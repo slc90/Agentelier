@@ -2,17 +2,19 @@
 
 ## 适用范围
 
-正式开发中，凡是涉及代码、构建或测试行为的修改，都必须在实施及必要验证完成后执行独立自动 Code Review。
+正式开发中，凡是涉及代码、构建或运行时行为的修改，都必须在实施及必要验证完成后执行独立自动 Code Review。
 
 包括：
 
-- Rust 源代码及测试代码。
-- Benchmark、构建脚本和工程配置。
-- 其他可能影响代码行为、构建或测试结果的文件。
+- Rust 源代码。
+- 构建脚本和工程配置。
+- 其他可能影响代码行为或构建结果的文件。
 
 纯 Markdown 或其他不影响工程行为的文档修改，不触发 Code Review。
 
 方案探索阶段遵循 `AGENTS.md` 中的规则例外。探索产物进入正式开发并准备交付时，必须完成适用的 Code Review。
+
+所有阶段均须遵守 `rules/project-context.md` 的测试、Benchmark 和 Example 禁令。
 
 ## 职责与独立性
 
@@ -23,7 +25,7 @@ Code Review 使用 `$code-review` Skill，由独立的 Reviewer Subagent 执行�
 Reviewer 只负责静态代码审查，不修改代码、不修复 Findings，也不继续实施任务。
 
 - 每轮 Review 必须启动全新的 Reviewer Subagent，不复用上一轮 Reviewer 的上下文。
-- Reviewer 不执行测试、Cargo 命令、BRP、GUI 或其他运行时验证。
+- Reviewer 不执行 Cargo 命令、BRP、GUI 或其他运行时验证。
 - Review 进行期间，不得并发修改 Reviewer 正在审查的内容。
 - Reviewer 根据实际 Diff 和必要上下文判断问题，不以未验证的推测代替具体 Findings。
 
@@ -52,12 +54,10 @@ Incremental Review 和 Final Full Review 默认不再读取设计文档，仍按
 
 ### 专项规则选择
 
-- `rules/code.md`：修改 Rust 源码时，包括测试、Benchmark、Build Script 和应用 Rust 代码。
+- `rules/code.md`：修改 Rust 源码时，包括 Build Script 和应用 Rust 代码。
 - `rules/architecture.md`：涉及 Crate 职责、依赖、Cargo Dependency 配置、Module、Visibility、Asset 管理或架构边界。
 - `rules/ui-composition.md`：涉及 BSN、SceneComponent、Scene Function、Props、UI 构造或组合方式。
 - `rules/documentation.md`：实际修改代码注释、Rustdoc、Markdown 或其他受文档规范约束的内容。
-- `rules/testing.md`：新增或修改可观察行为、修复 Bug、修改测试或调整回归保护与测试策略。
-- `rules/benchmark.md`：涉及性能敏感路径、Benchmark、性能改善、性能契约或测量方法。
 - `rules/logging.md`：涉及日志或错误处理、`Result` 传播、失败记录与恢复，或可能引入静默吞错。
 - `rules/gui-debugging.md`：修改 GUI 调试、BRP Runtime、输入或 Screenshot 验证通道，以及相关运行时验证基础设施时。
 
@@ -65,7 +65,7 @@ Incremental Review 和 Final Full Review 默认不再读取设计文档，仍按
 
 `rules/task-scope.md`、`rules/development.md` 和 `rules/git.md` 不属于 Reviewer 固定上下文。任务范围、开发过程及 Commit Message 分别由实施 Agent 和对应流程负责。
 
-Reviewer 不需要检查实施过程是否遵循 TDD，也不通过静态 Review 代替编译、测试或运行时验证。
+Reviewer 不检查实施过程是否遵循某种开发方法，也不通过静态 Review 代替编译或运行时验证。
 
 ## Review 流程
 

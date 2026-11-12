@@ -22,11 +22,9 @@ Git Commit Message 使用英文，具体要求遵循 `rules/git.md`。
 
 注释应解释不明显的原因和限制，而不是复述代码操作。
 
-不为普通 Type、Field、Function、Module 或 Test 编写显而易见的职责说明，也不在 `lib.rs`、`main.rs` 或 Integration Test 文件头部重复描述已集中维护的功能与测试覆盖信息。
+不为普通 Type、Field、Function 或 Module 编写显而易见的职责说明，也不在 `lib.rs`、`main.rs` 文件头部重复描述已集中维护的功能信息。
 
 Crate 功能及行为契约由 `docs/features/` 集中记录，模块核心设计及跨模块机制由 `docs/design/` 记录。`app/` 的实际界面与交互以其实现为准，不额外强制维护展示型功能文档。
-
-Integration Test 的 Coverage Model 由对应 Crate 的 `tests/COVERAGE.md` 维护，具体遵循 `rules/testing.md`。
 
 ## 注释格式
 

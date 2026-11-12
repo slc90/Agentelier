@@ -6,6 +6,8 @@
 
 检查最终 Working Tree、暂存区及 Diff，确保提交范围正确，且临时进度文件没有进入提交。
 
+提交内容不得包含 `rules/project-context.md` 禁止的测试、Benchmark 或 Example 代码。
+
 ## Commit Message
 
 Commit Message 统一使用英文，根据**最终实际提交的 Diff** 编写，不根据任务描述、原定计划或开发过程生成。
@@ -67,8 +69,7 @@ Unify widget interaction state handling
 
 **Commit Message 无例外地不记录以下内容：**
 
-- 测试的新增、删除或修改。
-- 测试执行过程及结果。
+- 验证执行过程及结果。
 - 格式化、编译检查、Clippy 等验证工作。
 - Import 整理及单纯代码格式调整。
 - 没有独立语义的附带文件或实现变化。
