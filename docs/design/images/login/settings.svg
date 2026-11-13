@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="980" viewBox="0 0 1240 980" role="img" aria-labelledby="title desc">
+<title id="title">账号与数据目录设置布局</title>
+<desc id="desc">设置页包含账号和数据与存储两个区域。数据区域分别显示当前使用目录和下次启动目录，更改路径不迁移文件，不影响当前运行。</desc>
+<defs><style>
+  text { font-family: 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; }
+  .title { font-size: 31px; font-weight: 700; fill: #192b3d; }
+  .heading { font-size: 24px; font-weight: 600; fill: #223b50; }
+  .body { font-size: 20px; fill: #4c6377; }
+  .small { font-size: 18px; fill: #627b8d; }
+  .path { font-family: 'Consolas', 'Noto Sans Mono CJK SC', monospace; font-size: 25px; fill: #243e53; }
+  .button { font-size: 20px; font-weight: 600; }
+</style></defs>
+<rect width="1240" height="980" rx="24" fill="#f3f6f9"/>
+<text x="60" y="64" class="title">账号与数据设置</text>
+<text x="60" y="103" class="body">账号会话可以结束，应用数据仍留在用户指定的位置。</text>
+
+<rect x="60" y="143" width="1120" height="770" rx="17" fill="#ffffff" stroke="#d6e0e8" stroke-width="2"/>
+<path d="M77 143 H1163 Q1180 143 1180 160 V214 H60 V160 Q60 143 77 143" fill="#eaf0f5"/>
+<text x="88" y="188" font-size="23" font-weight="700" fill="#253c50">Agentelier</text>
+<text x="1098" y="188" text-anchor="end" class="body">设置</text>
+<path d="M1132 171 L1146 185 M1146 171 L1132 185" fill="none" stroke="#70889a" stroke-width="2.5" stroke-linecap="round"/>
+
+<text x="100" y="269" class="heading">账号</text>
+<rect x="100" y="292" width="1040" height="148" rx="12" fill="#f8fafc" stroke="#e0e7ed"/>
+<text x="126" y="336" font-size="22" fill="#263f53">user@example.com</text>
+<circle cx="134" cy="378" r="6" fill="#2f8274"/>
+<text x="153" y="385" font-size="19" fill="#2f7166">已登录 · 订阅授权已开启</text>
+<rect x="907" y="326" width="206" height="55" rx="9" fill="#ffffff" stroke="#c7d5df"/>
+<text x="1010" y="361" text-anchor="middle" class="button" fill="#41596d">退出登录</text>
+<text x="126" y="417" class="small">退出只清除当前会话凭据，目录与应用配置保留。</text>
+
+<text x="100" y="497" class="heading">数据与存储</text>
+<text x="100" y="537" class="body">应用数据目录</text>
+<text x="100" y="570" class="small">仅保存账号登记与当前凭据；应用配置和日志保存在可执行文件旁。</text>
+
+<rect x="100" y="592" width="1040" height="99" rx="11" fill="#f8fafc" stroke="#dce5ec"/>
+<text x="126" y="624" class="small">当前使用</text>
+<text x="126" y="663" class="path">D:\AgentelierData</text>
+<rect x="807" y="618" width="142" height="48" rx="8" fill="#ffffff" stroke="#c8d6e0"/>
+<text x="878" y="649" text-anchor="middle" font-size="19" fill="#385269">打开目录</text>
+<rect x="969" y="618" width="144" height="48" rx="8" fill="#e8f2f1" stroke="#b7d5cf"/>
+<text x="1041" y="649" text-anchor="middle" font-size="19" font-weight="600" fill="#246f65">更改目录</text>
+
+<rect x="100" y="711" width="1040" height="151" rx="11" fill="#edf4f8" stroke="#cddfe9"/>
+<text x="126" y="748" font-size="18" fill="#52748b">下次启动使用</text>
+<text x="126" y="788" class="path">E:\WorkData</text>
+<text x="126" y="832" font-size="19" fill="#49667b">更改将在下次启动生效；文件由你自行复制和整理。</text>
+<text x="100" y="890" font-size="17" fill="#6d8192">本次运行仍使用当前目录。重新选择当前目录可撤回尚未生效的更改。</text>
+</svg>
