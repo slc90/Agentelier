@@ -1,0 +1,8 @@
+[package]
+name = "agentelier_bridge"
+publish = false
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
