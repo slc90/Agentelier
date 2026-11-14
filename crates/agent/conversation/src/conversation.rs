@@ -18,6 +18,7 @@ pub struct SessionSettings {
 }
 pub enum ConversationRequest {
     Create(SessionSettings),
+    Reset { session: SessionId },
     Send { session: SessionId, input: String },
     Retry { session: SessionId, turn: TurnId },
 }
@@ -91,8 +92,13 @@ impl Conversation {
         &mut self,
         settings: SessionSettings,
     ) -> Result<SessionView, ConversationFailure> {
-        if self.session.is_some() {
-            return Err(ConversationFailure("当前聊天会话已建立"));
+        if self
+            .session
+            .as_ref()
+            .and_then(|current| current.view.turn.as_ref())
+            .is_some_and(|turn| matches!(turn.status, TurnStatus::Running))
+        {
+            return Err(ConversationFailure("生成尚未结束，不能替换会话"));
         }
         if settings.slug.trim().is_empty()
             || settings.account_subject.is_empty()
@@ -122,6 +128,18 @@ impl Conversation {
             history: ProtocolHistory::default(),
         });
         Ok(session)
+    }
+
+    pub fn reset(&mut self, id: SessionId) -> Result<SessionView, ConversationFailure> {
+        let settings = self
+            .session
+            .as_ref()
+            .filter(|current| current.view.id == id)
+            .ok_or(ConversationFailure("要重置的会话已变化"))?
+            .view
+            .settings
+            .clone();
+        self.create(settings)
     }
 
     pub fn begin(
@@ -214,7 +232,9 @@ impl Conversation {
                 turn.is_retry = true;
                 Ok((current.view.clone(), request))
             }
-            ConversationRequest::Create(_) => Err(ConversationFailure("创建会话不是生成操作")),
+            ConversationRequest::Create(_) | ConversationRequest::Reset { .. } => {
+                Err(ConversationFailure("创建会话不是生成操作"))
+            }
         }
     }
 

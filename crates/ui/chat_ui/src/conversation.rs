@@ -71,12 +71,21 @@ pub struct ChatSession {
     pub previous_turns: Vec<ChatTurn>,
     pub committed_items: Vec<ChatHistoryItem>,
 }
+#[derive(Clone, Reflect)]
+pub struct ChatReplacement {
+    pub reset_session: Option<u64>,
+    pub slug: String,
+    pub display_name: String,
+    pub effort: Option<String>,
+    pub account_subject: String,
+}
 #[derive(Resource, Clone, Reflect, Default)]
 #[reflect(Resource)]
 pub struct ChatState {
     pub session: Option<ChatSession>,
     pub operation: Option<u64>,
     pub cancelling: bool,
+    pub replacement: Option<ChatReplacement>,
     pub draft: String,
     pub error: Option<String>,
 }
@@ -88,6 +97,7 @@ impl ChatState {
         activity: &HostActivity,
     ) -> bool {
         self.operation.is_none()
+            && self.replacement.is_none()
             && !activity.model_busy
             && model.can_request(account)
             && !self.draft.trim().is_empty()
@@ -117,12 +127,17 @@ struct MessageList;
 struct SessionSummary;
 #[derive(Component, Clone, Default)]
 struct ChatStatus;
+#[derive(Component, Clone, Default)]
+struct ReplacementPrompt;
 #[derive(Component, Clone, Copy)]
 enum ChatAction {
     Create,
     Send,
     Stop,
     Retry,
+    Reset,
+    ConfirmReplacement,
+    KeepSession,
 }
 #[derive(Component, Clone, PartialEq, Eq)]
 struct ChatRow {
@@ -168,8 +183,15 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
         Children [
             Node { column_gap: px(CONTENT_GAP), align_items: AlignItems::Center, flex_shrink: 0.0 }
             Children [
-                @button("创建会话", "CreateChatSession", ChatAction::Create)--
+                @button("新建会话", "CreateChatSession", ChatAction::Create)--
+                @button("重置当前会话", "ResetChatSession", ChatAction::Reset)--
                 Text(summary) WidgetryText SessionSummary Name("ChatSessionSummary")
+            ]--
+            Node { column_gap: px(CONTENT_GAP), flex_shrink: 0.0, display: Display::None } ReplacementPrompt
+            Children [
+                Text("当前对话仅在内存中，确认后将清除全部记录和上下文；输入草稿保留。") WidgetryText--
+                @button("确认清空", "ConfirmChatReplacement", ChatAction::ConfirmReplacement)--
+                @button("保留当前会话", "KeepChatSession", ChatAction::KeepSession)
             ]--
             Text(status) WidgetryText ChatStatus Name("ChatStatus")--
             @WidgetryScrollArea {
@@ -215,6 +237,11 @@ fn activate(
         ChatAction::Send => intents.send = true,
         ChatAction::Stop => commands.queue(stop),
         ChatAction::Retry => commands.queue(retry),
+        ChatAction::Reset => commands.queue(prepare_reset),
+        ChatAction::ConfirmReplacement => commands.queue(confirm_replacement),
+        ChatAction::KeepSession => commands.queue(|world: &mut World| {
+            world.resource_mut::<ChatState>().replacement = None;
+        }),
     }
     Ok(())
 }
@@ -224,7 +251,7 @@ fn create_session(world: &mut World) -> Result {
     let model = world.resource::<ModelState>();
     let account = world.resource::<AccountState>();
     if state.operation.is_some()
-        || state.session.is_some()
+        || state.replacement.is_some()
         || !model.can_verify(account)
         || world.resource::<AgentHost>().model_busy()?
     {
@@ -245,6 +272,16 @@ fn create_session(world: &mut World) -> Result {
         effort: model.reasoning.effort(),
         account_subject: subject,
     };
+    if state.session.is_some() {
+        world.resource_mut::<ChatState>().replacement = Some(ChatReplacement {
+            reset_session: None,
+            slug: settings.slug,
+            display_name: settings.display_name,
+            effort: settings.effort,
+            account_subject: settings.account_subject,
+        });
+        return Ok(());
+    }
     let result = world
         .resource::<AgentHost>()
         .request_conversation(ConversationRequest::Create(settings));
@@ -263,6 +300,68 @@ fn create_session(world: &mut World) -> Result {
     Ok(())
 }
 
+fn prepare_reset(world: &mut World) -> Result {
+    let state = world.resource::<ChatState>();
+    if state.operation.is_some()
+        || state.replacement.is_some()
+        || world.resource::<AgentHost>().model_busy()?
+    {
+        return Ok(());
+    }
+    let Some(session) = &state.session else {
+        return Ok(());
+    };
+    let pending = ChatReplacement {
+        reset_session: Some(session.id),
+        slug: session.slug.clone(),
+        display_name: session.display_name.clone(),
+        effort: session.effort.clone(),
+        account_subject: session.account_subject.clone(),
+    };
+    world.resource_mut::<ChatState>().replacement = Some(pending);
+    Ok(())
+}
+fn confirm_replacement(world: &mut World) -> Result {
+    let state = world.resource::<ChatState>();
+    if state.operation.is_some() || world.resource::<AgentHost>().model_busy()? {
+        return Ok(());
+    }
+    let Some(pending) = state.replacement.clone() else {
+        return Ok(());
+    };
+    let account = world.resource::<AccountState>();
+    if !world.resource::<ModelState>().can_request(account)
+        || account
+            .account
+            .as_ref()
+            .is_none_or(|account| account.subject != pending.account_subject)
+    {
+        return Ok(());
+    }
+    let request = match pending.reset_session {
+        Some(session) => ConversationRequest::Reset { session },
+        None => ConversationRequest::Create(SessionSettings {
+            slug: pending.slug,
+            display_name: pending.display_name,
+            effort: pending.effort,
+            account_subject: pending.account_subject,
+        }),
+    };
+    let result = world.resource::<AgentHost>().request_conversation(request);
+    let mut state = world.resource_mut::<ChatState>();
+    match result {
+        Ok(id) => {
+            state.operation = Some(id);
+            state.error = None;
+        }
+        Err(failure) => {
+            error!(error=%failure, "替换聊天会话失败");
+            state.error = Some(failure.to_string());
+        }
+    }
+    Ok(())
+}
+
 fn can_retry(
     state: &ChatState,
     model: &ModelState,
@@ -270,6 +369,7 @@ fn can_retry(
     activity: &HostActivity,
 ) -> bool {
     state.operation.is_none()
+        && state.replacement.is_none()
         && !activity.model_busy
         && model.can_request(account)
         && state.session.as_ref().is_some_and(|session| {
@@ -626,9 +726,12 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             ConversationEvent::Rejected(reason) => {
                 world.resource_mut::<ChatState>().error = Some(reason);
             }
-            ConversationEvent::Created(view)
-            | ConversationEvent::Updated(view)
-            | ConversationEvent::Finished(view) => {
+            ConversationEvent::Created(view) => {
+                let mut state = world.resource_mut::<ChatState>();
+                state.session = Some(project(view));
+                state.replacement = None;
+            }
+            ConversationEvent::Updated(view) | ConversationEvent::Finished(view) => {
                 world.resource_mut::<ChatState>().session = Some(project(view));
             }
             ConversationEvent::Accepted(view) => {
@@ -803,19 +906,37 @@ fn update(
     activity: Res<HostActivity>,
     buttons: Query<(Entity, &ChatAction)>,
     mut texts: Query<(&mut Text, Has<SessionSummary>, Has<ChatStatus>)>,
+    mut prompts: Query<&mut Node, With<ReplacementPrompt>>,
     mut commands: Commands,
 ) {
     if !state.is_changed() && !model.is_changed() && !account.is_changed() && !activity.is_changed()
     {
         return;
     }
+    for mut node in &mut prompts {
+        node.display = if state.replacement.is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
     for (entity, action) in &buttons {
         let enabled = match action {
             ChatAction::Create => {
-                state.session.is_none()
+                state.replacement.is_none()
                     && state.operation.is_none()
                     && !activity.model_busy
                     && model.can_verify(&account)
+            }
+            ChatAction::Reset => {
+                state.session.is_some()
+                    && state.replacement.is_none()
+                    && state.operation.is_none()
+                    && !activity.model_busy
+                    && model.can_request(&account)
+            }
+            ChatAction::ConfirmReplacement | ChatAction::KeepSession => {
+                state.replacement.is_some() && state.operation.is_none() && !activity.model_busy
             }
             ChatAction::Retry => can_retry(&state, &model, &account, &activity),
             ChatAction::Send => state.can_send(&model, &account, &activity),

@@ -7,6 +7,7 @@ pub struct SessionSettings {
 }
 pub enum ConversationRequest {
     Create(SessionSettings),
+    Reset { session: u64 },
     Send { session: u64, input: String },
     Retry { session: u64, turn: u64 },
 }
@@ -80,6 +81,11 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
                     account_subject: settings.account_subject,
                 },
             )
+        }
+        ConversationRequest::Reset { session } => {
+            agentelier_conversation::ConversationRequest::Reset {
+                session: agentelier_conversation::SessionId(session),
+            }
         }
         ConversationRequest::Retry { session, turn } => {
             agentelier_conversation::ConversationRequest::Retry {

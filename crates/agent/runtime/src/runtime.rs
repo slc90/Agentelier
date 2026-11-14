@@ -251,6 +251,14 @@ impl AgentRuntime {
                                                     AgentEventKind::Conversation(event),
                                                 )?;
                                             }
+                                            ConversationRequest::Reset { session } => {
+                                                let event = match conversation.reset(session) {
+                                                    Ok(view) => ConversationEvent::Created(view),
+                                                    Err(failure) => ConversationEvent::Rejected(failure.to_string()),
+                                                };
+                                                control.finished.cancel();
+                                                emit(&publish, id, AgentEventKind::Conversation(event))?;
+                                            }
                                             request @ (ConversationRequest::Send { .. } | ConversationRequest::Retry { .. }) => {
                                                 match conversation.start(id, request) {
                                                     Ok((view, request)) => {
