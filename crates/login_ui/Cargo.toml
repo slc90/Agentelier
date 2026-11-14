@@ -1,0 +1,18 @@
+[package]
+name = "agentelier_login_ui"
+publish = false
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+agentelier_login = { path = "../login" }
+bevy.workspace = true
+bevy_widgetry = { workspace = true, features = [
+  "file_dialog",
+  "button",
+  "job",
+] }
+tracing.workspace = true
+
+[lints]
+workspace = true

@@ -7,11 +7,15 @@ edition.workspace = true
 [dependencies]
 bevy.workspace = true
 bevy_app_assets = { path = "../crates/assets" }
+agentelier_login = { path = "../crates/login" }
+agentelier_login_ui = { path = "../crates/login_ui" }
 bevy_widgetry.workspace = true
 bevy_brp_runtime.workspace = true
 serde.workspace = true
 ron.workspace = true
 tracing.workspace = true
+winsafe = { workspace = true, features = ["user"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

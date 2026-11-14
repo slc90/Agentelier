@@ -1,0 +1,11 @@
+[package]
+name = "agentelier_login"
+publish = false
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

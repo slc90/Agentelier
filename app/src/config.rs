@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use tracing::warn;
+use tempfile::NamedTempFile;
 
 const DEFAULT_SCALE_FACTOR: f32 = 1.25;
 const ALLOWED_SCALE_FACTORS: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
@@ -11,12 +11,14 @@ const DEFAULT_BRP_PORT: u16 = 15702;
 const RENDER_WORLD_BRP_PORT: u16 = 15703;
 const BRP_PORT_RANGE: std::ops::RangeInclusive<u16> = 1024..=65534;
 
-#[derive(Resource, Debug, Serialize, Deserialize)]
+#[derive(Resource, Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AppConfig {
     pub(crate) scale_factor: f32,
     pub(crate) brp_enabled: bool,
     pub(crate) brp_port: u16,
+    #[serde(default)]
+    pub(crate) data_directory: Option<PathBuf>,
 }
 
 impl Default for AppConfig {
@@ -25,6 +27,7 @@ impl Default for AppConfig {
             scale_factor: DEFAULT_SCALE_FACTOR,
             brp_enabled: true,
             brp_port: DEFAULT_BRP_PORT,
+            data_directory: None,
         }
     }
 }
@@ -52,42 +55,34 @@ impl AppConfig {
             .map_err(io::Error::other)
     }
 
-    // Used when the application later provides settings editing. Never overwrite an invalid input during load.
-    #[allow(dead_code)]
-    pub(crate) fn save(&self, file: &ConfigFile) {
-        let result = (|| {
-            let content = self.serialized()?;
-            file.create_directory()?;
-            fs::write(&file.path, content)
-        })();
-        if let Err(error) = result {
-            warn!(path = %file.path.display(), error = %error, "无法保存配置；保留当前内存设置");
-        }
+    pub(crate) fn save(&self, file: &ConfigFile) -> io::Result<()> {
+        file.prepare(self)?.persist(&file.path)?;
+        Ok(())
     }
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub(crate) struct ConfigFile {
-    path: PathBuf,
+    pub(crate) path: PathBuf,
 }
 
 impl ConfigFile {
-    fn create_directory(&self) -> io::Result<()> {
+    fn prepare(&self, config: &AppConfig) -> io::Result<NamedTempFile> {
+        let content = config.serialized()?;
         let parent = self
             .path
             .parent()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "配置文件缺少父目录"))?;
-        fs::create_dir_all(parent)
+        fs::create_dir_all(parent)?;
+        let mut temporary = NamedTempFile::with_prefix_in(".agentelier-config-", parent)?;
+        temporary.write_all(content.as_bytes())?;
+        temporary.as_file().sync_all()?;
+        Ok(temporary)
     }
 
     fn create_default(&self, config: &AppConfig) -> io::Result<()> {
-        let content = config.serialized()?;
-        self.create_directory()?;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&self.path)?;
-        file.write_all(content.as_bytes())
+        self.prepare(config)?.persist_noclobber(&self.path)?;
+        Ok(())
     }
 }
 
@@ -96,33 +91,17 @@ pub(crate) struct LoadedConfig {
     pub(crate) file: ConfigFile,
 }
 
-pub(crate) fn load(path: PathBuf) -> LoadedConfig {
+pub(crate) fn load(path: PathBuf) -> io::Result<LoadedConfig> {
     let file = ConfigFile { path };
     let config = match fs::read_to_string(&file.path) {
-        Ok(content) => match ron::from_str::<AppConfig>(&content) {
-            Ok(config) => match config.validate() {
-                Ok(()) => config,
-                Err(error) => {
-                    warn!(path = %file.path.display(), error = %error, "配置无效；采用默认值并保留原文件");
-                    AppConfig::default()
-                }
-            },
-            Err(error) => {
-                warn!(path = %file.path.display(), error = %error, "配置解析失败；采用默认值并保留原文件");
-                AppConfig::default()
-            }
-        },
+        Ok(content) => ron::from_str::<AppConfig>(&content).map_err(io::Error::other)?,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let config = AppConfig::default();
-            if let Err(error) = file.create_default(&config) {
-                warn!(path = %file.path.display(), error = %error, "无法创建默认配置；继续使用内存默认值");
-            }
+            file.create_default(&config)?;
             config
         }
-        Err(error) => {
-            warn!(path = %file.path.display(), error = %error, "配置读取失败；采用默认值并保留原文件");
-            AppConfig::default()
-        }
+        Err(error) => return Err(error),
     };
-    LoadedConfig { config, file }
+    config.validate()?;
+    Ok(LoadedConfig { config, file })
 }

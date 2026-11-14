@@ -4,6 +4,7 @@ use bevy_widgetry::app_logging::safe_diagnostic;
 use bevy_widgetry::diagnostics::{ErrorFrame, WidgetryFailure};
 use std::{error::Error, fmt};
 use tracing::{debug, error, info, warn};
+use winsafe::prelude::Handle;
 
 type Source = Box<dyn Error + Send + Sync>;
 type AppFailure = WidgetryFailure<AppError>;
@@ -69,6 +70,13 @@ pub(crate) fn startup(error: BevyError, logging_ready: bool) {
             "应用启动失败：{}",
             safe_diagnostic(format_args!("{error:?}"))
         );
+    }
+    if let Err(failure) = winsafe::HWND::NULL.MessageBox(
+        &safe_diagnostic(format_args!("{error:?}")).to_string(),
+        "Agentelier 启动失败",
+        winsafe::co::MB::OK | winsafe::co::MB::ICONERROR,
+    ) {
+        eprintln!("无法显示启动错误提示：{failure}");
     }
 }
 

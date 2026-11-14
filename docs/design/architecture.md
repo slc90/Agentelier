@@ -1,6 +1,6 @@
 # Agentelier 总体架构
 
-当前 Workspace 包含应用 `app/`、应用 Asset 库 `crates/assets/`，以及空 Library Crate `crates/agent/`（`agentelier_agent`）和 `crates/bridge/`（`agentelier_bridge`）。两个新库仅建立 Crate 骨架，尚未实现下述 Agent 执行、业务桥接与生命周期机制，也尚未接入应用或引入 Tokio。下文说明这些能力的架构职责和依赖方向。
+当前 Workspace 包含应用 `app/`、应用 Asset 库 `crates/assets/`、登录数据能力 `crates/login/`（`agentelier_login`）、登录界面 `crates/login_ui/`（`agentelier_login_ui`），以及空 Library Crate `crates/agent/`（`agentelier_agent`）和 `crates/bridge/`（`agentelier_bridge`）。`login` 已实现数据目录环境，`login_ui` 已实现目录启动界面；账号认证尚未实现。Agent 与 Bridge 仅有骨架，尚未接入应用或引入 Tokio。下文同时说明后续执行和桥接能力的设计边界。
 
 Agentelier 是以 Bevy 构建交互界面的 Rust 桌面 Agent 应用。应用的交互与 Agent 的执行有不同的运行需求：前者由 Bevy ECS 与 Winit 驱动，后者需要持续处理异步模型响应、工具执行和任务生命周期。
 
@@ -32,6 +32,10 @@ Bevy 应用拥有窗口和 Winit 事件循环，使用 ECS 管理应用业务状
 
 应用层还负责统一装配与管理应用基础设施，包括 Asset、日志、按需启用的 BRP 运行时，以及辅助后台任务。
 
+当前入口先建立可执行文件旁的日志，加载 `config/config.ron`，再装配同一套 Bevy 运行时。`login_ui` 在启动窗口的内容宿主中复用 Widgetry 目录选择器，通过辅助后台任务调用 `login` 检查并占用目录，再调用 `app` 提供的保存操作提交新选择。完成后复用当前窗口进入主界面。数据环境保持到后台任务及日志收尾完成；当前仅确定 `auth.json` 路径，尚未实现账号恢复。具体关系见[数据目录与启动](mechanisms/application-data.md)。
+
+`app` 保留通用配置、日志和应用装配；具体登录界面归 `login_ui`，数据环境与后续认证能力归 `login`。`login` 不依赖 Bevy，也不反向依赖应用；`login_ui` 依赖 `login`、Bevy 和 Widgetry。后续认证执行仍在 Agent/Tokio 侧协调，具体认证能力由 `login` 承载。
+
 ### Agent：执行与运行状态
 
 `agentelier_agent` 负责 Agent 的实际执行：接收运行命令，协调模型通信与工具执行，维护相关任务和会话的运行状态，并产生执行进展和终态结果。
@@ -60,6 +64,11 @@ Agent 运行状态与应用展示状态有不同的所有者：**执行是否真
 ```mermaid
 flowchart TD
     App["app · 应用装配与交互"] --> Bridge["agentelier_bridge"]
+    App --> LoginUI["agentelier_login_ui · 登录界面"]
+    App --> Login["agentelier_login · 数据与认证能力"]
+    LoginUI --> Login
+    LoginUI --> Widgetry
+    LoginUI --> Bevy
     Bridge --> Agent["agentelier_agent"]
     Agent --> Tokio["Tokio"]
     App --> Widgetry["bevy_widgetry"]
@@ -136,7 +145,7 @@ BRP Runtime 由应用按需装配，用于操作和观察实际运行的 Bevy �
 
 应用拥有整体启动与退出流程；Agent 负责自身执行体的真实结束；辅助 Job 仍遵循自己的任务生命周期。
 
-启动时，应用建立基础设施与日志输出，装配 Bevy 和所需后台运行能力，再开放相关交互。Agent 的运行任务不占用 ECS 主线程。
+启动时，应用建立日志输出、读取配置，再装配现有 Bevy 运行时和目录启动界面。后台确认目录并取得占用，新选择保存成功后进入主界面。取消目录选择正常结束启动，等待辅助任务真实结束后完成日志收尾。Agent 的后续运行任务不占用 ECS 主线程。
 
 退出时，应用在所需资源仍有效的阶段协调收尾：停止接纳新操作、停止向即将退出的界面发送唤醒，通知 Agent 停止并等待其任务和 Tokio Runtime 结束，随后完成独立辅助任务的收尾，最后刷新并关闭应用日志。
 
@@ -146,7 +155,8 @@ flowchart TD
     Stop --> AgentStop["Agent 取消、结束与 Tokio 收尾"]
     AgentStop --> JobStop["辅助后台任务收尾"]
     JobStop --> Logs["日志刷新与关闭"]
-    Logs --> Done["进程退出"]
+    Logs --> Data["释放数据目录占用"]
+    Data --> Done["进程退出"]
 ```
 
 取消请求与任务实际结束是两个不同阶段。退出协调以执行体真实终止和必要资源释放为依据，并将收尾失败交由应用处理。应用应在 Bevy World 和相关资源失效前完成需要访问它们的收尾工作。
