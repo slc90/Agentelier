@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agentelier_bridge = { path = "../bridge" }
 agentelier_login = { path = "../login" }
 bevy.workspace = true
 bevy_widgetry_path_display.workspace = true
@@ -15,6 +16,7 @@ bevy_widgetry = { workspace = true, features = [
   "scroll_area",
 ] }
 tracing.workspace = true
+winsafe = { workspace = true, features = ["shell"] }
 
 [lints]
 workspace = true

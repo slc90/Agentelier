@@ -1,9 +1,9 @@
-use agentelier_bridge::{
-    AccountEventKind, AuthorizationLink, Connection, CredentialState as BridgeCredentials,
-};
-use agentelier_login_ui::{
+use crate::{
     AccountPhase, AccountState, AccountSummary, CredentialState, DataDirectoryReady, LoginAction,
     ModelState, RestoreAccount, SessionActivity, VerifyModel,
+};
+use agentelier_bridge::{
+    AccountEventKind, AuthorizationLink, Connection, CredentialState as BridgeCredentials,
 };
 use bevy::prelude::*;
 use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info};
 
 #[derive(Resource, Clone, Default)]
-pub(crate) struct AuthenticationBackend(Arc<Mutex<BackendState>>);
+pub struct AccountRuntime(Arc<Mutex<BackendState>>);
 #[derive(Default)]
 struct BackendState {
     connection: Option<Connection>,
@@ -37,8 +37,8 @@ enum Request {
     Login { consent: bool },
 }
 
-impl AuthenticationBackend {
-    pub(crate) fn finish(&self) -> Result {
+impl AccountRuntime {
+    pub fn finish(&self) -> Result {
         let mut backend = self
             .0
             .lock()
@@ -46,11 +46,11 @@ impl AuthenticationBackend {
         backend.stopping = true;
         backend.authorization = None;
         if let Some(connection) = &mut backend.connection {
-            connection.finish().map_err(crate::diagnostics::operation)?;
+            connection.finish().map_err(BevyError::from)?;
         }
         Ok(())
     }
-    pub(crate) fn begin_shutdown(&self) -> Result {
+    pub fn begin_shutdown(&self) -> Result {
         let mut backend = self
             .0
             .lock()
@@ -58,14 +58,12 @@ impl AuthenticationBackend {
         backend.stopping = true;
         backend.authorization = None;
         if let Some(connection) = &mut backend.connection {
-            connection
-                .begin_shutdown()
-                .map_err(crate::diagnostics::operation)?;
+            connection.begin_shutdown().map_err(BevyError::from)?;
             debug!("已停止认证业务接收与普通唤醒，等待执行体结束");
         }
         Ok(())
     }
-    pub(crate) fn is_finished(&self) -> Result<bool> {
+    pub fn is_finished(&self) -> Result<bool> {
         let backend = self
             .0
             .lock()
@@ -76,7 +74,7 @@ impl AuthenticationBackend {
             .is_none_or(Connection::is_finished))
     }
 }
-pub(crate) fn install(app: &mut App, backend: AuthenticationBackend) {
+pub(crate) fn install(app: &mut App, backend: AccountRuntime) {
     app.insert_resource(backend)
         .add_observer(ready)
         .add_observer(retry)
@@ -86,7 +84,7 @@ pub(crate) fn install(app: &mut App, backend: AuthenticationBackend) {
 }
 fn ready(
     event: On<DataDirectoryReady>,
-    backend: Res<AuthenticationBackend>,
+    backend: Res<AccountRuntime>,
     mut commands: Commands,
 ) -> Result {
     backend
@@ -112,7 +110,7 @@ fn request(world: &mut World, request: Request) -> Result {
     if state.operation.is_some() || state.runtime_failed {
         return Ok(());
     }
-    let backend = world.resource::<AuthenticationBackend>().clone();
+    let backend = world.resource::<AccountRuntime>().clone();
     let mut backend = backend
         .0
         .lock()
@@ -142,7 +140,7 @@ fn request(world: &mut World, request: Request) -> Result {
             Request::Restore => connection.restore(),
             Request::Login { consent } => connection.login(consent),
         }
-        .map_err(crate::diagnostics::operation)
+        .map_err(BevyError::from)
     })();
     let mut state = world.resource_mut::<AccountState>();
     match result {
@@ -192,7 +190,7 @@ fn action_request(world: &mut World, action: LoginAction) -> Result {
     if !valid {
         return Ok(());
     }
-    let backend = world.resource::<AuthenticationBackend>().clone();
+    let backend = world.resource::<AccountRuntime>().clone();
     let mut backend = backend
         .0
         .lock()
@@ -240,7 +238,7 @@ fn action_request(world: &mut World, action: LoginAction) -> Result {
     Ok(())
 }
 fn receive(world: &mut World) -> Result {
-    let backend = world.resource::<AuthenticationBackend>().clone();
+    let backend = world.resource::<AccountRuntime>().clone();
     let (events, failure) = {
         let mut backend = backend
             .0
@@ -488,7 +486,7 @@ fn sign_out(world: &mut World) -> Result {
     {
         return Ok(());
     }
-    let backend = world.resource::<AuthenticationBackend>().clone();
+    let backend = world.resource::<AccountRuntime>().clone();
     let mut backend = backend
         .0
         .lock()
@@ -533,7 +531,7 @@ fn verify_model(_event: On<VerifyModel>, mut commands: Commands) {
         {
             return Ok(());
         }
-        let backend = world.resource::<AuthenticationBackend>().clone();
+        let backend = world.resource::<AccountRuntime>().clone();
         let mut backend = backend
             .0
             .lock()
@@ -598,7 +596,7 @@ fn check_session(world: &mut World) -> Result {
     {
         return Ok(());
     }
-    let backend = world.resource::<AuthenticationBackend>().clone();
+    let backend = world.resource::<AccountRuntime>().clone();
     let mut backend = backend
         .0
         .lock()
@@ -632,7 +630,7 @@ fn launch_browser(world: &mut World) -> Result {
         return Ok(());
     }
     let id = state.operation;
-    let backend = world.resource::<AuthenticationBackend>().clone();
+    let backend = world.resource::<AccountRuntime>().clone();
     let mut backend = backend
         .0
         .lock()
@@ -702,7 +700,7 @@ fn copy_link(world: &mut World) -> Result {
     if world.resource::<AccountState>().phase != AccountPhase::Waiting {
         return Ok(());
     }
-    let backend = world.resource::<AuthenticationBackend>().clone();
+    let backend = world.resource::<AccountRuntime>().clone();
     let backend = backend
         .0
         .lock()
@@ -734,7 +732,7 @@ fn copy_link(world: &mut World) -> Result {
     Ok(())
 }
 fn receive_browser(world: &mut World) -> Result {
-    let backend = world.resource::<AuthenticationBackend>().clone();
+    let backend = world.resource::<AccountRuntime>().clone();
     let mut backend = backend
         .0
         .lock()

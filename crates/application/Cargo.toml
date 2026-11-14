@@ -1,0 +1,22 @@
+[package]
+name = "agentelier_application"
+publish = false
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bevy.workspace = true
+bevy_app_assets = { path = "../assets" }
+agentelier_login = { path = "../login" }
+agentelier_login_ui = { path = "../login_ui" }
+bevy_widgetry.workspace = true
+bevy_widgetry_path_display.workspace = true
+bevy_brp_runtime.workspace = true
+serde.workspace = true
+ron.workspace = true
+tracing.workspace = true
+winsafe = { workspace = true, features = ["user"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

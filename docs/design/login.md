@@ -12,7 +12,7 @@ flowchart LR
     Save --> UI
 ```
 
-`crates/login` 集中数据环境、OAuth、身份校验和具体文件凭据能力，不依赖 Bevy；`crates/login_ui` 负责目录与账号界面；`app` 负责配置、日志、浏览器/剪贴板集成及退出。Agent/Tokio 串行执行认证，Bridge 传递操作身份和业务阶段，账号与 Token 真相留在运行侧。
+`crates/login` 集中数据环境、OAuth、身份校验和具体文件凭据能力，不依赖 Bevy；`crates/login_ui` 负责目录与账号界面、Bridge 衔接及浏览器/剪贴板交互；`crates/application` 负责配置、日志、通用装配及整体退出协调，`app` 只保留程序入口。Agent/Tokio 串行执行认证，Bridge 传递操作身份和业务阶段，账号与 Token 真相留在运行侧。
 
 [数据目录与启动](mechanisms/application-data.md)说明目录选择、重启恢复及下次启动位置。更改位置不切换当前账号，也不移动文件。
 

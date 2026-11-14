@@ -24,7 +24,7 @@ Git Commit Message 使用英文，具体要求遵循 `rules/git.md`。
 
 不为普通 Type、Field、Function 或 Module 编写显而易见的职责说明，也不在 `lib.rs`、`main.rs` 文件头部重复描述已集中维护的功能信息。
 
-Crate 功能及行为契约由 `docs/features/` 集中记录，模块核心设计及跨模块机制由 `docs/design/` 记录。`app/` 的实际界面与交互以其实现为准，不额外强制维护展示型功能文档。
+Crate 功能及行为契约由 `docs/features/` 集中记录，模块核心设计及跨模块机制由 `docs/design/` 记录。界面与交互的具体实现位于 `crates/`，不额外强制维护展示型功能文档；`app/` 只保留程序入口。
 
 ## 注释格式
 

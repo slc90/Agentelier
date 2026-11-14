@@ -5,19 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-agentelier_bridge = { path = "../crates/bridge" }
-bevy.workspace = true
-bevy_app_assets = { path = "../crates/assets" }
-agentelier_login = { path = "../crates/login" }
-agentelier_login_ui = { path = "../crates/login_ui" }
-bevy_widgetry.workspace = true
-bevy_widgetry_path_display.workspace = true
-bevy_brp_runtime.workspace = true
-serde.workspace = true
-ron.workspace = true
-tracing.workspace = true
-winsafe = { workspace = true, features = ["user", "shell", "advapi"] }
-tempfile.workspace = true
+agentelier_application = { path = "../crates/application" }
 
 [lints]
 workspace = true

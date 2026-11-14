@@ -21,6 +21,7 @@ pub(crate) type RememberDirectory = Arc<dyn Fn(&Path) -> io::Result<()> + Send +
 
 pub struct LoginUiPlugin {
     options: StartupOptions,
+    backend: crate::AccountRuntime,
 }
 
 #[derive(Clone)]
@@ -37,12 +38,17 @@ impl LoginUiPlugin {
         remember: impl Fn(&Path) -> io::Result<()> + Send + Sync + 'static,
     ) -> Self {
         Self {
+            backend: crate::AccountRuntime::default(),
             options: StartupOptions {
                 saved_directory,
                 environment,
                 remember: Arc::new(remember),
             },
         }
+    }
+
+    pub fn account_runtime(&self) -> crate::AccountRuntime {
+        self.backend.clone()
     }
 }
 
@@ -54,6 +60,7 @@ impl Plugin for LoginUiPlugin {
         crate::directory_settings::install(app);
         crate::account::install(app);
         crate::model::install(app);
+        crate::authentication::install(app, self.backend.clone());
         app.insert_resource(StartupUi {
             options: self.options.clone(),
             host: None,

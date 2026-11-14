@@ -1,4 +1,4 @@
-use crate::authentication::AuthenticationBackend;
+use agentelier_login_ui::AccountRuntime;
 use bevy::app::OnAppExitSystems;
 use bevy::prelude::*;
 use bevy::window::ExitSystems;
@@ -33,7 +33,7 @@ pub(crate) fn install(app: &mut App) {
 fn coordinate(
     mut exits: ResMut<Messages<AppExit>>,
     mut state: ResMut<ExitState>,
-    backend: Res<AuthenticationBackend>,
+    backend: Res<AccountRuntime>,
     manager: Res<JobManager>,
     proxy: Res<EventLoopProxyWrapper>,
 ) {

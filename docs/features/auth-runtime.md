@@ -8,7 +8,7 @@
 
 `begin_shutdown()` 停止新命令和普通通知，取消当前监听与网络等待，已开始的文件提交继续结束。`is_finished()` 非阻塞检查线程，`finish()` join 并取得真实结果；线程只有在 Tokio 释放后才结束。宿主必须显式收尾处理错误，Drop 仅提供阻塞兜底。
 
-Bridge、Agent、login 都不依赖 Bevy。宿主负责 Winit 通知、非敏感 UI 投影、系统默认浏览器和剪贴板；浏览器辅助任务继续归 Widgetry JobManager。首次打开及重新打开均通过 Windows Shell 将授权地址交给系统默认浏览器；启动失败时显示错误，保留重新打开与复制链接入口。模型 HTTP 和 SSE 位于 Agent 的同一 Tokio 中。
+Bridge、Agent、login 都不依赖 Bevy。login_ui 的 Bevy 交互层提供 Winit 通知、非敏感 UI 投影、系统默认浏览器和剪贴板；application 负责通用宿主装配与整体收尾，浏览器辅助任务继续归 Widgetry JobManager。首次打开及重新打开均通过 Windows Shell 将授权地址交给系统默认浏览器；启动失败时显示错误，保留重新打开与复制链接入口。模型 HTTP 和 SSE 位于 Agent 的同一 Tokio 中。
 
 ## 共享凭据请求
 
