@@ -7,3 +7,5 @@ pub use conversation::{
     Conversation, ConversationEvent, ConversationFailure, ConversationRequest, SessionId,
     SessionSettings, SessionView, TurnId, TurnStatus, TurnView,
 };
+
+pub use agentelier_llm_model::ProtocolItemSummary;

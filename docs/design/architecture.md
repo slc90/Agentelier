@@ -1,6 +1,6 @@
 # Agentelier 总体架构
 
-Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。Bevy ECS 与 Winit 管理交互和展示，独立线程的 Tokio current-thread Runtime 承载账号与模型执行。当前已实现数据目录启动与设置、文件账号恢复、ChatGPT 浏览器授权、受保护凭据提交、按需续期、退出登录、模型连接验证、首轮流式聊天及运行收尾。
+Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。Bevy ECS 与 Winit 管理交互和展示，独立线程的 Tokio current-thread Runtime 承载账号与模型执行。当前已实现数据目录启动与设置、文件账号恢复、ChatGPT 浏览器授权、受保护凭据提交、按需续期、退出登录、模型连接验证、多轮流式聊天及运行收尾。
 
 ## Workspace 与三个领域
 
@@ -10,7 +10,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | --- | --- | --- |
 | `crates/ui/application/` | `agentelier_application` | 通用宿主、配置、日志、诊断、窗口装配与整体生命周期 |
 | `crates/ui/assets/` | `bevy_app_assets` | 应用 Asset 的统一注册 |
-| `crates/ui/chat_ui/` | `agentelier_chat_ui` | 模型准备、会话与草稿、首轮流式聊天和相应交互投影 |
+| `crates/ui/chat_ui/` | `agentelier_chat_ui` | 模型准备、会话与草稿、多轮流式聊天和相应交互投影 |
 | `crates/ui/agent_host/` | `agentelier_agent_host` | 唯一 Connection、Winit 唤醒、命令提交、业务消息分发及执行收尾 |
 | `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、账号界面，Bevy/Bridge 衔接及浏览器/剪贴板交互 |
 | `crates/agent/login/` | `agentelier_login` | 数据环境、OAuth、Token、身份校验、认证文件与受保护原子提交 |
@@ -138,10 +138,12 @@ flowchart LR
 
 ## 内存聊天与流式投影
 
-Conversation 固定 Session 的模型、推理设置和账号身份，分配独立 Session/Turn 身份并管理展示记录；Runtime 拥有业务对象及唯一网络任务、取消和 JoinHandle。聊天请求通过同一 CredentialClient 获取凭据并核对账号主体，不重新读取认证文件。当前支持一个内存 Session 的首轮消息，多轮历史及会话替换尚未接入。
+Conversation 固定 Session 的模型、推理设置和账号身份，分配独立 Session/Turn 身份并管理展示记录；Runtime 拥有业务对象及唯一网络任务、取消和 JoinHandle。聊天请求通过同一 CredentialClient 获取凭据并核对账号主体，不重新读取认证文件。当前支持一个内存 Session 的连续多轮交流，会话替换尚未接入。成功输入与完整协议输出由该 Session 原子提交，失败和取消只保留展示记录。
 
 LLM Model 解析 Responses 输出项、内容段、公开 phase 和文本增量；只有 response.completed 及可接受完整输出才成功。聊天无总生成时长限制，合法 SSE 活动维持 120 秒空闲期限；连接验证仍保留原总超时。工具输出明确失败，普通拒绝正文正常展示。任务 join 后才释放操作占用，失败/取消保留已经显示的部分回复。
 
 网络任务经容量为 32 的有界 Tokio 通道传递文本变化，发送等待可被任务取消。Runtime 推进权威状态后发布累计展示快照；Bridge 保留单个可替换快照，原先的有界控制/终态队列保持独立。每个快照包含此前全部消息和文本，合并不丢片段或跨轮次混接；终态返回前先交付最后快照。AgentHost 每次更新最多消费 32 项，仍有消息时继续唤醒，避免高频文本长期占用一个界面更新。
 
 chat_ui 仅管理展示投影与草稿，通过 BSN 和 Widgetry 多行 TextField、ScrollArea 构造消息列表。接纳前保留草稿；Accepted 后只清空尚未被继续编辑的原内容。消息更新复用既有行实体，切换设置页不改变后台任务，返回时按投影恢复。具体行为与限制见[聊天会话与流式回复](../features/chat.md)。
+
+协议历史和安全展示摘要的具体关系见[聊天会话与协议历史](modules/conversation.md)。

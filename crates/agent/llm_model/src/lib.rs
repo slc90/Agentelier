@@ -3,9 +3,11 @@ compile_error!("This application supports Windows x64 only");
 
 mod generation;
 mod model;
+mod protocol;
 mod stream;
 
 pub use generation::{GenerationRequest, generate};
+pub use protocol::{ProtocolHistory, ProtocolItemSummary, ProtocolOutput};
 pub use stream::{GenerationResult, OutputMessage, OutputText, StreamEvent};
 
 pub use model::{

@@ -1,5 +1,5 @@
 use crate::reasoning::{self, ReasoningSetting, ReasoningSource};
-use agentelier_agent_host::{AgentHost, HostFailed, ModelEvent, ReceiveAgentEvents};
+use agentelier_agent_host::{AgentHost, HostActivity, HostFailed, ModelEvent, ReceiveAgentEvents};
 use agentelier_llm_model_bridge::{ModelEventKind, ModelRequest, ModelResult};
 use agentelier_login_ui::{AccountPhase, AccountState, CredentialState, SessionActivity};
 use bevy::ecs::message::MessageCursor;
@@ -240,6 +240,7 @@ fn activate(event: On<Activate>, actions: Query<&ModelAction>, mut commands: Com
         let state = world.resource::<ModelState>();
         let account = world.resource::<AccountState>();
         if !state.can_request(account)
+            || world.resource::<AgentHost>().model_busy()?
             || matches!(action, ModelAction::Verify) && !state.can_verify(account)
         {
             return Ok(());
@@ -464,12 +465,13 @@ fn status(state: &ModelState, account: &AccountState) -> String {
 fn update(
     state: Res<ModelState>,
     account: Res<AccountState>,
+    activity: Res<HostActivity>,
     mut buttons: Query<(Entity, &ModelAction)>,
     selectors: Query<Entity, With<ModelSelector>>,
     mut texts: Query<(&mut Text, Has<ModelStatus>, Has<ModelText>)>,
     mut commands: Commands,
 ) {
-    if !state.is_changed() && !account.is_changed() {
+    if !state.is_changed() && !account.is_changed() && !activity.is_changed() {
         return;
     }
     for (entity, action) in &mut buttons {
@@ -477,7 +479,7 @@ fn update(
             ModelAction::Refresh => state.can_request(&account),
             ModelAction::Verify => state.can_verify(&account),
         };
-        if enabled {
+        if enabled && !activity.model_busy {
             commands.entity(entity).remove::<InteractionDisabled>();
         } else {
             commands.entity(entity).insert(InteractionDisabled);

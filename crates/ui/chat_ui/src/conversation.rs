@@ -44,12 +44,19 @@ pub enum ChatTurnStatus {
     Failed(String),
 }
 #[derive(Clone, Reflect)]
+pub enum ChatHistoryItem {
+    User,
+    Assistant { phase: Option<String> },
+    Reasoning { encrypted: bool },
+}
+#[derive(Clone, Reflect)]
 pub struct ChatTurn {
     pub id: u64,
     pub operation_id: u64,
     pub input: String,
     pub messages: Vec<ChatMessage>,
     pub status: ChatTurnStatus,
+    pub request_items: Vec<ChatHistoryItem>,
 }
 #[derive(Clone, Reflect)]
 pub struct ChatSession {
@@ -59,6 +66,8 @@ pub struct ChatSession {
     pub effort: Option<String>,
     pub account_subject: String,
     pub turn: Option<ChatTurn>,
+    pub previous_turns: Vec<ChatTurn>,
+    pub committed_items: Vec<ChatHistoryItem>,
 }
 #[derive(Resource, Clone, Reflect, Default)]
 #[reflect(Resource)]
@@ -80,7 +89,10 @@ impl ChatState {
             && model.can_request(account)
             && !self.draft.trim().is_empty()
             && self.session.as_ref().is_some_and(|session| {
-                session.turn.is_none()
+                session
+                    .turn
+                    .as_ref()
+                    .is_none_or(|turn| !matches!(turn.status, ChatTurnStatus::Running))
                     && account
                         .account
                         .as_ref()
@@ -361,6 +373,41 @@ fn process_input(world: &mut World) -> Result {
     Ok(())
 }
 
+fn history_item(item: agentelier_conversation_bridge::HistoryItem) -> ChatHistoryItem {
+    match item {
+        agentelier_conversation_bridge::HistoryItem::User => ChatHistoryItem::User,
+        agentelier_conversation_bridge::HistoryItem::Assistant { phase } => {
+            ChatHistoryItem::Assistant { phase }
+        }
+        agentelier_conversation_bridge::HistoryItem::Reasoning { encrypted } => {
+            ChatHistoryItem::Reasoning { encrypted }
+        }
+    }
+}
+fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> ChatTurn {
+    ChatTurn {
+        id: turn.id,
+        operation_id: turn.operation_id,
+        input: turn.input,
+        messages: turn
+            .messages
+            .into_iter()
+            .map(|message| ChatMessage {
+                id: message.id,
+                output_index: message.output_index,
+                phase: message.phase,
+                text: message.text,
+            })
+            .collect(),
+        status: match turn.status {
+            TurnStatus::Running => ChatTurnStatus::Running,
+            TurnStatus::Completed => ChatTurnStatus::Completed,
+            TurnStatus::Cancelled => ChatTurnStatus::Cancelled,
+            TurnStatus::Failed(reason) => ChatTurnStatus::Failed(reason),
+        },
+        request_items: turn.request_items.into_iter().map(history_item).collect(),
+    }
+}
 fn project(session: SessionView) -> ChatSession {
     ChatSession {
         id: session.id,
@@ -368,27 +415,17 @@ fn project(session: SessionView) -> ChatSession {
         display_name: session.settings.display_name,
         effort: session.settings.effort,
         account_subject: session.settings.account_subject,
-        turn: session.turn.map(|turn| ChatTurn {
-            id: turn.id,
-            operation_id: turn.operation_id,
-            input: turn.input,
-            messages: turn
-                .messages
-                .into_iter()
-                .map(|message| ChatMessage {
-                    id: message.id,
-                    output_index: message.output_index,
-                    phase: message.phase,
-                    text: message.text,
-                })
-                .collect(),
-            status: match turn.status {
-                TurnStatus::Running => ChatTurnStatus::Running,
-                TurnStatus::Completed => ChatTurnStatus::Completed,
-                TurnStatus::Cancelled => ChatTurnStatus::Cancelled,
-                TurnStatus::Failed(reason) => ChatTurnStatus::Failed(reason),
-            },
-        }),
+        turn: session.turn.map(project_turn),
+        previous_turns: session
+            .previous_turns
+            .into_iter()
+            .map(project_turn)
+            .collect(),
+        committed_items: session
+            .committed_items
+            .into_iter()
+            .map(history_item)
+            .collect(),
     }
 }
 
@@ -524,29 +561,34 @@ fn reconcile(world: &mut World) -> Result {
             .map(|(entity, row, _)| (entity, row.clone()))
             .collect();
         let mut desired = Vec::new();
-        if let Some(session) = &session
-            && let Some(turn) = &session.turn
-        {
-            desired.push((
-                ChatRow {
-                    session: session.id,
-                    turn: turn.id,
-                    output_index: None,
-                    item_id: None,
-                },
-                format!("你\n{}", turn.input),
-            ));
-            for message in &turn.messages {
-                let phase = message.phase.as_deref().unwrap_or("回答");
+        if let Some(session) = &session {
+            for turn in session.previous_turns.iter().chain(session.turn.iter()) {
+                let status = match &turn.status {
+                    ChatTurnStatus::Cancelled => " · 已取消，未进入上下文",
+                    ChatTurnStatus::Failed(_) => " · 失败，未进入上下文",
+                    _ => "",
+                };
                 desired.push((
                     ChatRow {
                         session: session.id,
                         turn: turn.id,
-                        output_index: Some(message.output_index),
-                        item_id: Some(message.id.clone()),
+                        output_index: None,
+                        item_id: None,
                     },
-                    format!("助手 · {phase}\n{}", message.text),
+                    format!("你{status}\n{}", turn.input),
                 ));
+                for message in &turn.messages {
+                    let phase = message.phase.as_deref().unwrap_or("回答");
+                    desired.push((
+                        ChatRow {
+                            session: session.id,
+                            turn: turn.id,
+                            output_index: Some(message.output_index),
+                            item_id: Some(message.id.clone()),
+                        },
+                        format!("助手 · {phase}{status}\n{}", message.text),
+                    ));
+                }
             }
         }
         for (entity, key) in &existing {

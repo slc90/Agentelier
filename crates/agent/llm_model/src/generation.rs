@@ -2,6 +2,7 @@ use crate::model::{
     ModelFailure, ModelFailureKind, acquire, http_failure, network, recover, request_id,
     with_response,
 };
+use crate::protocol::ProtocolHistory;
 use crate::stream::{GenerationResult, STREAM_IDLE_TIMEOUT, StreamEvent, consume};
 use agentelier_account::{AuthenticatedRequest, CredentialClient};
 use reqwest::Client;
@@ -14,7 +15,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub struct GenerationRequest {
     pub slug: String,
     pub effort: Option<String>,
-    pub input: String,
+    pub context: ProtocolHistory,
     pub account_subject: String,
 }
 
@@ -39,7 +40,8 @@ pub async fn generate(
     }
     let mut payload = serde_json::json!({
         "model": generation.slug,
-        "input": [{"role": "user", "content": generation.input}],
+        "input": generation.context.into_input(),
+        "include": ["reasoning.encrypted_content"],
         "store": false,
         "stream": true,
     });
@@ -75,7 +77,15 @@ pub async fn generate(
             Err(http_failure(response).await)
         };
         match outcome {
-            Ok(result) => return Ok(result),
+            Ok(result) => {
+                if !result.output.is_replayable() {
+                    return Err(ModelFailure::new(
+                        ModelFailureKind::Protocol,
+                        "完成响应缺少无状态续接所需的加密推理项",
+                    ));
+                }
+                return Ok(result);
+            }
             Err(failure) => {
                 if let Some(replacement) =
                     recover(&credentials, &mut request, &current, &failure).await?

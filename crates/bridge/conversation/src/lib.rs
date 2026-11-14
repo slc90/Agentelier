@@ -4,6 +4,6 @@ compile_error!("This application supports Windows x64 only");
 mod conversation;
 
 pub use conversation::{
-    ConversationEvent, ConversationRequest, MessageView, SessionSettings, SessionView, TurnStatus,
-    TurnView, convert, request,
+    ConversationEvent, ConversationRequest, HistoryItem, MessageView, SessionSettings, SessionView,
+    TurnStatus, TurnView, convert, request,
 };

@@ -5,6 +5,8 @@ mod conversation;
 mod preparation;
 mod reasoning;
 
-pub use conversation::{ChatMessage, ChatSession, ChatState, ChatTurn, ChatTurnStatus};
+pub use conversation::{
+    ChatHistoryItem, ChatMessage, ChatSession, ChatState, ChatTurn, ChatTurnStatus,
+};
 pub use preparation::{ChatUiHost, ModelChoice, ModelPhase, ModelState, install};
 pub use reasoning::ReasoningSetting;

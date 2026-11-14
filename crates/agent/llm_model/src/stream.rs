@@ -2,9 +2,11 @@ use crate::model::{
     ModelFailure, ModelFailureKind, diagnostic, http_failure, network, protocol, request_id,
     service_failure,
 };
+use crate::protocol::{ProtocolItem, ProtocolOutput};
 use agentelier_account::AuthenticatedRequest;
 use reqwest::Response;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::time::{Instant, timeout_at};
@@ -27,6 +29,7 @@ pub struct OutputMessage {
 }
 pub struct GenerationResult {
     pub messages: Vec<OutputMessage>,
+    pub output: ProtocolOutput,
 }
 pub enum StreamEvent {
     Item(OutputMessage),
@@ -91,7 +94,10 @@ fn message(item: &Value, output_index: usize) -> Result<OutputMessage, ModelFail
         content,
     })
 }
-fn completed(response: &Value) -> Result<GenerationResult, ModelFailure> {
+fn completed(
+    response: &Value,
+    completed_reasoning: &HashMap<String, Value>,
+) -> Result<GenerationResult, ModelFailure> {
     if field(response, "status")? != "completed" {
         return Err(protocol("完成事件的响应状态不一致"));
     }
@@ -100,14 +106,41 @@ fn completed(response: &Value) -> Result<GenerationResult, ModelFailure> {
         .and_then(Value::as_array)
         .ok_or_else(|| protocol("完成响应缺少输出数组"))?;
     let mut messages = Vec::new();
+    let mut protocol_items = Vec::new();
     for (index, item) in output.iter().enumerate() {
         match field(item, "type")? {
-            "message" => messages.push(message(item, index)?),
-            "reasoning" => {}
+            "message" => {
+                let message = message(item, index)?;
+                protocol_items.push(ProtocolItem::Assistant {
+                    raw: item.clone(),
+                    phase: message.phase.clone(),
+                });
+                messages.push(message);
+            }
+            "reasoning" => {
+                let mut raw = item.clone();
+                if raw
+                    .get("encrypted_content")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+                    && let Some(done) = completed_reasoning.get(field(item, "id")?)
+                    && let Some(encrypted) = done.get("encrypted_content")
+                {
+                    raw["encrypted_content"] = encrypted.clone();
+                }
+                let encrypted = raw
+                    .get("encrypted_content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.is_empty());
+                protocol_items.push(ProtocolItem::Reasoning { raw, encrypted });
+            }
             _ => return Err(protocol("不支持该模型输出类型；当前未启用工具执行")),
         }
     }
-    Ok(GenerationResult { messages })
+    Ok(GenerationResult {
+        messages,
+        output: ProtocolOutput(protocol_items),
+    })
 }
 async fn publish(
     sender: Option<&Sender<StreamEvent>>,
@@ -198,6 +231,7 @@ pub(crate) async fn consume(
         return Err(failure);
     }
     let mut parser = Sse::default();
+    let mut completed_reasoning = HashMap::new();
     let mut received = 0usize;
     let mut deadline = Instant::now() + STREAM_IDLE_TIMEOUT;
     loop {
@@ -238,6 +272,7 @@ pub(crate) async fn consume(
                         event
                             .get("response")
                             .ok_or_else(|| protocol("完成事件缺少响应对象"))?,
+                        &completed_reasoning,
                     );
                 }
                 "response.failed" => {
@@ -280,7 +315,12 @@ pub(crate) async fn consume(
                             )
                             .await?
                         }
-                        "reasoning" => {}
+                        "reasoning" => {
+                            if kind == "response.output_item.done" {
+                                completed_reasoning
+                                    .insert(field(item, "id")?.to_owned(), item.clone());
+                            }
+                        }
                         _ => return Err(protocol("不支持该模型输出类型；当前未启用工具执行")),
                     }
                 }

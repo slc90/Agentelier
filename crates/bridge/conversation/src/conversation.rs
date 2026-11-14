@@ -17,6 +17,12 @@ pub enum TurnStatus {
     Failed(String),
 }
 #[derive(Clone)]
+pub enum HistoryItem {
+    User,
+    Assistant { phase: Option<String> },
+    Reasoning { encrypted: bool },
+}
+#[derive(Clone)]
 pub struct MessageView {
     pub id: String,
     pub output_index: usize,
@@ -30,12 +36,15 @@ pub struct TurnView {
     pub input: String,
     pub messages: Vec<MessageView>,
     pub status: TurnStatus,
+    pub request_items: Vec<HistoryItem>,
 }
 #[derive(Clone)]
 pub struct SessionView {
     pub id: u64,
     pub settings: SessionSettings,
     pub turn: Option<TurnView>,
+    pub previous_turns: Vec<TurnView>,
+    pub committed_items: Vec<HistoryItem>,
 }
 pub enum ConversationEvent {
     Created(SessionView),
@@ -87,32 +96,54 @@ fn view(session: agentelier_conversation::SessionView) -> SessionView {
             effort: session.settings.effort,
             account_subject: session.settings.account_subject,
         },
-        turn: session.turn.map(|turn| TurnView {
-            id: turn.id.0,
-            operation_id: turn.operation_id,
-            input: turn.input,
-            messages: turn
-                .messages
-                .into_iter()
-                .map(|message| MessageView {
-                    id: message.id,
-                    output_index: message.output_index,
-                    phase: message.phase,
-                    text: message
-                        .content
-                        .into_iter()
-                        .map(|part| part.text)
-                        .collect::<Vec<_>>()
-                        .join("\n\n"),
-                })
-                .collect(),
-            status: match turn.status {
-                agentelier_conversation::TurnStatus::Running => TurnStatus::Running,
-                agentelier_conversation::TurnStatus::Completed => TurnStatus::Completed,
-                agentelier_conversation::TurnStatus::Cancelled => TurnStatus::Cancelled,
-                agentelier_conversation::TurnStatus::Failed(reason) => TurnStatus::Failed(reason),
-            },
-        }),
+        turn: session.turn.map(turn_view),
+        previous_turns: session.previous_turns.into_iter().map(turn_view).collect(),
+        committed_items: session
+            .committed_items
+            .into_iter()
+            .map(history_item)
+            .collect(),
+    }
+}
+
+fn history_item(item: agentelier_conversation::ProtocolItemSummary) -> HistoryItem {
+    match item {
+        agentelier_conversation::ProtocolItemSummary::User => HistoryItem::User,
+        agentelier_conversation::ProtocolItemSummary::Assistant { phase } => {
+            HistoryItem::Assistant { phase }
+        }
+        agentelier_conversation::ProtocolItemSummary::Reasoning { encrypted } => {
+            HistoryItem::Reasoning { encrypted }
+        }
+    }
+}
+fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
+    TurnView {
+        id: turn.id.0,
+        operation_id: turn.operation_id,
+        input: turn.input,
+        messages: turn
+            .messages
+            .into_iter()
+            .map(|message| MessageView {
+                id: message.id,
+                output_index: message.output_index,
+                phase: message.phase,
+                text: message
+                    .content
+                    .into_iter()
+                    .map(|part| part.text)
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            })
+            .collect(),
+        request_items: turn.request_items.into_iter().map(history_item).collect(),
+        status: match turn.status {
+            agentelier_conversation::TurnStatus::Running => TurnStatus::Running,
+            agentelier_conversation::TurnStatus::Completed => TurnStatus::Completed,
+            agentelier_conversation::TurnStatus::Cancelled => TurnStatus::Cancelled,
+            agentelier_conversation::TurnStatus::Failed(reason) => TurnStatus::Failed(reason),
+        },
     }
 }
 

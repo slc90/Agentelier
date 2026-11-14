@@ -1,0 +1,32 @@
+# 聊天会话与协议历史
+
+`agentelier_conversation` 管理当前内存会话。内部 ChatSession 持有固定模型、推理设置与账号身份、展示记录，以及独立的 ProtocolHistory。Runtime 保管业务对象和网络任务，LLM Model 负责协议解析；UI 只持有可重建的展示投影与未发送草稿。
+
+## 一轮记录怎样提交
+
+```mermaid
+flowchart LR
+    H[已提交历史] --> R[历史快照与当前输入]
+    R --> T[运行 Turn 并持续展示]
+    T -->|合法完成且任务已回收| C[提交用户输入与完整输出]
+    T -->|失败或取消| V[仅保留展示记录]
+    C --> H
+```
+
+新 Turn 只在上一轮终态与任务回收后接纳；生成期间不排队或并行发送。当前输入与完整输出在成功分支一起提交一次，其他结果不改变协议历史。展示记录保留失败和部分回复，后续提问不隐式承接这些内容。
+
+## 保存协议项而非气泡文本
+
+ProtocolHistory 按原顺序保存类型化的用户输入、助手原始协议项和不透明 reasoning 项。助手输出保留 ID、角色、内容及 phase，不把公开 commentary 和 final_answer 合并成失去阶段信息的假消息。该历史不实现 Debug 或 Reflect，不作为业务日志内容。
+
+请求以 store=false 重放客户端完整历史，客户端不裁剪输入；显式请求 reasoning.encrypted_content。完成响应缺少该字段时，只能从相同 ID 的 output_item.done 取完整不透明内容；没有可续接内容则明确失败。不会提取或伪造隐藏推理。协议依据：[无状态推理续接](https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses)、[流事件](https://developers.openai.com/api/reference/resources/responses/streaming-events)。
+
+Bridge 与 UI 只取得消息正文和安全顺序摘要：User、Assistant 的公开 phase，以及 Reasoning 是否含加密内容。Turn 记录其请求项摘要，Session 记录已提交项摘要，以便观察上下文是否重复或串接；摘要不参与请求构造。
+
+## 设置与生命周期
+
+每轮请求从同一 Session 捕获设置及历史快照。准备区变化只影响下次创建，账号凭据正常续期保留当前会话；账号身份改变或退出后不复用旧上下文。上下文超限保留原记录并显示实际失败，不压缩、裁剪或自动重试。
+
+当前只有一个活动内存 Session，没有聊天持久化、会话替换、分支回滚或工具执行循环。生成与展示的传递、关闭与回收关系见[总体架构](../architecture.md#内存聊天与流式投影)。
+
+当前订阅接口拒绝显式 truncation 参数，因此不发送该字段。客户端始终提供完整的已提交历史；服务上下文超限路径尚未在真实运行中触发，不把未验证的服务端行为视为保证。

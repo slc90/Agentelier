@@ -1,5 +1,6 @@
 use agentelier_llm_model::{
-    GenerationRequest, GenerationResult, ModelFailure, OutputMessage, OutputText, StreamEvent,
+    GenerationRequest, GenerationResult, ModelFailure, OutputMessage, OutputText, ProtocolHistory,
+    ProtocolItemSummary, StreamEvent,
 };
 use std::{error::Error, fmt};
 
@@ -33,12 +34,15 @@ pub struct TurnView {
     pub input: String,
     pub messages: Vec<OutputMessage>,
     pub status: TurnStatus,
+    pub request_items: Vec<ProtocolItemSummary>,
 }
 #[derive(Clone)]
 pub struct SessionView {
     pub id: SessionId,
     pub settings: SessionSettings,
     pub turn: Option<TurnView>,
+    pub previous_turns: Vec<TurnView>,
+    pub committed_items: Vec<ProtocolItemSummary>,
 }
 pub enum ConversationEvent {
     Created(SessionView),
@@ -57,9 +61,14 @@ impl fmt::Display for ConversationFailure {
 }
 impl Error for ConversationFailure {}
 
+struct ChatSession {
+    view: SessionView,
+    history: ProtocolHistory,
+}
+
 #[derive(Default)]
 pub struct Conversation {
-    session: Option<SessionView>,
+    session: Option<ChatSession>,
     next_session: u64,
     next_turn: u64,
 }
@@ -69,7 +78,7 @@ impl Conversation {
         if self
             .session
             .as_ref()
-            .is_some_and(|session| Some(session.settings.account_subject.as_str()) != subject)
+            .is_some_and(|session| Some(session.view.settings.account_subject.as_str()) != subject)
         {
             self.session = None;
         }
@@ -101,9 +110,14 @@ impl Conversation {
             id: SessionId(id),
             settings,
             turn: None,
+            previous_turns: Vec::new(),
+            committed_items: Vec::new(),
         };
         self.next_session = id;
-        self.session = Some(session.clone());
+        self.session = Some(ChatSession {
+            view: session.clone(),
+            history: ProtocolHistory::default(),
+        });
         Ok(session)
     }
 
@@ -120,37 +134,48 @@ impl Conversation {
             .session
             .as_mut()
             .ok_or(ConversationFailure("尚未创建聊天会话"))?;
-        if session.id != session_id {
+        if session.view.id != session_id {
             return Err(ConversationFailure("聊天会话身份已变化"));
         }
-        if session.turn.is_some() {
-            return Err(ConversationFailure("当前会话已有首轮记录"));
+        if session
+            .view
+            .turn
+            .as_ref()
+            .is_some_and(|turn| matches!(turn.status, TurnStatus::Running))
+        {
+            return Err(ConversationFailure("上一轮尚未结束"));
         }
         let id = self
             .next_turn
             .checked_add(1)
             .ok_or(ConversationFailure("聊天轮次标识已耗尽"))?;
+        let context = session.history.with_user(&input);
+        let request_items = context.summary();
         let request = GenerationRequest {
-            slug: session.settings.slug.clone(),
-            effort: session.settings.effort.clone(),
-            input: input.clone(),
-            account_subject: session.settings.account_subject.clone(),
+            slug: session.view.settings.slug.clone(),
+            effort: session.view.settings.effort.clone(),
+            context,
+            account_subject: session.view.settings.account_subject.clone(),
         };
-        session.turn = Some(TurnView {
+        if let Some(previous) = session.view.turn.take() {
+            session.view.previous_turns.push(previous);
+        }
+        session.view.turn = Some(TurnView {
             id: TurnId(id),
             operation_id,
             input,
             messages: Vec::new(),
             status: TurnStatus::Running,
+            request_items,
         });
         self.next_turn = id;
-        Ok((session.clone(), request))
+        Ok((session.view.clone(), request))
     }
 
     fn turn(&mut self, operation_id: u64) -> Result<&mut TurnView, ConversationFailure> {
         self.session
             .as_mut()
-            .and_then(|session| session.turn.as_mut())
+            .and_then(|session| session.view.turn.as_mut())
             .filter(|turn| {
                 turn.operation_id == operation_id && matches!(turn.status, TurnStatus::Running)
             })
@@ -227,7 +252,8 @@ impl Conversation {
             }
         }
         self.session
-            .clone()
+            .as_ref()
+            .map(|session| session.view.clone())
             .ok_or(ConversationFailure("运行轮次缺少会话"))
     }
 
@@ -236,17 +262,26 @@ impl Conversation {
         operation_id: u64,
         outcome: Option<Result<GenerationResult, ModelFailure>>,
     ) -> Result<SessionView, ConversationFailure> {
-        let turn = self.turn(operation_id)?;
+        self.turn(operation_id)?;
+        let session = self
+            .session
+            .as_mut()
+            .ok_or(ConversationFailure("完成轮次缺少会话"))?;
+        let turn = session
+            .view
+            .turn
+            .as_mut()
+            .ok_or(ConversationFailure("完成结果缺少对应轮次"))?;
         turn.status = match outcome {
             Some(Ok(result)) => {
+                session.history.commit(&turn.input, result.output);
+                session.view.committed_items = session.history.summary();
                 turn.messages = result.messages;
                 TurnStatus::Completed
             }
             Some(Err(failure)) => TurnStatus::Failed(failure.to_string()),
             None => TurnStatus::Cancelled,
         };
-        self.session
-            .clone()
-            .ok_or(ConversationFailure("完成轮次缺少会话"))
+        Ok(session.view.clone())
     }
 }
