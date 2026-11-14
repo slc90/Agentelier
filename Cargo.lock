@@ -115,6 +115,7 @@ name = "agentelier_login"
 version = "0.1.0"
 dependencies = [
  "tempfile",
+ "winsafe",
 ]
 
 [[package]]
@@ -1858,6 +1859,7 @@ dependencies = [
  "bevy_widgetry_diagnostics",
  "bevy_widgetry_file_dialog",
  "bevy_widgetry_job",
+ "bevy_widgetry_scroll_area",
  "bevy_widgetry_theme",
  "bevy_widgetry_ui_scale",
  "bevy_widgetry_window",

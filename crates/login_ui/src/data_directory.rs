@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use tracing::{debug, error, info};
 
-type RememberDirectory = Arc<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
+pub(crate) type RememberDirectory = Arc<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
 
 pub struct LoginUiPlugin {
     options: StartupOptions,
@@ -50,6 +50,7 @@ impl Plugin for LoginUiPlugin {
         if !app.is_plugin_added::<WidgetryFileDialogPlugin>() {
             app.add_plugins(WidgetryFileDialogPlugin);
         }
+        crate::directory_settings::install(app);
         app.insert_resource(StartupUi {
             options: self.options.clone(),
             host: None,
@@ -205,6 +206,9 @@ fn start_check(world: &mut World, path: PathBuf) -> Result {
                             CheckResult::Failed { title: "无法保存数据目录选择", reason: format!("{failure}\n原配置保持不变。") }
                         }
                         Ok(()) => {
+                            if options.saved_directory.as_deref() != Some(checking_path.as_path()) {
+                                info!(path = %checking_path.display(), "已保存应用数据目录选择");
+                            }
                             if options.environment.set(environment.clone()).is_err() {
                                 CheckResult::Failed { title: "无法建立数据环境", reason: "本次运行的数据环境已建立，不能重复切换".into() }
                             } else {
@@ -295,6 +299,12 @@ fn receive_check(world: &mut World) -> Result {
         CheckResult::Ready(environment) => {
             clear_screen(world);
             world.resource_mut::<StartupUi>().phase = Phase::Ready;
+            crate::directory_settings::start(
+                world,
+                host(world)?,
+                environment.clone(),
+                world.resource::<StartupUi>().options.remember.clone(),
+            )?;
             world.trigger(DataDirectoryReady {
                 environment: environment.clone(),
             });

@@ -1,6 +1,6 @@
 # 从数据目录进入 ChatGPT 登录
 
-当前只落地[数据目录选择与启动](mechanisms/application-data.md)，尚未实现账号恢复、浏览器授权、设置页或模型请求。下文及关联认证文档描述后续设计，实施顺序见 [plans/登录](../../plans/登录/00-overview.md)。
+当前已落地[数据目录启动与设置](mechanisms/application-data.md)，尚未实现账号恢复、浏览器授权或模型请求。下文及关联认证文档描述后续设计，实施顺序见 [plans/登录](../../plans/登录/00-overview.md)。
 
 功能按 `crates/login` 与 `crates/login_ui` 划分：前者集中数据与认证能力，后者集中 Bevy 界面，应用保留通用配置和装配。后续认证能力从原方案中的 Agent 内部模块调整为由 Agent 运行侧调用 `login`；尚未实施的增量需要沿此边界落地。
 

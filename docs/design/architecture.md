@@ -1,6 +1,6 @@
 # Agentelier 总体架构
 
-当前 Workspace 包含应用 `app/`、应用 Asset 库 `crates/assets/`、登录数据能力 `crates/login/`（`agentelier_login`）、登录界面 `crates/login_ui/`（`agentelier_login_ui`），以及空 Library Crate `crates/agent/`（`agentelier_agent`）和 `crates/bridge/`（`agentelier_bridge`）。`login` 已实现数据目录环境，`login_ui` 已实现目录启动界面；账号认证尚未实现。Agent 与 Bridge 仅有骨架，尚未接入应用或引入 Tokio。下文同时说明后续执行和桥接能力的设计边界。
+当前 Workspace 包含应用 `app/`、应用 Asset 库 `crates/assets/`、登录数据能力 `crates/login/`（`agentelier_login`）、登录界面 `crates/login_ui/`（`agentelier_login_ui`），以及空 Library Crate `crates/agent/`（`agentelier_agent`）和 `crates/bridge/`（`agentelier_bridge`）。`login` 已实现数据目录环境与候选检查，`login_ui` 已实现目录启动界面和数据存储设置；账号认证尚未实现。Agent 与 Bridge 仅有骨架，尚未接入应用或引入 Tokio。下文同时说明后续执行和桥接能力的设计边界。
 
 Agentelier 是以 Bevy 构建交互界面的 Rust 桌面 Agent 应用。应用的交互与 Agent 的执行有不同的运行需求：前者由 Bevy ECS 与 Winit 驱动，后者需要持续处理异步模型响应、工具执行和任务生命周期。
 
@@ -35,6 +35,8 @@ Bevy 应用拥有窗口和 Winit 事件循环，使用 ECS 管理应用业务状
 当前入口先建立可执行文件旁的日志，加载 `config/config.ron`，再装配同一套 Bevy 运行时。`login_ui` 在启动窗口的内容宿主中复用 Widgetry 目录选择器，通过辅助后台任务调用 `login` 检查并占用目录，再调用 `app` 提供的保存操作提交新选择。完成后复用当前窗口进入主界面。数据环境保持到后台任务及日志收尾完成；当前仅确定 `auth.json` 路径，尚未实现账号恢复。具体关系见[数据目录与启动](mechanisms/application-data.md)。
 
 `app` 保留通用配置、日志和应用装配；具体登录界面归 `login_ui`，数据环境与后续认证能力归 `login`。`login` 不依赖 Bevy，也不反向依赖应用；`login_ui` 依赖 `login`、Bevy 和 Widgetry。后续认证执行仍在 Agent/Tokio 侧协调，具体认证能力由 `login` 承载。
+
+目录设置继续归 `login_ui`：显示本次固定路径、打开当前目录、检查并保存下次启动位置，并按操作 ID 接收后台结果。候选检查不持有第二份长期占用。`app::config::ConfigStore` 串行合并最新配置并完整替换提交，启动与设置复用同一保存入口；文件保存成功才更新对应运行时状态。设置更改不修改当前数据环境，也不搬运文件。
 
 ### Agent：执行与运行状态
 

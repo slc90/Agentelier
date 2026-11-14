@@ -3,4 +3,4 @@ compile_error!("This application supports Windows x64 only");
 
 mod data_directory;
 
-pub use data_directory::DataEnvironment;
+pub use data_directory::{DataEnvironment, validate_data_directory};

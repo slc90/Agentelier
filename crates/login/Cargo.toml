@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 tempfile.workspace = true
+winsafe = { workspace = true, features = ["shell"] }
 
 [lints]
 workspace = true

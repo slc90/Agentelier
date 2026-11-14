@@ -1,8 +1,9 @@
-use bevy::prelude::*;
+use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use tempfile::NamedTempFile;
 
 const DEFAULT_SCALE_FACTOR: f32 = 1.25;
@@ -11,7 +12,7 @@ const DEFAULT_BRP_PORT: u16 = 15702;
 const RENDER_WORLD_BRP_PORT: u16 = 15703;
 const BRP_PORT_RANGE: std::ops::RangeInclusive<u16> = 1024..=65534;
 
-#[derive(Resource, Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AppConfig {
     pub(crate) scale_factor: f32,
@@ -55,15 +56,14 @@ impl AppConfig {
             .map_err(io::Error::other)
     }
 
-    pub(crate) fn save(&self, file: &ConfigFile) -> io::Result<()> {
+    fn save(&self, file: &ConfigFile) -> io::Result<()> {
         file.prepare(self)?.persist(&file.path)?;
         Ok(())
     }
 }
 
-#[derive(Resource, Clone)]
 pub(crate) struct ConfigFile {
-    pub(crate) path: PathBuf,
+    path: PathBuf,
 }
 
 impl ConfigFile {
@@ -89,6 +89,32 @@ impl ConfigFile {
 pub(crate) struct LoadedConfig {
     pub(crate) config: AppConfig,
     pub(crate) file: ConfigFile,
+}
+
+#[derive(Resource, Clone)]
+pub(crate) struct ConfigStore(Arc<Mutex<LoadedConfig>>);
+
+impl ConfigStore {
+    pub(crate) fn new(loaded: LoadedConfig) -> Self {
+        Self(Arc::new(Mutex::new(loaded)))
+    }
+
+    pub(crate) fn remember_data_directory(&self, path: &Path) -> io::Result<()> {
+        let mut current = self
+            .0
+            .lock()
+            .map_err(|_| io::Error::other("应用配置状态不可用"))?;
+        let mut updated = current.config.clone();
+        updated.data_directory = Some(path.to_path_buf());
+        updated.save(&current.file).map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("配置 {}：{error}", current.file.path.display()),
+            )
+        })?;
+        current.config = updated;
+        Ok(())
+    }
 }
 
 pub(crate) fn load(path: PathBuf) -> io::Result<LoadedConfig> {

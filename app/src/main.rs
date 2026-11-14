@@ -24,7 +24,7 @@ use bevy_widgetry::window::{
 };
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 const JOB_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const JOB_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -78,27 +78,16 @@ fn run(
             ),
         ))
     })?;
-    let startup_config = loaded.config.clone();
-    let config_file = loaded.file.clone();
+    let config = loaded.config.clone();
+    let config_store = config::ConfigStore::new(loaded);
+    let save_config = config_store.clone();
     let login_ui = LoginUiPlugin::new(
-        loaded.config.data_directory.clone(),
+        config.data_directory.clone(),
         data_environment,
-        move |directory| {
-            let mut updated = startup_config.clone();
-            updated.data_directory = Some(directory.to_path_buf());
-            updated.save(&config_file).map_err(|error| {
-                std::io::Error::new(
-                    error.kind(),
-                    format!("配置 {}：{error}", config_file.path.display()),
-                )
-            })?;
-            info!(path = %directory.display(), "已保存应用数据目录选择");
-            Ok(())
-        },
+        move |directory| save_config.remember_data_directory(directory),
     );
     app.insert_resource(
-        WidgetryUiScale::new(loaded.config.scale_factor)
-            .map_err(|failure| failure.into_bevy_error())?,
+        WidgetryUiScale::new(config.scale_factor).map_err(|failure| failure.into_bevy_error())?,
     )
     .add_plugins(WidgetryUiScalePlugin);
     app.insert_resource(WinitSettings::desktop_app());
@@ -117,11 +106,10 @@ fn run(
                 ..default()
             }),
     );
-    if loaded.config.brp_enabled {
-        app.add_plugins(BrpRuntimePlugin::with_port(loaded.config.brp_port));
+    if config.brp_enabled {
+        app.add_plugins(BrpRuntimePlugin::with_port(config.brp_port));
     }
-    app.insert_resource(loaded.config)
-        .insert_resource(loaded.file)
+    app.insert_resource(config_store)
         .add_plugins((AppAssetPlugin, WidgetryWindowPlugin, login_ui))
         .add_systems(Startup, setup)
         .add_observer(enter_main);
@@ -155,11 +143,9 @@ fn finish_jobs(manager: &JobManager) -> Result {
 }
 
 fn enter_main(
-    event: On<DataDirectoryReady>,
-    mut config: ResMut<config::AppConfig>,
+    _event: On<DataDirectoryReady>,
     mut primary: Query<&mut Window, With<PrimaryWindow>>,
 ) -> Result {
-    config.data_directory = Some(event.environment.root().to_path_buf());
     let mut window = primary.single_mut().map_err(diagnostics::operation)?;
     window.title = "agentelier".into();
     window.resolution.set(1920.0, 1080.0);
