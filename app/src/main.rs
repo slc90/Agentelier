@@ -6,7 +6,7 @@ compile_error!("This application template supports Windows x64 only");
 mod config;
 mod diagnostics;
 
-use agentelier_login::DataEnvironment;
+use agentelier_login::{DataEnvironment, display_path};
 use agentelier_login_ui::{DataDirectoryReady, LoginUiHost, LoginUiPlugin};
 use bevy::log::LogPlugin;
 use bevy::window::{MonitorSelection, PrimaryWindow, WindowPosition, WindowResolution};
@@ -74,7 +74,7 @@ fn run(
             error.kind(),
             format!(
                 "无法加载应用配置 {}：{error}；原文件保持不变",
-                config_path.display()
+                display_path(&config_path)
             ),
         ))
     })?;

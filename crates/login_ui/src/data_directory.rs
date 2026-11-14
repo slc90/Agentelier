@@ -1,4 +1,4 @@
-use agentelier_login::DataEnvironment;
+use agentelier_login::{DataEnvironment, display_path};
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use bevy_widgetry::button::WidgetryButton;
@@ -180,14 +180,14 @@ fn start_check(world: &mut World, path: PathBuf) -> Result {
     let submission = manager.spawn_thread(
         JobOptions { label: Some("检查应用数据目录并保存选择".into()), ..default() },
         move |context| {
-            debug!(path = %checking_path.display(), "开始检查应用数据目录");
+            debug!(path = %display_path(&checking_path), "开始检查应用数据目录");
             if context.is_cancelled() {
                 context.acknowledge_cancel();
                 return Ok(());
             }
             let result = match DataEnvironment::acquire(&checking_path) {
                 Err(failure) => {
-                    error!(path = %checking_path.display(), error = %failure, "应用数据目录不可用");
+                    error!(path = %display_path(&checking_path), error = %failure, "应用数据目录不可用");
                     CheckResult::Failed { title: "应用数据目录不可用", reason: failure.to_string() }
                 }
                 Ok(environment) => {
@@ -202,17 +202,17 @@ fn start_check(world: &mut World, path: PathBuf) -> Result {
                     };
                     match save {
                         Err(failure) => {
-                            error!(path = %checking_path.display(), error = %failure, "无法保存数据目录选择");
+                            error!(path = %display_path(&checking_path), error = %failure, "无法保存数据目录选择");
                             CheckResult::Failed { title: "无法保存数据目录选择", reason: format!("{failure}\n原配置保持不变。") }
                         }
                         Ok(()) => {
                             if options.saved_directory.as_deref() != Some(checking_path.as_path()) {
-                                info!(path = %checking_path.display(), "已保存应用数据目录选择");
+                                info!(path = %display_path(&checking_path), "已保存应用数据目录选择");
                             }
                             if options.environment.set(environment.clone()).is_err() {
                                 CheckResult::Failed { title: "无法建立数据环境", reason: "本次运行的数据环境已建立，不能重复切换".into() }
                             } else {
-                                debug!(path = %environment.root().display(), credentials_path = %environment.credentials_path().display(), "本次数据环境已就绪并取得独占占用");
+                                debug!(path = %display_path(environment.root()), credentials_path = %display_path(environment.credentials_path()), "本次数据环境已就绪并取得独占占用");
                                 CheckResult::Ready(environment)
                             }
                         }
@@ -222,14 +222,14 @@ fn start_check(world: &mut World, path: PathBuf) -> Result {
             if context.send_blocking(result)? == SendStatus::Canceled {
                 context.acknowledge_cancel();
             }
-            debug!(path = %checking_path.display(), "数据目录准备任务已结束");
+            debug!(path = %display_path(&checking_path), "数据目录准备任务已结束");
             Ok(())
         },
     );
     let (id, receiver) = match submission {
         Ok(submission) => submission,
         Err(failure) => {
-            error!(path = %path.display(), error = %failure, "无法启动数据目录准备任务");
+            error!(path = %display_path(&path), error = %failure, "无法启动数据目录准备任务");
             return show_failure(
                 world,
                 path,
@@ -339,7 +339,7 @@ fn recovery_button(label: &'static str, name: &'static str, choice: RecoveryChoi
 fn show_failure(world: &mut World, path: PathBuf, title: &str, reason: &str) -> Result {
     clear_screen(world);
     let host = host(world)?;
-    let text = format!("{title}\n\n目录：{}\n原因：{reason}", path.display());
+    let text = format!("{title}\n\n目录：{}\n原因：{reason}", display_path(&path));
     let screen = world
         .commands()
         .spawn_scene_with_error_handler(bsn! {

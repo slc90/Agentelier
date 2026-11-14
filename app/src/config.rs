@@ -1,3 +1,4 @@
+use agentelier_login::display_path;
 use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -109,7 +110,7 @@ impl ConfigStore {
         updated.save(&current.file).map_err(|error| {
             io::Error::new(
                 error.kind(),
-                format!("配置 {}：{error}", current.file.path.display()),
+                format!("配置 {}：{error}", display_path(&current.file.path)),
             )
         })?;
         current.config = updated;

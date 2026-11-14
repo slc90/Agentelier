@@ -1,5 +1,5 @@
 use crate::data_directory::RememberDirectory;
-use agentelier_login::{DataEnvironment, validate_data_directory};
+use agentelier_login::{DataEnvironment, display_path, validate_data_directory};
 use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::InteractionDisabled;
@@ -136,9 +136,9 @@ fn render(world: &mut World) -> Result {
     let host = state.host;
     let view = state.view;
     let current = state.current.root().to_path_buf();
-    let current_text = current.display().to_string();
+    let current_text = display_path(&current);
     let next = state.next_directory.clone();
-    let next_text = next.display().to_string();
+    let next_text = display_path(&next);
     let failure = state.error.clone().unwrap_or_default();
     let busy = state.pending.is_some();
     let status = match state.pending.as_ref().map(|pending| &pending.kind) {
@@ -307,8 +307,8 @@ fn start_operation(world: &mut World, operation_id: u64, operation: Operation) -
                 },
             };
             match &result {
-                Ok(OperationSuccess::Opened) => info!(operation_id, path = %current.root().display(), "已请求资源管理器打开当前数据目录"),
-                Ok(OperationSuccess::Saved(path)) => info!(operation_id, path = %path.display(), "已保存下次启动使用的数据目录"),
+                Ok(OperationSuccess::Opened) => info!(operation_id, path = %display_path(current.root()), "已请求资源管理器打开当前数据目录"),
+                Ok(OperationSuccess::Saved(path)) => info!(operation_id, path = %display_path(path), "已保存下次启动使用的数据目录"),
                 Err(failure) => error!(operation_id, error = %failure, "数据目录设置操作失败"),
             }
             if context.send_blocking(OperationReply {operation_id, result})? == SendStatus::Canceled {
@@ -377,7 +377,7 @@ fn receive_operation(world: &mut World) -> Result {
                         "{}：{failure}",
                         match pending.kind {
                             Operation::Save(path) =>
-                                format!("无法设置下次启动目录 {}", path.display()),
+                                format!("无法设置下次启动目录 {}", display_path(&path)),
                             Operation::Open => "无法打开当前目录".into(),
                         }
                     ))
