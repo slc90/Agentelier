@@ -1,6 +1,7 @@
 use bevy::prelude::Resource;
 use bevy_widgetry_path_display::display_path;
-use serde::{Deserialize, Serialize};
+use serde::ser::Error as _;
+use serde::{Deserialize, Serialize, Serializer};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -19,8 +20,25 @@ pub(crate) struct AppConfig {
     pub(crate) scale_factor: f32,
     pub(crate) brp_enabled: bool,
     pub(crate) brp_port: u16,
-    #[serde(default)]
+    #[serde(default, serialize_with = "serialize_data_directory")]
     pub(crate) data_directory: Option<PathBuf>,
+}
+
+fn serialize_data_directory<S: Serializer>(
+    directory: &Option<PathBuf>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let Some(directory) = directory else {
+        return serializer.serialize_none();
+    };
+    let path = directory
+        .to_str()
+        .ok_or_else(|| S::Error::custom("path contains invalid UTF-8 characters"))?;
+    if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        serializer.serialize_some(&format!(r"\\{unc}"))
+    } else {
+        serializer.serialize_some(path.strip_prefix(r"\\?\").unwrap_or(path))
+    }
 }
 
 impl Default for AppConfig {
