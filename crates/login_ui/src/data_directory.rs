@@ -53,6 +53,7 @@ impl Plugin for LoginUiPlugin {
         }
         crate::directory_settings::install(app);
         crate::account::install(app);
+        crate::model::install(app);
         app.insert_resource(StartupUi {
             options: self.options.clone(),
             host: None,

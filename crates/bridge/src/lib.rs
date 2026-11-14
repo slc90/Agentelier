@@ -5,6 +5,6 @@ mod connection;
 
 pub use connection::{
     AccountEvent, AccountEventKind, AccountSnapshot, AccountSummary, AuthorizationLink,
-    BridgeFailure, Connection, CredentialState, RemoteRevocation, SessionActivity, SessionFailure,
-    SessionFailureKind, SignOutStage,
+    BridgeFailure, Connection, CredentialState, ModelFailure, ModelFailureKind, ModelReply,
+    RemoteRevocation, SessionActivity, SessionFailure, SessionFailureKind, SignOutStage,
 };

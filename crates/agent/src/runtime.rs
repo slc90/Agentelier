@@ -1,4 +1,5 @@
 use crate::credentials::{CredentialClient, CredentialIntent};
+use crate::model::{self, ModelFailure, ModelReply};
 use agentelier_login::{
     AuthFile, BrowserLogin, CredentialPreparation, LoginFailure, LoginStage, RemoteRevocation,
     RestoreFailure, RestoredAccount, SessionActivity, SessionFailure, SessionFailureKind,
@@ -19,6 +20,8 @@ pub struct AgentEvent {
     pub kind: AgentEventKind,
 }
 pub enum AgentEventKind {
+    ModelCompleted(Result<ModelReply, ModelFailure>),
+    ModelCancelled,
     SignOutProgress(SignOutStage),
     SignOutFailed(SignOutFailure),
     SignedOut {
@@ -102,6 +105,11 @@ impl Error for RuntimeFailure {
 }
 
 pub(super) enum Command {
+    VerifyModel {
+        id: u64,
+        control: ModelControl,
+    },
+    ModelFinished(Result<Option<Result<ModelReply, ModelFailure>>, tokio::task::JoinError>),
     SignOut(u64),
     Credentials {
         intent: CredentialIntent,
@@ -124,6 +132,66 @@ pub struct AgentRuntime {
     credentials: CredentialClient,
     shutdown: CancellationToken,
     sign_out_commands: mpsc::Sender<u64>,
+    model: Option<ModelControl>,
+}
+
+#[derive(Clone)]
+pub(super) struct ModelControl {
+    cancel: CancellationToken,
+    finished: CancellationToken,
+}
+struct ModelTask {
+    id: u64,
+    control: ModelControl,
+    handle: tokio::task::JoinHandle<Option<Result<ModelReply, ModelFailure>>>,
+}
+impl ModelTask {
+    fn start(id: u64, control: ModelControl, credentials: CredentialClient) -> Self {
+        let cancel = control.cancel.clone();
+        let handle = tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            debug!(operation_id = id, "模型连接操作执行体已启动");
+            let result = tokio::select! { biased;
+                _ = cancel.cancelled() => None,
+                result = model::verify(credentials) => Some(result),
+            };
+            debug!(
+                operation_id = id,
+                elapsed_ms = started.elapsed().as_millis(),
+                cancelled = result.is_none(),
+                "模型连接操作执行体已结束"
+            );
+            result
+        });
+        Self {
+            id,
+            control,
+            handle,
+        }
+    }
+}
+fn model_event(
+    result: Result<Option<Result<ModelReply, ModelFailure>>, tokio::task::JoinError>,
+) -> AgentEventKind {
+    match result {
+        Ok(Some(result)) => AgentEventKind::ModelCompleted(result),
+        Ok(None) => AgentEventKind::ModelCancelled,
+        Err(_) => AgentEventKind::ModelCompleted(Err(ModelFailure::task())),
+    }
+}
+async fn stop_model(
+    model: &mut Option<ModelTask>,
+    publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
+) -> Result<(), RuntimeFailure> {
+    if let Some(task) = model.take() {
+        task.control.cancel.cancel();
+        debug!(operation_id = task.id, "已请求取消模型操作，等待执行体结束");
+        let result = task.handle.await;
+        task.control.finished.cancel();
+        debug!(operation_id = task.id, "模型操作已真实结束并回收");
+        emit(publish, task.id, model_event(result))?;
+    }
+    Ok(())
 }
 
 impl AgentRuntime {
@@ -151,18 +219,37 @@ impl AgentRuntime {
                         let mut file = AuthFile::new(credentials_path);
                         let mut pending_save = None;
                         let mut delivery_failure = None;
+                        let mut model: Option<ModelTask> = None;
+                        let execution = async {
                         loop {
                             let command = tokio::select! { biased;
                                 request = sign_out_incoming.recv() => match request { Some(id) => Command::SignOut(id), None => break },
                                 _ = runtime_shutdown.cancelled() => break,
+                                result = async { match &mut model {
+                                    Some(task) => (&mut task.handle).await,
+                                    None => std::future::pending().await,
+                                }} => Command::ModelFinished(result),
                                 command = incoming.recv() => match command { Some(command) => command, None => break },
                             };
                             match command {
+                                Command::VerifyModel { id, control } => {
+                                    if model.is_some() { return Err(RuntimeFailure::Busy); }
+                                    model = Some(ModelTask::start(id, control, owner_credentials.clone()));
+                                }
+                                Command::ModelFinished(result) => {
+                                    let task = model.take().ok_or_else(|| RuntimeFailure::Storage("模型终态缺少所属任务".into()))?;
+                                    task.control.finished.cancel();
+                                    debug!(operation_id = task.id, "模型操作已真实结束并回收");
+                                    capture_delivery(emit(&publish, task.id, model_event(result)), &mut delivery_failure);
+                                }
                                 Command::SignOut(id) => {
+                                    capture_delivery(stop_model(&mut model, &publish).await, &mut delivery_failure);
                                     pending_save = None;
                                     while let Ok(command) = incoming.try_recv() {
-                                        if let Command::Credentials { result, .. } = command {
-                                            result.send_replace(Some(Err(SessionFailure::new(SessionFailureKind::SignedOut, "退出已取消尚未开始的凭据请求"))));
+                                        match command {
+                                            Command::Credentials { result, .. } => { result.send_replace(Some(Err(SessionFailure::new(SessionFailureKind::SignedOut, "退出已取消尚未开始的凭据请求")))); }
+                                            Command::VerifyModel { control, .. } => control.finished.cancel(),
+                                            _ => {}
                                         }
                                     }
                                     let (returned, failure) = sign_out(file, id, &owner_credentials, &publish).await?;
@@ -258,6 +345,10 @@ impl AgentRuntime {
                             }
                             if delivery_failure.is_some() && !owner_credentials.is_signing_out()? { break; }
                         }
+                        Ok::<AuthFile, RuntimeFailure>(file)
+                        }.await;
+                        capture_delivery(stop_model(&mut model, &publish).await, &mut delivery_failure);
+                        let file = execution?;
                         if file.has_pending_session_update() || file.has_pending_sign_out() {
                             let (_, result) = blocking(file, AuthFile::save_pending).await?;
                             result.map_err(|failure| RuntimeFailure::Storage(failure.to_string()))?;
@@ -280,6 +371,7 @@ impl AgentRuntime {
             credentials,
             shutdown,
             sign_out_commands,
+            model: None,
         })
     }
 
@@ -288,6 +380,18 @@ impl AgentRuntime {
     }
     pub fn credentials(&self) -> CredentialClient {
         self.credentials.clone()
+    }
+    pub fn verify_model(&mut self, id: u64) -> Result<(), RuntimeFailure> {
+        let control = ModelControl {
+            cancel: CancellationToken::new(),
+            finished: CancellationToken::new(),
+        };
+        self.send(Command::VerifyModel {
+            id,
+            control: control.clone(),
+        })?;
+        self.model = Some(control);
+        Ok(())
     }
     pub fn sign_out(&mut self, id: u64) -> Result<(), RuntimeFailure> {
         if self.shutdown.is_cancelled() {
@@ -301,6 +405,9 @@ impl AgentRuntime {
                     mpsc::error::TrySendError::Closed(_) => RuntimeFailure::Closed,
                 })
         })?;
+        if let Some(model) = &self.model {
+            model.cancel.cancel();
+        }
         if let Some((_, cancel)) = &self.active {
             cancel.cancel();
         }
@@ -328,6 +435,13 @@ impl AgentRuntime {
         self.send(Command::Cancel(operation_id))
     }
     fn send(&self, command: Command) -> Result<(), RuntimeFailure> {
+        if self
+            .model
+            .as_ref()
+            .is_some_and(|model| !model.finished.is_cancelled())
+        {
+            return Err(RuntimeFailure::Busy);
+        }
         self.credentials.submit_operation(|| {
             self.commands
                 .as_ref()
@@ -341,6 +455,9 @@ impl AgentRuntime {
     }
     pub fn begin_shutdown(&mut self) {
         self.shutdown.cancel();
+        if let Some(model) = &self.model {
+            model.cancel.cancel();
+        }
         if let Some((_, token)) = &self.active {
             token.cancel();
         }

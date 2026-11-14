@@ -3,7 +3,7 @@ use agentelier_bridge::{
 };
 use agentelier_login_ui::{
     AccountPhase, AccountState, AccountSummary, CredentialState, DataDirectoryReady, LoginAction,
-    RestoreAccount, SessionActivity,
+    ModelState, RestoreAccount, SessionActivity, VerifyModel,
 };
 use bevy::prelude::*;
 use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
@@ -81,6 +81,7 @@ pub(crate) fn install(app: &mut App, backend: AuthenticationBackend) {
         .add_observer(ready)
         .add_observer(retry)
         .add_observer(login_action)
+        .add_observer(verify_model)
         .add_systems(Update, receive);
 }
 fn ready(
@@ -104,6 +105,9 @@ fn login_action(event: On<LoginAction>, mut commands: Commands) {
     commands.queue(move |world: &mut World| action_request(world, action));
 }
 fn request(world: &mut World, request: Request) -> Result {
+    if world.resource::<ModelState>().operation.is_some() {
+        return Ok(());
+    }
     let state = world.resource::<AccountState>();
     if state.operation.is_some() || state.runtime_failed {
         return Ok(());
@@ -266,6 +270,21 @@ fn receive(world: &mut World) -> Result {
     };
     let mut open = false;
     for event in events {
+        match event.kind {
+            AccountEventKind::ModelCompleted(result) => {
+                receive_model(world, event.operation_id, result)?;
+                continue;
+            }
+            AccountEventKind::ModelCancelled => {
+                let mut model = world.resource_mut::<ModelState>();
+                if model.operation == Some(event.operation_id) {
+                    *model = ModelState::default();
+                }
+                debug!(operation_id = event.operation_id, "模型验证已实际取消");
+                continue;
+            }
+            _ => {}
+        }
         if event.operation_id != 0
             && world.resource::<AccountState>().operation != Some(event.operation_id)
         {
@@ -277,6 +296,7 @@ fn receive(world: &mut World) -> Result {
             .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
         let mut state = world.resource_mut::<AccountState>();
         match event.kind {
+            AccountEventKind::ModelCompleted(_) | AccountEventKind::ModelCancelled => {}
             AccountEventKind::SignOutProgress(stage) => {
                 backend.authorization = None;
                 open = false;
@@ -422,6 +442,9 @@ fn receive(world: &mut World) -> Result {
         }
     }
     if let Some(failure) = failure {
+        let mut model = world.resource_mut::<ModelState>();
+        model.operation = None;
+        model.error = Some(failure.to_string());
         let mut state = world.resource_mut::<AccountState>();
         state.operation = None;
         state.phase = AccountPhase::Idle;
@@ -480,6 +503,7 @@ fn sign_out(world: &mut World) -> Result {
     match connection.sign_out() {
         Ok(id) => {
             backend.authorization = None;
+            *world.resource_mut::<ModelState>() = ModelState::default();
             let mut state = world.resource_mut::<AccountState>();
             state.operation = Some(id);
             state.phase = AccountPhase::SigningOut;
@@ -497,6 +521,68 @@ fn sign_out(world: &mut World) -> Result {
         Err(failure) => {
             error!(error = %failure, "无法请求退出登录");
             world.resource_mut::<AccountState>().error = Some(failure.to_string());
+        }
+    }
+    Ok(())
+}
+fn verify_model(_event: On<VerifyModel>, mut commands: Commands) {
+    commands.queue(|world: &mut World| -> Result {
+        if !world
+            .resource::<ModelState>()
+            .can_start(world.resource::<AccountState>())
+        {
+            return Ok(());
+        }
+        let backend = world.resource::<AuthenticationBackend>().clone();
+        let mut backend = backend
+            .0
+            .lock()
+            .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
+        if backend.stopping {
+            return Ok(());
+        }
+        let connection = backend
+            .connection
+            .as_mut()
+            .ok_or_else(|| io::Error::other("认证运行未建立"))?;
+        let mut state = world.resource_mut::<ModelState>();
+        *state = ModelState::default();
+        match connection.verify_model() {
+            Ok(id) => {
+                state.operation = Some(id);
+                info!(operation_id = id, "开始验证模型连接");
+            }
+            Err(failure) => {
+                state.error = Some(failure.to_string());
+                error!(error = %failure, "无法开始模型连接验证");
+            }
+        }
+        Ok(())
+    });
+}
+fn receive_model(
+    world: &mut World,
+    id: u64,
+    result: std::result::Result<agentelier_bridge::ModelReply, agentelier_bridge::ModelFailure>,
+) -> Result {
+    let mut state = world.resource_mut::<ModelState>();
+    if state.operation != Some(id) {
+        return Err(io::Error::other("模型结果不属于当前验证操作").into());
+    }
+    state.operation = None;
+    match result {
+        Ok(reply) => {
+            info!(operation_id = id, model = reply.model, "模型连接验证完成");
+            state.model = Some(reply.model);
+            state.text = Some(if reply.text.is_empty() {
+                "请求已完成，但没有文本内容".into()
+            } else {
+                reply.text
+            });
+        }
+        Err(failure) => {
+            error!(operation_id = id, kind = ?failure.kind, status = failure.status, code = failure.code, request_id = failure.request_id, "模型连接验证失败");
+            state.error = Some(failure.to_string());
         }
     }
     Ok(())

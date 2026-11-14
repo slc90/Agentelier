@@ -9,6 +9,9 @@ agentelier_login = { path = "../login" }
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

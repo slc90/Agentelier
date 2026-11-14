@@ -109,6 +109,9 @@ name = "agentelier_agent"
 version = "0.1.0"
 dependencies = [
  "agentelier_login",
+ "reqwest",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tracing",

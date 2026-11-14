@@ -262,26 +262,38 @@ fn button_state(state: &AccountState, action: ButtonAction) -> (bool, bool, bool
         loading || browser_busy,
     )
 }
-fn button(state: &AccountState, action: ButtonAction, name: &'static str) -> impl Scene {
+fn button(
+    state: &AccountState,
+    action: ButtonAction,
+    name: &'static str,
+    model_busy: bool,
+) -> impl Scene {
     let text = label(state, action);
-    let (visible, _, _) = button_state(state, action);
+    let (visible, disabled, _) = button_state(state, action);
+    let disabled = disabled || model_blocks(model_busy, action);
     let display = if visible {
         Display::Flex
     } else {
         Display::None
     };
-    bsn! {
-        @WidgetryButton {
-            @children: {Some(Box::new(bsn_list! {
-                Text(text) WidgetryText template(move |_| Ok(ButtonLabel(action)))
-            }) as Box<dyn SceneList>)}
-        }
-        Name(name) template(move |_| Ok(action))
-        Node { min_width: px(BUTTON_WIDTH), height: px(BUTTON_HEIGHT), align_self: AlignSelf::Start, flex_shrink: 0.0, display: display }
-        on(activate)
-    }
+    (
+        bsn! {
+            @WidgetryButton {
+                @children: {Some(Box::new(bsn_list! {
+                    Text(text) WidgetryText template(move |_| Ok(ButtonLabel(action)))
+                }) as Box<dyn SceneList>)}
+            }
+            Name(name) template(move |_| Ok(action))
+            Node { min_width: px(BUTTON_WIDTH), height: px(BUTTON_HEIGHT), align_self: AlignSelf::Start, flex_shrink: 0.0, display: display }
+            on(activate)
+        },
+        disabled.then_some(bsn! { InteractionDisabled }),
+    )
 }
-pub(crate) fn account_panel(state: &AccountState) -> impl Scene {
+fn model_blocks(busy: bool, action: ButtonAction) -> bool {
+    busy && !matches!(action, ButtonAction::Login(LoginAction::SignOut))
+}
+pub(crate) fn account_panel(state: &AccountState, model_busy: bool) -> impl Scene {
     let name = identity(state);
     let status = status(state);
     let error = state
@@ -303,15 +315,15 @@ pub(crate) fn account_panel(state: &AccountState) -> impl Scene {
             TextLayout::linebreak(LineBreak::AnyCharacter) Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }--
             Node { width: percent(100), column_gap: px(ACCOUNT_GAP), row_gap: px(ACCOUNT_GAP), flex_wrap: FlexWrap::Wrap }
             Children [
-                @button(state, ButtonAction::Login(LoginAction::Login), "AccountLogin")--
-                @button(state, ButtonAction::Login(LoginAction::Consent), "AccountConsent")--
-                @button(state, ButtonAction::Login(LoginAction::CheckSession), "AccountCheckSession")--
-                @button(state, ButtonAction::Login(LoginAction::SignOut), "AccountSignOut")--
-                @button(state, ButtonAction::Login(LoginAction::OpenBrowser), "AccountOpenBrowser")--
-                @button(state, ButtonAction::Login(LoginAction::CopyLink), "AccountCopyLink")--
-                @button(state, ButtonAction::Login(LoginAction::RetrySave), "AccountRetrySave")--
-                @button(state, ButtonAction::Login(LoginAction::Cancel), "AccountCancel")--
-                @button(state, ButtonAction::Restore, "AccountRestore")
+                @button(state, ButtonAction::Login(LoginAction::Login), "AccountLogin", model_busy)--
+                @button(state, ButtonAction::Login(LoginAction::Consent), "AccountConsent", model_busy)--
+                @button(state, ButtonAction::Login(LoginAction::CheckSession), "AccountCheckSession", model_busy)--
+                @button(state, ButtonAction::Login(LoginAction::SignOut), "AccountSignOut", model_busy)--
+                @button(state, ButtonAction::Login(LoginAction::OpenBrowser), "AccountOpenBrowser", model_busy)--
+                @button(state, ButtonAction::Login(LoginAction::CopyLink), "AccountCopyLink", model_busy)--
+                @button(state, ButtonAction::Login(LoginAction::RetrySave), "AccountRetrySave", model_busy)--
+                @button(state, ButtonAction::Login(LoginAction::Cancel), "AccountCancel", model_busy)--
+                @button(state, ButtonAction::Restore, "AccountRestore", model_busy)
             ]
         ]
     }
@@ -320,11 +332,12 @@ fn activate(
     event: On<Activate>,
     actions: Query<&ButtonAction>,
     state: Res<AccountState>,
+    model: Res<crate::ModelState>,
     mut commands: Commands,
 ) -> Result {
     let action = *actions.get(event.entity)?;
     let (visible, disabled, _) = button_state(&state, action);
-    if visible && !disabled {
+    if visible && !disabled && !model_blocks(model.operation.is_some(), action) {
         match action {
             ButtonAction::Restore => {
                 commands.trigger(RestoreAccount);
@@ -338,6 +351,7 @@ fn activate(
 }
 fn update_panel(
     state: Res<AccountState>,
+    model: Res<crate::ModelState>,
     mut text: Query<(
         &mut Text,
         Has<AccountIdentity>,
@@ -349,7 +363,7 @@ fn update_panel(
     mut buttons: Query<(Entity, &ButtonAction, &mut Node)>,
     mut commands: Commands,
 ) {
-    if !state.is_changed() {
+    if !state.is_changed() && !model.is_changed() {
         return;
     }
     for (mut text, is_identity, is_status, is_error, is_feedback, button) in &mut text {
@@ -371,6 +385,7 @@ fn update_panel(
     }
     for (entity, action, mut node) in &mut buttons {
         let (visible, disabled, loading) = button_state(&state, *action);
+        let disabled = disabled || model_blocks(model.operation.is_some(), *action);
         node.display = if visible {
             Display::Flex
         } else {

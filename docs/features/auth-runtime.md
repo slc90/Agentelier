@@ -8,7 +8,7 @@
 
 `begin_shutdown()` 停止新命令和普通通知，取消当前监听与网络等待，已开始的文件提交继续结束。`is_finished()` 非阻塞检查线程，`finish()` join 并取得真实结果；线程只有在 Tokio 释放后才结束。宿主必须显式收尾处理错误，Drop 仅提供阻塞兜底。
 
-Bridge、Agent、login 都不依赖 Bevy。宿主负责 Winit 通知、非敏感 UI 投影、系统默认浏览器和剪贴板；浏览器辅助任务继续归 Widgetry JobManager。首次打开及重新打开均通过 Windows Shell 将授权地址交给系统默认浏览器；启动失败时显示错误，保留重新打开与复制链接入口。当前不包含模型请求。
+Bridge、Agent、login 都不依赖 Bevy。宿主负责 Winit 通知、非敏感 UI 投影、系统默认浏览器和剪贴板；浏览器辅助任务继续归 Widgetry JobManager。首次打开及重新打开均通过 Windows Shell 将授权地址交给系统默认浏览器；启动失败时显示错误，保留重新打开与复制链接入口。模型 HTTP 和 SSE 位于 Agent 的同一 Tokio 中。
 
 ## 共享凭据请求
 
@@ -24,6 +24,13 @@ Bridge、Agent、login 都不依赖 Bevy。宿主负责 Winit 通知、非敏感
 
 `Connection::sign_out()` 分配退出标识；本地清理失败后再次调用复用该标识重试。退出独立于原登录操作，Bridge 消费并隔离原操作和全局会话的中间结果，仅把当前退出阶段或终态交给界面；退出期间不接纳登录、恢复、会话检查或普通保存重试。
 
-`AgentRuntime::sign_out(id)` 通过容量为一的专用控制通道提交退出，同步关闭 CredentialClient 入口并取消当前会话等待者的交付许可。当前浏览器等待被取消，已经开始的旋转和提交继续结束；所有者随后优先处理退出，丢弃尚未开始的旧命令，并以最新会话撤销和清理。旧 CredentialRequest 即使已经持有待取结果，也不能在退出后返回旧 Token；新的凭据入口仅在真实浏览器授权保存成功后重开。已经交付给业务的凭据由业务停止/取消路径结束使用，实际模型任务在后续增量接入。
+`AgentRuntime::sign_out(id)` 通过容量为一的专用控制通道提交退出，同步关闭 CredentialClient 入口并取消当前会话等待者的交付许可。当前浏览器等待被取消，已经开始的旋转和提交继续结束；所有者随后优先处理退出，丢弃尚未开始的旧命令，并以最新会话撤销和清理。旧 CredentialRequest 即使已经持有待取结果，也不能在退出后返回旧 Token；新的凭据入口仅在真实浏览器授权保存成功后重开。已经交付给业务的凭据由业务停止/取消路径结束使用，模型操作取消并回收后才继续退出清理。
 
 退出成功以 SignedOut 事件提供安全账号投影及 Confirmed/Unconfirmed/NotApplicable 的远端结果。SignOutFailed 保持禁止新请求，允许重试同一份本地清理。通知失败不会中途丢弃必要凭据提交；已接纳的退出优先于普通关闭收敛。普通关闭只停止运行，不自动退出账号。
+
+
+## 单次模型操作
+
+`verify_model()` 分配独立操作 ID，接纳后阻止新的登录、恢复、检查和重复验证，直到实际终态；退出仍可发起。Agent 在同一 Tokio 中启动一个模型任务，认证所有者继续处理该任务的 CredentialClient 请求。`ModelCompleted` 提供 Bridge 自己的 ModelReply 或 ModelFailure（分类、HTTP 状态、代码、请求标识、诊断原因），`ModelCancelled` 表示执行体已实际结束。模型结果入队后沿相同 Winit 通知路径唤醒应用。
+
+退出登录先取消并 join 当前模型任务，再撤销/清理会话；Bridge 隔离其迟到结果。关闭同样取消并等待模型任务，然后结束认证/Tokio。模型取消不会撤销认证所有者已经开始的刷新或丢弃待保存结果。目录和流协议见[模型连接验证](model-request.md)。

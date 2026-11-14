@@ -153,13 +153,15 @@ fn render(world: &mut World) -> Result {
         entity.despawn();
     }
     let account = world.resource::<crate::AccountState>().clone();
+    let model = world.resource::<crate::ModelState>().clone();
     let screen = match view {
         View::Home => world.commands().spawn_scene_with_error_handler(bsn! {
             Name("DirectorySettingsHome") ChildOf(host)
             Node { width: percent(100), height: percent(100), flex_direction: FlexDirection::Column, align_items: AlignItems::Start, padding: UiRect::all(px(PANEL_PADDING)), row_gap: px(FIELD_GAP) }
             Children [
                 @button("设置", "DirectorySettingsEntry", Action::Settings, false)--
-                @crate::account::account_panel(&account)
+                @crate::account::account_panel(&account, model.operation.is_some())--
+                @crate::model::panel(&model, &account)
             ]
         }).id(),
         View::Settings => {

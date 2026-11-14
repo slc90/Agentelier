@@ -39,6 +39,8 @@ pub struct AccountEvent {
     pub kind: AccountEventKind,
 }
 pub enum AccountEventKind {
+    ModelCompleted(Result<ModelReply, ModelFailure>),
+    ModelCancelled,
     SignOutProgress(SignOutStage),
     SignOutFailed(BridgeFailure),
     SignedOut {
@@ -56,6 +58,42 @@ pub enum AccountEventKind {
     SaveFailed(BridgeFailure),
     Completed(Result<AccountSnapshot, BridgeFailure>),
     Cancelled,
+}
+pub struct ModelReply {
+    pub model: String,
+    pub text: String,
+}
+#[derive(Clone, Copy, Debug)]
+pub enum ModelFailureKind {
+    Authentication,
+    Permission,
+    UsageLimit,
+    Service,
+    Network,
+    Protocol,
+    Incomplete,
+}
+pub struct ModelFailure {
+    pub kind: ModelFailureKind,
+    pub status: Option<u16>,
+    pub code: Option<String>,
+    pub request_id: Option<String>,
+    pub message: String,
+}
+impl fmt::Display for ModelFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)?;
+        if let Some(status) = self.status {
+            write!(f, "；HTTP {status}")?;
+        }
+        if let Some(code) = &self.code {
+            write!(f, "；{code}")?;
+        }
+        if let Some(id) = &self.request_id {
+            write!(f, "；请求 {id}")?;
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub enum SignOutStage {
@@ -145,6 +183,7 @@ pub struct Connection {
     failure: Option<BridgeFailure>,
     session_activity: SessionActivity,
     sign_out: Option<PendingSignOut>,
+    model: Option<u64>,
 }
 impl Connection {
     pub fn start(
@@ -179,6 +218,7 @@ impl Connection {
             failure: None,
             session_activity: SessionActivity::Idle,
             sign_out: None,
+            model: None,
         })
     }
     fn allocate(&self) -> Result<u64, BridgeFailure> {
@@ -186,6 +226,7 @@ impl Connection {
             return Err(BridgeFailure("认证运行已停止".into()));
         }
         if self.pending.is_some()
+            || self.model.is_some()
             || self.sign_out.is_some()
             || self.session_activity != SessionActivity::Idle
         {
@@ -208,6 +249,15 @@ impl Connection {
         });
         Ok(id)
     }
+    pub fn verify_model(&mut self) -> Result<u64, BridgeFailure> {
+        let id = self.allocate()?;
+        self.runtime
+            .verify_model(id)
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.next_operation = id;
+        self.model = Some(id);
+        Ok(id)
+    }
     pub fn login(&mut self, consent: bool) -> Result<u64, BridgeFailure> {
         let id = self.allocate()?;
         self.runtime
@@ -226,6 +276,7 @@ impl Connection {
             || self.sign_out.is_some()
             || self.failure.is_some()
             || self.pending.is_some()
+            || self.model.is_some()
             || matches!(
                 self.session_activity,
                 SessionActivity::Checking | SessionActivity::Refreshing | SessionActivity::Saving
@@ -311,6 +362,7 @@ impl Connection {
                             AccountEventKind::SignedOut { .. } => {
                                 self.sign_out = None;
                                 self.pending = None;
+                                self.model = None;
                                 self.session_activity = SessionActivity::Idle;
                             }
                             _ => {}
@@ -332,6 +384,16 @@ impl Connection {
                     }
                     if let AccountEventKind::SessionStatus { activity, .. } = &event.kind {
                         self.session_activity = *activity;
+                        return Ok(Some(event));
+                    }
+                    if matches!(
+                        &event.kind,
+                        AccountEventKind::ModelCompleted(_) | AccountEventKind::ModelCancelled
+                    ) {
+                        if self.model != Some(event.operation_id) {
+                            return self.protocol_failure();
+                        }
+                        self.model = None;
                         return Ok(Some(event));
                     }
                     let Some(pending) = &mut self.pending else {
@@ -423,6 +485,37 @@ impl Drop for Connection {
 }
 fn convert(event: AgentEvent) -> AccountEvent {
     let kind = match event.kind {
+        AgentEventKind::ModelCancelled => AccountEventKind::ModelCancelled,
+        AgentEventKind::ModelCompleted(result) => AccountEventKind::ModelCompleted(
+            result
+                .map(|reply| ModelReply {
+                    model: reply.model,
+                    text: reply.text,
+                })
+                .map_err(|failure| ModelFailure {
+                    kind: match failure.kind {
+                        agentelier_agent::ModelFailureKind::Authentication => {
+                            ModelFailureKind::Authentication
+                        }
+                        agentelier_agent::ModelFailureKind::Permission => {
+                            ModelFailureKind::Permission
+                        }
+                        agentelier_agent::ModelFailureKind::UsageLimit => {
+                            ModelFailureKind::UsageLimit
+                        }
+                        agentelier_agent::ModelFailureKind::Service => ModelFailureKind::Service,
+                        agentelier_agent::ModelFailureKind::Network => ModelFailureKind::Network,
+                        agentelier_agent::ModelFailureKind::Protocol => ModelFailureKind::Protocol,
+                        agentelier_agent::ModelFailureKind::Incomplete => {
+                            ModelFailureKind::Incomplete
+                        }
+                    },
+                    status: failure.status,
+                    code: failure.code,
+                    request_id: failure.request_id,
+                    message: failure.message,
+                }),
+        ),
         AgentEventKind::SignOutProgress(stage) => AccountEventKind::SignOutProgress(match stage {
             agentelier_agent::SignOutStage::Settling => SignOutStage::Settling,
             agentelier_agent::SignOutStage::Revoking => SignOutStage::Revoking,

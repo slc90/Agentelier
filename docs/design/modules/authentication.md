@@ -85,3 +85,9 @@ Agent 在独立线程驱动 Tokio，文件工作使用 spawn_blocking，网络�
 退出协调暂存 AppExit，停止认证命令及普通通知，取消当前授权并等待执行线程与 Tokio 真实结束，再在事件循环有效时收尾辅助任务。最后允许主循环退出、完成日志并释放数据环境。显式 finish 传播错误，Drop 仅提供防泄漏兜底。
 
 协议参照：[OpenAI 注册与登录](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)。本项目仅维护一个账号登记，不提供其他登录方式、存储后端或多账号框架。
+
+## 模型消费者与认证收敛
+
+单次模型验证在同一 Tokio 中使用独立任务，通过 CredentialClient 等待认证所有者交付已保存的凭据。目录与推理之间重新获取当前凭据并检查登记身份；输出开始前的 401 使用已有 AuthenticatedRequest 恢复预算，输出开始后不自动重放推理。
+
+退出或关闭会取消并回收模型执行体。取消凭据等待者不会丢弃认证所有者已经开始的旋转；所有者仍负责网络结果及必要文件提交，然后才结束退出清理或 Tokio 生命周期。模型协议和 Bridge/UI 终态关系见[单次模型请求](model-request.md)。

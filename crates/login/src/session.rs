@@ -79,6 +79,11 @@ pub struct CredentialVersion {
     subject: String,
     generation: Uuid,
 }
+impl CredentialVersion {
+    pub fn same_account(&self, other: &Self) -> bool {
+        self.client_id == other.client_id && self.subject == other.subject
+    }
+}
 
 #[derive(Clone)]
 pub struct UsableCredentials {
