@@ -7,6 +7,7 @@ edition.workspace = true
 [dependencies]
 agentelier_login = { path = "../login" }
 bevy.workspace = true
+bevy_widgetry_path_display.workspace = true
 bevy_widgetry = { workspace = true, features = [
   "file_dialog",
   "button",

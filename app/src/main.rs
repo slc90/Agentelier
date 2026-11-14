@@ -6,7 +6,7 @@ compile_error!("This application template supports Windows x64 only");
 mod config;
 mod diagnostics;
 
-use agentelier_login::{DataEnvironment, display_path};
+use agentelier_login::DataEnvironment;
 use agentelier_login_ui::{DataDirectoryReady, LoginUiHost, LoginUiPlugin};
 use bevy::log::LogPlugin;
 use bevy::window::{MonitorSelection, PrimaryWindow, WindowPosition, WindowResolution};
@@ -22,6 +22,7 @@ use bevy_widgetry::window::{
     WidgetryWindowBackground, WidgetryWindowControlsConfig, WidgetryWindowPlugin,
     prepare_native_window, transparent_render_creation, widgetry_window,
 };
+use bevy_widgetry_path_display::display_path;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tracing::{debug, warn};

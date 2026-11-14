@@ -1,5 +1,5 @@
 use crate::data_directory::RememberDirectory;
-use agentelier_login::{DataEnvironment, display_path, validate_data_directory};
+use agentelier_login::{DataEnvironment, validate_data_directory};
 use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::InteractionDisabled;
@@ -15,6 +15,7 @@ use bevy_widgetry::job::{
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::scroll_area::WidgetryScrollArea;
 use bevy_widgetry::text::WidgetryText;
+use bevy_widgetry_path_display::display_path;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;

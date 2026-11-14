@@ -14,6 +14,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+bevy_widgetry_path_display = { git = "https://github.com/slc90/bevy_widgetry" }
 bevy_widgetry = { git = "https://github.com/slc90/bevy_widgetry", default-features = false, features = [
   "window",
   "app_logging",

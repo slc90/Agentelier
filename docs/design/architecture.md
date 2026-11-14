@@ -38,6 +38,8 @@ Bevy 应用拥有窗口和 Winit 事件循环，使用 ECS 管理应用业务状
 
 目录设置继续归 `login_ui`：显示本次固定路径、打开当前目录、检查并保存下次启动位置，并按操作 ID 接收后台结果。候选检查不持有第二份长期占用。`app::config::ConfigStore` 串行合并最新配置并完整替换提交，启动与设置复用同一保存入口；文件保存成功才更新对应运行时状态。设置更改不修改当前数据环境，也不搬运文件。
 
+`app` 与 `login_ui` 直接依赖 Widgetry 的独立 `bevy_widgetry_path_display` crate，统一界面及日志中的路径显示。`login` 只提供原始路径，不实现或转导出路径显示函数。
+
 ### Agent：执行与运行状态
 
 `agentelier_agent` 负责 Agent 的实际执行：接收运行命令，协调模型通信与工具执行，维护相关任务和会话的运行状态，并产生执行进展和终态结果。
@@ -71,6 +73,8 @@ flowchart TD
     LoginUI --> Login
     LoginUI --> Widgetry
     LoginUI --> Bevy
+    LoginUI --> PathDisplay["bevy_widgetry_path_display"]
+    App --> PathDisplay
     Bridge --> Agent["agentelier_agent"]
     Agent --> Tokio["Tokio"]
     App --> Widgetry["bevy_widgetry"]

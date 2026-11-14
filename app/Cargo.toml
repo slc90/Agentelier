@@ -10,6 +10,7 @@ bevy_app_assets = { path = "../crates/assets" }
 agentelier_login = { path = "../crates/login" }
 agentelier_login_ui = { path = "../crates/login_ui" }
 bevy_widgetry.workspace = true
+bevy_widgetry_path_display.workspace = true
 bevy_brp_runtime.workspace = true
 serde.workspace = true
 ron.workspace = true

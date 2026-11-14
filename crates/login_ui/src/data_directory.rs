@@ -1,4 +1,4 @@
-use agentelier_login::{DataEnvironment, display_path};
+use agentelier_login::DataEnvironment;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use bevy_widgetry::button::WidgetryButton;
@@ -11,6 +11,7 @@ use bevy_widgetry::job::{
 };
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
+use bevy_widgetry_path_display::display_path;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};

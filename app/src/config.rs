@@ -1,5 +1,5 @@
-use agentelier_login::display_path;
 use bevy::prelude::Resource;
+use bevy_widgetry_path_display::display_path;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
