@@ -53,6 +53,8 @@ pub enum ChatHistoryItem {
 pub struct ChatTurn {
     pub id: u64,
     pub operation_id: u64,
+    pub input_id: u64,
+    pub is_retry: bool,
     pub input: String,
     pub messages: Vec<ChatMessage>,
     pub status: ChatTurnStatus,
@@ -120,6 +122,7 @@ enum ChatAction {
     Create,
     Send,
     Stop,
+    Retry,
 }
 #[derive(Component, Clone, PartialEq, Eq)]
 struct ChatRow {
@@ -185,7 +188,8 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
             Node { column_gap: px(CONTENT_GAP), flex_shrink: 0.0 }
             Children [
                 @button("发送", "SendChatMessage", ChatAction::Send)--
-                @button("停止", "StopChatGeneration", ChatAction::Stop)
+                @button("停止", "StopChatGeneration", ChatAction::Stop)--
+                @button("重试最近尝试", "RetryChatTurn", ChatAction::Retry)
             ]
         ]
     }
@@ -210,6 +214,7 @@ fn activate(
         ChatAction::Create => commands.queue(create_session),
         ChatAction::Send => intents.send = true,
         ChatAction::Stop => commands.queue(stop),
+        ChatAction::Retry => commands.queue(retry),
     }
     Ok(())
 }
@@ -252,6 +257,66 @@ fn create_session(world: &mut World) -> Result {
         }
         Err(failure) => {
             error!(error = %failure, "无法创建聊天会话");
+            state.error = Some(failure.to_string());
+        }
+    }
+    Ok(())
+}
+
+fn can_retry(
+    state: &ChatState,
+    model: &ModelState,
+    account: &AccountState,
+    activity: &HostActivity,
+) -> bool {
+    state.operation.is_none()
+        && !activity.model_busy
+        && model.can_request(account)
+        && state.session.as_ref().is_some_and(|session| {
+            account
+                .account
+                .as_ref()
+                .is_some_and(|account| account.subject == session.account_subject)
+                && session.turn.as_ref().is_some_and(|turn| {
+                    matches!(
+                        turn.status,
+                        ChatTurnStatus::Failed(_) | ChatTurnStatus::Cancelled
+                    )
+                })
+        })
+}
+fn retry(world: &mut World) -> Result {
+    let state = world.resource::<ChatState>();
+    if !can_retry(
+        state,
+        world.resource::<ModelState>(),
+        world.resource::<AccountState>(),
+        world.resource::<HostActivity>(),
+    ) || world.resource::<AgentHost>().model_busy()?
+    {
+        return Ok(());
+    }
+    let Some(session) = &state.session else {
+        return Ok(());
+    };
+    let Some(turn) = &session.turn else {
+        return Ok(());
+    };
+    let result = world
+        .resource::<AgentHost>()
+        .request_conversation(ConversationRequest::Retry {
+            session: session.id,
+            turn: turn.id,
+        });
+    let mut state = world.resource_mut::<ChatState>();
+    match result {
+        Ok(id) => {
+            state.operation = Some(id);
+            state.error = None;
+            info!(operation_id = id, "提交聊天重试");
+        }
+        Err(failure) => {
+            error!(error=%failure, "聊天重试提交失败");
             state.error = Some(failure.to_string());
         }
     }
@@ -432,6 +497,8 @@ fn history_item(item: agentelier_conversation_bridge::HistoryItem) -> ChatHistor
 fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> ChatTurn {
     ChatTurn {
         id: turn.id,
+        input_id: turn.input_id,
+        is_retry: turn.is_retry,
         operation_id: turn.operation_id,
         input: turn.input,
         messages: turn
@@ -565,8 +632,11 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 world.resource_mut::<ChatState>().session = Some(project(view));
             }
             ConversationEvent::Accepted(view) => {
-                world.resource_mut::<InputIntents>().clear_accepted =
-                    view.turn.as_ref().map(|turn| turn.input.clone());
+                world.resource_mut::<InputIntents>().clear_accepted = view
+                    .turn
+                    .as_ref()
+                    .filter(|turn| !turn.is_retry)
+                    .map(|turn| turn.input.clone());
                 world.resource_mut::<ChatState>().session = Some(project(view));
             }
         }
@@ -615,15 +685,31 @@ fn reconcile(world: &mut World) -> Result {
                     ChatTurnStatus::Failed(_) => " · 失败，未进入上下文",
                     _ => "",
                 };
-                desired.push((
-                    ChatRow {
-                        session: session.id,
-                        turn: turn.id,
-                        output_index: None,
-                        item_id: None,
-                    },
-                    format!("你{status}\n{}", turn.input),
-                ));
+                let user_key = ChatRow {
+                    session: session.id,
+                    turn: turn.input_id,
+                    output_index: None,
+                    item_id: None,
+                };
+                if !desired.iter().any(|(key, _)| key == &user_key) {
+                    desired.push((user_key, format!("你\n{}", turn.input)));
+                }
+                if turn.messages.is_empty() {
+                    desired.push((
+                        ChatRow {
+                            session: session.id,
+                            turn: turn.id,
+                            output_index: None,
+                            item_id: Some("attempt".into()),
+                        },
+                        format!(
+                            "助手 · 尝试 {}{}{}",
+                            turn.id,
+                            if turn.is_retry { " · 重试" } else { "" },
+                            status
+                        ),
+                    ));
+                }
                 for message in &turn.messages {
                     let phase = message.phase.as_deref().unwrap_or("回答");
                     desired.push((
@@ -656,7 +742,7 @@ fn reconcile(world: &mut World) -> Result {
                     key.turn,
                     key.output_index
                         .map(|index| index.to_string())
-                        .unwrap_or_else(|| "user".into())
+                        .unwrap_or_else(|| key.item_id.clone().unwrap_or_else(|| "user".into()))
                 );
                 world.commands().spawn_scene_with_error_handler(bsn! {
                     Name(name) ChildOf(list) Text(text) WidgetryText
@@ -731,6 +817,7 @@ fn update(
                     && !activity.model_busy
                     && model.can_verify(&account)
             }
+            ChatAction::Retry => can_retry(&state, &model, &account, &activity),
             ChatAction::Send => state.can_send(&model, &account, &activity),
             ChatAction::Stop => {
                 !state.cancelling

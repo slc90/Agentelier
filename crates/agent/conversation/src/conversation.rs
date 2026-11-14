@@ -19,6 +19,7 @@ pub struct SessionSettings {
 pub enum ConversationRequest {
     Create(SessionSettings),
     Send { session: SessionId, input: String },
+    Retry { session: SessionId, turn: TurnId },
 }
 #[derive(Clone)]
 pub enum TurnStatus {
@@ -31,6 +32,8 @@ pub enum TurnStatus {
 pub struct TurnView {
     pub id: TurnId,
     pub operation_id: u64,
+    pub input_id: TurnId,
+    pub is_retry: bool,
     pub input: String,
     pub messages: Vec<OutputMessage>,
     pub status: TurnStatus,
@@ -162,6 +165,8 @@ impl Conversation {
         }
         session.view.turn = Some(TurnView {
             id: TurnId(id),
+            input_id: TurnId(id),
+            is_retry: false,
             operation_id,
             input,
             messages: Vec::new(),
@@ -170,6 +175,47 @@ impl Conversation {
         });
         self.next_turn = id;
         Ok((session.view.clone(), request))
+    }
+
+    pub fn start(
+        &mut self,
+        operation: u64,
+        request: ConversationRequest,
+    ) -> Result<(SessionView, GenerationRequest), ConversationFailure> {
+        match request {
+            ConversationRequest::Send { session, input } => self.begin(operation, session, input),
+            ConversationRequest::Retry { session, turn } => {
+                let previous = self
+                    .session
+                    .as_ref()
+                    .filter(|current| current.view.id == session)
+                    .and_then(|current| current.view.turn.as_ref())
+                    .filter(|previous| {
+                        previous.id == turn
+                            && matches!(
+                                previous.status,
+                                TurnStatus::Failed(_) | TurnStatus::Cancelled
+                            )
+                    })
+                    .ok_or(ConversationFailure("只有最近失败或取消的输入可以重试"))?;
+                let input = previous.input.clone();
+                let input_id = previous.input_id;
+                let (_, request) = self.begin(operation, session, input)?;
+                let current = self
+                    .session
+                    .as_mut()
+                    .ok_or(ConversationFailure("重试缺少会话"))?;
+                let turn = current
+                    .view
+                    .turn
+                    .as_mut()
+                    .ok_or(ConversationFailure("重试缺少轮次"))?;
+                turn.input_id = input_id;
+                turn.is_retry = true;
+                Ok((current.view.clone(), request))
+            }
+            ConversationRequest::Create(_) => Err(ConversationFailure("创建会话不是生成操作")),
+        }
     }
 
     fn turn(&mut self, operation_id: u64) -> Result<&mut TurnView, ConversationFailure> {

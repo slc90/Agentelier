@@ -8,6 +8,7 @@ pub struct SessionSettings {
 pub enum ConversationRequest {
     Create(SessionSettings),
     Send { session: u64, input: String },
+    Retry { session: u64, turn: u64 },
 }
 #[derive(Clone)]
 pub enum TurnStatus {
@@ -33,6 +34,8 @@ pub struct MessageView {
 pub struct TurnView {
     pub id: u64,
     pub operation_id: u64,
+    pub input_id: u64,
+    pub is_retry: bool,
     pub input: String,
     pub messages: Vec<MessageView>,
     pub status: TurnStatus,
@@ -78,6 +81,12 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
                 },
             )
         }
+        ConversationRequest::Retry { session, turn } => {
+            agentelier_conversation::ConversationRequest::Retry {
+                session: agentelier_conversation::SessionId(session),
+                turn: agentelier_conversation::TurnId(turn),
+            }
+        }
         ConversationRequest::Send { session, input } => {
             agentelier_conversation::ConversationRequest::Send {
                 session: agentelier_conversation::SessionId(session),
@@ -120,6 +129,8 @@ fn history_item(item: agentelier_conversation::ProtocolItemSummary) -> HistoryIt
 fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
     TurnView {
         id: turn.id.0,
+        input_id: turn.input_id.0,
+        is_retry: turn.is_retry,
         operation_id: turn.operation_id,
         input: turn.input,
         messages: turn

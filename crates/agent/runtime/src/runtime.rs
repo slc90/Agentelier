@@ -251,8 +251,8 @@ impl AgentRuntime {
                                                     AgentEventKind::Conversation(event),
                                                 )?;
                                             }
-                                            ConversationRequest::Send { session, input } => {
-                                                match conversation.begin(id, session, input) {
+                                            request @ (ConversationRequest::Send { .. } | ConversationRequest::Retry { .. }) => {
+                                                match conversation.start(id, request) {
                                                     Ok((view, request)) => {
                                                         let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
                                                         control.turn.set((view.id.0, turn.id.0)).map_err(|_| RuntimeFailure::ModelState)?;

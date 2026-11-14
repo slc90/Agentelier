@@ -34,3 +34,7 @@ Bridge 与 UI 只取得消息正文和安全顺序摘要：User、Assistant 的�
 ## 取消控制
 
 Runtime 为每次生成保留独立取消令牌，并在接纳后绑定 Session、Turn 和 operation 身份。Connection 与共享 Host 直接提交控制，不等待普通命令或正文通道。UI 只记录停止中意图；执行所有者结束任务、收割 JoinHandle、排空最后增量后发布唯一终态。外层取消覆盖网络、凭据等待和增量发送等待；Account 已开始的凭据旋转与持久化由其所有者独立完成。
+
+## 输入与尝试身份
+
+Turn 的 input_id 将同一输入的多次尝试归组，id 与 operation_id 每次独立分配。Retry 只接受当前最近 Failed/Cancelled 的身份；该时刻已提交历史仍等于原输入之前的历史，因此直接捕获它加一次原输入。旧尝试移入展示记录，历史只在新尝试成功后原子提交。Bridge 投影 is_retry，UI 据此保留草稿并按 input_id 去重用户行。
