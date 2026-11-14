@@ -110,6 +110,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentelier_agent_host"
+version = "0.1.0"
+dependencies = [
+ "agentelier_account_bridge",
+ "agentelier_bridge_connection",
+ "agentelier_llm_model_bridge",
+ "bevy",
+ "tracing",
+]
+
+[[package]]
 name = "agentelier_agent_runtime"
 version = "0.1.0"
 dependencies = [
@@ -124,6 +135,7 @@ dependencies = [
 name = "agentelier_application"
 version = "0.1.0"
 dependencies = [
+ "agentelier_agent_host",
  "agentelier_login",
  "agentelier_login_ui",
  "bevy",
@@ -195,7 +207,7 @@ name = "agentelier_login_ui"
 version = "0.1.0"
 dependencies = [
  "agentelier_account_bridge",
- "agentelier_bridge_connection",
+ "agentelier_agent_host",
  "agentelier_llm_model_bridge",
  "agentelier_login",
  "bevy",

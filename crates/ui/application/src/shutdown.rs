@@ -1,4 +1,4 @@
-use agentelier_login_ui::AccountRuntime;
+use agentelier_agent_host::AgentHost;
 use bevy::app::OnAppExitSystems;
 use bevy::prelude::*;
 use bevy::window::ExitSystems;
@@ -13,7 +13,7 @@ const JOB_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[derive(Resource, Default)]
 struct ExitState {
     requested: Option<AppExit>,
-    auth_finished: bool,
+    agent_finished: bool,
     jobs: Option<ShutdownHandle>,
     failed_jobs: bool,
     timeout_reported: bool,
@@ -33,7 +33,7 @@ pub(crate) fn install(app: &mut App) {
 fn coordinate(
     mut exits: ResMut<Messages<AppExit>>,
     mut state: ResMut<ExitState>,
-    backend: Res<AccountRuntime>,
+    backend: Res<AgentHost>,
     manager: Res<JobManager>,
     proxy: Res<EventLoopProxyWrapper>,
 ) {
@@ -53,19 +53,19 @@ fn coordinate(
     if first_request && let Err(failure) = backend.begin_shutdown() {
         fail(&mut state, failure);
     }
-    if !state.auth_finished {
+    if !state.agent_finished {
         match backend.is_finished() {
             Ok(false) => {
                 wake(&proxy, &mut state);
                 return;
             }
             Ok(true) => match backend.finish() {
-                Ok(()) => debug!("认证后台已真实结束"),
+                Ok(()) => debug!("共享执行后台已真实结束"),
                 Err(failure) => fail(&mut state, failure),
             },
             Err(failure) => fail(&mut state, failure),
         }
-        state.auth_finished = true;
+        state.agent_finished = true;
     }
     if state.jobs.is_none() && !state.failed_jobs {
         match manager.begin_shutdown(JOB_SHUTDOWN_TIMEOUT) {

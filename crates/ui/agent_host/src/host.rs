@@ -1,0 +1,215 @@
+use agentelier_account_bridge::AccountEventKind;
+use agentelier_bridge_connection::{BridgeEventKind, BridgeFailure, Connection};
+use agentelier_llm_model_bridge::ModelEventKind;
+use bevy::prelude::*;
+use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
+use std::io;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, MutexGuard};
+use tracing::debug;
+
+#[derive(Resource, Clone, Default)]
+pub struct AgentHost(Arc<Mutex<HostState>>);
+
+#[derive(Default)]
+struct HostState {
+    connection: Option<Connection>,
+    startup: Option<ConnectionStartup>,
+    stopping: bool,
+    failed: bool,
+}
+
+struct ConnectionStartup {
+    path: PathBuf,
+    notify: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+#[derive(Message)]
+pub struct AccountEvent {
+    pub operation_id: u64,
+    pub kind: AccountEventKind,
+}
+
+#[derive(Message)]
+pub struct ModelEvent {
+    pub operation_id: u64,
+    pub kind: ModelEventKind,
+}
+
+#[derive(Message, Clone)]
+pub struct HostFailed {
+    pub reason: String,
+}
+
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct ReceiveAgentEvents;
+
+#[derive(Default)]
+pub struct AgentHostPlugin {
+    host: AgentHost,
+}
+
+impl AgentHostPlugin {
+    pub fn host(&self) -> AgentHost {
+        self.host.clone()
+    }
+}
+
+impl Plugin for AgentHostPlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(self.host.clone())
+            .add_message::<AccountEvent>()
+            .add_message::<ModelEvent>()
+            .add_message::<HostFailed>()
+            .add_systems(Update, receive.in_set(ReceiveAgentEvents));
+    }
+}
+
+impl AgentHost {
+    fn state(&self) -> Result<MutexGuard<'_, HostState>> {
+        self.0
+            .lock()
+            .map_err(|_| io::Error::other("执行宿主状态锁已损坏").into())
+    }
+
+    pub fn prepare(&self, path: PathBuf, proxy: &EventLoopProxyWrapper) -> Result {
+        let mut state = self.state()?;
+        if state.stopping || state.failed {
+            return Err(io::Error::other("执行宿主已经停止").into());
+        }
+        if state.startup.is_some() {
+            return Err(io::Error::other("执行连接已经建立，不能重复启动").into());
+        }
+        let proxy = (**proxy).clone();
+        state.startup = Some(ConnectionStartup {
+            path,
+            notify: Arc::new(move || proxy.send_event(WinitUserEvent::WakeUp).is_ok()),
+        });
+        Ok(())
+    }
+
+    fn submit<T>(
+        &self,
+        action: impl FnOnce(&mut Connection) -> std::result::Result<T, BridgeFailure>,
+    ) -> Result<T> {
+        let mut state = self.state()?;
+        if state.stopping || state.failed {
+            return Err(io::Error::other("执行宿主已经停止").into());
+        }
+        if state.connection.is_none() {
+            let startup = state
+                .startup
+                .as_ref()
+                .ok_or_else(|| io::Error::other("执行连接缺少本次数据环境"))?;
+            let notify = startup.notify.clone();
+            state.connection = Some(Connection::start(startup.path.clone(), move || notify())?);
+            debug!("共享执行连接已建立");
+        }
+        let connection = state
+            .connection
+            .as_mut()
+            .ok_or_else(|| io::Error::other("执行连接尚未建立"))?;
+        action(connection).map_err(BevyError::from)
+    }
+
+    pub fn restore(&self) -> Result<u64> {
+        self.submit(Connection::restore)
+    }
+    pub fn login(&self, consent: bool) -> Result<u64> {
+        self.submit(|connection| connection.login(consent))
+    }
+    pub fn retry_save(&self, id: u64) -> Result {
+        self.submit(|connection| connection.retry_save(id))
+    }
+    pub fn cancel(&self, id: u64) -> Result {
+        self.submit(|connection| connection.cancel(id))
+    }
+    pub fn check_session(&self) -> Result {
+        self.submit(Connection::check_session)
+    }
+    pub fn sign_out(&self) -> Result<u64> {
+        self.submit(Connection::sign_out)
+    }
+    pub fn verify_model(&self) -> Result<u64> {
+        self.submit(Connection::verify_model)
+    }
+
+    pub fn is_stopping(&self) -> Result<bool> {
+        Ok(self.state()?.stopping)
+    }
+
+    pub fn begin_shutdown(&self) -> Result {
+        let mut state = self.state()?;
+        let first_request = !state.stopping;
+        state.stopping = true;
+        if let Some(connection) = &mut state.connection {
+            connection.begin_shutdown()?;
+            if first_request {
+                debug!("已停止共享业务接收与普通唤醒，等待执行体结束");
+            }
+        }
+        Ok(())
+    }
+
+    pub fn is_finished(&self) -> Result<bool> {
+        Ok(self
+            .state()?
+            .connection
+            .as_ref()
+            .is_none_or(Connection::is_finished))
+    }
+
+    pub fn finish(&self) -> Result {
+        self.begin_shutdown()?;
+        if let Some(connection) = &mut self.state()?.connection {
+            connection.finish()?;
+        }
+        Ok(())
+    }
+}
+
+fn receive(world: &mut World) -> Result {
+    let host = world.resource::<AgentHost>().clone();
+    let (events, failure) = {
+        let mut state = host.state()?;
+        if state.stopping || state.failed {
+            return Ok(());
+        }
+        let mut events = Vec::new();
+        let mut failure = None;
+        if let Some(connection) = &mut state.connection {
+            loop {
+                match connection.try_receive() {
+                    Ok(Some(event)) => events.push(event),
+                    Ok(None) => break,
+                    Err(error) => {
+                        failure = Some(error.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+        state.failed = failure.is_some();
+        (events, failure)
+    };
+    for event in events {
+        match event.kind {
+            BridgeEventKind::Account(kind) => {
+                world.write_message(AccountEvent {
+                    operation_id: event.operation_id,
+                    kind,
+                });
+            }
+            BridgeEventKind::Model(kind) => {
+                world.write_message(ModelEvent {
+                    operation_id: event.operation_id,
+                    kind,
+                });
+            }
+        }
+    }
+    if let Some(reason) = failure {
+        world.write_message(HostFailed { reason });
+    }
+    Ok(())
+}

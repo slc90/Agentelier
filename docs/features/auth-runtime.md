@@ -8,7 +8,7 @@
 
 `begin_shutdown()` 停止新命令和普通通知，取消当前监听与网络等待，已开始的文件提交继续结束。`is_finished()` 非阻塞检查线程，`finish()` join 并取得真实结果；线程只有在 Tokio 释放后才结束。宿主必须显式收尾处理错误，Drop 仅提供阻塞兜底。
 
-Bridge、Agent、login 都不依赖 Bevy。login_ui 的 Bevy 交互层提供 Winit 通知、非敏感 UI 投影、系统默认浏览器和剪贴板；application 负责通用宿主装配与整体收尾，浏览器辅助任务继续归 Widgetry JobManager。首次打开及重新打开均通过 Windows Shell 将授权地址交给系统默认浏览器；启动失败时显示错误，保留重新打开与复制链接入口。模型 HTTP 和 SSE 由 `agentelier_llm_model` 实现，在 Runtime 的同一 Tokio 中运行。
+Bridge、Agent、login 都不依赖 Bevy。`agentelier_agent_host::AgentHost` 独占 Connection，提供 Winit 通知、命令转交及执行收尾；公共接收系统只读取一次连接，将带 operation_id 的账号与模型业务事件分别转交 ECS 消息通道，并单独广播运行失败。login_ui 在公共接收之后消费对应业务消息，负责非敏感 UI 投影、系统默认浏览器和剪贴板；application 负责通用宿主装配与整体收尾，浏览器辅助任务继续归 Widgetry JobManager。首次打开及重新打开均通过 Windows Shell 将授权地址交给系统默认浏览器；启动失败时显示错误，保留重新打开与复制链接入口。模型 HTTP 和 SSE 由 `agentelier_llm_model` 实现，在 Runtime 的同一 Tokio 中运行。
 
 ## 共享凭据请求
 
@@ -40,3 +40,5 @@ Bridge、Agent、login 都不依赖 Bevy。login_ui 的 Bevy 交互层提供 Win
 Account Bridge (`agentelier_account_bridge`) 提供账号摘要、授权地址及 AccountEventKind 的安全转换。LLM Model Bridge (`agentelier_llm_model_bridge`) 独立提供模型结果与错误分类转换。两者不执行账号或模型任务。
 
 Connection 的 `try_receive()` 返回 `BridgeEvent { operation_id, kind }`，其中 `BridgeEventKind::Account(AccountEventKind)` 与 `BridgeEventKind::Model(ModelEventKind)` 分别携带对应业务类型。Connection 只管理投递、操作关联、互斥、唤醒和通信生命周期；不拥有账号会话或 UI 投影。
+
+共享宿主在数据目录就绪后启动，沿用本次数据环境的凭据路径，不持有第二份目录占用或账号缓存。页面状态不拥有后台线程。application 保存 AgentHost 的收尾句柄，先 begin_shutdown、非阻塞确认 is_finished，再 finish 获取实际线程结果；登录 UI 清理自己的授权地址和浏览器任务，辅助 Job、日志及目录按原顺序结束。

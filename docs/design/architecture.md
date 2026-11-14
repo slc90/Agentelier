@@ -10,6 +10,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | --- | --- | --- |
 | `crates/ui/application/` | `agentelier_application` | 通用宿主、配置、日志、诊断、窗口装配与整体生命周期 |
 | `crates/ui/assets/` | `bevy_app_assets` | 应用 Asset 的统一注册 |
+| `crates/ui/agent_host/` | `agentelier_agent_host` | 唯一 Connection、Winit 唤醒、命令提交、业务消息分发及执行收尾 |
 | `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、账号、模型验证界面，Bevy/Bridge 衔接及浏览器/剪贴板交互 |
 | `crates/agent/login/` | `agentelier_login` | 数据环境、OAuth、Token、身份校验、认证文件与受保护原子提交 |
 | `crates/agent/account/` | `agentelier_account` | 账号操作与会话状态、共享凭据门控和按需续期协调 |
@@ -28,7 +29,9 @@ flowchart TD
     App --> Assets["UI · assets"]
     App --> Login["Agent · login"]
     UI --> Login
-    UI --> Connection["Bridge · connection"]
+    App --> Host["UI · agent_host"]
+    UI --> Host
+    Host --> Connection["Bridge · connection"]
     UI --> AccountBridge["Bridge · account"]
     UI --> ModelBridge["Bridge · llm_model"]
     Connection --> Runtime["Agent · runtime"]
@@ -46,9 +49,9 @@ flowchart TD
 
 ## UI 管理交互与通用宿主
 
-`application` 建立可执行文件旁的日志，读取 `config/config.ron`，装配窗口、Asset、缩放与可选 BRP。`login_ui` 通过 BSN 组合界面，持有面向交互的账号、目录与模型状态；Widgetry 控件自身的状态遵循其公开契约。
+`application` 建立可执行文件旁的日志，读取 `config/config.ron`，装配窗口、Asset、缩放与可选 BRP。`agent_host` 是唯一 Connection 所有者和接收者，按业务将账号与模型事件分发到独立 ECS 消息通道，运行错误另行广播；`login_ui` 在宿主接收后消费自己的业务消息，通过 BSN 组合界面，持有面向交互的账号、目录与模型状态；Widgetry 控件自身的状态遵循其公开契约。
 
-启动界面复用 Widgetry 目录选择器，通过辅助 Job 调用 Login 检查并占用目录。配置由 application 的 ConfigStore 串行合并并完整替换提交；成功后复用同一窗口进入主界面，通过 Connection 发起账号恢复。数据环境保持到后台执行及日志收尾完成。
+启动界面复用 Widgetry 目录选择器，通过辅助 Job 调用 Login 检查并占用目录。配置由 application 的 ConfigStore 串行合并并完整替换提交；成功后复用同一窗口进入主界面，通过共享 AgentHost 发起账号恢复。数据环境保持到后台执行及日志收尾完成。
 
 目录设置显示本次固定路径、打开当前目录、检查并保存下次启动位置。候选检查不持有第二份长期占用，保存成功才更新配置投影；更改下次位置不搬运文件、不切换当前数据环境或账号。关系见[数据目录与启动](mechanisms/application-data.md)。
 
@@ -102,7 +105,7 @@ sequenceDiagram
 
 Widgetry JobManager 管理目录 I/O 和浏览器等应用辅助工作；账号更新、模型网络请求及其取消/回收由 Agent 侧管理。任务所属体系取决于业务所有者，不取决于是否异步。
 
-`application::shutdown` 暂存 AppExit，通过 `login_ui::AccountRuntime` 的 begin_shutdown/is_finished/finish 停止连接与普通业务唤醒、取消浏览器及模型等待。退出协调使用自己的 Winit 通知保持事件循环推进，在 World 和接收端仍有效时非阻塞确认线程结束并显式 join。
+`application::shutdown` 暂存 AppExit，通过 `agentelier_agent_host::AgentHost` 的 begin_shutdown/is_finished/finish 停止连接与普通业务唤醒、取消浏览器及模型等待。退出协调使用自己的 Winit 通知保持事件循环推进，在 World 和接收端仍有效时非阻塞确认线程结束并显式 join。
 
 Account 完成在途更新和必要提交，Runtime 等待模型真实回收并释放 Tokio，随后宿主结束辅助 Job、刷新日志，最后释放目录占用。两类后台均结束后才重新发布 AppExit；主循环返回后保留兜底收尾。运行收尾错误影响进程退出结果，辅助任务仍执行收尾。
 

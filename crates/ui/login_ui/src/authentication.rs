@@ -5,25 +5,22 @@ use crate::{
 use agentelier_account_bridge::{
     AccountEventKind, AuthorizationLink, CredentialState as BridgeCredentials,
 };
-use agentelier_bridge_connection::{BridgeEventKind, Connection};
+use agentelier_agent_host::{AccountEvent, AgentHost, HostFailed, ModelEvent, ReceiveAgentEvents};
 use agentelier_llm_model_bridge::ModelEventKind;
+use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
-use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
+use bevy::winit::EventLoopProxyWrapper;
 use bevy_widgetry::job::{
     JobId, JobManager, JobOptions, JobOutcome, JobRead, JobReceiver, SendStatus,
 };
 use std::io;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info};
 
 #[derive(Resource, Clone, Default)]
-pub struct AccountRuntime(Arc<Mutex<BackendState>>);
+struct LoginInteraction(Arc<Mutex<BackendState>>);
 #[derive(Default)]
 struct BackendState {
-    connection: Option<Connection>,
-    credentials_path: Option<PathBuf>,
-    stopping: bool,
     authorization: Option<(u64, AuthorizationLink)>,
     browser: Option<BrowserPending>,
 }
@@ -39,61 +36,21 @@ enum Request {
     Login { consent: bool },
 }
 
-impl AccountRuntime {
-    pub fn finish(&self) -> Result {
-        let mut backend = self
-            .0
-            .lock()
-            .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
-        backend.stopping = true;
-        backend.authorization = None;
-        if let Some(connection) = &mut backend.connection {
-            connection.finish().map_err(BevyError::from)?;
-        }
-        Ok(())
-    }
-    pub fn begin_shutdown(&self) -> Result {
-        let mut backend = self
-            .0
-            .lock()
-            .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
-        backend.stopping = true;
-        backend.authorization = None;
-        if let Some(connection) = &mut backend.connection {
-            connection.begin_shutdown().map_err(BevyError::from)?;
-            debug!("已停止认证业务接收与普通唤醒，等待执行体结束");
-        }
-        Ok(())
-    }
-    pub fn is_finished(&self) -> Result<bool> {
-        let backend = self
-            .0
-            .lock()
-            .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
-        Ok(backend
-            .connection
-            .as_ref()
-            .is_none_or(Connection::is_finished))
-    }
-}
-pub(crate) fn install(app: &mut App, backend: AccountRuntime) {
-    app.insert_resource(backend)
+pub(crate) fn install(app: &mut App) {
+    app.init_resource::<LoginInteraction>()
         .add_observer(ready)
         .add_observer(retry)
         .add_observer(login_action)
         .add_observer(verify_model)
-        .add_systems(Update, receive);
+        .add_systems(Update, receive.after(ReceiveAgentEvents));
 }
 fn ready(
     event: On<DataDirectoryReady>,
-    backend: Res<AccountRuntime>,
+    host: Res<AgentHost>,
+    proxy: Res<EventLoopProxyWrapper>,
     mut commands: Commands,
 ) -> Result {
-    backend
-        .0
-        .lock()
-        .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?
-        .credentials_path = Some(event.environment.credentials_path().to_path_buf());
+    host.prepare(event.environment.credentials_path().to_path_buf(), &proxy)?;
     commands.queue(|world: &mut World| request(world, Request::Restore));
     Ok(())
 }
@@ -112,38 +69,19 @@ fn request(world: &mut World, request: Request) -> Result {
     if state.operation.is_some() || state.runtime_failed {
         return Ok(());
     }
-    let backend = world.resource::<AccountRuntime>().clone();
+    let backend = world.resource::<LoginInteraction>().clone();
     let mut backend = backend
         .0
         .lock()
-        .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
-    if backend.stopping {
+        .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
+    if world.resource::<AgentHost>().is_stopping()? {
         return Ok(());
     }
-    let result = (|| {
-        if backend.connection.is_none() {
-            let path = backend
-                .credentials_path
-                .clone()
-                .ok_or_else(|| io::Error::other("认证运行缺少当前凭据路径"))?;
-            let proxy = world
-                .get_resource::<EventLoopProxyWrapper>()
-                .map(|proxy| (**proxy).clone())
-                .ok_or_else(|| io::Error::other("认证运行缺少 Winit 唤醒通道"))?;
-            backend.connection = Some(Connection::start(path, move || {
-                proxy.send_event(WinitUserEvent::WakeUp).is_ok()
-            })?);
-        }
-        let connection = backend
-            .connection
-            .as_mut()
-            .ok_or_else(|| io::Error::other("认证运行未建立"))?;
-        match request {
-            Request::Restore => connection.restore(),
-            Request::Login { consent } => connection.login(consent),
-        }
-        .map_err(BevyError::from)
-    })();
+    let host = world.resource::<AgentHost>();
+    let result = match request {
+        Request::Restore => host.restore(),
+        Request::Login { consent } => host.login(consent),
+    };
     let mut state = world.resource_mut::<AccountState>();
     match result {
         Ok(id) => {
@@ -192,22 +130,19 @@ fn action_request(world: &mut World, action: LoginAction) -> Result {
     if !valid {
         return Ok(());
     }
-    let backend = world.resource::<AccountRuntime>().clone();
+    let backend = world.resource::<LoginInteraction>().clone();
     let mut backend = backend
         .0
         .lock()
-        .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
-    if backend.stopping {
+        .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
+    if world.resource::<AgentHost>().is_stopping()? {
         return Ok(());
     }
-    let connection = backend
-        .connection
-        .as_mut()
-        .ok_or_else(|| io::Error::other("认证运行未建立"))?;
+    let host = world.resource::<AgentHost>();
     let result = if action == LoginAction::RetrySave {
-        connection.retry_save(id)
+        host.retry_save(id)
     } else {
-        connection.cancel(id)
+        host.cancel(id)
     };
     let manager = world.resource::<JobManager>().clone();
     let mut state = world.resource_mut::<AccountState>();
@@ -239,52 +174,45 @@ fn action_request(world: &mut World, action: LoginAction) -> Result {
     }
     Ok(())
 }
-fn receive(world: &mut World) -> Result {
-    let backend = world.resource::<AccountRuntime>().clone();
-    let (events, failure) = {
-        let mut backend = backend
+fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) -> Result {
+    let backend = world.resource::<LoginInteraction>().clone();
+    if world.resource::<AgentHost>().is_stopping()? {
+        let mut interaction = backend
             .0
             .lock()
-            .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
-        if backend.stopping {
-            drop(backend);
-            return receive_browser(world);
+            .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
+        interaction.authorization = None;
+        if let Some(browser) = &interaction.browser {
+            world
+                .resource::<JobManager>()
+                .cancel(browser.job_id)
+                .map_err(|failure| failure.into_bevy_error())?;
         }
-        let mut events = Vec::new();
-        let mut failure = None;
-        if !world.resource::<AccountState>().runtime_failed
-            && let Some(connection) = &mut backend.connection
-        {
-            loop {
-                match connection.try_receive() {
-                    Ok(Some(event)) => events.push(event),
-                    Ok(None) => break,
-                    Err(error) => {
-                        failure = Some(error);
-                        break;
-                    }
-                }
-            }
-        }
-        (events, failure)
-    };
-    let mut open = false;
-    for event in events {
-        let kind = match event.kind {
-            BridgeEventKind::Model(ModelEventKind::Completed(result)) => {
-                receive_model(world, event.operation_id, result)?;
-                continue;
-            }
-            BridgeEventKind::Model(ModelEventKind::Cancelled) => {
+        drop(interaction);
+        return receive_browser(world);
+    }
+    let events: Vec<_> = world
+        .resource_mut::<Messages<AccountEvent>>()
+        .drain()
+        .collect();
+    let models: Vec<_> = world
+        .resource_mut::<Messages<ModelEvent>>()
+        .drain()
+        .collect();
+    for event in models {
+        match event.kind {
+            ModelEventKind::Completed(result) => receive_model(world, event.operation_id, result)?,
+            ModelEventKind::Cancelled => {
                 let mut model = world.resource_mut::<ModelState>();
                 if model.operation == Some(event.operation_id) {
                     *model = ModelState::default();
                 }
                 debug!(operation_id = event.operation_id, "模型验证已实际取消");
-                continue;
             }
-            BridgeEventKind::Account(kind) => kind,
-        };
+        }
+    }
+    let mut open = false;
+    for event in events {
         if event.operation_id != 0
             && world.resource::<AccountState>().operation != Some(event.operation_id)
         {
@@ -293,9 +221,9 @@ fn receive(world: &mut World) -> Result {
         let mut backend = backend
             .0
             .lock()
-            .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
+            .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
         let mut state = world.resource_mut::<AccountState>();
-        match kind {
+        match event.kind {
             AccountEventKind::SignOutProgress(stage) => {
                 backend.authorization = None;
                 open = false;
@@ -448,7 +376,11 @@ fn receive(world: &mut World) -> Result {
             }
         }
     }
-    if let Some(failure) = failure {
+    if let Some(failure) = failures
+        .read(world.resource::<Messages<HostFailed>>())
+        .last()
+        .map(|failure| failure.reason.clone())
+    {
         let mut model = world.resource_mut::<ModelState>();
         model.operation = None;
         model.error = Some(failure.to_string());
@@ -495,19 +427,16 @@ fn sign_out(world: &mut World) -> Result {
     {
         return Ok(());
     }
-    let backend = world.resource::<AccountRuntime>().clone();
+    let backend = world.resource::<LoginInteraction>().clone();
     let mut backend = backend
         .0
         .lock()
-        .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
-    if backend.stopping {
+        .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
+    if world.resource::<AgentHost>().is_stopping()? {
         return Ok(());
     }
-    let connection = backend
-        .connection
-        .as_mut()
-        .ok_or_else(|| io::Error::other("认证运行未建立"))?;
-    match connection.sign_out() {
+    let host = world.resource::<AgentHost>();
+    match host.sign_out() {
         Ok(id) => {
             backend.authorization = None;
             *world.resource_mut::<ModelState>() = ModelState::default();
@@ -540,21 +469,13 @@ fn verify_model(_event: On<VerifyModel>, mut commands: Commands) {
         {
             return Ok(());
         }
-        let backend = world.resource::<AccountRuntime>().clone();
-        let mut backend = backend
-            .0
-            .lock()
-            .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
-        if backend.stopping {
+        if world.resource::<AgentHost>().is_stopping()? {
             return Ok(());
         }
-        let connection = backend
-            .connection
-            .as_mut()
-            .ok_or_else(|| io::Error::other("认证运行未建立"))?;
+        let host = world.resource::<AgentHost>().clone();
         let mut state = world.resource_mut::<ModelState>();
         *state = ModelState::default();
-        match connection.verify_model() {
+        match host.verify_model() {
             Ok(id) => {
                 state.operation = Some(id);
                 info!(operation_id = id, "开始验证模型连接");
@@ -608,19 +529,11 @@ fn check_session(world: &mut World) -> Result {
     {
         return Ok(());
     }
-    let backend = world.resource::<AccountRuntime>().clone();
-    let mut backend = backend
-        .0
-        .lock()
-        .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
-    if backend.stopping {
+    if world.resource::<AgentHost>().is_stopping()? {
         return Ok(());
     }
-    let connection = backend
-        .connection
-        .as_mut()
-        .ok_or_else(|| io::Error::other("认证运行未建立"))?;
-    let result = connection.check_session();
+    let host = world.resource::<AgentHost>();
+    let result = host.check_session();
     let mut state = world.resource_mut::<AccountState>();
     match result {
         Ok(()) => {
@@ -642,12 +555,12 @@ fn launch_browser(world: &mut World) -> Result {
         return Ok(());
     }
     let id = state.operation;
-    let backend = world.resource::<AccountRuntime>().clone();
+    let backend = world.resource::<LoginInteraction>().clone();
     let mut backend = backend
         .0
         .lock()
-        .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
-    if backend.stopping || backend.browser.is_some() {
+        .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
+    if world.resource::<AgentHost>().is_stopping()? || backend.browser.is_some() {
         return Ok(());
     }
     let Some((operation_id, url)) = backend
@@ -712,12 +625,12 @@ fn copy_link(world: &mut World) -> Result {
     if world.resource::<AccountState>().phase != AccountPhase::Waiting {
         return Ok(());
     }
-    let backend = world.resource::<AccountRuntime>().clone();
+    let backend = world.resource::<LoginInteraction>().clone();
     let backend = backend
         .0
         .lock()
-        .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
-    if backend.stopping {
+        .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
+    if world.resource::<AgentHost>().is_stopping()? {
         return Ok(());
     }
     let Some((id, link)) = &backend.authorization else {
@@ -744,11 +657,11 @@ fn copy_link(world: &mut World) -> Result {
     Ok(())
 }
 fn receive_browser(world: &mut World) -> Result {
-    let backend = world.resource::<AccountRuntime>().clone();
+    let backend = world.resource::<LoginInteraction>().clone();
     let mut backend = backend
         .0
         .lock()
-        .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
+        .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
     let Some(mut pending) = backend.browser.take() else {
         return Ok(());
     };

@@ -11,6 +11,5 @@ pub use account::{
     AccountPhase, AccountState, AccountSummary, CredentialState, LoginAction, RestoreAccount,
     SessionActivity,
 };
-pub use authentication::AccountRuntime;
 pub use data_directory::{DataDirectoryReady, LoginUiHost, LoginUiPlugin};
 pub use model::{ModelState, VerifyModel};

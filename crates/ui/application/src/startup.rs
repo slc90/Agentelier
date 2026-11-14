@@ -1,4 +1,5 @@
 use crate::{config, diagnostics, shutdown};
+use agentelier_agent_host::AgentHostPlugin;
 use agentelier_login::DataEnvironment;
 use agentelier_login_ui::{DataDirectoryReady, LoginUiHost, LoginUiPlugin};
 use bevy::log::LogPlugin;
@@ -99,9 +100,10 @@ fn run_application(
     if config.brp_enabled {
         app.add_plugins(BrpRuntimePlugin::with_port(config.brp_port));
     }
-    let backend = login_ui.account_runtime();
+    let host_plugin = AgentHostPlugin::default();
+    let backend = host_plugin.host();
     app.insert_resource(config_store)
-        .add_plugins((AppAssetPlugin, WidgetryWindowPlugin, login_ui))
+        .add_plugins((AppAssetPlugin, WidgetryWindowPlugin, host_plugin, login_ui))
         .add_systems(Startup, setup)
         .add_observer(enter_main);
     let manager = app.world().resource::<JobManager>().clone();
