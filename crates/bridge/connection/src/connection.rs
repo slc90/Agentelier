@@ -188,6 +188,20 @@ impl Connection {
         self.model = Some(id);
         Ok(id)
     }
+    pub fn cancel_conversation(
+        &mut self,
+        session: u64,
+        turn: u64,
+        operation: u64,
+    ) -> Result<bool, BridgeFailure> {
+        if self.stopping || self.sign_out.is_some() || self.failure.is_some() {
+            return Err(BridgeFailure("聊天运行正在结束".into()));
+        }
+        if self.model != Some(operation) {
+            return Ok(false);
+        }
+        Ok(self.runtime.cancel_conversation(session, turn, operation))
+    }
     fn take_progress(&self) -> Result<Option<BridgeEvent>, BridgeFailure> {
         Ok(self
             .progress

@@ -74,6 +74,7 @@ pub struct ChatSession {
 pub struct ChatState {
     pub session: Option<ChatSession>,
     pub operation: Option<u64>,
+    pub cancelling: bool,
     pub draft: String,
     pub error: Option<String>,
 }
@@ -118,6 +119,7 @@ struct ChatStatus;
 enum ChatAction {
     Create,
     Send,
+    Stop,
 }
 #[derive(Component, Clone, PartialEq, Eq)]
 struct ChatRow {
@@ -180,7 +182,11 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
                 @hint_text: {Some("输入消息；Enter 发送，Shift+Enter 换行".into())},
             }
             Composer Name("ChatComposer") Node { width: percent(100), flex_shrink: 0.0 }--
-            @button("发送", "SendChatMessage", ChatAction::Send)
+            Node { column_gap: px(CONTENT_GAP), flex_shrink: 0.0 }
+            Children [
+                @button("发送", "SendChatMessage", ChatAction::Send)--
+                @button("停止", "StopChatGeneration", ChatAction::Stop)
+            ]
         ]
     }
 }
@@ -203,6 +209,7 @@ fn activate(
     match actions.get(event.entity)? {
         ChatAction::Create => commands.queue(create_session),
         ChatAction::Send => intents.send = true,
+        ChatAction::Stop => commands.queue(stop),
     }
     Ok(())
 }
@@ -246,6 +253,44 @@ fn create_session(world: &mut World) -> Result {
         Err(failure) => {
             error!(error = %failure, "无法创建聊天会话");
             state.error = Some(failure.to_string());
+        }
+    }
+    Ok(())
+}
+
+fn stop(world: &mut World) -> Result {
+    let state = world.resource::<ChatState>();
+    if state.cancelling {
+        return Ok(());
+    }
+    let Some(session) = &state.session else {
+        return Ok(());
+    };
+    let Some(turn) = &session.turn else {
+        return Ok(());
+    };
+    if state.operation != Some(turn.operation_id) || !matches!(turn.status, ChatTurnStatus::Running)
+    {
+        return Ok(());
+    }
+    let (session, turn, operation) = (session.id, turn.id, turn.operation_id);
+    match world
+        .resource::<AgentHost>()
+        .cancel_conversation(session, turn, operation)
+    {
+        Ok(true) => {
+            world.resource_mut::<ChatState>().cancelling = true;
+            info!(
+                session_id = session,
+                turn_id = turn,
+                operation_id = operation,
+                "已请求停止聊天，等待任务回收"
+            );
+        }
+        Ok(false) => {}
+        Err(failure) => {
+            error!(error=%failure, "停止聊天请求失败");
+            world.resource_mut::<ChatState>().error = Some(failure.to_string());
         }
     }
     Ok(())
@@ -526,6 +571,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             }
         }
         if terminal {
+            world.resource_mut::<ChatState>().cancelling = false;
             world.resource_mut::<ChatState>().operation = None;
         }
     }
@@ -536,6 +582,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
     {
         let mut state = world.resource_mut::<ChatState>();
         state.operation = None;
+        state.cancelling = false;
         state.error = Some(reason);
         changed = true;
     }
@@ -638,6 +685,9 @@ fn summary(state: &ChatState) -> String {
         .unwrap_or_else(|| "选择模型与推理设置后创建会话".into())
 }
 fn status(state: &ChatState) -> String {
+    if state.cancelling {
+        return "正在停止…等待任务结束与回收".into();
+    }
     if let Some(error) = &state.error {
         return error.clone();
     }
@@ -682,6 +732,17 @@ fn update(
                     && model.can_verify(&account)
             }
             ChatAction::Send => state.can_send(&model, &account, &activity),
+            ChatAction::Stop => {
+                !state.cancelling
+                    && state
+                        .session
+                        .as_ref()
+                        .and_then(|session| session.turn.as_ref())
+                        .is_some_and(|turn| {
+                            state.operation == Some(turn.operation_id)
+                                && matches!(turn.status, ChatTurnStatus::Running)
+                        })
+            }
         };
         if enabled {
             commands.entity(entity).remove::<InteractionDisabled>();

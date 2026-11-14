@@ -11,6 +11,7 @@ use model_task::{
     stop_model,
 };
 use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::{error::Error, fmt, io};
 use tokio::sync::mpsc;
@@ -99,6 +100,8 @@ pub struct AgentRuntime {
 
 #[derive(Clone)]
 struct ModelControl {
+    id: u64,
+    turn: Arc<OnceLock<(u64, u64)>>,
     cancel: CancellationToken,
     finished: CancellationToken,
 }
@@ -251,6 +254,8 @@ impl AgentRuntime {
                                             ConversationRequest::Send { session, input } => {
                                                 match conversation.begin(id, session, input) {
                                                     Ok((view, request)) => {
+                                                        let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
+                                                        control.turn.set((view.id.0, turn.id.0)).map_err(|_| RuntimeFailure::ModelState)?;
                                                         emit(
                                                             &publish,
                                                             id,
@@ -414,6 +419,8 @@ impl AgentRuntime {
     }
     pub fn request_model(&mut self, id: u64, request: ModelRequest) -> Result<(), RuntimeFailure> {
         let control = ModelControl {
+            id,
+            turn: Arc::new(OnceLock::new()),
             cancel: CancellationToken::new(),
             finished: CancellationToken::new(),
         };
@@ -431,6 +438,8 @@ impl AgentRuntime {
         request: ConversationRequest,
     ) -> Result<(), RuntimeFailure> {
         let control = ModelControl {
+            id,
+            turn: Arc::new(OnceLock::new()),
             cancel: CancellationToken::new(),
             finished: CancellationToken::new(),
         };
@@ -441,6 +450,17 @@ impl AgentRuntime {
         })?;
         self.model = Some(control);
         Ok(())
+    }
+    pub fn cancel_conversation(&self, session: u64, turn: u64, operation: u64) -> bool {
+        let Some(control) = self.model.as_ref().filter(|control| {
+            control.id == operation
+                && control.turn.get() == Some(&(session, turn))
+                && !control.finished.is_cancelled()
+        }) else {
+            return false;
+        };
+        control.cancel.cancel();
+        true
     }
     pub fn sign_out(&mut self, id: u64) -> Result<(), RuntimeFailure> {
         if self.shutdown.is_cancelled() {
