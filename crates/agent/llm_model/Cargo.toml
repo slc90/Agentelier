@@ -1,0 +1,15 @@
+[package]
+name = "agentelier_llm_model"
+publish = false
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+agentelier_account = { path = "../account" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

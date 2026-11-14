@@ -29,7 +29,7 @@ flowchart TD
 
 ## 功能与通用配置分别由谁管理
 
-`crates/login` 提供不依赖 Bevy 的 `DataEnvironment`，集中根目录、`auth.json` 路径、访问检查与占用句柄。`crates/login_ui` 提供 BSN 启动界面、Widgetry 选择器、错误恢复及后台任务协调。`app` 只保留程序入口；`crates/application` 提供通用应用配置、日志、窗口和 BRP 装配，并向 `login_ui` 提供保存目录选择的操作。
+`crates/agent/login` 提供不依赖 Bevy 的 `DataEnvironment`，集中根目录、`auth.json` 路径、访问检查与占用句柄。`crates/ui/login_ui` 提供 BSN 启动界面、Widgetry 选择器、错误恢复及后台任务协调。`app` 只保留程序入口；`crates/ui/application` 提供通用应用配置、日志、窗口和 BRP 装配，并向 `login_ui` 提供保存目录选择的操作。
 
 目录检查和配置提交由 Widgetry JobManager 的后台线程执行，不在 ECS 主线程等待文件 I/O。JobManager 主动唤醒 Winit，界面非阻塞接收真实完成结果；检查或保存期间不会开放主业务界面或接受第二次目录提交。配置保存成功后，发布 `DataDirectoryReady`，应用更新内存配置和窗口标题、尺寸，复用当前窗口进入既有主界面。
 

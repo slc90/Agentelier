@@ -2,7 +2,7 @@
 
 ## 提交前检查
 
-提交前必须完成适用的验证与独立 Code Review，并按照 `rules/development.md` 删除本任务的临时进度 Markdown。
+提交前必须完成适用的验证，并按照 `rules/development.md` 删除本任务的临时进度 Markdown。
 
 检查最终 Working Tree、暂存区及 Diff，确保提交范围正确，且临时进度文件没有进入提交。
 

@@ -1,4 +1,6 @@
-use agentelier_agent::{AgentEvent, AgentEventKind, AgentRuntime, DeliveryFailure};
+use agentelier_account_bridge::{AccountEventKind, SessionActivity};
+use agentelier_agent_runtime::{AgentEventKind, AgentRuntime, DeliveryFailure};
+use agentelier_llm_model_bridge::ModelEventKind;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::{error::Error, fmt};
@@ -6,129 +8,13 @@ use std::{error::Error, fmt};
 const RESULT_CAPACITY: usize = 8;
 type Notify = Box<dyn Fn() -> bool + Send + Sync>;
 
-#[derive(Clone, Debug)]
-pub struct AccountSummary {
-    pub subject: String,
-    pub display_name: Option<String>,
-    pub email: Option<String>,
-}
-#[derive(Clone, Copy, Debug)]
-pub enum CredentialState {
-    NoRecord,
-    HostOnly,
-    SignedOut,
-    ReauthenticationRequired,
-    StoredSession {
-        expired: bool,
-        subscription_enabled: bool,
-    },
-}
-#[derive(Debug)]
-pub struct AccountSnapshot {
-    pub account: Option<AccountSummary>,
-    pub credentials: CredentialState,
-}
-pub struct AuthorizationLink(String);
-impl AuthorizationLink {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-pub struct AccountEvent {
+pub struct BridgeEvent {
     pub operation_id: u64,
-    pub kind: AccountEventKind,
+    pub kind: BridgeEventKind,
 }
-pub enum AccountEventKind {
-    ModelCompleted(Result<ModelReply, ModelFailure>),
-    ModelCancelled,
-    SignOutProgress(SignOutStage),
-    SignOutFailed(BridgeFailure),
-    SignedOut {
-        snapshot: AccountSnapshot,
-        remote: RemoteRevocation,
-    },
-    SessionStatus {
-        snapshot: AccountSnapshot,
-        activity: SessionActivity,
-        failure: Option<SessionFailure>,
-    },
-    BrowserReady(AuthorizationLink),
-    Exchanging,
-    Saving,
-    SaveFailed(BridgeFailure),
-    Completed(Result<AccountSnapshot, BridgeFailure>),
-    Cancelled,
-}
-pub struct ModelReply {
-    pub model: String,
-    pub text: String,
-}
-#[derive(Clone, Copy, Debug)]
-pub enum ModelFailureKind {
-    Authentication,
-    Permission,
-    UsageLimit,
-    Service,
-    Network,
-    Protocol,
-    Incomplete,
-}
-pub struct ModelFailure {
-    pub kind: ModelFailureKind,
-    pub status: Option<u16>,
-    pub code: Option<String>,
-    pub request_id: Option<String>,
-    pub message: String,
-}
-impl fmt::Display for ModelFailure {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.message)?;
-        if let Some(status) = self.status {
-            write!(f, "；HTTP {status}")?;
-        }
-        if let Some(code) = &self.code {
-            write!(f, "；{code}")?;
-        }
-        if let Some(id) = &self.request_id {
-            write!(f, "；请求 {id}")?;
-        }
-        Ok(())
-    }
-}
-#[derive(Clone, Copy, Debug)]
-pub enum SignOutStage {
-    Settling,
-    Revoking,
-    Clearing,
-}
-#[derive(Clone, Debug)]
-pub enum RemoteRevocation {
-    Confirmed,
-    Unconfirmed(String),
-    NotApplicable,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionActivity {
-    Idle,
-    Checking,
-    Refreshing,
-    Saving,
-    SaveFailed,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionFailureKind {
-    Unavailable,
-    Temporary,
-    Uncertain,
-    ReauthenticationRequired,
-    ClientConfiguration,
-    Storage,
-}
-#[derive(Clone, Debug)]
-pub struct SessionFailure {
-    pub kind: SessionFailureKind,
-    pub retry_at: Option<u64>,
-    pub message: String,
+pub enum BridgeEventKind {
+    Account(AccountEventKind),
+    Model(ModelEventKind),
 }
 #[derive(Clone, Debug)]
 pub struct BridgeFailure(String);
@@ -175,7 +61,7 @@ struct PendingSignOut {
 
 pub struct Connection {
     runtime: AgentRuntime,
-    events: mpsc::Receiver<AccountEvent>,
+    events: mpsc::Receiver<BridgeEvent>,
     wake: Arc<WakeGate>,
     next_operation: u64,
     pending: Option<Pending>,
@@ -198,7 +84,20 @@ impl Connection {
             path,
             move |event| {
                 sender
-                    .try_send(convert(event))
+                    .try_send(BridgeEvent {
+                        operation_id: event.operation_id,
+                        kind: match event.kind {
+                            AgentEventKind::Account(kind) => {
+                                BridgeEventKind::Account(agentelier_account_bridge::convert(kind))
+                            }
+                            AgentEventKind::ModelCompleted(result) => BridgeEventKind::Model(
+                                agentelier_llm_model_bridge::convert(Some(result)),
+                            ),
+                            AgentEventKind::ModelCancelled => {
+                                BridgeEventKind::Model(agentelier_llm_model_bridge::convert(None))
+                            }
+                        },
+                    })
                     .map_err(|error| match error {
                         mpsc::TrySendError::Full(_) => DeliveryFailure::Full,
                         mpsc::TrySendError::Disconnected(_) => DeliveryFailure::Closed,
@@ -330,7 +229,7 @@ impl Connection {
         }
         Ok(())
     }
-    pub fn try_receive(&mut self) -> Result<Option<AccountEvent>, BridgeFailure> {
+    pub fn try_receive(&mut self) -> Result<Option<BridgeEvent>, BridgeFailure> {
         if let Some(failure) = &self.failure {
             return Err(failure.clone());
         }
@@ -345,19 +244,21 @@ impl Connection {
         loop {
             match self.events.try_recv() {
                 Ok(event) => {
-                    if matches!(
-                        &event.kind,
-                        AccountEventKind::SignOutProgress(_)
-                            | AccountEventKind::SignOutFailed(_)
-                            | AccountEventKind::SignedOut { .. }
-                    ) {
+                    if let BridgeEventKind::Account(kind) = &event.kind
+                        && matches!(
+                            kind,
+                            AccountEventKind::SignOutProgress(_)
+                                | AccountEventKind::SignOutFailed(_)
+                                | AccountEventKind::SignedOut { .. }
+                        )
+                    {
                         let Some(pending) = &mut self.sign_out else {
                             return self.protocol_failure();
                         };
                         if pending.id != event.operation_id {
                             return self.protocol_failure();
                         }
-                        match &event.kind {
+                        match kind {
                             AccountEventKind::SignOutFailed(_) => pending.failed = true,
                             AccountEventKind::SignedOut { .. } => {
                                 self.sign_out = None;
@@ -372,7 +273,9 @@ impl Connection {
                     if self.sign_out.is_some() {
                         if matches!(
                             &event.kind,
-                            AccountEventKind::Completed(_) | AccountEventKind::Cancelled
+                            BridgeEventKind::Account(
+                                AccountEventKind::Completed(_) | AccountEventKind::Cancelled
+                            )
                         ) && self
                             .pending
                             .as_ref()
@@ -382,18 +285,18 @@ impl Connection {
                         }
                         continue;
                     }
-                    if let AccountEventKind::SessionStatus { activity, .. } = &event.kind {
-                        self.session_activity = *activity;
-                        return Ok(Some(event));
-                    }
-                    if matches!(
-                        &event.kind,
-                        AccountEventKind::ModelCompleted(_) | AccountEventKind::ModelCancelled
-                    ) {
-                        if self.model != Some(event.operation_id) {
-                            return self.protocol_failure();
+                    let kind = match &event.kind {
+                        BridgeEventKind::Model(_) => {
+                            if self.model != Some(event.operation_id) {
+                                return self.protocol_failure();
+                            }
+                            self.model = None;
+                            return Ok(Some(event));
                         }
-                        self.model = None;
+                        BridgeEventKind::Account(kind) => kind,
+                    };
+                    if let AccountEventKind::SessionStatus { activity, .. } = kind {
+                        self.session_activity = *activity;
                         return Ok(Some(event));
                     }
                     let Some(pending) = &mut self.pending else {
@@ -402,7 +305,7 @@ impl Connection {
                     if event.operation_id != pending.id {
                         return self.protocol_failure();
                     }
-                    match &event.kind {
+                    match kind {
                         AccountEventKind::BrowserReady(_) if pending.cancelling => continue,
                         AccountEventKind::SaveFailed(_) => pending.phase = Phase::SaveFailed,
                         AccountEventKind::Saving => pending.phase = Phase::Saving,
@@ -423,7 +326,7 @@ impl Connection {
             }
         }
     }
-    fn protocol_failure(&mut self) -> Result<Option<AccountEvent>, BridgeFailure> {
+    fn protocol_failure(&mut self) -> Result<Option<BridgeEvent>, BridgeFailure> {
         let failure = BridgeFailure("账号结果不属于当前操作".into());
         self.failure = Some(failure.clone());
         Err(failure)
@@ -481,137 +384,5 @@ impl Drop for Connection {
         if let Err(failure) = self.finish() {
             tracing::error!(error = %failure, "未显式收尾的业务桥接在释放时结束失败");
         }
-    }
-}
-fn convert(event: AgentEvent) -> AccountEvent {
-    let kind = match event.kind {
-        AgentEventKind::ModelCancelled => AccountEventKind::ModelCancelled,
-        AgentEventKind::ModelCompleted(result) => AccountEventKind::ModelCompleted(
-            result
-                .map(|reply| ModelReply {
-                    model: reply.model,
-                    text: reply.text,
-                })
-                .map_err(|failure| ModelFailure {
-                    kind: match failure.kind {
-                        agentelier_agent::ModelFailureKind::Authentication => {
-                            ModelFailureKind::Authentication
-                        }
-                        agentelier_agent::ModelFailureKind::Permission => {
-                            ModelFailureKind::Permission
-                        }
-                        agentelier_agent::ModelFailureKind::UsageLimit => {
-                            ModelFailureKind::UsageLimit
-                        }
-                        agentelier_agent::ModelFailureKind::Service => ModelFailureKind::Service,
-                        agentelier_agent::ModelFailureKind::Network => ModelFailureKind::Network,
-                        agentelier_agent::ModelFailureKind::Protocol => ModelFailureKind::Protocol,
-                        agentelier_agent::ModelFailureKind::Incomplete => {
-                            ModelFailureKind::Incomplete
-                        }
-                    },
-                    status: failure.status,
-                    code: failure.code,
-                    request_id: failure.request_id,
-                    message: failure.message,
-                }),
-        ),
-        AgentEventKind::SignOutProgress(stage) => AccountEventKind::SignOutProgress(match stage {
-            agentelier_agent::SignOutStage::Settling => SignOutStage::Settling,
-            agentelier_agent::SignOutStage::Revoking => SignOutStage::Revoking,
-            agentelier_agent::SignOutStage::Clearing => SignOutStage::Clearing,
-        }),
-        AgentEventKind::SignOutFailed(failure) => {
-            AccountEventKind::SignOutFailed(BridgeFailure(failure.to_string()))
-        }
-        AgentEventKind::SignedOut { snapshot, remote } => AccountEventKind::SignedOut {
-            snapshot: convert_snapshot(snapshot),
-            remote: match remote {
-                agentelier_agent::RemoteRevocation::Confirmed => RemoteRevocation::Confirmed,
-                agentelier_agent::RemoteRevocation::Unconfirmed(reason) => {
-                    RemoteRevocation::Unconfirmed(reason)
-                }
-                agentelier_agent::RemoteRevocation::NotApplicable => {
-                    RemoteRevocation::NotApplicable
-                }
-            },
-        },
-        AgentEventKind::SessionStatus {
-            snapshot,
-            activity,
-            failure,
-        } => AccountEventKind::SessionStatus {
-            snapshot: convert_snapshot(snapshot),
-            activity: match activity {
-                agentelier_agent::SessionActivity::Idle => SessionActivity::Idle,
-                agentelier_agent::SessionActivity::Checking => SessionActivity::Checking,
-                agentelier_agent::SessionActivity::Refreshing => SessionActivity::Refreshing,
-                agentelier_agent::SessionActivity::Saving => SessionActivity::Saving,
-                agentelier_agent::SessionActivity::SaveFailed => SessionActivity::SaveFailed,
-            },
-            failure: failure.map(|failure| SessionFailure {
-                kind: match failure.kind {
-                    agentelier_agent::SessionFailureKind::Temporary => {
-                        SessionFailureKind::Temporary
-                    }
-                    agentelier_agent::SessionFailureKind::Uncertain
-                    | agentelier_agent::SessionFailureKind::Identity => {
-                        SessionFailureKind::Uncertain
-                    }
-                    agentelier_agent::SessionFailureKind::ReauthenticationRequired => {
-                        SessionFailureKind::ReauthenticationRequired
-                    }
-                    agentelier_agent::SessionFailureKind::ClientConfiguration => {
-                        SessionFailureKind::ClientConfiguration
-                    }
-                    agentelier_agent::SessionFailureKind::Storage => SessionFailureKind::Storage,
-                    _ => SessionFailureKind::Unavailable,
-                },
-                retry_at: failure.retry_at,
-                message: failure.to_string(),
-            }),
-        },
-        AgentEventKind::BrowserReady(url) => AccountEventKind::BrowserReady(AuthorizationLink(url)),
-        AgentEventKind::Exchanging => AccountEventKind::Exchanging,
-        AgentEventKind::Saving => AccountEventKind::Saving,
-        AgentEventKind::SaveFailed(failure) => {
-            AccountEventKind::SaveFailed(BridgeFailure(failure.to_string()))
-        }
-        AgentEventKind::Cancelled => AccountEventKind::Cancelled,
-        AgentEventKind::Completed(result) => AccountEventKind::Completed(
-            result
-                .map(convert_snapshot)
-                .map_err(|error| BridgeFailure(error.to_string())),
-        ),
-    };
-    AccountEvent {
-        operation_id: event.operation_id,
-        kind,
-    }
-}
-fn convert_snapshot(restored: agentelier_agent::RestoredAccount) -> AccountSnapshot {
-    let account = restored.account.map(|account| AccountSummary {
-        subject: account.subject,
-        display_name: account.display_name,
-        email: account.email,
-    });
-    let credentials = match restored.credentials {
-        agentelier_agent::CredentialState::NoRecord => CredentialState::NoRecord,
-        agentelier_agent::CredentialState::HostOnly => CredentialState::HostOnly,
-        agentelier_agent::CredentialState::SignedOut => CredentialState::SignedOut,
-        agentelier_agent::CredentialState::ReauthenticationRequired => {
-            CredentialState::ReauthenticationRequired
-        }
-        agentelier_agent::CredentialState::StoredSession {
-            expired,
-            subscription_enabled,
-        } => CredentialState::StoredSession {
-            expired,
-            subscription_enabled,
-        },
-    };
-    AccountSnapshot {
-        account,
-        credentials,
     }
 }

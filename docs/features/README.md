@@ -5,4 +5,5 @@
 - [应用宿主与程序入口](application.md)：薄可执行入口、通用装配、配置与整体生命周期。
 - [登录数据环境](login.md)：不依赖 Bevy 的目录检查、凭据路径和独占占用。
 - [登录与目录设置界面](login-ui.md)：Widgetry 目录选择、后台准备、失败恢复及下次启动位置设置。
-- [账号恢复后台与桥接](auth-runtime.md)：Tokio 执行、有界业务消息、应用唤醒和显式收尾。
+- [账号恢复后台与桥接](auth-runtime.md)：Account/Runtime 分工、业务转换、有界消息、应用唤醒和显式收尾。
+- [模型连接验证](model-request.md)：模型目录、Responses/SSE 终态及结果展示。

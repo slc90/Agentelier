@@ -1,5 +1,4 @@
-use crate::credentials::CredentialClient;
-use agentelier_login::{AuthenticatedRequest, UsableCredentials};
+use agentelier_account::{AuthenticatedRequest, CredentialClient, UsableCredentials};
 use reqwest::{Client, Response};
 use serde::Deserialize;
 use serde_json::Value;
@@ -51,9 +50,6 @@ impl ModelFailure {
     fn authentication(failure: impl fmt::Display) -> Self {
         Self::new(ModelFailureKind::Authentication, failure.to_string())
     }
-    pub(super) fn task() -> Self {
-        Self::new(ModelFailureKind::Service, "模型操作任务异常结束")
-    }
 }
 impl fmt::Display for ModelFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -72,7 +68,7 @@ impl fmt::Display for ModelFailure {
 }
 impl Error for ModelFailure {}
 
-pub(super) async fn verify(credentials: CredentialClient) -> Result<ModelReply, ModelFailure> {
+pub async fn verify(credentials: CredentialClient) -> Result<ModelReply, ModelFailure> {
     let client = Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())

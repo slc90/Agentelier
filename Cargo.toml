@@ -2,12 +2,16 @@
 resolver = "3"
 members = [
   "app",
-  "crates/agent",
-  "crates/application",
-  "crates/assets",
-  "crates/bridge",
-  "crates/login",
-  "crates/login_ui",
+  "crates/ui/application",
+  "crates/ui/assets",
+  "crates/ui/login_ui",
+  "crates/agent/login",
+  "crates/agent/account",
+  "crates/agent/llm_model",
+  "crates/agent/runtime",
+  "crates/bridge/account",
+  "crates/bridge/llm_model",
+  "crates/bridge/connection",
 ]
 
 [workspace.package]

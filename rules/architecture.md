@@ -7,11 +7,23 @@
 ### Crate 职责与依赖方向
 
 - `app/`：仅保留可执行包所需的 `Cargo.toml` 和程序入口 `src/main.rs`。`main.rs` 只承担入口级平台声明并调用 `crates/` 提供的启动接口，不实现业务、配置、窗口/UI 装配、诊断或生命周期协调，也不声明其他功能 Module。下层库 crate 不得依赖 `app`。
-- 所有功能实现必须放在 `crates/`，按真实职责归入已有库或新增库；不得将所有功能集中到一个替代 `app/` 的总包。
-- `crates/application/`：通用应用宿主，负责配置、日志、诊断、窗口/插件装配与整体启动退出协调，不接管具体账号界面、认证协议或模型执行。
-- `crates/login_ui/`：目录、账号及模型验证界面，以及相应的 Bevy/Bridge 交互衔接和浏览器交互。认证协议、凭据维护及模型网络请求继续由对应运行侧库负责。
-- `crates/assets/`：统一管理应用 Asset，可供其他 Crate 使用。
-- `crates/` 中将来增加的内部 Library：按实际可交付能力划分。
+- 所有功能实现必须放在 `crates/`，按真实职责归入 `ui/`、`agent/`、`bridge/` 三个领域。领域目录只是架构边界，不是 Rust Crate，不预先创建空库，也不建立承担整个领域功能的总包。
+- `crates/ui/application/`：通用应用宿主，负责配置、日志、诊断、窗口/插件装配与整体启动退出协调，不接管具体账号界面、认证协议或模型执行。
+- `crates/ui/login_ui/`：目录、账号及模型验证界面，以及相应的 Bevy/Bridge 交互衔接和浏览器交互。
+- `crates/ui/assets/`：统一管理应用 Asset。
+- `crates/agent/login/`（`agentelier_login`）：OAuth 协议、Token、认证文件持久化及数据环境，不承担统一运行调度。
+- `crates/agent/account/`（`agentelier_account`）：账号操作与会话运行状态、共享凭据请求、登录/恢复/续期/退出协调，具体协议和文件读写由 Login 实现。
+- `crates/agent/llm_model/`（`agentelier_llm_model`）：模型服务通信、模型目录、Responses 和 SSE，通过 Account 取得凭据，不维护第二份账号状态或读写认证文件。
+- `crates/agent/runtime/`（`agentelier_agent_runtime`）：Tokio 执行环境、跨业务任务调度、取消、回收与运行生命周期，不包含具体 OAuth 或模型网络协议。
+- `crates/bridge/account/`（`agentelier_account_bridge`）：账号安全投影及认证业务事件转换。
+- `crates/bridge/llm_model/`（`agentelier_llm_model_bridge`）：模型结果、错误分类、取消和完成状态转换。
+- `crates/bridge/connection/`（`agentelier_bridge_connection`）：跨运行边界连接、命令/事件投递、操作关联、界面唤醒及通信生命周期，不承接具体业务投影和错误分类。
+
+跨领域允许 `ui → agent`、`ui → bridge`、`bridge → agent`；禁止 `agent → ui`、`agent → bridge`、`bridge → ui`。UI 可以直接使用 Agent 业务能力，需要转换或跨运行边界协调时使用对应 Bridge，不强制所有访问经过 Bridge。
+
+领域内部不得循环依赖。Runtime 依赖 Account 和 LLM Model；LLM Model 依赖 Account，Account 依赖 Login。Bridge 不依赖 Bevy 的具体界面实现，不拥有 Agent 执行状态或 UI 展示状态。
+
+新增能力先判断领域，再按真实职责复用或建立 Crate。既有 Crate 不因领域名称就承接所有新功能，也不为每个类型或小功能机械建库；独立边界须能以功能和依赖解释。
 
 ### 外部依赖管理
 
@@ -46,7 +58,7 @@ Workspace 内部 Crate 默认使用 Path Dependency 并遵守必要的职责与�
 
 ## Assets
 
-应用 Asset 统一由 `crates/assets/` 管理，资源文件位于 `crates/assets/src/assets/`，`crates/assets/src/lib.rs` 公开 `AppAssetPlugin` 负责应用需要的注册。
+应用 Asset 统一由 `crates/ui/assets/` 管理，资源文件位于 `crates/ui/assets/src/assets/`，`crates/ui/assets/src/lib.rs` 公开 `AppAssetPlugin` 负责应用需要的注册。
 
 其他代码通过语义名称引用应用 Asset，不到处散布物理/Embedded 路径；Asset 的注册和路径选择集中在实际的 Asset Owner 中。
 

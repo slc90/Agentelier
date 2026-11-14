@@ -20,7 +20,7 @@
 
 ## 基础规则
 
-- `rules/project-context.md`：项目背景、目标环境、平台边界、开发与验证原则及 UI 构造原则。方案探索、正式代码开发及独立 Code Review 均须读取。
+- `rules/project-context.md`：项目背景、目标环境、平台边界、开发与验证原则及 UI 构造原则。方案探索与正式代码开发均须读取。
 - `rules/task-scope.md`：限定当前任务的修改范围，避免无关改动。
 - `rules/development.md`：开发流程、任务进度记录、工程化开发方法及验证衔接。
 
@@ -37,7 +37,6 @@
 - `rules/gui-debugging.md`：GUI 运行时行为及 BRP 自动验证。
 - `rules/logging.md`：日志职责、记录条件、日志内容与持久化。
 - `rules/git.md`：Git 提交范围、变更分组及 Commit Message。
-- `rules/code-review.md`：独立自动 Code Review 的适用范围、执行流程及中断续接。
 - `rules/common-commands.md`：常用开发与验证命令，命令列表仅供按需选择，不代表每次修改都必须执行全部命令。
 
 相关规则可以同时适用。规则选择应依据真实任务内容和变更影响，而不是仅凭文件所属目录判断。
@@ -78,7 +77,7 @@
 
 探索结束、解决方案明确后，**自主进入正式开发，不需要等待人工确认**。
 
-探索阶段的工程流程豁免不延续至正式开发。需要保留的实验代码必须按照正式工程规则整理、验证和 Review，不能直接以探索阶段的标准交付。
+探索阶段的工程流程豁免不延续至正式开发。需要保留的实验代码必须按照正式工程规则整理和验证，不能直接以探索阶段的标准交付。
 
 ## 正式开发
 
@@ -88,19 +87,15 @@ GUI 运行时验证遵循 `rules/gui-debugging.md`。纯重构等特殊情况按
 
 ## 任务进度与中断续接
 
-实际修改仓库的任务必须维护根目录下的临时进度 Markdown，记录任务范围、实施进度、验证结果、Review 状态及必要的续接信息。
+实际修改仓库的任务必须维护根目录下的临时进度 Markdown，记录任务范围、实施进度、验证结果及必要的续接信息。
 
 中断后根据进度记录和实际工作区状态继续，不重复已完成的工作，也不将未经核实的记录视为完成证据。
 
-具体记录格式、更新时机、Review 状态管理及提交前清理要求遵循 `rules/development.md`。
+具体记录格式、更新时机及提交前清理要求遵循 `rules/development.md`。
 
-## 独立 Code Review
+## 专项 Code Review
 
-影响代码、构建或运行行为的修改，在实施和必要验证后必须执行独立自动 Code Review。纯不影响工程行为的 Markdown 修改不触发。
-
-每轮 Review 使用新的独立 Reviewer Subagent，按真实 Diff 选择相关规则，并始终读取 `rules/project-context.md`。
-
-完整 Review 流程、Findings 修复循环、Baseline 管理及中断续接遵循 `rules/code-review.md`。具体调用方式以当前 `$code-review` Skill 文档为准。
+不强制执行独立 Code Review；用户明确要求时，按指定范围执行专项 Code Review。
 
 # 文档同步
 

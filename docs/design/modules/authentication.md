@@ -34,7 +34,7 @@ reqwest 显式启用 `system-proxy`，Token、发现文档与 JWKS 共用该客�
 
 恢复账号不触发网络；运行侧需要凭据时，通过同一个认证所有者检查当前记录。到期前 60 秒进入续期窗口，同时受服务返回的 refresh_not_before 限制。最早刷新时间未到但 Access Token 有效时继续使用；凭据已经不可用则返回暂不可用及重试时间，不忙等或发送过期 Token。
 
-Agent 提供可克隆 CredentialClient，以请求类型及被拒绝的原凭据代次合并在途等待，所有文件和会话变更仍由同一 Tokio 循环串行处理。会话代次仅存在于进程内，文件记录实质变化或成功提交时更新；重新读取相同文件不改变代次或清除当前运行的错误防护。调用方丢弃 Future 不取消已经开始的 Token 旋转。
+Account 提供可克隆 CredentialClient，以请求类型及被拒绝的原凭据代次合并在途等待，所有文件和会话变更仍由同一 Tokio 循环串行处理。会话代次仅存在于进程内，文件记录实质变化或成功提交时更新；重新读取相同文件不改变代次或清除当前运行的错误防护。调用方丢弃 Future 不取消已经开始的 Token 旋转。
 
 续期使用固定 Token 地址和实际客户端，省略 scope。新 ID Token 若存在，除正常 JWT 验证外，要求 subject 与原登记一致，并比较最初授权的 audience、可选 nonce 和 auth_time。首次续期从已保存的 ID Token 取得原始绑定，后续将其作为可选 identity_binding 随会话保存；缺少新 ID Token 时保留旧值。展示名和邮箱继续使用既有已验证登记。
 
@@ -78,7 +78,7 @@ flowchart LR
 
 命令队列容量为四、事件队列容量为八。Bridge 只接纳一个在途账号操作，保存失败与重试继续使用同一标识，终态才释放操作。state/nonce/Token 留在认证运行；授权地址只通过无 Debug 的私有交互消息交给应用后台句柄，不进入可反射 AccountState。
 
-Agent 在独立线程驱动 Tokio，文件工作使用 spawn_blocking，网络与回调为异步。取消通过当前操作专属 CancellationToken 直接通知在途任务；等待超时为命名常量五分钟。取消或关闭停止监听和网络等待；已开始的文件提交等待真实完成，以实际保存结果决定成功或取消。
+Runtime 在独立线程驱动 Tokio，Account 串行协调账号操作，Login 的具体文件工作使用 spawn_blocking，网络与回调为异步。取消通过当前操作专属 CancellationToken 直接通知在途任务；等待超时为命名常量五分钟。取消或关闭停止监听和网络等待；已开始的文件提交等待真实完成，以实际保存结果决定成功或取消。
 
 结果先入队再通知 Winit，应用非阻塞消费所有待处理阶段。打开浏览器作为应用辅助 Job 管理，其结果有独立操作关联；迟到结果不覆盖其他登录。应用只安装原有日志和 BRP Runtime。
 
@@ -91,3 +91,9 @@ Agent 在独立线程驱动 Tokio，文件工作使用 spawn_blocking，网络�
 单次模型验证在同一 Tokio 中使用独立任务，通过 CredentialClient 等待认证所有者交付已保存的凭据。目录与推理之间重新获取当前凭据并检查登记身份；输出开始前的 401 使用已有 AuthenticatedRequest 恢复预算，输出开始后不自动重放推理。
 
 退出或关闭会取消并回收模型执行体。取消凭据等待者不会丢弃认证所有者已经开始的旋转；所有者仍负责网络结果及必要文件提交，然后才结束退出清理或 Tokio 生命周期。模型协议和 Bridge/UI 终态关系见[单次模型请求](model-request.md)。
+
+## Crate 所有权
+
+`agentelier_login` 保留协议、Token 和具体持久化实现；`agentelier_account::Account` 持有唯一 AuthFile 与待保存浏览器操作，执行账号恢复、授权、续期、保存和退出协调。共享凭据入口及会话门控位于 Account，向 Runtime 注入的命令提交能力发送 AccountCommand，不依赖 Runtime 或 Bridge。
+
+`agentelier_agent_runtime` 拥有 Tokio、混合命令队列、独立退出队列、模型任务及线程收尾。Account 的交付失败返回 Runtime，由 Runtime 在完成必要提交后报告；退出时先回收模型，再进入 Account 的撤销和清理。Account Bridge 负责非敏感账号投影，Connection 负责操作关联和唤醒，UI 只持有展示状态。

@@ -1,181 +1,118 @@
 # Agentelier 总体架构
 
-当前 Workspace 包含仅保留程序入口的 `app/`、通用应用宿主 `crates/application/`（`agentelier_application`）、应用 Asset 库 `crates/assets/`、数据与认证能力 `crates/login/`（`agentelier_login`）、登录界面 `crates/login_ui/`（`agentelier_login_ui`）、后台运行 `crates/agent/`（`agentelier_agent`）和业务桥接 `crates/bridge/`（`agentelier_bridge`）。当前已实现数据目录启动与设置、文件账号恢复、ChatGPT 浏览器授权、受限权限凭据提交、非敏感状态展示及运行收尾；已实现 Token 按需续期、共享凭据请求与失败分类；已实现远端撤销与本地会话清理；已接入单次模型连接验证。
+Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。Bevy ECS 与 Winit 管理交互和展示，独立线程的 Tokio current-thread Runtime 承载账号与模型执行。当前已实现数据目录启动与设置、文件账号恢复、ChatGPT 浏览器授权、受保护凭据提交、按需续期、退出登录、模型连接验证及运行收尾。
 
-Agentelier 是以 Bevy 构建交互界面的 Rust 桌面 Agent 应用。应用的交互与 Agent 的执行有不同的运行需求：前者由 Bevy ECS 与 Winit 驱动，后者需要持续处理异步模型响应、工具执行和任务生命周期。
+## Workspace 与三个领域
 
-两部分运行在**同一个进程**中，以**独立的业务桥接**交换命令和事件。Bevy 负责应用交互与呈现，Tokio 承载 Agent 执行；桥接隔离双方的内部模型，而不接管任何一方的业务状态。
+`app/` 是唯一程序入口，只保留 `Cargo.toml` 与 `src/main.rs`，后者声明平台并调用 `agentelier_application::run()`。功能归入 `crates/ui/`、`crates/agent/`、`crates/bridge/`；这三个目录不是 Crate，领域内按实际职责划分独立库。
 
-```mermaid
-flowchart LR
-    subgraph Process["Agentelier · Rust 单进程"]
-        UI["Bevy 应用<br/>ECS · BSN · Widgetry UI"]
-        Bridge["业务桥接<br/>agentelier_bridge"]
-        Agent["Agent 运行<br/>agentelier_agent · Tokio"]
-        Model["模型通信能力"]
-        UI <-->|"业务命令与事件"| Bridge
-        Bridge <-->|"运行命令与事件"| Agent
-        Agent <-->|"模型请求与响应"| Model
-    end
-    Model <-->|"网络通信"| Service["外部模型服务"]
-```
+| 目录 | Package | 当前职责 |
+| --- | --- | --- |
+| `crates/ui/application/` | `agentelier_application` | 通用宿主、配置、日志、诊断、窗口装配与整体生命周期 |
+| `crates/ui/assets/` | `bevy_app_assets` | 应用 Asset 的统一注册 |
+| `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、账号、模型验证界面，Bevy/Bridge 衔接及浏览器/剪贴板交互 |
+| `crates/agent/login/` | `agentelier_login` | 数据环境、OAuth、Token、身份校验、认证文件与受保护原子提交 |
+| `crates/agent/account/` | `agentelier_account` | 账号操作与会话状态、共享凭据门控和按需续期协调 |
+| `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录、Responses、SSE 和模型错误语义 |
+| `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型任务取消/回收及执行收尾 |
+| `crates/bridge/account/` | `agentelier_account_bridge` | 账号摘要、凭据安全投影、授权地址及账号事件转换 |
+| `crates/bridge/llm_model/` | `agentelier_llm_model_bridge` | 模型结果、错误分类、取消和完成状态转换 |
+| `crates/bridge/connection/` | `agentelier_bridge_connection` | 命令/事件传递、操作关联、互斥、唤醒与连接生命周期 |
 
-图中的双向箭头表示**运行时信息交互**，不是 Rust Crate 的依赖方向。模型通信能力属于 Agent 运行侧，外部模型服务不属于 Agentelier 进程。
-
-## 应用层与 Agent 运行层
-
-### Bevy 应用：交互、状态与装配
-
-Bevy 应用拥有窗口和 Winit 事件循环，使用 ECS 管理应用业务状态，使用 BSN 声明和组合 UI。`bevy_widgetry` 在 Bevy 原生运行模型中提供窗口、控件及其他 UI 能力，不建立第二套 UI 运行时。
-
-应用层决定何时发起操作、如何响应用户输入，以及如何把 Agent 的业务事件反映到界面。它持有**面向交互与展示的状态**，例如当前操作、已收到的内容、等待用户处理的请求和界面反馈。Widgetry 控件自身的运行时状态继续由各控件按公开契约管理。
-
-应用层还负责统一装配与管理应用基础设施，包括 Asset、日志、按需启用的 BRP 运行时，以及辅助后台任务。
-
-`app/src/main.rs` 仅调用 `agentelier_application::run()`。应用宿主先建立可执行文件旁的日志，加载 `config/config.ron`，再装配同一套 Bevy 运行时。`login_ui` 在启动窗口的内容宿主中复用 Widgetry 目录选择器，通过辅助后台任务调用 `login` 检查并占用目录，再调用 `application` 提供的保存操作提交新选择。完成后复用当前窗口进入主界面，并通过桥接在 Agent/Tokio 中恢复 `auth.json`；数据环境保持到后台任务及日志收尾完成。主窗口可沿同一桥接发起浏览器授权，系统浏览器由应用辅助 Job 打开，剪贴板操作由应用执行。具体关系见[数据目录与启动](mechanisms/application-data.md)。
-
-`application` 负责通用配置、日志、诊断、窗口/插件装配及整体退出协调；具体目录/账号/模型验证界面、账号投影、Bridge 衔接、浏览器及剪贴板交互归 `login_ui`，数据环境与具体文件凭据组件归 `login`。`login` 不依赖 Bevy，也不反向依赖应用；`login_ui` 依赖 `login`、Bridge、Bevy 和 Widgetry。Agent 依赖 `login`，在独立线程的 Tokio current-thread Runtime 中串行执行恢复、授权及保存重试；OAuth 网络和回环监听使用异步 I/O，具体文件读写使用 `spawn_blocking`。`login` 使用启用 Windows 系统代理的 reqwest 与 jsonwebtoken 校验固定签发方，并通过 win-custody 的安全接口保护凭据权限；Bridge 转换业务消息，授权地址仅作为无 Debug 的私有交互数据交给应用，不进入反射状态。应用浏览器 Job 使用系统默认浏览器。详见[认证运行与凭据管理](modules/authentication.md)。
-
-目录设置继续归 `login_ui`：显示本次固定路径、打开当前目录、检查并保存下次启动位置，并按操作 ID 接收后台结果。候选检查不持有第二份长期占用。`agentelier_application::config::ConfigStore` 串行合并最新配置并完整替换提交，启动与设置复用同一保存入口；文件保存成功才更新对应运行时状态。设置更改不修改当前数据环境，也不搬运文件。
-
-`application` 与 `login_ui` 直接依赖 Widgetry 的独立 `bevy_widgetry_path_display` crate，统一界面及日志中的路径显示。`login` 只提供原始路径，不实现或转导出路径显示函数。
-
-### Agent：执行与运行状态
-
-认证运行通过可克隆 CredentialClient 接收运行侧的按需凭据请求，合并同类在途等待；Token、会话代次与待提交旋转结果不进入 Bevy。Bridge 的 check_session 复用该路径，仅转换全局非敏感 SessionStatus，UI 可显示检查、续期、保存失败或需要重新登录。启动只恢复文件；没有周期保活。模型任务在同一 Tokio 中并发运行，通过共享凭据入口按需认证；通信与取消关系见[单次模型请求](modules/model-request.md)。
-
-退出由 login_ui → Bridge → Agent 发起，application 只调用 login_ui 提供的运行收尾句柄协调应用关闭。Agent 的独立控制入口先关闭凭据接纳与旧等待者交付，取消并回收当前模型任务，等待当前更新结束，再调用 login 的撤销及原子清理；Bridge 隔离旧操作，UI 仅显示阶段和真实终态。login 直接记录有限撤销尝试的安全诊断，仍由宿主统一管理 tracing；不新增日志订阅或认证后台。普通关闭不退出账号。
-
-`agentelier_agent` 负责 Agent 的实际执行：接收运行命令，协调模型通信与工具执行，维护相关任务和会话的运行状态，并产生执行进展和终态结果。
-
-Agent 的异步工作由 **Tokio** 承载。Agent 自行管理执行任务的取消、结束和资源收尾，不把执行循环改造成 Bevy ECS System，也不直接访问或修改 ECS World。
-
-Agent 运行状态与应用展示状态有不同的所有者：**执行是否真正完成，以 Agent 的结果为准；界面如何呈现，由 Bevy 应用决定。**
-
-### 业务桥接：转换双方理解的信息
-
-`agentelier_bridge` 是独立的 Rust Crate，连接应用与 Agent 的业务边界。它负责：
-
-- 将应用发出的业务请求、控制操作转换为 Agent 可处理的运行命令。
-- 将 Agent 的执行事件转换为应用可理解的业务事件，保留必要的结构化信息。
-- 关联请求、执行进展和终态，使不同操作的结果能够正确归属。
-- 负责跨运行边界的消息传递，并协调必要的通知、顺序与流量控制。
-
-桥接提供与 Bevy 无关的 Rust 业务消息，不强制使用 Bevy 的 `Event`、`Message` 或 ECS 类型作为自身协议。应用侧再将这些消息接入 ECS。
-
-桥接不负责 UI 渲染、不保存完整应用状态，也不管理 Agent 的执行循环。它表达执行事实，但不替 Agent 决定执行事实。
-
-## 模块依赖与职责边界
-
-运行时消息可以双向流动，源码依赖保持清楚的方向：
+跨领域允许 `ui → agent`、`ui → bridge`、`bridge → agent`，禁止反向依赖。UI 可直接使用 Agent 的能力，例如数据环境；需要业务转换或跨运行边界协调时使用 Bridge。新增功能先判断所属领域，再按实际职责复用或新建库，不继续扩大聚合总库，也不预设占位库。
 
 ```mermaid
 flowchart TD
-    Entry["app · main.rs"] --> App["agentelier_application · 通用应用宿主"]
-    App --> LoginUI["agentelier_login_ui · 界面与业务交互"]
-    App --> Login["agentelier_login · 数据与认证能力"]
-    LoginUI --> Bridge["agentelier_bridge"]
-    LoginUI --> Login
-    LoginUI --> Widgetry
-    LoginUI --> Bevy
-    LoginUI --> PathDisplay["bevy_widgetry_path_display"]
-    App --> PathDisplay
-    Bridge --> Agent["agentelier_agent"]
-    Agent --> Tokio["Tokio"]
-    Agent --> Login
-    App --> Widgetry["bevy_widgetry"]
-    App --> Assets["应用 Asset"]
-    App --> BRP["可选 BRP Runtime"]
-    App --> Bevy["Bevy / Winit"]
+    Entry["app · main.rs"] --> App["UI · application"]
+    App --> UI["UI · login_ui"]
+    App --> Assets["UI · assets"]
+    App --> Login["Agent · login"]
+    UI --> Login
+    UI --> Connection["Bridge · connection"]
+    UI --> AccountBridge["Bridge · account"]
+    UI --> ModelBridge["Bridge · llm_model"]
+    Connection --> Runtime["Agent · runtime"]
+    Connection --> AccountBridge
+    Connection --> ModelBridge
+    AccountBridge --> Account["Agent · account"]
+    ModelBridge --> Model["Agent · llm_model"]
+    Runtime --> Account
+    Runtime --> Model
+    Model --> Account
+    Account --> Login
 ```
 
-`application` 负责装配这些能力，`app` 仅调用启动接口；下层 Crate 不反向依赖 `app`。桥接与 Agent 不依赖 Bevy，不需要知道 UI Entity、Component 或 World 的结构。Bevy 专属能力由应用层持有，在需要跨边界通知时，以与 Bevy 无关的能力接口交给桥接使用。
+图中为内部 Crate 的直接依赖。UI 库另依赖 Bevy、Widgetry 及路径显示库；application 按配置安装 BRP Runtime。Agent 与 Bridge 不依赖 Bevy，不访问 Entity、Component 或 World，也不安装日志 Subscriber。
 
-这里的 Crate 边界对应独立职责，不要求每种功能再拆出额外的 Crate。新增 Agent 能力应归入负责其执行语义的模块；新增界面能力归入相应 UI 库，通用宿主不承接具体业务交互。
+## UI 管理交互与通用宿主
 
-## 从用户操作到界面更新
+`application` 建立可执行文件旁的日志，读取 `config/config.ron`，装配窗口、Asset、缩放与可选 BRP。`login_ui` 通过 BSN 组合界面，持有面向交互的账号、目录与模型状态；Widgetry 控件自身的状态遵循其公开契约。
 
-Bevy 发起业务操作后，不在 ECS 更新过程中等待 Agent 执行完成。桥接转发命令，Agent 在 Tokio 中异步处理；执行期间产生的结果经过桥接返回，应用以非阻塞方式接收并更新 ECS 状态。
+启动界面复用 Widgetry 目录选择器，通过辅助 Job 调用 Login 检查并占用目录。配置由 application 的 ConfigStore 串行合并并完整替换提交；成功后复用同一窗口进入主界面，通过 Connection 发起账号恢复。数据环境保持到后台执行及日志收尾完成。
+
+目录设置显示本次固定路径、打开当前目录、检查并保存下次启动位置。候选检查不持有第二份长期占用，保存成功才更新配置投影；更改下次位置不搬运文件、不切换当前数据环境或账号。关系见[数据目录与启动](mechanisms/application-data.md)。
+
+UI 使用 `bevy_widgetry_path_display` 显示路径，Login 只返回原始路径。系统浏览器由 login_ui 的辅助 Job 通过 Windows Shell 打开；剪贴板由应用处理。授权地址仅作为无 Debug 的私有交互数据保存，不进入反射状态或日志。
+
+## Agent 的账号、模型与执行所有者
+
+Login 实现具体协议、身份与文件规则。Account 的 `Account` 持有唯一 AuthFile 及待保存浏览器操作，串行执行恢复、登录、保存重试、凭据获取和退出；文件工作交给 spawn_blocking，网络及回环监听使用异步 I/O。登录协议使用支持系统代理的 reqwest、固定签发方的 JWT 校验及 win-custody 的安全文件权限接口。
+
+Account 的可克隆 CredentialClient 管理接纳、会话失效令牌和在途请求合并。它通过 Runtime 赋予的命令提交能力进入同一个有界队列，不反向依赖 Runtime。Token、会话代次和旋转待保存结果只留在执行侧；启动仅恢复文件，无周期保活。按需更新保存成功才交付凭据，取消等待者不丢弃已经开始的旋转。
+
+LLM Model 通过 Account 获取凭据，不读写认证文件，也不建立第二份账号缓存。它负责模型目录、模型选择、Responses HTTP 请求、一次有界认证恢复、SSE 完成判定及错误分类。协议见[单次模型请求](modules/model-request.md)。
+
+Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模型任务。Runtime 拥有线程、队列、取消令牌、JoinHandle 及真实回收信号；账号处理期间模型任务仍可并发等待网络。它不包含 OAuth、认证文件实现或模型网络协议。依赖为 Runtime → Account → Login，以及 Runtime → LLM Model → Account，无循环。
+
+用户请求退出时，共享门控先停止新凭据请求和旧等待者交付；独立控制队列优先处理退出。Runtime 取消并回收模型任务、结束旧排队命令，再让 Account 等待当前更新收敛并调用 Login 执行撤销和本地提交。取消、退出请求与实际完成分别表达。普通关闭不退出账号。详见[认证运行与凭据管理](modules/authentication.md)。
+
+## Bridge 按业务转换，共用连接协调
+
+Account Bridge 将 AccountEventKind 转为自己的账号事件和安全摘要，保留登录、保存、会话及退出阶段；LLM Model Bridge 将模型结果转换为自己的回复、错误及完成/取消类型。两者都不执行后台业务，不持有 Agent 的执行状态或 UI 的展示状态。
+
+Connection 只包装和调用对应业务转换，返回带 operation_id 的 BridgeEvent；BridgeEventKind 区分 Account 与 Model。它分配操作身份、隔离迟到结果、协调在途操作、转发控制命令并持有连接收尾句柄，不实现字段投影或业务错误分类。UI 显式消费连接封装和相应业务类型。
+
+命令队列容量为四，退出控制队列为一，结果队列为八。当前只接纳一个在途账号操作或模型验证，退出可停止当前操作；保存重试沿用同一操作 ID，全局 SessionStatus 使用保留 ID 0。满队列、通道关闭、通知失败和意外停止形成明确错误。
+
+结果先入队再通过 UI 提供的通知能力唤醒 Winit，ECS 非阻塞消费事件并更新自己的投影。Bridge 不依赖 Winit 或 Bevy 类型，也不把通知信号当作业务数据。
 
 ```mermaid
 sequenceDiagram
-    participant User as 用户
     participant UI as Bevy ECS
-    participant Bridge as 业务桥接
-    participant Agent as Tokio Agent
-    participant Model as 模型通信
-    User->>UI: 发起操作
-    UI->>Bridge: 业务命令
-    Bridge->>Agent: 运行命令
-    Agent->>Model: 请求模型
-    loop 增量输出
-        Model-->>Agent: 响应内容
-        Agent-->>Bridge: 执行进展
-        Bridge-->>UI: 业务事件
-        UI-->>User: 更新界面
-    end
-    Model-->>Agent: 本次响应结束
-    Agent-->>Bridge: 执行结果
-    Bridge-->>UI: 业务终态
+    participant C as Connection
+    participant R as Runtime
+    participant M as LLM Model
+    participant A as Account
+    participant B as 业务 Bridge
+    UI->>C: 验证模型连接
+    C->>R: 操作 ID 与运行命令
+    R->>M: 启动可取消任务
+    M->>A: 共享凭据请求
+    A-->>M: 已保存的可用凭据
+    M-->>R: 模型回复或实际失败
+    R-->>C: 执行事件
+    C->>B: 对应业务转换
+    B-->>C: 安全业务结果
+    C-->>UI: 入队并唤醒 Winit
 ```
 
-图中以模型响应说明信息流动；工具执行、需要用户处理的操作以及其他 Agent 行为也沿相同的桥接边界协作。具体事件种类随对应业务能力定义，不由整体架构预设完整清单。
+执行是否真正完成以 Runtime/业务所有者的结果为准，如何展示由 Bevy 决定。模型输出在协议完成后一次性更新；UI 不把“正在取消”当作“已经结束”。
 
-### 状态与结果关联
+## 辅助任务与整体生命周期
 
-Agent 持有执行状态；ECS 持有界面需要的状态投影。桥接传递必要的操作身份，使事件能归属到正确的请求、会话或操作，避免迟到结果覆盖无关界面。
+Widgetry JobManager 管理目录 I/O 和浏览器等应用辅助工作；账号更新、模型网络请求及其取消/回收由 Agent 侧管理。任务所属体系取决于业务所有者，不取决于是否异步。
 
-例如，用户请求取消后，界面可以立即显示“正在取消”；只有 Agent 确认相关执行已经结束，界面才转为“已取消”或其他实际终态。取消命令本身不是取消完成的证明。
+`application::shutdown` 暂存 AppExit，通过 `login_ui::AccountRuntime` 的 begin_shutdown/is_finished/finish 停止连接与普通业务唤醒、取消浏览器及模型等待。退出协调使用自己的 Winit 通知保持事件循环推进，在 World 和接收端仍有效时非阻塞确认线程结束并显式 join。
 
-### 后台消息主动唤醒界面
-
-桌面窗口空闲时，Winit 不一定持续驱动更新。Agent 产生业务事件后，除将数据放入通信通道外，还需要**通知应用侧唤醒事件循环**，以便 ECS 及时接收并处理。
-
-唤醒能力由持有 Winit 的应用层提供。桥接只使用应用赋予的通知能力，不因此依赖 Winit 或 Bevy 的具体类型。唤醒信号用于触发应用处理，实际业务数据仍通过桥接通道传递。
-
-## 辅助后台工作与应用基础设施
-
-### Widgetry JobManager 的职责
-
-`bevy_widgetry::job` 管理应用自身的辅助后台工作，例如文件 I/O 等独立于 Agent 执行生命周期的任务。其结果返回给发起任务的应用功能。
-
-Agent 的模型请求、执行步骤、工具调用以及对应的取消与收尾，则继续由 Agent/Tokio 管理。**任务属于哪个执行体系，取决于其业务所有者，而不只是它是否异步。**
-
-### Asset 管理
-
-应用统一管理 Asset，由 `crates/assets/` 集中持有应用资源。
-
-### BRP Runtime
-
-BRP Runtime 由应用按需装配，用于操作和观察实际运行的 Bevy 应用，不进入 Agent 执行核心。
-
-### 统一日志
-
-跨模块操作使用必要的关联标识，方便在统一日志中追踪请求从界面到执行侧的过程。
-
-## 生命周期由应用统一协调
-
-`application::startup` 拥有整体启动与退出流程，`application::shutdown` 协调结束顺序；`login_ui::AccountRuntime` 向宿主提供 begin_shutdown/is_finished/finish，用于停止和回收由界面衔接层持有的 Bridge 连接。Agent 负责自身执行体的真实结束；辅助 Job 仍遵循自己的任务生命周期。
-
-启动时，应用建立日志输出、读取配置，再装配现有 Bevy 运行时和目录启动界面。后台确认目录并取得占用，新选择保存成功后进入主界面。应用准备好接收队列和 Winit 通知能力后，启动 Agent 并发起账号恢复。命令队列容量为四、结果队列容量为八，仅允许一个在途浏览器/账号操作或模型验证，退出控制可以停止当前操作；待保存结果及控制消息复用当前操作身份。取消目录选择正常结束启动，等待辅助任务真实结束后完成日志收尾。认证读取不占用 ECS 主线程。
-
-退出帧中，应用暂存 `AppExit`，停止接纳认证操作并关闭普通业务唤醒、关闭命令发送端。退出协调通过自己的 Winit 通知继续推进，保持 World、接收端和事件循环有效，非阻塞检查认证线程结束后显式 join，再开始并等待辅助任务收尾。两者完成后才重新发布 `AppExit`，主循环返回后执行兜底检查，最后关闭日志并释放目录占用。认证收尾失败会影响进程退出结果，辅助任务仍会执行收尾。
+Account 完成在途更新和必要提交，Runtime 等待模型真实回收并释放 Tokio，随后宿主结束辅助 Job、刷新日志，最后释放目录占用。两类后台均结束后才重新发布 AppExit；主循环返回后保留兜底收尾。运行收尾错误影响进程退出结果，辅助任务仍执行收尾。
 
 ```mermaid
-flowchart TD
-    Exit["应用进入退出流程"] --> Stop["停止新操作与界面唤醒"]
-    Stop --> AgentStop["Agent 取消、结束与 Tokio 收尾"]
-    AgentStop --> JobStop["辅助后台任务收尾"]
-    JobStop --> Logs["日志刷新与关闭"]
+flowchart LR
+    Exit["应用关闭"] --> Stop["停止命令与普通唤醒"]
+    Stop --> Agent["取消并回收模型 · Account 提交 · Tokio 结束"]
+    Agent --> Jobs["辅助 Job 收尾"]
+    Jobs --> Logs["刷新并关闭日志"]
     Logs --> Data["释放数据目录占用"]
-    Data --> Done["进程退出"]
 ```
 
-取消请求与任务实际结束是两个不同阶段。退出协调以执行体真实终止和必要资源释放为依据，并将收尾失败交由应用处理。应用应在 Bevy World 和相关资源失效前完成需要访问它们的收尾工作。
-
-## 整体约束
-
-- **单进程、纯 Rust。** Bevy 与 Agent 共享应用进程，不通过独立 Agent 服务进程连接。
-- **执行环境分离。** Bevy ECS 管理交互与展示，Tokio 承载 Agent 执行；双方不直接操作对方的内部状态。
-- **协议隔离。** 应用通过业务命令与事件和 Agent 协作，不直接消费 Agent 的内部执行事件作为 UI 协议。
-- **职责归属稳定。** 桥接只协调通信，辅助 JobManager 不接管 Agent 生命周期，日志与应用基础设施由应用统一管理。
+所有库使用宿主统一配置的 tracing。日志只包含安全的操作标识、阶段与诊断，不泄露 Token、授权地址或模型正文。开发与 BRP 验证须保护现有登录状态，未经授权不退出、重新授权、重置凭据或更换数据环境。

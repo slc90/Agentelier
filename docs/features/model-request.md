@@ -17,3 +17,5 @@
 JSON 和单个 SSE 事件最多 4 MiB，总事件流最多 16 MiB；模型 HTTP 请求总超时 120 秒、连接超时 15 秒，超出限制明确失败。本阶段仅实现单次纯文本连接验证，没有聊天、工具、逐字 UI 或自动重试服务故障。
 
 实现关系见[单次模型请求](../design/modules/model-request.md)，运行与消息接口见[账号后台与业务桥接](auth-runtime.md)。
+
+模型协议由 `agentelier_llm_model` 实现，通过 `agentelier_account` 获取凭据，由 `agentelier_agent_runtime` 管理任务。`agentelier_llm_model_bridge` 转换结果及取消/完成状态，`agentelier_bridge_connection` 负责操作关联、消息与唤醒。

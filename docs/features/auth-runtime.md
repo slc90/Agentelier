@@ -1,18 +1,18 @@
 # 账号后台与业务桥接
 
-`AgentRuntime` 在独立线程驱动 Tokio，串行处理恢复、浏览器授权、重试保存和取消。网络与回环监听为异步；具体文件操作交给 spawn_blocking。文件缓存、待保存会话与 Token 仅在运行侧存在，不由 JobManager 代管。
+`agentelier_agent_runtime::AgentRuntime` 在独立线程驱动 Tokio，将恢复、浏览器授权、重试保存和取消交给 `agentelier_account::Account` 串行处理。网络与回环监听为异步；具体文件操作交给 spawn_blocking。文件缓存、待保存会话与 Token 由 Account/Login 持有，不由 JobManager 代管。
 
-`Connection::start(path, notify)` 在启动生产者前建立有界队列和通知能力。`restore()`、`login(consent)` 分配递增操作标识，只接纳一个在途账号操作。`try_receive()` 返回阶段事件、保存失败或实际终态；`retry_save(id)` 和 `cancel(id)` 作用于当前操作。保存失败不结束操作，重试保存不重新交换授权码。
+`agentelier_bridge_connection::Connection::start(path, notify)` 在启动生产者前建立有界队列和通知能力。`restore()`、`login(consent)` 分配递增操作标识，只接纳一个在途账号操作。`try_receive()` 返回阶段事件、保存失败或实际终态；`retry_save(id)` 和 `cancel(id)` 作用于当前操作。保存失败不结束操作，重试保存不重新交换授权码。
 
 命令容量为四，结果容量为八。消息先入队再通知应用；队列满、通道关闭、意外停止和通知失败形成明确错误，不将缺少终态当作正常完成。结果摘要和错误不引用 Agent 内部类型。BrowserReady 的 AuthorizationLink 不实现 Debug，宿主只能把它用于当前浏览器交互，不能复制进反射状态或日志。
 
 `begin_shutdown()` 停止新命令和普通通知，取消当前监听与网络等待，已开始的文件提交继续结束。`is_finished()` 非阻塞检查线程，`finish()` join 并取得真实结果；线程只有在 Tokio 释放后才结束。宿主必须显式收尾处理错误，Drop 仅提供阻塞兜底。
 
-Bridge、Agent、login 都不依赖 Bevy。login_ui 的 Bevy 交互层提供 Winit 通知、非敏感 UI 投影、系统默认浏览器和剪贴板；application 负责通用宿主装配与整体收尾，浏览器辅助任务继续归 Widgetry JobManager。首次打开及重新打开均通过 Windows Shell 将授权地址交给系统默认浏览器；启动失败时显示错误，保留重新打开与复制链接入口。模型 HTTP 和 SSE 位于 Agent 的同一 Tokio 中。
+Bridge、Agent、login 都不依赖 Bevy。login_ui 的 Bevy 交互层提供 Winit 通知、非敏感 UI 投影、系统默认浏览器和剪贴板；application 负责通用宿主装配与整体收尾，浏览器辅助任务继续归 Widgetry JobManager。首次打开及重新打开均通过 Windows Shell 将授权地址交给系统默认浏览器；启动失败时显示错误，保留重新打开与复制链接入口。模型 HTTP 和 SSE 由 `agentelier_llm_model` 实现，在 Runtime 的同一 Tokio 中运行。
 
 ## 共享凭据请求
 
-`AgentRuntime::credentials()` 返回可克隆的 `CredentialClient`。`request()` 提交按需获取，`CredentialRequest::wait()` 异步等待；多个相同类型的在途请求共享一个结果。丢弃等待句柄仅结束调用方等待，不取消认证运行中的旋转。句柄不持有第二套 Token 缓存；结果通过不实现 Debug/Reflect 的私有通道返回运行侧消费者。
+`AgentRuntime::credentials()` 返回 Account 提供的可克隆 `CredentialClient`。`request()` 提交按需获取，`CredentialRequest::wait()` 异步等待；多个相同类型的在途请求共享一个结果。丢弃等待句柄仅结束调用方等待，不取消认证运行中的旋转。句柄不持有第二套 Token 缓存；结果通过不实现 Debug/Reflect 的私有通道返回运行侧消费者。
 
 `recover(&mut AuthenticatedRequest, status)` 在原请求预算允许时提交一次恢复。同一登记已存在有效的新代次时直接复用；否则在允许的刷新时间内尝试续期。不同账号身份拒绝恢复；恢复预算保存在原请求上下文中，调用方必须在重发时继续持有该上下文。
 
@@ -31,6 +31,12 @@ Bridge、Agent、login 都不依赖 Bevy。login_ui 的 Bevy 交互层提供 Win
 
 ## 单次模型操作
 
-`verify_model()` 分配独立操作 ID，接纳后阻止新的登录、恢复、检查和重复验证，直到实际终态；退出仍可发起。Agent 在同一 Tokio 中启动一个模型任务，认证所有者继续处理该任务的 CredentialClient 请求。`ModelCompleted` 提供 Bridge 自己的 ModelReply 或 ModelFailure（分类、HTTP 状态、代码、请求标识、诊断原因），`ModelCancelled` 表示执行体已实际结束。模型结果入队后沿相同 Winit 通知路径唤醒应用。
+`verify_model()` 分配独立操作 ID，接纳后阻止新的登录、恢复、检查和重复验证，直到实际终态；退出仍可发起。Agent 在同一 Tokio 中启动一个模型任务，认证所有者继续处理该任务的 CredentialClient 请求。Runtime 的 `ModelCompleted`/`ModelCancelled` 经过 LLM Model Bridge 转成 `ModelEventKind::Completed`/`Cancelled`；Completed 提供该 Bridge 自己的 ModelReply 或 ModelFailure（分类、HTTP 状态、代码、请求标识、诊断原因），Cancelled 表示执行体已实际结束。模型结果入队后沿相同 Winit 通知路径唤醒应用。
 
 退出登录先取消并 join 当前模型任务，再撤销/清理会话；Bridge 隔离其迟到结果。关闭同样取消并等待模型任务，然后结束认证/Tokio。模型取消不会撤销认证所有者已经开始的刷新或丢弃待保存结果。目录和流协议见[模型连接验证](model-request.md)。
+
+## 业务转换与连接封装
+
+Account Bridge (`agentelier_account_bridge`) 提供账号摘要、授权地址及 AccountEventKind 的安全转换。LLM Model Bridge (`agentelier_llm_model_bridge`) 独立提供模型结果与错误分类转换。两者不执行账号或模型任务。
+
+Connection 的 `try_receive()` 返回 `BridgeEvent { operation_id, kind }`，其中 `BridgeEventKind::Account(AccountEventKind)` 与 `BridgeEventKind::Model(ModelEventKind)` 分别携带对应业务类型。Connection 只管理投递、操作关联、互斥、唤醒和通信生命周期；不拥有账号会话或 UI 投影。

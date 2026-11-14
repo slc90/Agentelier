@@ -1,12 +1,11 @@
 [package]
-name = "agentelier_bridge"
+name = "agentelier_llm_model_bridge"
 publish = false
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-agentelier_agent = { path = "../agent" }
-tracing.workspace = true
+agentelier_llm_model = { path = "../../agent/llm_model" }
 
 [lints]
 workspace = true

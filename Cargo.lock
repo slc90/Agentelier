@@ -93,13 +93,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentelier_agent"
+name = "agentelier_account"
 version = "0.1.0"
 dependencies = [
  "agentelier_login",
- "reqwest",
- "serde",
- "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "agentelier_account_bridge"
+version = "0.1.0"
+dependencies = [
+ "agentelier_account",
+]
+
+[[package]]
+name = "agentelier_agent_runtime"
+version = "0.1.0"
+dependencies = [
+ "agentelier_account",
+ "agentelier_llm_model",
  "tokio",
  "tokio-util",
  "tracing",
@@ -124,11 +139,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentelier_bridge"
+name = "agentelier_bridge_connection"
 version = "0.1.0"
 dependencies = [
- "agentelier_agent",
+ "agentelier_account_bridge",
+ "agentelier_agent_runtime",
+ "agentelier_llm_model_bridge",
  "tracing",
+]
+
+[[package]]
+name = "agentelier_llm_model"
+version = "0.1.0"
+dependencies = [
+ "agentelier_account",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "agentelier_llm_model_bridge"
+version = "0.1.0"
+dependencies = [
+ "agentelier_llm_model",
 ]
 
 [[package]]
@@ -159,7 +194,9 @@ dependencies = [
 name = "agentelier_login_ui"
 version = "0.1.0"
 dependencies = [
- "agentelier_bridge",
+ "agentelier_account_bridge",
+ "agentelier_bridge_connection",
+ "agentelier_llm_model_bridge",
  "agentelier_login",
  "bevy",
  "bevy_widgetry",

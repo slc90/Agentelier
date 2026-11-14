@@ -1,0 +1,11 @@
+[package]
+name = "agentelier_account_bridge"
+publish = false
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+agentelier_account = { path = "../../agent/account" }
+
+[lints]
+workspace = true

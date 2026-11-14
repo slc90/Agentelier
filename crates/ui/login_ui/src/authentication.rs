@@ -2,9 +2,11 @@ use crate::{
     AccountPhase, AccountState, AccountSummary, CredentialState, DataDirectoryReady, LoginAction,
     ModelState, RestoreAccount, SessionActivity, VerifyModel,
 };
-use agentelier_bridge::{
-    AccountEventKind, AuthorizationLink, Connection, CredentialState as BridgeCredentials,
+use agentelier_account_bridge::{
+    AccountEventKind, AuthorizationLink, CredentialState as BridgeCredentials,
 };
+use agentelier_bridge_connection::{BridgeEventKind, Connection};
+use agentelier_llm_model_bridge::ModelEventKind;
 use bevy::prelude::*;
 use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
 use bevy_widgetry::job::{
@@ -268,12 +270,12 @@ fn receive(world: &mut World) -> Result {
     };
     let mut open = false;
     for event in events {
-        match event.kind {
-            AccountEventKind::ModelCompleted(result) => {
+        let kind = match event.kind {
+            BridgeEventKind::Model(ModelEventKind::Completed(result)) => {
                 receive_model(world, event.operation_id, result)?;
                 continue;
             }
-            AccountEventKind::ModelCancelled => {
+            BridgeEventKind::Model(ModelEventKind::Cancelled) => {
                 let mut model = world.resource_mut::<ModelState>();
                 if model.operation == Some(event.operation_id) {
                     *model = ModelState::default();
@@ -281,8 +283,8 @@ fn receive(world: &mut World) -> Result {
                 debug!(operation_id = event.operation_id, "模型验证已实际取消");
                 continue;
             }
-            _ => {}
-        }
+            BridgeEventKind::Account(kind) => kind,
+        };
         if event.operation_id != 0
             && world.resource::<AccountState>().operation != Some(event.operation_id)
         {
@@ -293,15 +295,14 @@ fn receive(world: &mut World) -> Result {
             .lock()
             .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
         let mut state = world.resource_mut::<AccountState>();
-        match event.kind {
-            AccountEventKind::ModelCompleted(_) | AccountEventKind::ModelCancelled => {}
+        match kind {
             AccountEventKind::SignOutProgress(stage) => {
                 backend.authorization = None;
                 open = false;
                 state.phase = match stage {
-                    agentelier_bridge::SignOutStage::Settling => AccountPhase::SigningOut,
-                    agentelier_bridge::SignOutStage::Revoking => AccountPhase::Revoking,
-                    agentelier_bridge::SignOutStage::Clearing => AccountPhase::Clearing,
+                    agentelier_account_bridge::SignOutStage::Settling => AccountPhase::SigningOut,
+                    agentelier_account_bridge::SignOutStage::Revoking => AccountPhase::Revoking,
+                    agentelier_account_bridge::SignOutStage::Clearing => AccountPhase::Clearing,
                 };
             }
             AccountEventKind::SignOutFailed(failure) => {
@@ -321,11 +322,13 @@ fn receive(world: &mut World) -> Result {
                 state.session_client_error = false;
                 state.session_retry_at = None;
                 state.feedback = Some(match remote {
-                    agentelier_bridge::RemoteRevocation::Unconfirmed(reason) => {
+                    agentelier_account_bridge::RemoteRevocation::Unconfirmed(reason) => {
                         format!("已退出本机登录；远端撤销未确认：{reason}")
                     }
-                    agentelier_bridge::RemoteRevocation::Confirmed
-                    | agentelier_bridge::RemoteRevocation::NotApplicable => "已退出登录".into(),
+                    agentelier_account_bridge::RemoteRevocation::Confirmed
+                    | agentelier_account_bridge::RemoteRevocation::NotApplicable => {
+                        "已退出登录".into()
+                    }
                 });
                 info!(
                     operation_id = event.operation_id,
@@ -340,25 +343,31 @@ fn receive(world: &mut World) -> Result {
                 let was_checking = state.session_activity != SessionActivity::Idle;
                 apply_snapshot(&mut state, snapshot);
                 state.session_activity = match activity {
-                    agentelier_bridge::SessionActivity::Idle => SessionActivity::Idle,
-                    agentelier_bridge::SessionActivity::Checking => SessionActivity::Checking,
-                    agentelier_bridge::SessionActivity::Refreshing => SessionActivity::Refreshing,
-                    agentelier_bridge::SessionActivity::Saving => SessionActivity::Saving,
-                    agentelier_bridge::SessionActivity::SaveFailed => SessionActivity::SaveFailed,
+                    agentelier_account_bridge::SessionActivity::Idle => SessionActivity::Idle,
+                    agentelier_account_bridge::SessionActivity::Checking => {
+                        SessionActivity::Checking
+                    }
+                    agentelier_account_bridge::SessionActivity::Refreshing => {
+                        SessionActivity::Refreshing
+                    }
+                    agentelier_account_bridge::SessionActivity::Saving => SessionActivity::Saving,
+                    agentelier_account_bridge::SessionActivity::SaveFailed => {
+                        SessionActivity::SaveFailed
+                    }
                 };
                 if matches!(
                     activity,
-                    agentelier_bridge::SessionActivity::Idle
-                        | agentelier_bridge::SessionActivity::SaveFailed
+                    agentelier_account_bridge::SessionActivity::Idle
+                        | agentelier_account_bridge::SessionActivity::SaveFailed
                 ) {
                     state.session_client_error = failure.as_ref().is_some_and(|failure| {
-                        failure.kind == agentelier_bridge::SessionFailureKind::ClientConfiguration
+                        failure.kind == agentelier_account_bridge::SessionFailureKind::ClientConfiguration
                     });
                     state.session_retry_at = failure.as_ref().and_then(|failure| failure.retry_at);
                     state.session_error = failure.map(|failure| failure.message);
                 }
                 if was_checking
-                    && activity == agentelier_bridge::SessionActivity::Idle
+                    && activity == agentelier_account_bridge::SessionActivity::Idle
                     && state.session_error.is_none()
                 {
                     state.feedback = Some("会话凭据可用".into());
@@ -456,7 +465,7 @@ fn receive(world: &mut World) -> Result {
     }
     receive_browser(world)
 }
-fn apply_snapshot(state: &mut AccountState, snapshot: agentelier_bridge::AccountSnapshot) {
+fn apply_snapshot(state: &mut AccountState, snapshot: agentelier_account_bridge::AccountSnapshot) {
     state.account = snapshot.account.map(|account| AccountSummary {
         subject: account.subject,
         display_name: account.display_name,
@@ -561,7 +570,10 @@ fn verify_model(_event: On<VerifyModel>, mut commands: Commands) {
 fn receive_model(
     world: &mut World,
     id: u64,
-    result: std::result::Result<agentelier_bridge::ModelReply, agentelier_bridge::ModelFailure>,
+    result: std::result::Result<
+        agentelier_llm_model_bridge::ModelReply,
+        agentelier_llm_model_bridge::ModelFailure,
+    >,
 ) -> Result {
     let mut state = world.resource_mut::<ModelState>();
     if state.operation != Some(id) {

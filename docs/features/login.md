@@ -1,6 +1,6 @@
 # 登录数据环境
 
-`agentelier_login` 是不依赖 Bevy 的功能库。当前公开 `DataEnvironment`，负责用户确认目录的检查和进程级占用；浏览器授权由本库的认证能力实现。
+`agentelier_login` 位于 `crates/agent/login/`，是不依赖 Bevy 的协议与持久化库。当前公开 `DataEnvironment`，负责用户确认目录的检查和进程级占用；浏览器授权由本库的认证能力实现。
 
 - `DataEnvironment::acquire(&Path)` 要求目录已存在且为绝对路径，检查目录读取、已有 `auth.json` 读写和临时文件创建、替换、读回；返回真实 I/O 失败，不创建缺失目录或账号文件。
 - `root()` 与 `credentials_path()` 分别返回规范化的固定根路径和该目录下的 `auth.json` 路径。
@@ -12,7 +12,7 @@
 
 ## 文件账号恢复
 
-`AuthFile::new(PathBuf)` 绑定具体凭据文件，`restore(&mut self)` 同步读取并校验记录，成功后持有该记录，仅返回 `RestoredAccount` 的安全摘要及 `CredentialState`。应用通过 Agent/Tokio 调用，不在 ECS 主线程读取。浏览器授权的写入复用下述整记录提交。
+`AuthFile::new(PathBuf)` 绑定具体凭据文件，`restore(&mut self)` 同步读取并校验记录，成功后持有该记录，仅返回 `RestoredAccount` 的安全摘要及 `CredentialState`。应用通过 Connection → Runtime → Account 调用，不在 ECS 主线程读取。浏览器授权的写入复用下述整记录提交。
 
 缺失文件返回 `NoRecord`；只有主机标识返回 `HostOnly`；登记存在、会话为空返回 `SignedOut`；已有会话返回 `StoredSession { expired, subscription_enabled }` 及账号摘要。过期仅按当前时间与记录有效期比较，不代表已完成网络认证或续期。
 
