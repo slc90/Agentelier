@@ -10,7 +10,11 @@ pub struct ModelInfo {
 
 pub enum ModelRequest {
     Catalog,
-    Verify { slug: String, display_name: String },
+    Verify {
+        slug: String,
+        display_name: String,
+        effort: Option<String>,
+    },
 }
 
 pub enum ModelResult {
@@ -21,14 +25,21 @@ pub enum ModelResult {
 pub fn request(request: ModelRequest) -> agentelier_llm_model::ModelRequest {
     match request {
         ModelRequest::Catalog => agentelier_llm_model::ModelRequest::Catalog,
-        ModelRequest::Verify { slug, display_name } => {
-            agentelier_llm_model::ModelRequest::Verify { slug, display_name }
-        }
+        ModelRequest::Verify {
+            slug,
+            display_name,
+            effort,
+        } => agentelier_llm_model::ModelRequest::Verify {
+            slug,
+            display_name,
+            effort,
+        },
     }
 }
 
 pub struct ModelReply {
     pub slug: String,
+    pub effort: Option<String>,
     pub model: String,
     pub text: String,
 }
@@ -91,6 +102,7 @@ pub fn convert(
                     agentelier_llm_model::ModelResult::Verified(reply) => {
                         ModelResult::Verified(ModelReply {
                             slug: reply.slug,
+                            effort: reply.effort,
                             model: reply.model,
                             text: reply.text,
                         })

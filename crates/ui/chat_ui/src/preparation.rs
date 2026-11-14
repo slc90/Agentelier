@@ -1,3 +1,4 @@
+use crate::reasoning::{self, ReasoningSetting, ReasoningSource};
 use agentelier_agent_host::{AgentHost, HostFailed, ModelEvent, ReceiveAgentEvents};
 use agentelier_llm_model_bridge::{ModelEventKind, ModelRequest, ModelResult};
 use agentelier_login_ui::{AccountPhase, AccountState, CredentialState, SessionActivity};
@@ -41,6 +42,8 @@ pub enum ModelPhase {
 pub struct ModelState {
     pub models: Vec<ModelChoice>,
     pub selected: Option<ModelChoice>,
+    pub reasoning: ReasoningSetting,
+    pub used_effort: Option<String>,
     pub operation: Option<u64>,
     pub phase: ModelPhase,
     pub catalog_loaded: bool,
@@ -53,7 +56,7 @@ pub struct ModelState {
 }
 
 impl ModelState {
-    fn can_request(&self, account: &AccountState) -> bool {
+    pub(crate) fn can_request(&self, account: &AccountState) -> bool {
         self.operation.is_none()
             && account.operation.is_none()
             && account.phase == AccountPhase::Idle
@@ -67,7 +70,7 @@ impl ModelState {
                 }
             )
     }
-    fn selected_model(&self) -> Option<&ModelChoice> {
+    pub(crate) fn selected_model(&self) -> Option<&ModelChoice> {
         self.selected
             .as_ref()
             .and_then(|selected| self.models.iter().find(|model| model.slug == selected.slug))
@@ -77,6 +80,14 @@ impl ModelState {
             && self.catalog_loaded
             && self.catalog_error.is_none()
             && self.selected_model().is_some()
+            && reasoning::choices(self.selected_model()).contains(&self.reasoning)
+    }
+    pub(crate) fn clear_reply(&mut self) {
+        self.error = None;
+        self.text = None;
+        self.model = None;
+        self.used_slug = None;
+        self.used_effort = None;
     }
 }
 
@@ -97,6 +108,7 @@ struct ModelStatus;
 struct ModelText;
 
 pub fn install(app: &mut App) -> Result {
+    reasoning::install(app)?;
     app.register_widgetry_combo_box::<ModelChoice>()
         .map_err(|failure| failure.into_bevy_error())?;
     app.init_resource::<ModelState>()
@@ -122,6 +134,7 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
         let state = world.resource::<ModelState>().clone();
         let account = world.resource::<AccountState>();
         let source = world.resource::<ModelSource>().0;
+        let reasoning_source = world.resource::<ReasoningSource>().0;
         let summary = status(&state, account);
         let raw_text = state.text.clone().unwrap_or_default();
         let scene: Box<dyn Scene> = Box::new(bsn! {
@@ -142,6 +155,7 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
                     Name("ModelSelector") ModelSelector
                     Node { width: px(MODEL_SELECTOR_WIDTH), flex_shrink: 0.0 }
                     on(select_model)--
+                    @reasoning::selector(reasoning_source)--
                     @action_button("验证模型连接", "VerifyModelConnection", ModelAction::Verify)
                 ]--
                 Text(summary) WidgetryText ModelStatus Name("ModelConnectionStatus")
@@ -190,6 +204,7 @@ fn select_model(
     source: Res<ModelSource>,
     models: Query<&WidgetryListModel<ModelChoice>>,
     mut state: ResMut<ModelState>,
+    mut commands: Commands,
 ) -> Result {
     if !selectors.contains(event.source) || state.operation.is_some() {
         return Ok(());
@@ -208,11 +223,10 @@ fn select_model(
         .is_none_or(|selected| selected.slug != choice.slug)
     {
         info!(model = choice.slug, "用户选择模型");
+        state.reasoning = reasoning::initial(&choice);
         state.selected = Some(choice);
-        state.error = None;
-        state.text = None;
-        state.model = None;
-        state.used_slug = None;
+        state.clear_reply();
+        commands.queue(reasoning::sync);
     }
     Ok(())
 }
@@ -236,6 +250,7 @@ fn activate(event: On<Activate>, actions: Query<&ModelAction>, mut commands: Com
                 ModelRequest::Verify {
                     slug: choice.slug.clone(),
                     display_name: choice.display_name.clone(),
+                    effort: state.reasoning.effort(),
                 }
             }
         };
@@ -283,6 +298,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             .get_mut::<WidgetryListModel<ModelChoice>>(source)
             .ok_or_else(|| io::Error::other("模型选择数据源不存在"))?
             .clear();
+        reasoning::sync(world)?;
     }
     let events: Vec<_> = world
         .resource_mut::<Messages<ModelEvent>>()
@@ -335,6 +351,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                         );
                     }
                 }
+                reasoning::sync(world)?;
                 info!(model_count = choices.len(), "模型目录读取完成");
             }
             ModelEventKind::Completed(Ok(ModelResult::Verified(reply))) => {
@@ -345,6 +362,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 );
                 state.model = Some(reply.model);
                 state.used_slug = Some(reply.slug);
+                state.used_effort = reply.effort;
                 state.text = Some(if reply.text.is_empty() {
                     "请求已完成，但没有文本内容".into()
                 } else {
@@ -408,10 +426,19 @@ fn status(state: &ModelState, account: &AccountState) -> String {
             selected.display_name, selected.slug
         );
     }
+    if state.selected_model().is_some()
+        && !reasoning::choices(state.selected_model()).contains(&state.reasoning)
+    {
+        return format!(
+            "推理档位 {} 已不在支持范围内，请重新选择",
+            state.reasoning.label()
+        );
+    }
     if let Some(model) = &state.model {
         return format!(
-            "连接完成 · {model} · {}",
-            state.used_slug.as_deref().unwrap_or_default()
+            "连接完成 · {model} · {} · 推理：{}",
+            state.used_slug.as_deref().unwrap_or_default(),
+            state.used_effort.as_deref().unwrap_or("服务默认")
         );
     }
     if state.catalog_loaded && state.models.is_empty() {
@@ -420,7 +447,14 @@ fn status(state: &ModelState, account: &AccountState) -> String {
     state
         .selected
         .as_ref()
-        .map(|model| format!("已选择：{} · {}", model.display_name, model.slug))
+        .map(|model| {
+            format!(
+                "已选择：{} · {} · 推理：{}",
+                model.display_name,
+                model.slug,
+                state.reasoning.label()
+            )
+        })
         .unwrap_or_else(|| "刷新模型目录，然后选择要使用的模型".into())
 }
 

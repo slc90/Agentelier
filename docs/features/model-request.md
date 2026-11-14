@@ -4,7 +4,7 @@
 
 用户显式刷新时，通过当前 OAuth Access Token 读取 `GET https://api.openai.com/v1/models`，保持服务顺序并展示全部 `visibility=list` 的模型，同时保留目录提供的推理能力元数据。界面显示 `display_name` 和 `slug`，验证请求使用明确选择的 `slug`，不会自动选择首项或使用硬编码兜底。目录投影仅保留在本次运行内，不写入配置；目录刷新不改变已有选择，原模型消失时保留其名称并说明不可用。读取失败保留原目录及选择并显示真实错误，空目录禁用验证。
 
-请求发送到公共 `POST https://api.openai.com/v1/responses`，仅包含模型、独立用户消息列表、`store=false` 和 `stream=true`。传输在 Agent 的 Tokio 中进行，不由 Bevy 或辅助 Job 发送认证 HTTP。
+请求发送到公共 `POST https://api.openai.com/v1/responses`，包含模型、独立用户消息列表、`store=false` 和 `stream=true`；显式选择推理档位时附带 `reasoning.effort`，服务默认模式省略整个 reasoning 字段。传输在 Agent 的 Tokio 中进行，不由 Bevy 或辅助 Job 发送认证 HTTP。
 
 只有 `response.completed` 才算成功，完成对象中各输出项的 `output_text` 按服务顺序一次性展示，不重复追加增量文本。没有正文时明确说明已完成但没有文本内容。失败、未完成、显式错误及缺少完成事件的断流均为失败，部分正文不冒充成功。
 
@@ -21,3 +21,5 @@ JSON 和单个 SSE 事件最多 4 MiB，总事件流最多 16 MiB；模型 HTTP 
 模型协议由 `agentelier_llm_model` 实现，通过 `agentelier_account` 获取凭据，由 `agentelier_agent_runtime` 管理任务。`agentelier_llm_model_bridge` 转换结果及取消/完成状态，`agentelier_bridge_connection` 负责操作关联、消息与唤醒。
 
 模型目录读取与指定模型验证使用不同的类型化请求和结果，仍复用同一 Runtime 任务、取消及回收路径。模型准备区及验证投影属于 `agentelier_chat_ui`，账号界面不保存模型目录；`agentelier_agent_host` 只协调共享连接及活动状态。所选模型、目录读取中、读取失败、验证中及实际使用的 slug 可独立观察。
+
+推理选择随当前模型能力更新，只提供目录明确声明的档位，不按模型名称猜测全局列表。已知且有效的模型默认档位解析为明确选择；能力或默认值未知时可使用“服务默认”。切换模型重新选择其默认设置，刷新目录则保留仍然有效的用户选择；已选档位消失时禁用验证并要求重新选择。服务拒绝所选 effort 时显示真实失败，不自动换档位。模型及实际提交的 effort 在完成摘要和安全状态中可查。

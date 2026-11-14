@@ -25,7 +25,11 @@ pub struct ModelInfo {
 
 pub enum ModelRequest {
     Catalog,
-    Verify { slug: String, display_name: String },
+    Verify {
+        slug: String,
+        display_name: String,
+        effort: Option<String>,
+    },
 }
 
 pub enum ModelResult {
@@ -35,6 +39,7 @@ pub enum ModelResult {
 
 pub struct ModelReply {
     pub slug: String,
+    pub effort: Option<String>,
     pub model: String,
     pub text: String,
 }
@@ -99,7 +104,12 @@ pub async fn execute(
         .build()
         .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "无法建立安全模型客户端"))?;
     let mut current = acquire(&credentials).await?;
-    let ModelRequest::Verify { slug, display_name } = operation else {
+    let ModelRequest::Verify {
+        slug,
+        display_name,
+        effort,
+    } = operation
+    else {
         let mut catalog_request = AuthenticatedRequest::new(&current);
         let catalog = loop {
             let response = client
@@ -136,18 +146,8 @@ pub async fn execute(
             let slug = required_text(model, "slug", "可显示模型缺少 slug")?.to_owned();
             let display_name =
                 required_text(model, "display_name", "可显示模型缺少 display_name")?.to_owned();
-            let supported_reasoning_levels = model
-                .get("supported_reasoning_levels")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|level| level.get("effort").and_then(Value::as_str))
-                .map(str::to_owned)
-                .collect();
-            let default_reasoning_level = model
-                .get("default_reasoning_level")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
+            let (supported_reasoning_levels, default_reasoning_level) =
+                reasoning_capabilities(model)?;
             if result.iter().any(|entry: &ModelInfo| entry.slug == slug) {
                 return Err(protocol("模型目录含有重复 slug"));
             }
@@ -164,16 +164,18 @@ pub async fn execute(
     if slug.trim().is_empty() {
         return Err(protocol("未选择模型"));
     }
-    tracing::debug!(model = slug, "使用显式选择的模型验证连接");
+    tracing::debug!(model = slug, effort, "使用显式选择的模型与推理设置验证连接");
+    let mut payload = serde_json::json!({"model": slug, "input": [{"role": "user", "content": INPUT}], "store": false, "stream": true});
+    if let Some(effort) = &effort {
+        payload["reasoning"] = serde_json::json!({"effort": effort});
+    }
     let mut request = AuthenticatedRequest::new(&current);
     loop {
         let response = client
             .post(RESPONSES_URL)
             .bearer_auth(current.access_token())
             .header(reqwest::header::ACCEPT, "text/event-stream")
-            .json(
-                &serde_json::json!({"model": slug, "input": [{"role": "user", "content": INPUT}], "store": false, "stream": true}),
-            )
+            .json(&payload)
             .send()
             .await
             .map_err(network)?;
@@ -190,6 +192,7 @@ pub async fn execute(
             Ok(text) => {
                 return Ok(ModelResult::Verified(ModelReply {
                     slug,
+                    effort,
                     model: display_name,
                     text,
                 }));
@@ -206,6 +209,49 @@ pub async fn execute(
         }
     }
 }
+#[derive(Deserialize)]
+struct ReasoningLevel {
+    effort: String,
+}
+
+fn reasoning_capabilities(model: &Value) -> Result<(Vec<String>, Option<String>), ModelFailure> {
+    let levels = match model
+        .get("supported_reasoning_levels")
+        .filter(|value| !value.is_null())
+    {
+        None => Vec::new(),
+        Some(value) => serde_json::from_value::<Vec<ReasoningLevel>>(value.clone())
+            .map_err(|_| protocol("模型推理能力格式无效"))?
+            .into_iter()
+            .map(|level| level.effort)
+            .collect::<Vec<_>>(),
+    };
+    if levels.iter().any(|level| level.trim().is_empty()) {
+        return Err(protocol("模型推理档位为空"));
+    }
+    let default = match model
+        .get("default_reasoning_level")
+        .filter(|value| !value.is_null())
+    {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| protocol("模型默认推理档位无效"))?
+                .to_owned(),
+        ),
+    };
+    if !levels.is_empty()
+        && default
+            .as_ref()
+            .is_some_and(|default| !levels.contains(default))
+    {
+        return Err(protocol("模型默认推理档位不在支持范围内"));
+    }
+    Ok((levels, default))
+}
+
 async fn acquire(client: &CredentialClient) -> Result<UsableCredentials, ModelFailure> {
     client
         .request()

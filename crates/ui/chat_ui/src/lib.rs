@@ -2,5 +2,7 @@
 compile_error!("This application supports Windows x64 only");
 
 mod preparation;
+mod reasoning;
 
 pub use preparation::{ChatUiHost, ModelChoice, ModelPhase, ModelState, install};
+pub use reasoning::ReasoningSetting;
