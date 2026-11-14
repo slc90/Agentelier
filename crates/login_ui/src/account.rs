@@ -2,12 +2,12 @@ use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::{InteractionDisabled, UiSystems};
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::button::WidgetryButton;
+use bevy_widgetry::button::{WidgetryButton, WidgetryButtonLoading};
 use bevy_widgetry::text::WidgetryText;
 
 const ACCOUNT_GAP: f32 = 12.0;
-const RETRY_HEIGHT: f32 = 40.0;
-const RETRY_WIDTH: f32 = 144.0;
+const BUTTON_HEIGHT: f32 = 40.0;
+const BUTTON_WIDTH: f32 = 168.0;
 
 #[derive(Resource, Reflect, Clone, Default)]
 #[reflect(Resource)]
@@ -15,17 +15,18 @@ pub struct AccountState {
     pub account: Option<AccountSummary>,
     pub credentials: CredentialState,
     pub operation: Option<u64>,
+    pub phase: AccountPhase,
     pub error: Option<String>,
+    pub feedback: Option<String>,
+    pub browser_opening: bool,
     pub runtime_failed: bool,
 }
-
 #[derive(Reflect, Clone)]
 pub struct AccountSummary {
     pub subject: String,
     pub display_name: Option<String>,
     pub email: Option<String>,
 }
-
 #[derive(Reflect, Clone, Default)]
 pub enum CredentialState {
     #[default]
@@ -35,12 +36,39 @@ pub enum CredentialState {
     SignedOut,
     StoredSession {
         expired: bool,
+        subscription_enabled: bool,
     },
 }
-
+#[derive(Reflect, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AccountPhase {
+    #[default]
+    Idle,
+    Reading,
+    Preparing,
+    Waiting,
+    Exchanging,
+    Saving,
+    SaveFailed,
+    Cancelling,
+}
 #[derive(Event)]
 pub struct RestoreAccount;
-
+#[derive(Event, Clone, Copy, PartialEq, Eq)]
+pub enum LoginAction {
+    Login,
+    Consent,
+    OpenBrowser,
+    CopyLink,
+    Cancel,
+    RetrySave,
+}
+#[derive(Component, Clone, Copy)]
+enum ButtonAction {
+    Restore,
+    Login(LoginAction),
+}
+#[derive(Component, Clone, Copy)]
+struct ButtonLabel(ButtonAction);
 #[derive(Component, Clone, Default)]
 struct AccountIdentity;
 #[derive(Component, Clone, Default)]
@@ -48,14 +76,13 @@ struct AccountStatus;
 #[derive(Component, Clone, Default)]
 struct AccountError;
 #[derive(Component, Clone, Default)]
-struct AccountRetry;
+struct AccountFeedback;
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<AccountState>()
         .register_type::<AccountState>()
         .add_systems(PostUpdate, update_panel.before(UiSystems::Content));
 }
-
 fn identity(state: &AccountState) -> String {
     state
         .account
@@ -68,61 +95,156 @@ fn identity(state: &AccountState) -> String {
         })
         .unwrap_or_default()
 }
-
 fn status(state: &AccountState) -> &'static str {
-    if state.operation.is_some() {
-        return "正在读取账号…";
-    }
-    if state.error.is_some() {
-        return "账号读取失败";
+    match state.phase {
+        AccountPhase::Reading => return "正在读取账号…",
+        AccountPhase::Preparing => return "正在准备登录…",
+        AccountPhase::Waiting => return "请在浏览器中完成登录",
+        AccountPhase::Exchanging => return "正在交换授权码并校验身份…",
+        AccountPhase::Saving => return "正在保存登录凭据…",
+        AccountPhase::SaveFailed => return "登录结果尚未保存，请重试保存",
+        AccountPhase::Cancelling => return "正在取消登录…",
+        AccountPhase::Idle => {}
     }
     match state.credentials {
+        CredentialState::Unknown if state.error.is_some() => "无法恢复账号",
         CredentialState::Unknown => "正在读取账号…",
         CredentialState::NoRecord | CredentialState::HostOnly | CredentialState::SignedOut => {
             "未登录"
         }
-        CredentialState::StoredSession { expired: true } => "已恢复账号，会话已过期",
-        CredentialState::StoredSession { expired: false } => "已恢复账号会话",
+        CredentialState::StoredSession { expired: true, .. } => "会话已过期，请重新登录",
+        CredentialState::StoredSession {
+            subscription_enabled: false,
+            ..
+        } => "账号已登录，订阅授权未开启",
+        CredentialState::StoredSession { .. } => "账号已登录，订阅授权已开启",
     }
 }
-
+fn label(state: &AccountState, action: ButtonAction) -> &'static str {
+    match action {
+        ButtonAction::Restore => "重新读取账号",
+        ButtonAction::Login(LoginAction::Login)
+            if matches!(state.credentials, CredentialState::StoredSession { .. }) =>
+        {
+            "重新登录"
+        }
+        ButtonAction::Login(LoginAction::Login) => "使用 ChatGPT 登录",
+        ButtonAction::Login(LoginAction::Consent) => "开启订阅授权",
+        ButtonAction::Login(LoginAction::OpenBrowser) => "重新打开浏览器",
+        ButtonAction::Login(LoginAction::CopyLink) => "复制登录链接",
+        ButtonAction::Login(LoginAction::Cancel) => "取消登录",
+        ButtonAction::Login(LoginAction::RetrySave) => "重试保存",
+    }
+}
+fn button_state(state: &AccountState, action: ButtonAction) -> (bool, bool, bool) {
+    let idle = state.phase == AccountPhase::Idle;
+    let (visible, loading) = match action {
+        ButtonAction::Restore => (
+            idle || state.phase == AccountPhase::Reading,
+            state.phase == AccountPhase::Reading,
+        ),
+        ButtonAction::Login(LoginAction::Login) => (
+            idle || state.phase == AccountPhase::Preparing,
+            state.phase == AccountPhase::Preparing,
+        ),
+        ButtonAction::Login(LoginAction::Consent) => (
+            idle && matches!(
+                state.credentials,
+                CredentialState::StoredSession {
+                    subscription_enabled: false,
+                    ..
+                }
+            ),
+            false,
+        ),
+        ButtonAction::Login(LoginAction::OpenBrowser | LoginAction::CopyLink) => {
+            (state.phase == AccountPhase::Waiting, false)
+        }
+        ButtonAction::Login(LoginAction::Cancel) => (
+            !idle && state.phase != AccountPhase::Reading,
+            state.phase == AccountPhase::Cancelling,
+        ),
+        ButtonAction::Login(LoginAction::RetrySave) => (
+            matches!(state.phase, AccountPhase::SaveFailed | AccountPhase::Saving),
+            state.phase == AccountPhase::Saving,
+        ),
+    };
+    let browser_busy =
+        matches!(action, ButtonAction::Login(LoginAction::OpenBrowser)) && state.browser_opening;
+    (
+        visible,
+        state.runtime_failed || loading || browser_busy,
+        loading || browser_busy,
+    )
+}
+fn button(state: &AccountState, action: ButtonAction, name: &'static str) -> impl Scene {
+    let text = label(state, action);
+    let (visible, _, _) = button_state(state, action);
+    let display = if visible {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    bsn! {
+        @WidgetryButton {
+            @children: {Some(Box::new(bsn_list! {
+                Text(text) WidgetryText template(move |_| Ok(ButtonLabel(action)))
+            }) as Box<dyn SceneList>)}
+        }
+        Name(name) template(move |_| Ok(action))
+        Node { min_width: px(BUTTON_WIDTH), height: px(BUTTON_HEIGHT), align_self: AlignSelf::Start, flex_shrink: 0.0, display: display }
+        on(activate)
+    }
+}
 pub(crate) fn account_panel(state: &AccountState) -> impl Scene {
     let name = identity(state);
     let status = status(state);
     let error = state.error.clone().unwrap_or_default();
-    let disabled = state.operation.is_some() || state.runtime_failed;
-    let retry_button = (
-        bsn! {
-            @WidgetryButton {
-                @children: {Some(Box::new(bsn_list! {Text("重新读取账号") WidgetryText}) as Box<dyn SceneList>)}
-            }
-            AccountRetry Name("AccountRestore")
-            Node { min_width: px(RETRY_WIDTH), height: px(RETRY_HEIGHT), align_self: AlignSelf::Start, flex_shrink: 0.0 }
-            on(retry)
-        },
-        disabled.then_some(bsn! { InteractionDisabled }),
-    );
+    let feedback = state.feedback.clone().unwrap_or_default();
     bsn! {
         Name("AccountPanel")
         Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(ACCOUNT_GAP), flex_shrink: 0.0 }
         Children [
             Text("账号") WidgetryText--
-            Text(name) WidgetryText AccountIdentity Name("AccountIdentity")--
+            Text(name) WidgetryText AccountIdentity Name("AccountIdentity")
+            TextLayout::linebreak(LineBreak::AnyCharacter) Node { width: percent(100), min_width: px(0) }--
             Text(status) WidgetryText AccountStatus Name("AccountStatus")--
+            Text(feedback) WidgetryText AccountFeedback Name("AccountFeedback")--
             Text(error) WidgetryText AccountError Name("AccountError")
-            TextLayout::linebreak(LineBreak::AnyCharacter)
-            Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }--
-            {retry_button}
+            TextLayout::linebreak(LineBreak::AnyCharacter) Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }--
+            Node { width: percent(100), column_gap: px(ACCOUNT_GAP), row_gap: px(ACCOUNT_GAP), flex_wrap: FlexWrap::Wrap }
+            Children [
+                @button(state, ButtonAction::Login(LoginAction::Login), "AccountLogin")--
+                @button(state, ButtonAction::Login(LoginAction::Consent), "AccountConsent")--
+                @button(state, ButtonAction::Login(LoginAction::OpenBrowser), "AccountOpenBrowser")--
+                @button(state, ButtonAction::Login(LoginAction::CopyLink), "AccountCopyLink")--
+                @button(state, ButtonAction::Login(LoginAction::RetrySave), "AccountRetrySave")--
+                @button(state, ButtonAction::Login(LoginAction::Cancel), "AccountCancel")--
+                @button(state, ButtonAction::Restore, "AccountRestore")
+            ]
         ]
     }
 }
-
-fn retry(_event: On<Activate>, state: Res<AccountState>, mut commands: Commands) {
-    if state.operation.is_none() && !state.runtime_failed {
-        commands.trigger(RestoreAccount);
+fn activate(
+    event: On<Activate>,
+    actions: Query<&ButtonAction>,
+    state: Res<AccountState>,
+    mut commands: Commands,
+) -> Result {
+    let action = *actions.get(event.entity)?;
+    let (visible, disabled, _) = button_state(&state, action);
+    if visible && !disabled {
+        match action {
+            ButtonAction::Restore => {
+                commands.trigger(RestoreAccount);
+            }
+            ButtonAction::Login(action) => {
+                commands.trigger(action);
+            }
+        }
     }
+    Ok(())
 }
-
 fn update_panel(
     state: Res<AccountState>,
     mut text: Query<(
@@ -130,27 +252,40 @@ fn update_panel(
         Has<AccountIdentity>,
         Has<AccountStatus>,
         Has<AccountError>,
+        Has<AccountFeedback>,
+        Option<&ButtonLabel>,
     )>,
-    buttons: Query<Entity, With<AccountRetry>>,
+    mut buttons: Query<(Entity, &ButtonAction, &mut Node)>,
     mut commands: Commands,
 ) {
     if !state.is_changed() {
         return;
     }
-    for (mut text, is_identity, is_status, is_error) in &mut text {
+    for (mut text, is_identity, is_status, is_error, is_feedback, button) in &mut text {
         if is_identity {
             text.0 = identity(&state);
         } else if is_status {
             text.0 = status(&state).into();
         } else if is_error {
             text.0 = state.error.clone().unwrap_or_default();
+        } else if is_feedback {
+            text.0 = state.feedback.clone().unwrap_or_default();
+        } else if let Some(button) = button {
+            text.0 = label(&state, button.0).into();
         }
     }
-    for entity in &buttons {
-        if state.operation.is_some() || state.runtime_failed {
+    for (entity, action, mut node) in &mut buttons {
+        let (visible, disabled, loading) = button_state(&state, *action);
+        node.display = if visible {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if disabled {
             commands.entity(entity).insert(InteractionDisabled);
         } else {
             commands.entity(entity).remove::<InteractionDisabled>();
         }
+        WidgetryButtonLoading::set(&mut commands, entity, loading);
     }
 }

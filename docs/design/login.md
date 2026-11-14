@@ -1,27 +1,23 @@
-# 从数据目录恢复账号
+# 从数据目录进入 ChatGPT 登录
 
-当前已经实现[数据目录启动与设置](mechanisms/application-data.md)和[文件账号恢复](modules/authentication.md)。进入主窗口后，应用通过业务桥接请求 Agent/Tokio 读取本次目录的 `auth.json`，展示未登录、账号摘要或具体存储错误。恢复不主动打开浏览器、不创建或覆盖凭据文件。
+当前已经实现数据目录启动与设置、文件账号恢复和 ChatGPT 浏览器授权。应用先确定并占用本次目录，再恢复该目录中的账号；未登录时可从主窗口打开系统浏览器完成授权。
 
 ```mermaid
 flowchart LR
-    Directory["用户确认并占用数据目录"] --> App["主窗口请求恢复账号"]
-    App --> Bridge["bridge · 安全业务消息"]
-    Bridge --> Agent["Agent / Tokio"]
-    Agent --> Login["login · 文件读取与校验"]
-    Login --> File["本次目录 auth.json"]
-    Agent -->|结果与主动唤醒| App
+    Directory["已确认并占用的目录"] --> Restore["后台恢复 auth.json"]
+    Restore --> UI["主窗口账号状态"]
+    UI -->|用户发起| Browser["系统浏览器授权"]
+    Browser --> Verify["后台校验身份"]
+    Verify --> Save["受限权限整体保存"]
+    Save --> UI
 ```
 
-`crates/login` 集中数据环境和具体文件凭据能力，不依赖 Bevy；`crates/login_ui` 集中目录界面及账号安全投影；`app` 保留配置、日志、Winit 通知及退出协调。Agent 串行执行认证操作，桥接只负责业务转换、操作身份和通信。账号真相留在运行侧，不将 Token 或原始记录放入 ECS。
+`crates/login` 集中数据环境、OAuth、身份校验和具体文件凭据能力，不依赖 Bevy；`crates/login_ui` 负责目录与账号界面；`app` 负责配置、日志、浏览器/剪贴板集成及退出。Agent/Tokio 串行执行认证，Bridge 传递操作身份和业务阶段，账号与 Token 真相留在运行侧。
 
-## 当前行为
+[数据目录与启动](mechanisms/application-data.md)说明目录选择、重启恢复及下次启动位置。更改位置不切换当前账号，也不移动文件。
 
-[数据目录与启动](mechanisms/application-data.md)说明首次选择、重启恢复、查看路径和更改位置。更改目录在下次启动生效，当前账号始终来自本次固定数据目录；文件由用户自行整理。
+[浏览器登录与账号界面](modules/account-ui.md)说明准备、等待、取消、保存重试、账号及订阅范围状态。没有 API Key 或其他登录方式，密码与验证只由用户在授权页面输入。
 
-[账号恢复界面](modules/account-ui.md)说明读取中、未登录、已恢复会话、过期与错误的展示。存储失败可以重新读取，不把损坏文件当作不存在；没有会话时不制造登录成功。
+[认证运行与凭据管理](modules/authentication.md)说明独立客户端登记、文件格式、JWT 校验、安全存储、唤醒与真实收尾。文件保存成功后才报告登录完成，失败保留已有会话。
 
-[认证运行与凭据管理](modules/authentication.md)说明文件格式、结构校验、安全投影、主动唤醒及真实收尾。数据环境保持到后台及日志结束，账号恢复不接管辅助任务体系。
-
-## 后续边界
-
-浏览器授权、Token 续期、退出登录和模型请求尚未实现，按[登录实施导航](../../plans/登录/00-overview.md)继续。合法真实会话由浏览器登录增量产生后再验证重启恢复，不提前构造伪造登录。
+自动续期、退出登录及模型请求仍按[后续增量导航](../../plans/登录/00-overview.md)实施。本增量不自动刷新或清除已有凭据。

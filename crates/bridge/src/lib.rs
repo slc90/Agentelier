@@ -3,4 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod connection;
 
-pub use connection::{AccountEvent, AccountSummary, BridgeFailure, Connection, CredentialState};
+pub use connection::{
+    AccountEvent, AccountEventKind, AccountSnapshot, AccountSummary, AuthorizationLink,
+    BridgeFailure, Connection, CredentialState,
+};

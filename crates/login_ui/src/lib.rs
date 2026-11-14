@@ -5,5 +5,7 @@ mod account;
 mod data_directory;
 mod directory_settings;
 
-pub use account::{AccountState, AccountSummary, CredentialState, RestoreAccount};
+pub use account::{
+    AccountPhase, AccountState, AccountSummary, CredentialState, LoginAction, RestoreAccount,
+};
 pub use data_directory::{DataDirectoryReady, LoginUiHost, LoginUiPlugin};

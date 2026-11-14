@@ -1,6 +1,6 @@
 # Agentelier 总体架构
 
-当前 Workspace 包含应用 `app/`、应用 Asset 库 `crates/assets/`、数据与认证能力 `crates/login/`（`agentelier_login`）、登录界面 `crates/login_ui/`（`agentelier_login_ui`）、后台运行 `crates/agent/`（`agentelier_agent`）和业务桥接 `crates/bridge/`（`agentelier_bridge`）。当前已实现数据目录启动与设置、从该目录的 `auth.json` 恢复账号、非敏感状态展示及运行收尾；浏览器登录、Token 续期、退出登录与模型请求尚未实现。
+当前 Workspace 包含应用 `app/`、应用 Asset 库 `crates/assets/`、数据与认证能力 `crates/login/`（`agentelier_login`）、登录界面 `crates/login_ui/`（`agentelier_login_ui`）、后台运行 `crates/agent/`（`agentelier_agent`）和业务桥接 `crates/bridge/`（`agentelier_bridge`）。当前已实现数据目录启动与设置、文件账号恢复、ChatGPT 浏览器授权、受限权限凭据提交、非敏感状态展示及运行收尾；Token 自动续期、退出登录与模型请求尚未实现。
 
 Agentelier 是以 Bevy 构建交互界面的 Rust 桌面 Agent 应用。应用的交互与 Agent 的执行有不同的运行需求：前者由 Bevy ECS 与 Winit 驱动，后者需要持续处理异步模型响应、工具执行和任务生命周期。
 
@@ -32,9 +32,9 @@ Bevy 应用拥有窗口和 Winit 事件循环，使用 ECS 管理应用业务状
 
 应用层还负责统一装配与管理应用基础设施，包括 Asset、日志、按需启用的 BRP 运行时，以及辅助后台任务。
 
-当前入口先建立可执行文件旁的日志，加载 `config/config.ron`，再装配同一套 Bevy 运行时。`login_ui` 在启动窗口的内容宿主中复用 Widgetry 目录选择器，通过辅助后台任务调用 `login` 检查并占用目录，再调用 `app` 提供的保存操作提交新选择。完成后复用当前窗口进入主界面，并通过桥接在 Agent/Tokio 中恢复 `auth.json`；数据环境保持到后台任务及日志收尾完成。具体关系见[数据目录与启动](mechanisms/application-data.md)。
+当前入口先建立可执行文件旁的日志，加载 `config/config.ron`，再装配同一套 Bevy 运行时。`login_ui` 在启动窗口的内容宿主中复用 Widgetry 目录选择器，通过辅助后台任务调用 `login` 检查并占用目录，再调用 `app` 提供的保存操作提交新选择。完成后复用当前窗口进入主界面，并通过桥接在 Agent/Tokio 中恢复 `auth.json`；数据环境保持到后台任务及日志收尾完成。主窗口可沿同一桥接发起浏览器授权，系统浏览器由应用辅助 Job 打开，剪贴板操作由应用执行。具体关系见[数据目录与启动](mechanisms/application-data.md)。
 
-`app` 保留通用配置、日志、桥接装配及退出协调；具体登录界面和账号投影归 `login_ui`，数据环境与具体文件凭据组件归 `login`。`login` 不依赖 Bevy，也不反向依赖应用；`login_ui` 依赖 `login`、Bevy 和 Widgetry。Agent 依赖 `login`，在独立线程的 Tokio current-thread Runtime 中串行接收恢复命令，使用 `spawn_blocking` 执行文件读取；Bridge 只向应用暴露自己的安全业务消息。详见[认证运行与凭据管理](modules/authentication.md)。
+`app` 保留通用配置、日志、桥接装配及退出协调；具体登录界面和账号投影归 `login_ui`，数据环境与具体文件凭据组件归 `login`。`login` 不依赖 Bevy，也不反向依赖应用；`login_ui` 依赖 `login`、Bevy 和 Widgetry。Agent 依赖 `login`，在独立线程的 Tokio current-thread Runtime 中串行执行恢复、授权及保存重试；OAuth 网络和回环监听使用异步 I/O，具体文件读写使用 `spawn_blocking`。`login` 使用启用 Windows 系统代理的 reqwest 与 jsonwebtoken 校验固定签发方，并通过 win-custody 的安全接口保护凭据权限；Bridge 转换业务消息，授权地址仅作为无 Debug 的私有交互数据交给应用，不进入反射状态。应用浏览器 Job 使用系统默认浏览器。详见[认证运行与凭据管理](modules/authentication.md)。
 
 目录设置继续归 `login_ui`：显示本次固定路径、打开当前目录、检查并保存下次启动位置，并按操作 ID 接收后台结果。候选检查不持有第二份长期占用。`app::config::ConfigStore` 串行合并最新配置并完整替换提交，启动与设置复用同一保存入口；文件保存成功才更新对应运行时状态。设置更改不修改当前数据环境，也不搬运文件。
 
@@ -152,7 +152,7 @@ BRP Runtime 由应用按需装配，用于操作和观察实际运行的 Bevy �
 
 应用拥有整体启动与退出流程；Agent 负责自身执行体的真实结束；辅助 Job 仍遵循自己的任务生命周期。
 
-启动时，应用建立日志输出、读取配置，再装配现有 Bevy 运行时和目录启动界面。后台确认目录并取得占用，新选择保存成功后进入主界面。应用准备好接收队列和 Winit 通知能力后，启动 Agent 并发起账号恢复。命令与结果队列容量各为一，仅允许一个在途恢复操作。取消目录选择正常结束启动，等待辅助任务真实结束后完成日志收尾。认证读取不占用 ECS 主线程。
+启动时，应用建立日志输出、读取配置，再装配现有 Bevy 运行时和目录启动界面。后台确认目录并取得占用，新选择保存成功后进入主界面。应用准备好接收队列和 Winit 通知能力后，启动 Agent 并发起账号恢复。命令队列容量为四、结果队列容量为八，仅允许一个在途账号操作；待保存结果及控制消息复用当前操作身份。取消目录选择正常结束启动，等待辅助任务真实结束后完成日志收尾。认证读取不占用 ECS 主线程。
 
 退出帧中，应用暂存 `AppExit`，停止接纳认证操作并关闭普通业务唤醒、关闭命令发送端。退出协调通过自己的 Winit 通知继续推进，保持 World、接收端和事件循环有效，非阻塞检查认证线程结束后显式 join，再开始并等待辅助任务收尾。两者完成后才重新发布 `AppExit`，主循环返回后执行兜底检查，最后关闭日志并释放目录占用。认证收尾失败会影响进程退出结果，辅助任务仍会执行收尾。
 

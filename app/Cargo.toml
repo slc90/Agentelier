@@ -16,7 +16,7 @@ bevy_brp_runtime.workspace = true
 serde.workspace = true
 ron.workspace = true
 tracing.workspace = true
-winsafe = { workspace = true, features = ["user"] }
+winsafe = { workspace = true, features = ["user", "shell", "advapi"] }
 tempfile.workspace = true
 
 [lints]

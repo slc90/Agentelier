@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, Read};
@@ -6,43 +6,46 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{error::Error, fmt};
 
-const ISSUER: &str = "https://auth.openai.com";
+pub(crate) const ISSUER: &str = "https://auth.openai.com";
+pub(crate) const SUBSCRIPTION_SCOPE: &str = "chatgpt.tokens.use.direct";
 const MAX_AUTH_FILE_BYTES: u64 = 1024 * 1024;
 
 pub struct AuthFile {
-    path: PathBuf,
-    record: Option<AccountRecord>,
+    pub(crate) path: PathBuf,
+    pub(crate) record: Option<AccountRecord>,
+    pub(crate) pending: Option<AccountRecord>,
+    pub(crate) issued_client: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct AccountRecord {
-    ext_agent_host_id: String,
-    registration: Option<Registration>,
-    session: Option<Session>,
+pub(crate) struct AccountRecord {
+    pub(crate) ext_agent_host_id: String,
+    pub(crate) registration: Option<Registration>,
+    pub(crate) session: Option<Session>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Registration {
-    issuer: String,
-    client_id: String,
-    subject: String,
-    display_name: Option<String>,
-    email: Option<String>,
+pub(crate) struct Registration {
+    pub(crate) issuer: String,
+    pub(crate) client_id: String,
+    pub(crate) subject: String,
+    pub(crate) display_name: Option<String>,
+    pub(crate) email: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Session {
-    access_token: String,
-    refresh_token: String,
-    id_token: String,
-    token_type: String,
-    scopes: Vec<String>,
-    received_at: u64,
-    expires_at: u64,
-    refresh_not_before: Option<u64>,
+pub(crate) struct Session {
+    pub(crate) access_token: Option<String>,
+    pub(crate) refresh_token: Option<String>,
+    pub(crate) id_token: String,
+    pub(crate) token_type: Option<String>,
+    pub(crate) scopes: Vec<String>,
+    pub(crate) received_at: u64,
+    pub(crate) expires_at: Option<u64>,
+    pub(crate) refresh_not_before: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -57,7 +60,10 @@ pub enum CredentialState {
     NoRecord,
     HostOnly,
     SignedOut,
-    StoredSession { expired: bool },
+    StoredSession {
+        expired: bool,
+        subscription_enabled: bool,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -100,7 +106,12 @@ impl Error for RestoreFailure {
 
 impl AuthFile {
     pub fn new(path: PathBuf) -> Self {
-        Self { path, record: None }
+        Self {
+            path,
+            record: None,
+            pending: None,
+            issued_client: None,
+        }
     }
 
     pub fn restore(&mut self) -> Result<RestoredAccount, RestoreFailure> {
@@ -136,7 +147,7 @@ impl AuthFile {
 }
 
 impl AccountRecord {
-    fn validate(&self) -> Result<(), RestoreFailure> {
+    pub(crate) fn validate(&self) -> Result<(), RestoreFailure> {
         let host = self
             .ext_agent_host_id
             .strip_prefix("urn:uuid:")
@@ -167,13 +178,24 @@ impl AccountRecord {
             if self.registration.is_none() {
                 return Err(RestoreFailure::Invalid("session requires registration"));
             }
-            if session.access_token.trim().is_empty()
-                || session.refresh_token.trim().is_empty()
+            if session
+                .access_token
+                .as_ref()
+                .is_some_and(|value| value.trim().is_empty())
+                || session
+                    .refresh_token
+                    .as_ref()
+                    .is_some_and(|value| value.trim().is_empty())
                 || session.id_token.trim().is_empty()
             {
                 return Err(RestoreFailure::Invalid("session tokens"));
             }
-            if !session.token_type.eq_ignore_ascii_case("Bearer") {
+            if session.access_token.is_some()
+                && !session
+                    .token_type
+                    .as_ref()
+                    .is_some_and(|value| value.eq_ignore_ascii_case("Bearer"))
+            {
                 return Err(RestoreFailure::Invalid("session.token_type"));
             }
             let mut scopes = HashSet::new();
@@ -186,18 +208,29 @@ impl AccountRecord {
             {
                 return Err(RestoreFailure::Invalid("session.scopes"));
             }
-            if session.expires_at <= session.received_at
+            if session.access_token.is_some() != session.expires_at.is_some()
+                || session.access_token.is_some() != session.token_type.is_some()
                 || session
-                    .refresh_not_before
-                    .is_some_and(|time| time < session.received_at)
+                    .expires_at
+                    .is_some_and(|time| time <= session.received_at)
             {
                 return Err(RestoreFailure::Invalid("session timestamps"));
+            }
+            if (session
+                .scopes
+                .iter()
+                .any(|scope| scope == SUBSCRIPTION_SCOPE || scope == "offline_access")
+                && session.access_token.is_none())
+                || (session.scopes.iter().any(|scope| scope == "offline_access")
+                    && session.refresh_token.is_none())
+            {
+                return Err(RestoreFailure::Invalid("session granted credentials"));
             }
         }
         Ok(())
     }
 
-    fn projection(&self) -> Result<RestoredAccount, RestoreFailure> {
+    pub(crate) fn projection(&self) -> Result<RestoredAccount, RestoreFailure> {
         let account = self
             .registration
             .as_ref()
@@ -212,7 +245,11 @@ impl AccountRecord {
                 .map_err(|_| RestoreFailure::Clock)?
                 .as_secs();
             CredentialState::StoredSession {
-                expired: now >= session.expires_at,
+                expired: session.expires_at.is_some_and(|time| now >= time),
+                subscription_enabled: session
+                    .scopes
+                    .iter()
+                    .any(|scope| scope == SUBSCRIPTION_SCOPE),
             }
         } else if account.is_some() {
             CredentialState::SignedOut

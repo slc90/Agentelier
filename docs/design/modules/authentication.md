@@ -1,44 +1,61 @@
 # 认证运行与凭据管理
 
-当前已实现从本次数据目录恢复 `auth.json`。具体文件能力归 `agentelier_login`，Agent/Tokio 负责执行，Bridge 转换业务结果，应用协调启动与退出，`login_ui` 展示安全投影。浏览器登录、续期及退出登录尚未实现，后续方案见 [04](../../../plans/登录/04-browser-login.md)、[05](../../../plans/登录/05-renew-session.md) 和 [06](../../../plans/登录/06-sign-out.md)。
+当前已实现文件账号恢复及 ChatGPT 浏览器授权。具体认证与文件能力归 `agentelier_login`，Agent/Tokio 串行执行，Bridge 转换业务事件，应用处理浏览器、剪贴板及退出，`login_ui` 只持有安全投影。自动续期与退出登录尚未实现。
 
-## 一份文件，区分主机、登记与会话
+## 记录与会话
 
-根记录包含 `ext_agent_host_id`、可空的 `registration`、可空的 `session`，不接受未知字段。主机标识必须为非 nil UUID 对应的 `urn:uuid:`。本次恢复不会生成或保存标识。
+`auth.json` 根记录包含稳定的 `ext_agent_host_id`、可空 `registration` 和可空 `session`，拒绝未知字段。首次授权前使用随机 UUID 创建 `urn:uuid:` 主机标识并完成保存；后续授权、重启和移动同一份数据都复用它。单纯恢复不生成主机标识。
 
-| 记录 | 字段及约束 |
+| 记录 | 字段与语义 |
 | --- | --- |
-| 登记 | `issuer` 固定为 `https://auth.openai.com`；非空 `client_id`、`subject`；可空 `display_name`、`email`，存在时不得为空白 |
-| 会话 | 非空 `access_token`、`refresh_token`、`id_token`；`token_type` 为 Bearer（忽略大小写）；`scopes` 为非空且无重复/空白项的字符串数组 |
-| 时间 | `received_at`、`expires_at`、可空 `refresh_not_before`，均为 Unix 秒；过期时间晚于接收时间，最早刷新时间不得早于接收时间 |
+| 登记 | 固定 `issuer=https://auth.openai.com`，实际签发的 `client_id`，已验证的 `subject`，可空展示名与邮箱 |
+| 会话 | ID Token、实际 `scopes`，以及服务实际授予的可空 Access/Refresh Token、Token 类型 |
+| 时间 | Token 响应接收时的 `received_at`，可空 Access Token `expires_at` 和 `refresh_not_before`，统一为 Unix 秒 |
 
-会话存在时必须有登记。读取已有会话只检查本地结构，信任先前授权阶段保存的身份，不重新执行 JWT 校验或向服务确认有效性；后续真实写入必须先完成身份校验。Token 的实际授权范围及时间完整保留在运行侧，界面只展示是否过期，不推断订阅或套餐。
+有会话必须有登记。Access Token、Bearer 类型和有效期必须共同存在；直接订阅使用范围需要 Access Token，offline_access 需要相应凭据。仅有已验证身份的合法授权不生成假的 Access Token 或有效期。最早刷新时间可能在网络响应到达前已经过去，不因此拒绝合法记录。
 
-文件不存在、只有主机、已有登记但无会话分别投影为 `NoRecord`、`HostOnly`、`SignedOut`，均显示未登录。会话存在时恢复账号 subject、展示名、邮箱，并比较当前时间与有效期。文件只读，不创建空账号或覆盖损坏记录；本次没有写入接口、密钥管理或其他存储后端。
+文件缺失、只有主机、登记但会话为空分别为 NoRecord、HostOnly、SignedOut。已有会话恢复摘要、是否过期及实际订阅范围，不把本地读取视为远端认证检查。解析错误只显示行列，结构错误使用固定字段名称，原始正文和 Token 不进入错误或 Debug。
 
-解析、结构、读取、超出 1 MiB 及系统时钟错误分别返回。解析错误只保留行列，结构错误使用固定字段名称，不转发 serde 中可能包含敏感值的原文。失败时保留上次成功缓存，并向界面报告本次错误。
+## 浏览器尝试
 
-## 运行和投影分别持有状态
+应用只采用固定 OpenAI 公共客户端协议。首次请求使用 `dynamic_agent_client` 与 Agentelier 名称提示；回调必须返回实际客户端标识。该入口标识不会保存为正式登记。已登记账号复用原客户端及主机标识，且返回 subject 必须匹配。
+
+每次尝试生成新的安全随机 state、nonce、PKCE verifier，用 SHA-256 / base64url 构造 S256 challenge。先绑定 127.0.0.1 的可用端口，再形成同一尝试固定的 `/auth/callback` 地址，授权与 Token 交换完全复用此 URI。URL 和表单均由编码库构造，不拼接原始参数。
+
+回调只接受匹配 Host 的 GET，限制请求大小与连接等待时间，核对单一 state 后才处理授权错误、授权码和客户端标识。无关或 state 不匹配的请求被拒绝，不消耗当前尝试。正确回调的浏览器响应清除地址栏查询参数，禁止缓存和 Referrer，不提前宣称持久化成功。
+
+Token 请求携带实际客户端、一次性授权码、PKCE verifier、回调和固定 resource。禁止重定向；网络错误和响应格式只返回固定阶段信息及 HTTP 状态，不转发响应正文。已取得的客户端标识在当前运行中保留，失败后的新授权不再次使用动态注册入口；未验证身份的标识不成为磁盘登记。
+
+reqwest 显式启用 `system-proxy`，Token、发现文档与 JWKS 共用该客户端，自动读取 Windows 手动系统代理及绕过设置，代理环境变量遵循依赖自身的优先规则；不解析 PAC。客户端随新登录建立，回环监听不经过代理。应用的浏览器 Job 通过 Windows Shell 将当前授权地址交给系统默认浏览器，首次打开和重新打开复用同一路径；启动失败保留同一次尝试的手动入口。
+
+从固定签发方获取发现文档及同源 HTTPS JWKS。校验 RS256 签名、issuer、audience、exp、iat、可选 nbf、本次 nonce 和适用的 azp，再以 sub 建立身份。Access Token 的内部字段不参与身份判断。服务端未授予订阅范围时仍保存验证后的身份，并在显式开启订阅授权时请求补充同意。
+
+## 私有文件提交
+
+主机创建和 Token 保存共用同一个整记录提交路径。临时目录创建后，先设置仅当前用户及 SYSTEM 可访问且禁止继承的 DACL，再在其中创建并保护临时文件。使用 win-custody 的安全 API 查询并核对权限；写入秘密之前权限必须满足要求，不解除 unsafe 禁令。
+
+完整序列化、写入、sync 后，将受保护文件移至同目录的唯一暂存路径，清理本次临时目录，再原子替换目标。第一次创建使用不覆盖已有文件的提交。已有目标只接受普通非重解析文件，提交前保护目标权限；不递归处理用户目录。最终替换保留来源文件的受保护 DACL。
+
+会话先在运行侧暂存。保存失败保留同一份已验证结果并等待重试，不重复消费授权码；保存成功才替换缓存并发布持久化终态。取消待保存结果会丢弃新结果，保留旧会话。实际提交已经开始时等待完整结果，不在提交中途丢弃任务。
+
+## 执行、通知和结束
 
 ```mermaid
 flowchart LR
-    UI["login_ui · 账号摘要/状态/操作/错误"] <--> App["app · 装配与退出"]
-    App <--> Bridge["bridge · 安全业务协议"]
-    Bridge <--> Agent["agent · Tokio 执行"]
-    Agent --> Login["login · AuthFile 与私有记录"]
+    UI["login_ui · 非敏感状态"] <--> App["app · 浏览器/剪贴板/退出"]
+    App <--> Bridge["bridge · 操作身份与业务消息"]
+    Bridge <--> Agent["Agent · Tokio"]
+    Agent --> Login["login · OAuth/验证/具体文件组件"]
     Login --> File["本次目录 auth.json"]
+    Login <--> OpenAI["固定 OpenAI 授权服务"]
 ```
 
-Agent 独立线程驱动 Tokio current-thread Runtime，串行接收恢复命令；每次通过 `spawn_blocking` 调用具体文件组件，等待真实结果后保留组件和缓存。它不访问 ECS、不安装日志订阅，也不由 Widgetry JobManager 管理。
+命令队列容量为四、事件队列容量为八。Bridge 只接纳一个在途账号操作，保存失败与重试继续使用同一标识，终态才释放操作。state/nonce/Token 留在认证运行；授权地址只通过无 Debug 的私有交互消息交给应用后台句柄，不进入可反射 AccountState。
 
-命令队列和结果队列容量各为一。Bridge 只接纳一个在途操作，负责分配及核对操作标识；应用再次核对当前投影中的操作身份。Bridge 消息只包含它自己的摘要、状态和筛选后的错误，不暴露 Token、授权码或原始文件记录。
+Agent 在独立线程驱动 Tokio，文件工作使用 spawn_blocking，网络与回调为异步。取消通过当前操作专属 CancellationToken 直接通知在途任务；等待超时为命名常量五分钟。取消或关闭停止监听和网络等待；已开始的文件提交等待真实完成，以实际保存结果决定成功或取消。
 
-结果先入队，再调用宿主提供的通知能力。应用将通知转换为 Winit WakeUp，ECS 以非阻塞方式消费结果；账号面板在 PostUpdate 投影文字，保证 Update 收到结果后不依赖下一次用户输入更新文字。队列满、通道关闭、任务或线程异常、唤醒失败都不当作正常缺失结果。
+结果先入队再通知 Winit，应用非阻塞消费所有待处理阶段。打开浏览器作为应用辅助 Job 管理，其结果有独立操作关联；迟到结果不覆盖其他登录。应用只安装原有日志和 BRP Runtime。
 
-## 退出以真实结束为准
+退出协调暂存 AppExit，停止认证命令及普通通知，取消当前授权并等待执行线程与 Tokio 真实结束，再在事件循环有效时收尾辅助任务。最后允许主循环退出、完成日志并释放数据环境。显式 finish 传播错误，Drop 仅提供防泄漏兜底。
 
-退出帧暂存 `AppExit`，关闭新认证命令和普通业务唤醒。已接收的读操作继续到真实结束，不把停止请求视为完成。退出协调自行通知 Winit 推进帧，保持 World、桥接、接收端及事件循环有效；非阻塞检查认证线程已结束后再 join。线程先释放 Tokio 并等待阻塞文件工作结束，再报告退出结果。
-
-随后在事件循环有效时开始并完成独立辅助任务收尾，再发布真正的 `AppExit`。主循环返回后兜底检查运行状态，刷新并关闭日志，最后释放数据目录占用。后台失败会影响进程退出结果，不阻止辅助任务收尾。显式 `finish()` 用于传播失败；Drop 只在宿主遗漏收尾时阻塞等待并记录无法返回的错误。
-
-当前仅恢复，不修改凭据。合法真实会话的重启验证留到浏览器授权增量产生真实记录以后，不制造伪造登录记录。
+协议参照：[OpenAI 注册与登录](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)。本项目仅维护一个账号登记，不提供其他登录方式、存储后端或多账号框架。
