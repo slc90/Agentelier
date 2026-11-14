@@ -1,6 +1,6 @@
 # Agentelier 总体架构
 
-Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。Bevy ECS 与 Winit 管理交互和展示，独立线程的 Tokio current-thread Runtime 承载账号与模型执行。当前已实现数据目录启动与设置、文件账号恢复、ChatGPT 浏览器授权、受保护凭据提交、按需续期、退出登录、模型连接验证及运行收尾。
+Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。Bevy ECS 与 Winit 管理交互和展示，独立线程的 Tokio current-thread Runtime 承载账号与模型执行。当前已实现数据目录启动与设置、文件账号恢复、ChatGPT 浏览器授权、受保护凭据提交、按需续期、退出登录、模型连接验证、首轮流式聊天及运行收尾。
 
 ## Workspace 与三个领域
 
@@ -10,15 +10,17 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | --- | --- | --- |
 | `crates/ui/application/` | `agentelier_application` | 通用宿主、配置、日志、诊断、窗口装配与整体生命周期 |
 | `crates/ui/assets/` | `bevy_app_assets` | 应用 Asset 的统一注册 |
-| `crates/ui/chat_ui/` | `agentelier_chat_ui` | 模型目录、显式模型和推理选择、连接验证与相应交互投影 |
+| `crates/ui/chat_ui/` | `agentelier_chat_ui` | 模型准备、会话与草稿、首轮流式聊天和相应交互投影 |
 | `crates/ui/agent_host/` | `agentelier_agent_host` | 唯一 Connection、Winit 唤醒、命令提交、业务消息分发及执行收尾 |
 | `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、账号界面，Bevy/Bridge 衔接及浏览器/剪贴板交互 |
 | `crates/agent/login/` | `agentelier_login` | 数据环境、OAuth、Token、身份校验、认证文件与受保护原子提交 |
 | `crates/agent/account/` | `agentelier_account` | 账号操作与会话状态、共享凭据门控和按需续期协调 |
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录、Responses、SSE 和模型错误语义 |
+| `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的内存聊天会话、Turn 身份、展示记录与结果收敛 |
 | `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型任务取消/回收及执行收尾 |
 | `crates/bridge/account/` | `agentelier_account_bridge` | 账号摘要、凭据安全投影、授权地址及账号事件转换 |
 | `crates/bridge/llm_model/` | `agentelier_llm_model_bridge` | 模型结果、错误分类、取消和完成状态转换 |
+| `crates/bridge/conversation/` | `agentelier_conversation_bridge` | 聊天命令、会话/轮次和安全展示投影转换 |
 | `crates/bridge/connection/` | `agentelier_bridge_connection` | 命令/事件传递、操作关联、互斥、唤醒与连接生命周期 |
 
 跨领域允许 `ui → agent`、`ui → bridge`、`bridge → agent`，禁止反向依赖。UI 可直接使用 Agent 的能力，例如数据环境；需要业务转换或跨运行边界协调时使用 Bridge。新增功能先判断所属领域，再按实际职责复用或新建库，不继续扩大聚合总库，也不预设占位库。
@@ -38,13 +40,21 @@ flowchart TD
     Host --> Connection["Bridge · connection"]
     UI --> AccountBridge["Bridge · account"]
     ChatUI --> ModelBridge["Bridge · llm_model"]
+    ChatUI --> ConversationBridge["Bridge · conversation"]
+    Host --> AccountBridge
+    Host --> ModelBridge
+    Host --> ConversationBridge
     Connection --> Runtime["Agent · runtime"]
     Connection --> AccountBridge
     Connection --> ModelBridge
+    Connection --> ConversationBridge
     AccountBridge --> Account["Agent · account"]
     ModelBridge --> Model["Agent · llm_model"]
     Runtime --> Account
     Runtime --> Model
+    Runtime --> Conversation["Agent · conversation"]
+    Conversation --> Model
+    ConversationBridge --> Conversation
     Model --> Account
     Account --> Login
 ```
@@ -53,7 +63,7 @@ flowchart TD
 
 ## UI 管理交互与通用宿主
 
-`application` 建立可执行文件旁的日志，读取 `config/config.ron`，装配窗口、Asset、缩放与可选 BRP。`agent_host` 是唯一 Connection 所有者和接收者，按业务将账号与模型事件分发到独立 ECS 消息通道，运行错误另行广播；`login_ui` 在宿主接收后消费自己的业务消息，通过 BSN 组合界面，持有面向交互的账号、目录与模型状态；Widgetry 控件自身的状态遵循其公开契约。
+`application` 建立可执行文件旁的日志，读取 `config/config.ron`，装配窗口、Asset、缩放与可选 BRP。`agent_host` 是唯一 Connection 所有者和接收者，按业务将账号、模型与聊天事件分发到独立 ECS 消息通道，运行错误另行广播；`login_ui` 在宿主接收后消费自己的业务消息，通过 BSN 组合界面，持有面向交互的账号与目录状态；Widgetry 控件自身的状态遵循其公开契约。
 
 启动界面复用 Widgetry 目录选择器，通过辅助 Job 调用 Login 检查并占用目录。配置由 application 的 ConfigStore 串行合并并完整替换提交；成功后复用同一窗口进入主界面，通过共享 AgentHost 发起账号恢复。数据环境保持到后台执行及日志收尾完成。
 
@@ -79,7 +89,7 @@ Account Bridge 将 AccountEventKind 转为自己的账号事件和安全摘要�
 
 Connection 只包装和调用对应业务转换，返回带 operation_id 的 BridgeEvent；BridgeEventKind 区分 Account 与 Model。它分配操作身份、隔离迟到结果、协调在途操作、转发控制命令并持有连接收尾句柄，不实现字段投影或业务错误分类。UI 显式消费连接封装和相应业务类型。
 
-命令队列容量为四，退出控制队列为一，结果队列为八。当前只接纳一个在途账号操作、模型目录读取或指定模型验证，退出可停止当前操作；保存重试沿用同一操作 ID，全局 SessionStatus 使用保留 ID 0。满队列、通道关闭、通知失败和意外停止形成明确错误。
+命令队列容量为四，退出控制队列为一，结果队列为八。当前只接纳一个在途账号操作、模型操作或聊天操作，退出可停止当前操作；保存重试沿用同一操作 ID，全局 SessionStatus 使用保留 ID 0。满队列、通道关闭、通知失败和意外停止形成明确错误。
 
 结果先入队再通过 UI 提供的通知能力唤醒 Winit，ECS 非阻塞消费事件并更新自己的投影。Bridge 不依赖 Winit 或 Bevy 类型，也不把通知信号当作业务数据。
 
@@ -103,7 +113,7 @@ sequenceDiagram
     C-->>UI: 入队并唤醒 Winit
 ```
 
-执行是否真正完成以 Runtime/业务所有者的结果为准，如何展示由 Bevy 决定。模型输出在协议完成后一次性更新；UI 不把“正在取消”当作“已经结束”。
+执行是否真正完成以 Runtime/业务所有者的结果为准，如何展示由 Bevy 决定。连接验证在协议完成后一次性显示；聊天输出按输出项和内容段持续更新，并在合法完成后校准。UI 不把“正在取消”当作“已经结束”。
 
 ## 辅助任务与整体生命周期
 
@@ -125,3 +135,13 @@ flowchart LR
 所有库使用宿主统一配置的 tracing。日志只包含安全的操作标识、阶段与诊断，不泄露 Token、授权地址或模型正文。开发与 BRP 验证须保护现有登录状态，未经授权不退出、重新授权、重置凭据或更换数据环境。
 
 模型准备区由 chat_ui 构造并持有 UI 投影，通过共享宿主读取目录和验证显式模型。登录主页以 HomeContent 提供内容位置，application 使用 BSN 挂载 ChatUiHost，不把模型状态或网络逻辑放入通用装配。模型目录与验证复用现有模型任务生命周期，结果按业务类型在 LLM Model Bridge 转换；账号自然续期保留准备区，账号身份变化或退出后清除旧目录与选择。
+
+## 内存聊天与流式投影
+
+Conversation 固定 Session 的模型、推理设置和账号身份，分配独立 Session/Turn 身份并管理展示记录；Runtime 拥有业务对象及唯一网络任务、取消和 JoinHandle。聊天请求通过同一 CredentialClient 获取凭据并核对账号主体，不重新读取认证文件。当前支持一个内存 Session 的首轮消息，多轮历史及会话替换尚未接入。
+
+LLM Model 解析 Responses 输出项、内容段、公开 phase 和文本增量；只有 response.completed 及可接受完整输出才成功。聊天无总生成时长限制，合法 SSE 活动维持 120 秒空闲期限；连接验证仍保留原总超时。工具输出明确失败，普通拒绝正文正常展示。任务 join 后才释放操作占用，失败/取消保留已经显示的部分回复。
+
+网络任务经容量为 32 的有界 Tokio 通道传递文本变化，发送等待可被任务取消。Runtime 推进权威状态后发布累计展示快照；Bridge 保留单个可替换快照，原先的有界控制/终态队列保持独立。每个快照包含此前全部消息和文本，合并不丢片段或跨轮次混接；终态返回前先交付最后快照。AgentHost 每次更新最多消费 32 项，仍有消息时继续唤醒，避免高频文本长期占用一个界面更新。
+
+chat_ui 仅管理展示投影与草稿，通过 BSN 和 Widgetry 多行 TextField、ScrollArea 构造消息列表。接纳前保留草稿；Accepted 后只清空尚未被继续编辑的原内容。消息更新复用既有行实体，切换设置页不改变后台任务，返回时按投影恢复。具体行为与限制见[聊天会话与流式回复](../features/chat.md)。

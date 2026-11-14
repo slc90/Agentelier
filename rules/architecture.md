@@ -11,11 +11,13 @@
 - `crates/ui/application/`：通用应用宿主，负责配置、日志、诊断、窗口/插件装配与整体启动退出协调，不接管具体账号界面、认证协议或模型执行。
 - `crates/ui/login_ui/`：目录、账号界面，以及相应的 Bevy/Bridge 交互衔接和浏览器交互。
 - `crates/ui/agent_host/`（`agentelier_agent_host`）：共享执行连接、Winit 唤醒、命令转交、业务消息分发和执行收尾。
-- `crates/ui/chat_ui/`（`agentelier_chat_ui`）：模型准备和相应的交互投影，不接管认证、HTTP 或运行线程。
+- `crates/ui/chat_ui/`（`agentelier_chat_ui`）：模型准备、聊天输入和展示投影，不接管认证、HTTP、会话权威或运行线程。
 - `crates/ui/assets/`：统一管理应用 Asset。
 - `crates/agent/login/`（`agentelier_login`）：OAuth 协议、Token、认证文件持久化及数据环境，不承担统一运行调度。
 - `crates/agent/account/`（`agentelier_account`）：账号操作与会话运行状态、共享凭据请求、登录/恢复/续期/退出协调，具体协议和文件读写由 Login 实现。
 - `crates/agent/llm_model/`（`agentelier_llm_model`）：模型服务通信、模型目录、Responses 和 SSE，通过 Account 取得凭据，不维护第二份账号状态或读写认证文件。
+- `crates/agent/conversation/`（`agentelier_conversation`）：聊天会话、设置快照、Turn、展示与历史业务，不接管线程或网络。
+- `crates/bridge/conversation/`（`agentelier_conversation_bridge`）：聊天请求与安全展示投影，不持有会话权威状态。
 - `crates/agent/runtime/`（`agentelier_agent_runtime`）：Tokio 执行环境、跨业务任务调度、取消、回收与运行生命周期，不包含具体 OAuth 或模型网络协议。
 - `crates/bridge/account/`（`agentelier_account_bridge`）：账号安全投影及认证业务事件转换。
 - `crates/bridge/llm_model/`（`agentelier_llm_model_bridge`）：模型结果、错误分类、取消和完成状态转换。

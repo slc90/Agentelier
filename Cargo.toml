@@ -11,6 +11,8 @@ members = [
   "crates/agent/account",
   "crates/agent/llm_model",
   "crates/agent/runtime",
+  "crates/agent/conversation",
+  "crates/bridge/conversation",
   "crates/bridge/account",
   "crates/bridge/llm_model",
   "crates/bridge/connection",

@@ -42,3 +42,9 @@ Account Bridge (`agentelier_account_bridge`) 提供账号摘要、授权地址�
 Connection 的 `try_receive()` 返回 `BridgeEvent { operation_id, kind }`，其中 `BridgeEventKind::Account(AccountEventKind)` 与 `BridgeEventKind::Model(ModelEventKind)` 分别携带对应业务类型。Connection 只管理投递、操作关联、互斥、唤醒和通信生命周期；不拥有账号会话或 UI 投影。
 
 共享宿主在数据目录就绪后启动，沿用本次数据环境的凭据路径，不持有第二份目录占用或账号缓存。页面状态不拥有后台线程。application 保存 AgentHost 的收尾句柄，先 begin_shutdown、非阻塞确认 is_finished，再 finish 获取实际线程结果；登录 UI 清理自己的授权地址和浏览器任务，辅助 Job、日志及目录按原顺序结束。
+
+## 聊天操作
+
+request_conversation 分配操作 ID，Create 固定会话设置，Send 由 Conversation 接纳后返回 Accepted。输入、Session 与 Turn 身份沿业务投影保留；消息增量只更新对应 Turn。Runtime 的网络任务使用同一凭据客户端并在请求前核对主体，身份变化会使旧会话失效，凭据自然续期不清空聊天。Conversation Bridge 只返回安全展示数据，不携带 Token 或隐藏推理。
+
+聊天进度与控制/终态分开传递：Bridge 合并累计展示快照，最后快照先于终态交付；Finished 只在执行体已 join 后发布。普通关闭仍先取消并回收模型，再等待必要凭据提交，最后结束 Tokio 和辅助任务。

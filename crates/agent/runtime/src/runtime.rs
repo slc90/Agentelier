@@ -1,7 +1,15 @@
 use agentelier_account::{
     Account, AccountCommand, AccountEventKind, AccountFailure, CredentialClient,
 };
-use agentelier_llm_model::{ModelFailure, ModelFailureKind, ModelRequest, ModelResult};
+use agentelier_conversation::{
+    Conversation, ConversationEvent, ConversationFailure, ConversationRequest,
+};
+use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult, StreamEvent};
+mod model_task;
+use model_task::{
+    ModelJoin, ModelTask, PROGRESS_CAPACITY, TaskRequest, complete, drain_progress, progress,
+    stop_model,
+};
 use std::path::PathBuf;
 use std::thread::JoinHandle;
 use std::{error::Error, fmt, io};
@@ -22,6 +30,7 @@ pub enum AgentEventKind {
     Account(AccountEventKind),
     ModelCompleted(Result<ModelResult, ModelFailure>),
     ModelCancelled,
+    Conversation(ConversationEvent),
 }
 #[derive(Debug)]
 pub enum RuntimeFailure {
@@ -29,6 +38,7 @@ pub enum RuntimeFailure {
     Thread,
     ModelState,
     Account(AccountFailure),
+    Conversation(ConversationFailure),
 }
 impl fmt::Display for RuntimeFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -37,6 +47,7 @@ impl fmt::Display for RuntimeFailure {
             Self::Thread => f.write_str("认证运行线程异常结束"),
             Self::ModelState => f.write_str("模型终态缺少所属任务"),
             Self::Account(error) => error.fmt(f),
+            Self::Conversation(error) => error.fmt(f),
         }
     }
 }
@@ -45,6 +56,7 @@ impl Error for RuntimeFailure {
         match self {
             Self::Startup(error) => Some(error),
             Self::Account(error) => Some(error),
+            Self::Conversation(error) => Some(error),
             Self::Thread | Self::ModelState => None,
         }
     }
@@ -54,6 +66,11 @@ impl From<AccountFailure> for RuntimeFailure {
         Self::Account(failure)
     }
 }
+impl From<ConversationFailure> for RuntimeFailure {
+    fn from(failure: ConversationFailure) -> Self {
+        Self::Conversation(failure)
+    }
+}
 enum Command {
     Account(AccountCommand),
     Model {
@@ -61,7 +78,13 @@ enum Command {
         control: ModelControl,
         request: ModelRequest,
     },
-    ModelFinished(Result<Option<Result<ModelResult, ModelFailure>>, tokio::task::JoinError>),
+    ModelFinished(ModelJoin),
+    Stream(Option<StreamEvent>),
+    Conversation {
+        id: u64,
+        control: ModelControl,
+        request: ConversationRequest,
+    },
 }
 
 pub struct AgentRuntime {
@@ -79,71 +102,6 @@ struct ModelControl {
     cancel: CancellationToken,
     finished: CancellationToken,
 }
-struct ModelTask {
-    id: u64,
-    control: ModelControl,
-    handle: tokio::task::JoinHandle<Option<Result<ModelResult, ModelFailure>>>,
-}
-impl ModelTask {
-    fn start(
-        id: u64,
-        control: ModelControl,
-        credentials: CredentialClient,
-        request: ModelRequest,
-    ) -> Self {
-        let cancel = control.cancel.clone();
-        let handle = tokio::spawn(async move {
-            let started = std::time::Instant::now();
-            debug!(operation_id = id, "模型连接操作执行体已启动");
-            let result = tokio::select! { biased;
-                _ = cancel.cancelled() => None,
-                result = agentelier_llm_model::execute(credentials, request) => Some(result),
-            };
-            debug!(
-                operation_id = id,
-                elapsed_ms = started.elapsed().as_millis(),
-                cancelled = result.is_none(),
-                "模型连接操作执行体已结束"
-            );
-            result
-        });
-        Self {
-            id,
-            control,
-            handle,
-        }
-    }
-}
-fn model_event(
-    result: Result<Option<Result<ModelResult, ModelFailure>>, tokio::task::JoinError>,
-) -> AgentEventKind {
-    match result {
-        Ok(Some(result)) => AgentEventKind::ModelCompleted(result),
-        Ok(None) => AgentEventKind::ModelCancelled,
-        Err(_) => AgentEventKind::ModelCompleted(Err(ModelFailure {
-            kind: ModelFailureKind::Service,
-            status: None,
-            code: None,
-            request_id: None,
-            message: "模型操作任务异常结束".into(),
-        })),
-    }
-}
-async fn stop_model(
-    model: &mut Option<ModelTask>,
-    publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
-) -> Result<(), RuntimeFailure> {
-    if let Some(task) = model.take() {
-        task.control.cancel.cancel();
-        debug!(operation_id = task.id, "已请求取消模型操作，等待执行体结束");
-        let result = task.handle.await;
-        task.control.finished.cancel();
-        debug!(operation_id = task.id, "模型操作已真实结束并回收");
-        emit(publish, task.id, model_event(result))?;
-    }
-    Ok(())
-}
-
 impl AgentRuntime {
     pub fn start(
         credentials_path: PathBuf,
@@ -172,14 +130,15 @@ impl AgentRuntime {
             .name("agentelier-auth".into())
             .spawn(move || {
                 debug!("认证运行线程已启动");
-                let outcome =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        runtime.block_on(async move {
-                            let mut account =
-                                Account::new(credentials_path, owner_credentials.clone());
-                            let mut delivery_failure = None;
-                            let mut model: Option<ModelTask> = None;
-                            let execution = async {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    runtime.block_on(async move {
+                        let mut account = Account::new(credentials_path, owner_credentials.clone());
+                        let mut delivery_failure = None;
+                        let mut model: Option<ModelTask> = None;
+                        let mut conversation = Conversation::default();
+                        let mut current_subject: Option<String> = None;
+                        let mut progress_events: Option<mpsc::Receiver<StreamEvent>> = None;
+                        let execution = async {
                             loop {
                                 let command = tokio::select! { biased;
                                     request = sign_out_incoming.recv() => match request {
@@ -191,13 +150,21 @@ impl AgentRuntime {
                                         Some(task) => (&mut task.handle).await,
                                         None => std::future::pending().await,
                                     }} => Command::ModelFinished(result),
+                                    event = async { match &mut progress_events {
+                                        Some(receiver) => receiver.recv().await,
+                                        None => std::future::pending().await,
+                                    }} => Command::Stream(event),
                                     command = incoming.recv() => match command {
                                         Some(command) => command,
                                         None => break,
                                     },
                                 };
                                 match command {
-                                    Command::Model { id, control, request } => {
+                                    Command::Model {
+                                        id,
+                                        control,
+                                        request,
+                                    } => {
                                         if model.is_some() {
                                             return Err(AccountFailure::Busy.into());
                                         }
@@ -205,7 +172,7 @@ impl AgentRuntime {
                                             id,
                                             control,
                                             owner_credentials.clone(),
-                                            request,
+                                            TaskRequest::Model(request),
                                         ));
                                     }
                                     Command::ModelFinished(result) => {
@@ -214,9 +181,108 @@ impl AgentRuntime {
                                         task.control.finished.cancel();
                                         debug!(operation_id = task.id, "模型操作已真实结束并回收");
                                         capture_delivery(
-                                            emit(&publish, task.id, model_event(result)),
+                                            {
+                                                drain_progress(
+                                                    &mut conversation,
+                                                    task.id,
+                                                    &mut progress_events,
+                                                    &publish,
+                                                )?;
+                                                emit(
+                                                    &publish,
+                                                    task.id,
+                                                    complete(
+                                                        &mut conversation,
+                                                        task.id,
+                                                        task.chat,
+                                                        result,
+                                                    )?,
+                                                )
+                                            },
                                             &mut delivery_failure,
                                         );
+                                    }
+                                    Command::Stream(event) => {
+                                        if let Some(event) = event {
+                                            let task = model
+                                                .as_ref()
+                                                .filter(|task| task.chat)
+                                                .ok_or(RuntimeFailure::ModelState)?;
+                                            progress(&mut conversation, task.id, event, &publish)?;
+                                        } else {
+                                            progress_events = None;
+                                        }
+                                    }
+                                    Command::Conversation {
+                                        id,
+                                        control,
+                                        request,
+                                    } => {
+                                        if model.is_some() {
+                                            return Err(AccountFailure::Busy.into());
+                                        }
+                                        match request {
+                                            ConversationRequest::Create(settings) => {
+                                                let event = if Some(&settings.account_subject)
+                                                    != current_subject.as_ref()
+                                                {
+                                                    ConversationEvent::Rejected(
+                                                        "当前账号与会话设置不一致".into(),
+                                                    )
+                                                } else {
+                                                    match conversation.create(settings) {
+                                                        Ok(view) => {
+                                                            ConversationEvent::Created(view)
+                                                        }
+                                                        Err(failure) => {
+                                                            ConversationEvent::Rejected(
+                                                                failure.to_string(),
+                                                            )
+                                                        }
+                                                    }
+                                                };
+                                                control.finished.cancel();
+                                                emit(
+                                                    &publish,
+                                                    id,
+                                                    AgentEventKind::Conversation(event),
+                                                )?;
+                                            }
+                                            ConversationRequest::Send { session, input } => {
+                                                match conversation.begin(id, session, input) {
+                                                    Ok((view, request)) => {
+                                                        emit(
+                                                            &publish,
+                                                            id,
+                                                            AgentEventKind::Conversation(
+                                                                ConversationEvent::Accepted(view),
+                                                            ),
+                                                        )?;
+                                                        let (sender, receiver) =
+                                                            mpsc::channel(PROGRESS_CAPACITY);
+                                                        progress_events = Some(receiver);
+                                                        model = Some(ModelTask::start(
+                                                            id,
+                                                            control,
+                                                            owner_credentials.clone(),
+                                                            TaskRequest::Chat(request, sender),
+                                                        ));
+                                                    }
+                                                    Err(failure) => {
+                                                        control.finished.cancel();
+                                                        emit(
+                                                            &publish,
+                                                            id,
+                                                            AgentEventKind::Conversation(
+                                                                ConversationEvent::Rejected(
+                                                                    failure.to_string(),
+                                                                ),
+                                                            ),
+                                                        )?;
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                     Command::Account(command) => {
                                         let signing_out =
@@ -225,7 +291,13 @@ impl AgentRuntime {
                                             matches!(&command, AccountCommand::Credentials { .. });
                                         if signing_out {
                                             capture_delivery(
-                                                stop_model(&mut model, &publish).await,
+                                                stop_model(
+                                                    &mut model,
+                                                    &mut progress_events,
+                                                    &mut conversation,
+                                                    &publish,
+                                                )
+                                                .await,
                                                 &mut delivery_failure,
                                             );
                                             while let Ok(queued) = incoming.try_recv() {
@@ -233,15 +305,41 @@ impl AgentRuntime {
                                                     Command::Account(command) => {
                                                         command.reject_for_sign_out()
                                                     }
-                                                    Command::Model { control, .. } => {
+                                                    Command::Model { control, .. }
+                                                    | Command::Conversation { control, .. } => {
                                                         control.finished.cancel()
                                                     }
                                                     _ => {}
                                                 }
                                             }
                                         }
+                                        let identity = std::cell::Cell::new(None);
                                         let (returned, failure) = account
                                             .handle(command, &|event| {
+                                                match &event.kind {
+                                                    AccountEventKind::Completed(Ok(snapshot))
+                                                    | AccountEventKind::SessionStatus {
+                                                        snapshot,
+                                                        ..
+                                                    }
+                                                    | AccountEventKind::SignedOut {
+                                                        snapshot,
+                                                        ..
+                                                    } => {
+                                                        let subject = if matches!(
+                                                            &snapshot.credentials,
+                                                            agentelier_account::CredentialState::SignedOut
+                                                                | agentelier_account::CredentialState::NoRecord
+                                                                | agentelier_account::CredentialState::HostOnly
+                                                        ) {
+                                                            None
+                                                        } else {
+                                                            snapshot.account.as_ref().map(|account| account.subject.clone())
+                                                        };
+                                                        identity.set(Some(subject));
+                                                    }
+                                                    _ => {}
+                                                }
                                                 publish(AgentEvent {
                                                     operation_id: event.operation_id,
                                                     kind: AgentEventKind::Account(event.kind),
@@ -249,6 +347,10 @@ impl AgentRuntime {
                                             })
                                             .await?;
                                         account = returned;
+                                        if let Some(subject) = identity.take() {
+                                            conversation.synchronize_account(subject.as_deref());
+                                            current_subject = subject;
+                                        }
                                         if failure.is_some()
                                             && (acquiring || delivery_failure.is_none())
                                         {
@@ -268,18 +370,24 @@ impl AgentRuntime {
                             Ok::<Account, RuntimeFailure>(account)
                         }
                         .await;
-                            capture_delivery(
-                                stop_model(&mut model, &publish).await,
-                                &mut delivery_failure,
-                            );
-                            execution?.finish().await?;
-                            if let Some(failure) = delivery_failure {
-                                return Err(failure);
-                            }
-                            Ok(())
-                        })
-                    }))
-                    .unwrap_or(Err(RuntimeFailure::Thread));
+                        capture_delivery(
+                            stop_model(
+                                &mut model,
+                                &mut progress_events,
+                                &mut conversation,
+                                &publish,
+                            )
+                            .await,
+                            &mut delivery_failure,
+                        );
+                        execution?.finish().await?;
+                        if let Some(failure) = delivery_failure {
+                            return Err(failure);
+                        }
+                        Ok(())
+                    })
+                }))
+                .unwrap_or(Err(RuntimeFailure::Thread));
                 drop(runtime);
                 debug!("认证执行体与 Tokio 已结束");
                 let notification = finished()
@@ -313,6 +421,23 @@ impl AgentRuntime {
             id,
             request,
             control: control.clone(),
+        })?;
+        self.model = Some(control);
+        Ok(())
+    }
+    pub fn request_conversation(
+        &mut self,
+        id: u64,
+        request: ConversationRequest,
+    ) -> Result<(), RuntimeFailure> {
+        let control = ModelControl {
+            cancel: CancellationToken::new(),
+            finished: CancellationToken::new(),
+        };
+        self.send(Command::Conversation {
+            id,
+            control: control.clone(),
+            request,
         })?;
         self.model = Some(control);
         Ok(())

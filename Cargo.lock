@@ -115,6 +115,7 @@ version = "0.1.0"
 dependencies = [
  "agentelier_account_bridge",
  "agentelier_bridge_connection",
+ "agentelier_conversation_bridge",
  "agentelier_llm_model_bridge",
  "bevy",
  "tracing",
@@ -125,6 +126,7 @@ name = "agentelier_agent_runtime"
 version = "0.1.0"
 dependencies = [
  "agentelier_account",
+ "agentelier_conversation",
  "agentelier_llm_model",
  "tokio",
  "tokio-util",
@@ -157,6 +159,7 @@ version = "0.1.0"
 dependencies = [
  "agentelier_account_bridge",
  "agentelier_agent_runtime",
+ "agentelier_conversation_bridge",
  "agentelier_llm_model_bridge",
  "tracing",
 ]
@@ -166,11 +169,26 @@ name = "agentelier_chat_ui"
 version = "0.1.0"
 dependencies = [
  "agentelier_agent_host",
+ "agentelier_conversation_bridge",
  "agentelier_llm_model_bridge",
  "agentelier_login_ui",
  "bevy",
  "bevy_widgetry",
  "tracing",
+]
+
+[[package]]
+name = "agentelier_conversation"
+version = "0.1.0"
+dependencies = [
+ "agentelier_llm_model",
+]
+
+[[package]]
+name = "agentelier_conversation_bridge"
+version = "0.1.0"
+dependencies = [
+ "agentelier_conversation",
 ]
 
 [[package]]
@@ -181,6 +199,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
 ]
 
@@ -1975,6 +1994,7 @@ dependencies = [
  "bevy_widgetry_job",
  "bevy_widgetry_list_view",
  "bevy_widgetry_scroll_area",
+ "bevy_widgetry_text_field",
  "bevy_widgetry_theme",
  "bevy_widgetry_ui_scale",
  "bevy_widgetry_window",

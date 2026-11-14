@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agentelier_conversation_bridge = { path = "../conversation" }
 agentelier_agent_runtime = { path = "../../agent/runtime" }
 agentelier_account_bridge = { path = "../account" }
 agentelier_llm_model_bridge = { path = "../llm_model" }

@@ -1,0 +1,11 @@
+[package]
+name = "agentelier_conversation_bridge"
+publish = false
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+agentelier_conversation = { path = "../../agent/conversation" }
+
+[lints]
+workspace = true

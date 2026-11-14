@@ -15,6 +15,7 @@ pub struct BridgeEvent {
 pub enum BridgeEventKind {
     Account(AccountEventKind),
     Model(ModelEventKind),
+    Conversation(agentelier_conversation_bridge::ConversationEvent),
 }
 #[derive(Clone, Debug)]
 pub struct BridgeFailure(String);
@@ -62,6 +63,8 @@ struct PendingSignOut {
 pub struct Connection {
     runtime: AgentRuntime,
     events: mpsc::Receiver<BridgeEvent>,
+    progress: Arc<Mutex<Option<BridgeEvent>>>,
+    deferred: Option<BridgeEvent>,
     wake: Arc<WakeGate>,
     next_operation: u64,
     pending: Option<Pending>,
@@ -77,31 +80,42 @@ impl Connection {
         notify: impl Fn() -> bool + Send + Sync + 'static,
     ) -> Result<Self, BridgeFailure> {
         let (sender, events) = mpsc::sync_channel(RESULT_CAPACITY);
+        let progress = Arc::new(Mutex::new(None));
+        let delivery_progress = progress.clone();
         let wake = Arc::new(WakeGate(Mutex::new(Some(Box::new(notify)))));
         let delivery_wake = wake.clone();
         let finished_wake = wake.clone();
         let runtime = AgentRuntime::start(
             path,
             move |event| {
-                sender
-                    .try_send(BridgeEvent {
-                        operation_id: event.operation_id,
-                        kind: match event.kind {
-                            AgentEventKind::Account(kind) => {
-                                BridgeEventKind::Account(agentelier_account_bridge::convert(kind))
-                            }
-                            AgentEventKind::ModelCompleted(result) => BridgeEventKind::Model(
-                                agentelier_llm_model_bridge::convert(Some(result)),
-                            ),
-                            AgentEventKind::ModelCancelled => {
-                                BridgeEventKind::Model(agentelier_llm_model_bridge::convert(None))
-                            }
-                        },
-                    })
-                    .map_err(|error| match error {
+                let event = BridgeEvent {
+                    operation_id: event.operation_id,
+                    kind: match event.kind {
+                        AgentEventKind::Account(kind) => {
+                            BridgeEventKind::Account(agentelier_account_bridge::convert(kind))
+                        }
+                        AgentEventKind::ModelCompleted(result) => BridgeEventKind::Model(
+                            agentelier_llm_model_bridge::convert(Some(result)),
+                        ),
+                        AgentEventKind::ModelCancelled => {
+                            BridgeEventKind::Model(agentelier_llm_model_bridge::convert(None))
+                        }
+                        AgentEventKind::Conversation(kind) => BridgeEventKind::Conversation(
+                            agentelier_conversation_bridge::convert(kind),
+                        ),
+                    },
+                };
+                if matches!(&event.kind, BridgeEventKind::Conversation(kind) if kind.is_progress())
+                {
+                    *delivery_progress
+                        .lock()
+                        .map_err(|_| DeliveryFailure::Closed)? = Some(event);
+                } else {
+                    sender.try_send(event).map_err(|error| match error {
                         mpsc::TrySendError::Full(_) => DeliveryFailure::Full,
                         mpsc::TrySendError::Disconnected(_) => DeliveryFailure::Closed,
                     })?;
+                }
                 delivery_wake.signal()
             },
             move || finished_wake.signal(),
@@ -110,6 +124,8 @@ impl Connection {
         Ok(Self {
             runtime,
             events,
+            progress,
+            deferred: None,
             wake,
             next_operation: 0,
             pending: None,
@@ -159,6 +175,25 @@ impl Connection {
         self.next_operation = id;
         self.model = Some(id);
         Ok(id)
+    }
+    pub fn request_conversation(
+        &mut self,
+        request: agentelier_conversation_bridge::ConversationRequest,
+    ) -> Result<u64, BridgeFailure> {
+        let id = self.allocate()?;
+        self.runtime
+            .request_conversation(id, agentelier_conversation_bridge::request(request))
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.next_operation = id;
+        self.model = Some(id);
+        Ok(id)
+    }
+    fn take_progress(&self) -> Result<Option<BridgeEvent>, BridgeFailure> {
+        Ok(self
+            .progress
+            .lock()
+            .map_err(|_| BridgeFailure("聊天增量状态锁已损坏".into()))?
+            .take())
     }
     pub fn login(&mut self, consent: bool) -> Result<u64, BridgeFailure> {
         let id = self.allocate()?;
@@ -245,7 +280,21 @@ impl Connection {
             return Err(failure);
         }
         loop {
-            match self.events.try_recv() {
+            let received = self
+                .deferred
+                .take()
+                .map(Ok)
+                .unwrap_or_else(|| self.events.try_recv());
+            let received = match received {
+                Err(mpsc::TryRecvError::Empty) if self.sign_out.is_none() => {
+                    match self.take_progress()? {
+                        Some(event) => Ok(event),
+                        None => Err(mpsc::TryRecvError::Empty),
+                    }
+                }
+                other => other,
+            };
+            match received {
                 Ok(event) => {
                     if let BridgeEventKind::Account(kind) = &event.kind
                         && matches!(
@@ -294,6 +343,22 @@ impl Connection {
                                 return self.protocol_failure();
                             }
                             self.model = None;
+                            return Ok(Some(event));
+                        }
+                        BridgeEventKind::Conversation(kind) => {
+                            if self.model != Some(event.operation_id) {
+                                return self.protocol_failure();
+                            }
+                            if kind.is_terminal() {
+                                if let Some(progress) = self.take_progress()? {
+                                    if progress.operation_id != event.operation_id {
+                                        return self.protocol_failure();
+                                    }
+                                    self.deferred = Some(event);
+                                    return Ok(Some(progress));
+                                }
+                                self.model = None;
+                            }
                             return Ok(Some(event));
                         }
                         BridgeEventKind::Account(kind) => kind,
@@ -357,6 +422,8 @@ impl Connection {
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
         self.next_operation = id;
         self.sign_out = Some(PendingSignOut { id, failed: false });
+        self.take_progress()?;
+        self.deferred = None;
         Ok(id)
     }
     pub fn begin_shutdown(&mut self) -> Result<(), BridgeFailure> {

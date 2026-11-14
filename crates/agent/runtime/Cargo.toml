@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agentelier_conversation = { path = "../conversation" }
 agentelier_account = { path = "../account" }
 agentelier_llm_model = { path = "../llm_model" }
 tokio.workspace = true

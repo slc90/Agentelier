@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tracing::debug;
 
+const MAX_EVENTS_PER_UPDATE: usize = 32;
+
 #[derive(Resource, Clone, Default)]
 pub struct AgentHost(Arc<Mutex<HostState>>);
 
@@ -42,6 +44,12 @@ pub struct ModelEvent {
     pub kind: ModelEventKind,
 }
 
+#[derive(Message)]
+pub struct ConversationEvent {
+    pub operation_id: u64,
+    pub kind: agentelier_conversation_bridge::ConversationEvent,
+}
+
 #[derive(Message, Clone)]
 pub struct HostFailed {
     pub reason: String,
@@ -67,6 +75,7 @@ impl Plugin for AgentHostPlugin {
             .init_resource::<HostActivity>()
             .add_message::<AccountEvent>()
             .add_message::<ModelEvent>()
+            .add_message::<ConversationEvent>()
             .add_message::<HostFailed>()
             .add_systems(Update, receive.in_set(ReceiveAgentEvents));
     }
@@ -144,6 +153,14 @@ impl AgentHost {
         self.state()?.model_busy = true;
         Ok(id)
     }
+    pub fn request_conversation(
+        &self,
+        request: agentelier_conversation_bridge::ConversationRequest,
+    ) -> Result<u64> {
+        let id = self.submit(|connection| connection.request_conversation(request))?;
+        self.state()?.model_busy = true;
+        Ok(id)
+    }
     pub fn model_busy(&self) -> Result<bool> {
         Ok(self.state()?.model_busy)
     }
@@ -192,7 +209,7 @@ fn receive(world: &mut World) -> Result {
         let mut events = Vec::new();
         let mut failure = None;
         if let Some(connection) = &mut state.connection {
-            loop {
+            for _ in 0..MAX_EVENTS_PER_UPDATE {
                 match connection.try_receive() {
                     Ok(Some(event)) => events.push(event),
                     Ok(None) => break,
@@ -203,6 +220,14 @@ fn receive(world: &mut World) -> Result {
                 }
             }
         }
+        if events.len() == MAX_EVENTS_PER_UPDATE
+            && state
+                .startup
+                .as_ref()
+                .is_some_and(|startup| !(startup.notify)())
+        {
+            failure = Some("执行结果已入队，但无法继续唤醒界面".into());
+        }
         state.failed = failure.is_some();
         (events, failure)
     };
@@ -210,6 +235,15 @@ fn receive(world: &mut World) -> Result {
         match event.kind {
             BridgeEventKind::Account(kind) => {
                 world.write_message(AccountEvent {
+                    operation_id: event.operation_id,
+                    kind,
+                });
+            }
+            BridgeEventKind::Conversation(kind) => {
+                if kind.is_terminal() {
+                    host.state()?.model_busy = false;
+                }
+                world.write_message(ConversationEvent {
                     operation_id: event.operation_id,
                     kind,
                 });

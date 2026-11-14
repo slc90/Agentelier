@@ -75,7 +75,7 @@ impl ModelState {
             .as_ref()
             .and_then(|selected| self.models.iter().find(|model| model.slug == selected.slug))
     }
-    fn can_verify(&self, account: &AccountState) -> bool {
+    pub(crate) fn can_verify(&self, account: &AccountState) -> bool {
         self.can_request(account)
             && self.catalog_loaded
             && self.catalog_error.is_none()
@@ -109,6 +109,7 @@ struct ModelText;
 
 pub fn install(app: &mut App) -> Result {
     reasoning::install(app)?;
+    crate::conversation::install(app);
     app.register_widgetry_combo_box::<ModelChoice>()
         .map_err(|failure| failure.into_bevy_error())?;
     app.init_resource::<ModelState>()
@@ -137,6 +138,7 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
         let reasoning_source = world.resource::<ReasoningSource>().0;
         let summary = status(&state, account);
         let raw_text = state.text.clone().unwrap_or_default();
+        let chat = world.resource::<crate::conversation::ChatState>().clone();
         let scene: Box<dyn Scene> = Box::new(bsn! {
             Name("ModelPreparation") ChildOf(host)
             Node { width: percent(100), height: percent(100), min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(PANEL_GAP) }
@@ -167,7 +169,8 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
                         Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }
                     }) as Box<dyn SceneList>)}
                 }
-                Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }
+                Node { width: percent(100), height: px(64), flex_shrink: 0.0 }--
+                @crate::conversation::panel(&chat)
             ]
         });
         world.commands().spawn_scene_with_error_handler(scene);
@@ -279,7 +282,7 @@ fn activate(event: On<Activate>, actions: Query<&ModelAction>, mut commands: Com
     Ok(())
 }
 
-fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) -> Result {
+pub(crate) fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) -> Result {
     let account = world.resource::<AccountState>();
     let subject = account
         .account

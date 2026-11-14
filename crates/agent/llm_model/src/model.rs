@@ -11,8 +11,6 @@ const INPUT: &str = "请简短回复，确认连接正常";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
-const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
-const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DIAGNOSTIC_CHARS: usize = 2048;
 
 #[derive(Clone)]
@@ -62,7 +60,7 @@ pub struct ModelFailure {
     pub message: String,
 }
 impl ModelFailure {
-    fn new(kind: ModelFailureKind, message: impl Into<String>) -> Self {
+    pub(super) fn new(kind: ModelFailureKind, message: impl Into<String>) -> Self {
         Self {
             kind,
             status: None,
@@ -182,8 +180,16 @@ pub async fn execute(
         let outcome = if response.status().is_success() {
             let status = response.status().as_u16();
             let id = request_id(&response);
-            consume(response, &mut request)
+            crate::stream::consume(response, &mut request, None, false)
                 .await
+                .map(|output| {
+                    output
+                        .messages
+                        .into_iter()
+                        .flat_map(|message| message.content.into_iter().map(|part| part.text))
+                        .collect::<Vec<_>>()
+                        .join("\n\n")
+                })
                 .map_err(|failure| with_response(failure, status, id))
         } else {
             Err(http_failure(response).await)
@@ -252,7 +258,7 @@ fn reasoning_capabilities(model: &Value) -> Result<(Vec<String>, Option<String>)
     Ok((levels, default))
 }
 
-async fn acquire(client: &CredentialClient) -> Result<UsableCredentials, ModelFailure> {
+pub(super) async fn acquire(client: &CredentialClient) -> Result<UsableCredentials, ModelFailure> {
     client
         .request()
         .map_err(ModelFailure::authentication)?
@@ -260,7 +266,7 @@ async fn acquire(client: &CredentialClient) -> Result<UsableCredentials, ModelFa
         .await
         .map_err(ModelFailure::authentication)
 }
-async fn recover(
+pub(super) async fn recover(
     client: &CredentialClient,
     request: &mut AuthenticatedRequest,
     previous: &UsableCredentials,
@@ -286,7 +292,11 @@ async fn recover(
     same_account(previous, &current).map_err(|error| recovery_failure(error.to_string()))?;
     Ok(Some(current))
 }
-fn with_response(mut failure: ModelFailure, status: u16, id: Option<String>) -> ModelFailure {
+pub(super) fn with_response(
+    mut failure: ModelFailure,
+    status: u16,
+    id: Option<String>,
+) -> ModelFailure {
     if failure.status.is_none() {
         failure.status = Some(status);
     }
@@ -315,10 +325,10 @@ fn required_text<'a>(value: &'a Value, key: &str, message: &str) -> Result<&'a s
         .filter(|text| !text.trim().is_empty())
         .ok_or_else(|| protocol(message))
 }
-fn protocol(message: &str) -> ModelFailure {
+pub(super) fn protocol(message: &str) -> ModelFailure {
     ModelFailure::new(ModelFailureKind::Protocol, message)
 }
-fn network(error: reqwest::Error) -> ModelFailure {
+pub(super) fn network(error: reqwest::Error) -> ModelFailure {
     ModelFailure::new(
         ModelFailureKind::Network,
         if error.is_timeout() {
@@ -328,14 +338,14 @@ fn network(error: reqwest::Error) -> ModelFailure {
         },
     )
 }
-fn request_id(response: &Response) -> Option<String> {
+pub(super) fn request_id(response: &Response) -> Option<String> {
     response
         .headers()
         .get("x-request-id")
         .and_then(|id| id.to_str().ok())
         .map(diagnostic)
 }
-fn diagnostic(value: &str) -> String {
+pub(super) fn diagnostic(value: &str) -> String {
     value
         .chars()
         .filter(|c| !c.is_control() || *c == '\n')
@@ -373,7 +383,7 @@ fn classify(status: Option<u16>, code: Option<&str>) -> ModelFailureKind {
         _ => ModelFailureKind::Service,
     }
 }
-fn service_failure(
+pub(super) fn service_failure(
     value: &Value,
     status: Option<u16>,
     id: Option<String>,
@@ -408,7 +418,7 @@ fn service_failure(
         message,
     }
 }
-async fn http_failure(response: Response) -> ModelFailure {
+pub(super) async fn http_failure(response: Response) -> ModelFailure {
     let status = Some(response.status().as_u16());
     let id = request_id(&response);
     match read_bytes(response).await {
@@ -427,177 +437,4 @@ async fn http_failure(response: Response) -> ModelFailure {
             failure
         }
     }
-}
-
-#[derive(Default)]
-struct Sse {
-    line: Vec<u8>,
-    data: String,
-    after_cr: bool,
-    first_line: bool,
-}
-impl Sse {
-    fn push(&mut self, byte: u8) -> Result<Option<String>, ModelFailure> {
-        if byte == b'\n' && self.after_cr {
-            self.after_cr = false;
-            return Ok(None);
-        }
-        self.after_cr = byte == b'\r';
-        if byte == b'\n' || byte == b'\r' {
-            let bytes = std::mem::take(&mut self.line);
-            let line = std::str::from_utf8(&bytes).map_err(|_| protocol("事件流包含无效 UTF-8"))?;
-            let line = if !self.first_line {
-                self.first_line = true;
-                line.trim_start_matches('\u{feff}')
-            } else {
-                line
-            };
-            if line.is_empty() {
-                if self.data.is_empty() {
-                    return Ok(None);
-                }
-                self.data.pop();
-                return Ok(Some(std::mem::take(&mut self.data)));
-            }
-            if let Some(data) = line.strip_prefix("data:") {
-                self.data.push_str(data.strip_prefix(' ').unwrap_or(data));
-                self.data.push('\n');
-            } else if line == "data" {
-                self.data.push('\n');
-            }
-        } else {
-            self.line.push(byte);
-        }
-        if self.line.len().saturating_add(self.data.len()) > MAX_EVENT_BYTES {
-            return Err(protocol("模型事件超过允许大小"));
-        }
-        Ok(None)
-    }
-}
-
-#[derive(Deserialize)]
-struct CompletedResponse {
-    status: String,
-    output: Vec<OutputItem>,
-}
-#[derive(Deserialize)]
-struct OutputItem {
-    #[serde(rename = "type")]
-    kind: String,
-    #[serde(default)]
-    content: Vec<Content>,
-}
-#[derive(Deserialize)]
-struct Content {
-    #[serde(rename = "type")]
-    kind: String,
-    text: Option<String>,
-}
-async fn consume(
-    mut response: Response,
-    request: &mut AuthenticatedRequest,
-) -> Result<String, ModelFailure> {
-    let id = request_id(&response);
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default();
-    // The subscription endpoint can return valid SSE without a Content-Type header.
-    if !content_type.is_empty()
-        && content_type
-            .split(';')
-            .next()
-            .is_none_or(|mime| !mime.trim().eq_ignore_ascii_case("text/event-stream"))
-    {
-        let mime = diagnostic(content_type);
-        let mut failure = http_failure(response).await;
-        failure.kind = ModelFailureKind::Protocol;
-        failure.message = format!("模型服务未返回 SSE 事件流（{mime}）：{}", failure.message);
-        return Err(failure);
-    }
-    let mut parser = Sse::default();
-    let mut received = 0usize;
-    while let Some(chunk) = response.chunk().await.map_err(|error| {
-        let mut failure = network(error);
-        failure.request_id = id.clone();
-        failure
-    })? {
-        received = received.saturating_add(chunk.len());
-        if received > MAX_STREAM_BYTES {
-            return Err(protocol("模型事件流超过允许大小"));
-        }
-        for byte in chunk {
-            let Some(data) = parser.push(byte)? else {
-                continue;
-            };
-            let event: Value =
-                serde_json::from_str(&data).map_err(|_| protocol("模型事件不是有效 JSON"))?;
-            let kind = required_text(&event, "type", "模型事件缺少类型")?;
-            match kind {
-                "response.completed" => {
-                    let complete: CompletedResponse = serde_json::from_value(
-                        event
-                            .get("response")
-                            .cloned()
-                            .ok_or_else(|| protocol("完成事件缺少响应对象"))?,
-                    )
-                    .map_err(|_| protocol("完成响应对象结构无效"))?;
-                    if complete.status != "completed" {
-                        return Err(protocol("完成事件的响应状态不一致"));
-                    }
-                    let mut texts = Vec::new();
-                    for item in complete.output {
-                        if item.kind == "message" {
-                            for content in item.content {
-                                if content.kind == "output_text" {
-                                    texts.push(
-                                        content.text.ok_or_else(|| protocol("完成正文缺少文本"))?,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    return Ok(texts.join("\n\n"));
-                }
-                "response.failed" => {
-                    return Err(service_failure(
-                        event.get("response").unwrap_or(&event),
-                        None,
-                        id,
-                        "模型请求失败",
-                    ));
-                }
-                "response.incomplete" => {
-                    let reason = event
-                        .pointer("/response/incomplete_details/reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or("服务未提供原因");
-                    let mut failure = ModelFailure::new(
-                        ModelFailureKind::Incomplete,
-                        format!("模型请求未完成：{}", diagnostic(reason)),
-                    );
-                    failure.request_id = id;
-                    return Err(failure);
-                }
-                "error" => {
-                    let status = event
-                        .get("status_code")
-                        .and_then(Value::as_u64)
-                        .and_then(|status| u16::try_from(status).ok());
-                    return Err(service_failure(&event, status, id, "模型服务返回错误事件"));
-                }
-                "response.output_text.delta"
-                | "response.output_item.added"
-                | "response.content_part.added" => request.mark_output_started(),
-                _ => {}
-            }
-        }
-    }
-    let mut failure = ModelFailure::new(
-        ModelFailureKind::Network,
-        "连接中断：事件流结束前未收到 response.completed",
-    );
-    failure.request_id = id;
-    Err(failure)
 }

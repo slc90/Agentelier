@@ -80,6 +80,10 @@ pub struct CredentialVersion {
     generation: Uuid,
 }
 impl CredentialVersion {
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
+
     pub fn same_account(&self, other: &Self) -> bool {
         self.client_id == other.client_id && self.subject == other.subject
     }

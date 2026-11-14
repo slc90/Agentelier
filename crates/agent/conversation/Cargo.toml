@@ -1,0 +1,11 @@
+[package]
+name = "agentelier_conversation"
+publish = false
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+agentelier_llm_model = { path = "../llm_model" }
+
+[lints]
+workspace = true

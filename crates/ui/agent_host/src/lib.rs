@@ -4,6 +4,6 @@ compile_error!("This application supports Windows x64 only");
 mod host;
 
 pub use host::{
-    AccountEvent, AgentHost, AgentHostPlugin, HostActivity, HostFailed, ModelEvent,
-    ReceiveAgentEvents,
+    AccountEvent, AgentHost, AgentHostPlugin, ConversationEvent, HostActivity, HostFailed,
+    ModelEvent, ReceiveAgentEvents,
 };
