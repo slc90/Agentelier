@@ -17,6 +17,7 @@ pub struct AuthFile {
     pub(crate) issued_client: Option<String>,
     pub(crate) generation: uuid::Uuid,
     pub(crate) renewal: crate::session::RenewalState,
+    pub(crate) sign_out: crate::sign_out::SignOutState,
 }
 
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -126,6 +127,7 @@ impl AuthFile {
             issued_client: None,
             generation: uuid::Uuid::new_v4(),
             renewal: crate::session::RenewalState::Ready,
+            sign_out: crate::sign_out::SignOutState::Inactive,
         }
     }
 
@@ -161,6 +163,11 @@ impl AuthFile {
                 column: error.column(),
             })?;
         record.validate()?;
+        if self.signing_out_or_ended() && record.session.is_some() {
+            return Err(RestoreFailure::Invalid(
+                "signed out session requires browser authorization",
+            ));
+        }
         let projection = record.projection()?;
         if self.record.as_ref() != Some(&record) {
             self.generation = uuid::Uuid::new_v4();

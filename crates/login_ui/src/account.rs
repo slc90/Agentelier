@@ -55,6 +55,10 @@ pub enum AccountPhase {
     Saving,
     SaveFailed,
     Cancelling,
+    SigningOut,
+    Revoking,
+    Clearing,
+    SignOutFailed,
 }
 #[derive(Reflect, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SessionActivity {
@@ -76,6 +80,7 @@ pub enum LoginAction {
     Cancel,
     RetrySave,
     CheckSession,
+    SignOut,
 }
 #[derive(Component, Clone, Copy)]
 enum ButtonAction {
@@ -99,6 +104,12 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(PostUpdate, update_panel.before(UiSystems::Content));
 }
 fn identity(state: &AccountState) -> String {
+    if matches!(
+        state.credentials,
+        CredentialState::SignedOut | CredentialState::NoRecord | CredentialState::HostOnly
+    ) {
+        return String::new();
+    }
     state
         .account
         .as_ref()
@@ -119,6 +130,10 @@ fn status(state: &AccountState) -> &'static str {
         AccountPhase::Saving => return "正在保存登录凭据…",
         AccountPhase::SaveFailed => return "登录结果尚未保存，请重试保存",
         AccountPhase::Cancelling => return "正在取消登录…",
+        AccountPhase::SigningOut => return "正在退出登录，等待当前操作结束…",
+        AccountPhase::Revoking => return "正在退出登录，撤销远端会话…",
+        AccountPhase::Clearing => return "正在退出登录，清除本地凭据…",
+        AccountPhase::SignOutFailed => return "退出未完成，无法清除本地凭据",
         AccountPhase::Idle => {}
     }
     match state.session_activity {
@@ -163,10 +178,21 @@ fn label(state: &AccountState, action: ButtonAction) -> &'static str {
             "重试保存凭据"
         }
         ButtonAction::Login(LoginAction::CheckSession) => "检查会话",
+        ButtonAction::Login(LoginAction::SignOut) if state.phase == AccountPhase::SignOutFailed => {
+            "重试退出登录"
+        }
+        ButtonAction::Login(LoginAction::SignOut) => "退出登录",
     }
 }
 fn button_state(state: &AccountState, action: ButtonAction) -> (bool, bool, bool) {
     let idle = state.phase == AccountPhase::Idle;
+    let ending = matches!(
+        state.phase,
+        AccountPhase::SigningOut
+            | AccountPhase::Revoking
+            | AccountPhase::Clearing
+            | AccountPhase::SignOutFailed
+    );
     let (visible, loading) = match action {
         ButtonAction::Restore => (
             idle || state.phase == AccountPhase::Reading,
@@ -190,7 +216,7 @@ fn button_state(state: &AccountState, action: ButtonAction) -> (bool, bool, bool
             (state.phase == AccountPhase::Waiting, false)
         }
         ButtonAction::Login(LoginAction::Cancel) => (
-            !idle && state.phase != AccountPhase::Reading,
+            !idle && state.phase != AccountPhase::Reading && !ending,
             state.phase == AccountPhase::Cancelling,
         ),
         ButtonAction::Login(LoginAction::RetrySave) => (
@@ -198,11 +224,21 @@ fn button_state(state: &AccountState, action: ButtonAction) -> (bool, bool, bool
             state.phase == AccountPhase::Saving,
         ),
         ButtonAction::Login(LoginAction::CheckSession) => (
-            idle && state.account.is_some(),
+            idle && state.account.is_some()
+                && !matches!(state.credentials, CredentialState::SignedOut),
             matches!(
                 state.session_activity,
                 SessionActivity::Checking | SessionActivity::Refreshing | SessionActivity::Saving
             ),
+        ),
+        ButtonAction::Login(LoginAction::SignOut) => (
+            ending
+                || matches!(
+                    state.credentials,
+                    CredentialState::StoredSession { .. }
+                        | CredentialState::ReauthenticationRequired
+                ),
+            ending && state.phase != AccountPhase::SignOutFailed,
         ),
     };
     let browser_busy =
@@ -212,8 +248,12 @@ fn button_state(state: &AccountState, action: ButtonAction) -> (bool, bool, bool
         state.runtime_failed
             || loading
             || browser_busy
+            || (ending && !matches!(action, ButtonAction::Login(LoginAction::SignOut)))
             || (state.session_activity != SessionActivity::Idle
-                && !matches!(action, ButtonAction::Login(LoginAction::CheckSession)))
+                && !matches!(
+                    action,
+                    ButtonAction::Login(LoginAction::CheckSession | LoginAction::SignOut)
+                ))
             || (state.session_client_error
                 && matches!(
                     action,
@@ -266,6 +306,7 @@ pub(crate) fn account_panel(state: &AccountState) -> impl Scene {
                 @button(state, ButtonAction::Login(LoginAction::Login), "AccountLogin")--
                 @button(state, ButtonAction::Login(LoginAction::Consent), "AccountConsent")--
                 @button(state, ButtonAction::Login(LoginAction::CheckSession), "AccountCheckSession")--
+                @button(state, ButtonAction::Login(LoginAction::SignOut), "AccountSignOut")--
                 @button(state, ButtonAction::Login(LoginAction::OpenBrowser), "AccountOpenBrowser")--
                 @button(state, ButtonAction::Login(LoginAction::CopyLink), "AccountCopyLink")--
                 @button(state, ButtonAction::Login(LoginAction::RetrySave), "AccountRetrySave")--

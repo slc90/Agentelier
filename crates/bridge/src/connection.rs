@@ -39,6 +39,12 @@ pub struct AccountEvent {
     pub kind: AccountEventKind,
 }
 pub enum AccountEventKind {
+    SignOutProgress(SignOutStage),
+    SignOutFailed(BridgeFailure),
+    SignedOut {
+        snapshot: AccountSnapshot,
+        remote: RemoteRevocation,
+    },
     SessionStatus {
         snapshot: AccountSnapshot,
         activity: SessionActivity,
@@ -50,6 +56,18 @@ pub enum AccountEventKind {
     SaveFailed(BridgeFailure),
     Completed(Result<AccountSnapshot, BridgeFailure>),
     Cancelled,
+}
+#[derive(Clone, Copy, Debug)]
+pub enum SignOutStage {
+    Settling,
+    Revoking,
+    Clearing,
+}
+#[derive(Clone, Debug)]
+pub enum RemoteRevocation {
+    Confirmed,
+    Unconfirmed(String),
+    NotApplicable,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionActivity {
@@ -112,6 +130,10 @@ struct Pending {
     phase: Phase,
     cancelling: bool,
 }
+struct PendingSignOut {
+    id: u64,
+    failed: bool,
+}
 
 pub struct Connection {
     runtime: AgentRuntime,
@@ -122,6 +144,7 @@ pub struct Connection {
     stopping: bool,
     failure: Option<BridgeFailure>,
     session_activity: SessionActivity,
+    sign_out: Option<PendingSignOut>,
 }
 impl Connection {
     pub fn start(
@@ -155,13 +178,17 @@ impl Connection {
             stopping: false,
             failure: None,
             session_activity: SessionActivity::Idle,
+            sign_out: None,
         })
     }
     fn allocate(&self) -> Result<u64, BridgeFailure> {
         if self.stopping || self.failure.is_some() {
             return Err(BridgeFailure("认证运行已停止".into()));
         }
-        if self.pending.is_some() || self.session_activity != SessionActivity::Idle {
+        if self.pending.is_some()
+            || self.sign_out.is_some()
+            || self.session_activity != SessionActivity::Idle
+        {
             return Err(BridgeFailure("已有账号操作正在进行".into()));
         }
         self.next_operation
@@ -196,6 +223,7 @@ impl Connection {
     }
     pub fn check_session(&mut self) -> Result<(), BridgeFailure> {
         if self.stopping
+            || self.sign_out.is_some()
             || self.failure.is_some()
             || self.pending.is_some()
             || matches!(
@@ -214,6 +242,7 @@ impl Connection {
     }
     pub fn retry_save(&mut self, id: u64) -> Result<(), BridgeFailure> {
         if self.stopping
+            || self.sign_out.is_some()
             || !self.pending.as_ref().is_some_and(|pending| {
                 pending.id == id
                     && matches!(pending.phase, Phase::SaveFailed)
@@ -231,7 +260,7 @@ impl Connection {
         Ok(())
     }
     pub fn cancel(&mut self, id: u64) -> Result<(), BridgeFailure> {
-        if self.stopping {
+        if self.stopping || self.sign_out.is_some() {
             return Err(BridgeFailure("认证运行正在结束".into()));
         }
         let pending = self
@@ -265,6 +294,42 @@ impl Connection {
         loop {
             match self.events.try_recv() {
                 Ok(event) => {
+                    if matches!(
+                        &event.kind,
+                        AccountEventKind::SignOutProgress(_)
+                            | AccountEventKind::SignOutFailed(_)
+                            | AccountEventKind::SignedOut { .. }
+                    ) {
+                        let Some(pending) = &mut self.sign_out else {
+                            return self.protocol_failure();
+                        };
+                        if pending.id != event.operation_id {
+                            return self.protocol_failure();
+                        }
+                        match &event.kind {
+                            AccountEventKind::SignOutFailed(_) => pending.failed = true,
+                            AccountEventKind::SignedOut { .. } => {
+                                self.sign_out = None;
+                                self.pending = None;
+                                self.session_activity = SessionActivity::Idle;
+                            }
+                            _ => {}
+                        }
+                        return Ok(Some(event));
+                    }
+                    if self.sign_out.is_some() {
+                        if matches!(
+                            &event.kind,
+                            AccountEventKind::Completed(_) | AccountEventKind::Cancelled
+                        ) && self
+                            .pending
+                            .as_ref()
+                            .is_some_and(|pending| pending.id == event.operation_id)
+                        {
+                            self.pending = None;
+                        }
+                        continue;
+                    }
                     if let AccountEventKind::SessionStatus { activity, .. } = &event.kind {
                         self.session_activity = *activity;
                         return Ok(Some(event));
@@ -301,6 +366,31 @@ impl Connection {
         self.failure = Some(failure.clone());
         Err(failure)
     }
+    pub fn sign_out(&mut self) -> Result<u64, BridgeFailure> {
+        if self.stopping || self.failure.is_some() {
+            return Err(BridgeFailure("认证运行已停止".into()));
+        }
+        if let Some(pending) = &mut self.sign_out {
+            if !pending.failed {
+                return Err(BridgeFailure("退出登录正在进行".into()));
+            }
+            self.runtime
+                .sign_out(pending.id)
+                .map_err(|failure| BridgeFailure(failure.to_string()))?;
+            pending.failed = false;
+            return Ok(pending.id);
+        }
+        let id = self
+            .next_operation
+            .checked_add(1)
+            .ok_or_else(|| BridgeFailure("账号操作标识已耗尽".into()))?;
+        self.runtime
+            .sign_out(id)
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.next_operation = id;
+        self.sign_out = Some(PendingSignOut { id, failed: false });
+        Ok(id)
+    }
     pub fn begin_shutdown(&mut self) -> Result<(), BridgeFailure> {
         self.stopping = true;
         let result = self.wake.disable();
@@ -333,6 +423,26 @@ impl Drop for Connection {
 }
 fn convert(event: AgentEvent) -> AccountEvent {
     let kind = match event.kind {
+        AgentEventKind::SignOutProgress(stage) => AccountEventKind::SignOutProgress(match stage {
+            agentelier_agent::SignOutStage::Settling => SignOutStage::Settling,
+            agentelier_agent::SignOutStage::Revoking => SignOutStage::Revoking,
+            agentelier_agent::SignOutStage::Clearing => SignOutStage::Clearing,
+        }),
+        AgentEventKind::SignOutFailed(failure) => {
+            AccountEventKind::SignOutFailed(BridgeFailure(failure.to_string()))
+        }
+        AgentEventKind::SignedOut { snapshot, remote } => AccountEventKind::SignedOut {
+            snapshot: convert_snapshot(snapshot),
+            remote: match remote {
+                agentelier_agent::RemoteRevocation::Confirmed => RemoteRevocation::Confirmed,
+                agentelier_agent::RemoteRevocation::Unconfirmed(reason) => {
+                    RemoteRevocation::Unconfirmed(reason)
+                }
+                agentelier_agent::RemoteRevocation::NotApplicable => {
+                    RemoteRevocation::NotApplicable
+                }
+            },
+        },
         AgentEventKind::SessionStatus {
             snapshot,
             activity,

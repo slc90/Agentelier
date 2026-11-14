@@ -80,6 +80,7 @@ impl AuthFile {
             .validate()
             .map_err(|error| LoginFailure::storage(LoginStage::Save, error))?;
         self.pending = Some(verified.record);
+        self.sign_out = crate::sign_out::SignOutState::Inactive;
         Ok(())
     }
 
@@ -94,6 +95,9 @@ impl AuthFile {
         commit(&self.path, record, false)
             .map_err(|error| LoginFailure::storage(LoginStage::Save, error))?;
         self.record = self.pending.take();
+        if let crate::sign_out::SignOutState::Pending(remote) = &self.sign_out {
+            self.sign_out = crate::sign_out::SignOutState::Complete(remote.clone());
+        }
         self.generation = uuid::Uuid::new_v4();
         self.renewal = if matches!(
             self.renewal,
@@ -107,8 +111,15 @@ impl AuthFile {
         Ok(projection)
     }
 
-    pub fn discard_pending(&mut self) {
+    pub fn discard_pending(&mut self) -> Result<(), LoginFailure> {
+        if self.has_pending_sign_out() || self.has_pending_session_update() {
+            return Err(LoginFailure::new(
+                LoginStage::Save,
+                "不能取消退出清理或旋转后的待提交凭据",
+            ));
+        }
         self.pending = None;
+        Ok(())
     }
 }
 

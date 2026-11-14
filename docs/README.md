@@ -10,4 +10,4 @@
 
 根据任务需要查阅相关文档；具体实现以当前代码为准。
 
-已实现的目录选择、配置保存与启动占用流程见[数据目录与启动](design/mechanisms/application-data.md)，文件账号恢复与后台生命周期见[认证运行与凭据管理](design/modules/authentication.md)。浏览器登录与按需会话续期已接入；退出登录及模型请求尚未实现，后续实施顺序见[登录增量导航](../plans/登录/00-overview.md)。
+已实现的目录选择、配置保存与启动占用流程见[数据目录与启动](design/mechanisms/application-data.md)，文件账号恢复与后台生命周期见[认证运行与凭据管理](design/modules/authentication.md)。浏览器登录、按需会话续期与退出登录已接入；模型请求尚未实现，后续实施顺序见[登录增量导航](../plans/登录/00-overview.md)。

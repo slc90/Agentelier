@@ -6,6 +6,7 @@ mod browser;
 mod credential_commit;
 mod data_directory;
 mod session;
+mod sign_out;
 
 pub use authentication::{
     AccountSummary, AuthFile, CredentialState, RestoreFailure, RestoredAccount,
@@ -16,3 +17,4 @@ pub use session::{
     AuthenticatedRequest, CredentialPreparation, CredentialVersion, SessionActivity,
     SessionFailure, SessionFailureKind, UsableCredentials,
 };
+pub use sign_out::{RemoteRevocation, SignOutFailure, SignOutPreparation, SignOutStage};

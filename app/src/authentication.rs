@@ -170,6 +170,7 @@ fn action_request(world: &mut World, action: LoginAction) -> Result {
         LoginAction::OpenBrowser => return launch_browser(world),
         LoginAction::CopyLink => return copy_link(world),
         LoginAction::CheckSession => return check_session(world),
+        LoginAction::SignOut => return sign_out(world),
         _ => {}
     }
     let state = world.resource::<AccountState>();
@@ -276,6 +277,43 @@ fn receive(world: &mut World) -> Result {
             .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
         let mut state = world.resource_mut::<AccountState>();
         match event.kind {
+            AccountEventKind::SignOutProgress(stage) => {
+                backend.authorization = None;
+                open = false;
+                state.phase = match stage {
+                    agentelier_bridge::SignOutStage::Settling => AccountPhase::SigningOut,
+                    agentelier_bridge::SignOutStage::Revoking => AccountPhase::Revoking,
+                    agentelier_bridge::SignOutStage::Clearing => AccountPhase::Clearing,
+                };
+            }
+            AccountEventKind::SignOutFailed(failure) => {
+                state.phase = AccountPhase::SignOutFailed;
+                state.error = Some(failure.to_string());
+                error!(operation_id = event.operation_id, error = %failure, "退出未完成，等待重试本地清理");
+            }
+            AccountEventKind::SignedOut { snapshot, remote } => {
+                backend.authorization = None;
+                open = false;
+                apply_snapshot(&mut state, snapshot);
+                state.phase = AccountPhase::Idle;
+                state.operation = None;
+                state.error = None;
+                state.session_error = None;
+                state.session_activity = SessionActivity::Idle;
+                state.session_client_error = false;
+                state.session_retry_at = None;
+                state.feedback = Some(match remote {
+                    agentelier_bridge::RemoteRevocation::Unconfirmed(reason) => {
+                        format!("已退出本机登录；远端撤销未确认：{reason}")
+                    }
+                    agentelier_bridge::RemoteRevocation::Confirmed
+                    | agentelier_bridge::RemoteRevocation::NotApplicable => "已退出登录".into(),
+                });
+                info!(
+                    operation_id = event.operation_id,
+                    "退出登录完成，本地会话已清除并保留账号登记"
+                );
+            }
             AccountEventKind::SessionStatus {
                 snapshot,
                 activity,
@@ -416,6 +454,52 @@ fn apply_snapshot(state: &mut AccountState, snapshot: agentelier_bridge::Account
             subscription_enabled,
         },
     };
+}
+fn sign_out(world: &mut World) -> Result {
+    let state = world.resource::<AccountState>();
+    if state.runtime_failed
+        || matches!(
+            state.phase,
+            AccountPhase::SigningOut | AccountPhase::Revoking | AccountPhase::Clearing
+        )
+    {
+        return Ok(());
+    }
+    let backend = world.resource::<AuthenticationBackend>().clone();
+    let mut backend = backend
+        .0
+        .lock()
+        .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
+    if backend.stopping {
+        return Ok(());
+    }
+    let connection = backend
+        .connection
+        .as_mut()
+        .ok_or_else(|| io::Error::other("认证运行未建立"))?;
+    match connection.sign_out() {
+        Ok(id) => {
+            backend.authorization = None;
+            let mut state = world.resource_mut::<AccountState>();
+            state.operation = Some(id);
+            state.phase = AccountPhase::SigningOut;
+            state.error = None;
+            state.feedback = None;
+            state.session_error = None;
+            info!(operation_id = id, "用户请求退出登录，停止接纳新凭据请求");
+            if let Some(browser) = &backend.browser {
+                world
+                    .resource::<JobManager>()
+                    .cancel(browser.job_id)
+                    .map_err(|failure| failure.into_bevy_error())?;
+            }
+        }
+        Err(failure) => {
+            error!(error = %failure, "无法请求退出登录");
+            world.resource_mut::<AccountState>().error = Some(failure.to_string());
+        }
+    }
+    Ok(())
 }
 fn check_session(world: &mut World) -> Result {
     let state = world.resource::<AccountState>();

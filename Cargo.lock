@@ -139,6 +139,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "tracing",
  "url",
  "uuid",
  "win-custody",

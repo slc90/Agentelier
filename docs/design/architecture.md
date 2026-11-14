@@ -1,6 +1,6 @@
 # Agentelier 总体架构
 
-当前 Workspace 包含应用 `app/`、应用 Asset 库 `crates/assets/`、数据与认证能力 `crates/login/`（`agentelier_login`）、登录界面 `crates/login_ui/`（`agentelier_login_ui`）、后台运行 `crates/agent/`（`agentelier_agent`）和业务桥接 `crates/bridge/`（`agentelier_bridge`）。当前已实现数据目录启动与设置、文件账号恢复、ChatGPT 浏览器授权、受限权限凭据提交、非敏感状态展示及运行收尾；已实现 Token 按需续期、共享凭据请求与失败分类；退出登录与模型请求尚未实现。
+当前 Workspace 包含应用 `app/`、应用 Asset 库 `crates/assets/`、数据与认证能力 `crates/login/`（`agentelier_login`）、登录界面 `crates/login_ui/`（`agentelier_login_ui`）、后台运行 `crates/agent/`（`agentelier_agent`）和业务桥接 `crates/bridge/`（`agentelier_bridge`）。当前已实现数据目录启动与设置、文件账号恢复、ChatGPT 浏览器授权、受限权限凭据提交、非敏感状态展示及运行收尾；已实现 Token 按需续期、共享凭据请求与失败分类；已实现远端撤销与本地会话清理；模型请求尚未实现。
 
 Agentelier 是以 Bevy 构建交互界面的 Rust 桌面 Agent 应用。应用的交互与 Agent 的执行有不同的运行需求：前者由 Bevy ECS 与 Winit 驱动，后者需要持续处理异步模型响应、工具执行和任务生命周期。
 
@@ -43,6 +43,8 @@ Bevy 应用拥有窗口和 Winit 事件循环，使用 ECS 管理应用业务状
 ### Agent：执行与运行状态
 
 认证运行通过可克隆 CredentialClient 接收运行侧的按需凭据请求，合并同类在途等待；Token、会话代次与待提交旋转结果不进入 Bevy。Bridge 的 check_session 复用该路径，仅转换全局非敏感 SessionStatus，UI 可显示检查、续期、保存失败或需要重新登录。启动只恢复文件；没有周期保活或模型请求。
+
+退出同样由 app → Bridge → Agent 发起。Agent 的独立控制入口先关闭凭据接纳与旧等待者交付，再等待当前更新结束，调用 login 的撤销及原子清理；Bridge 隔离旧操作，UI 仅显示阶段和真实终态。login 直接记录有限撤销尝试的安全诊断，仍由宿主统一管理 tracing；不新增日志订阅或认证后台。普通关闭不退出账号。
 
 `agentelier_agent` 负责 Agent 的实际执行：接收运行命令，协调模型通信与工具执行，维护相关任务和会话的运行状态，并产生执行进展和终态结果。
 

@@ -161,6 +161,12 @@ impl AuthFile {
         &mut self,
         rejected: Option<&CredentialVersion>,
     ) -> Result<CredentialPreparation, SessionFailure> {
+        if self.signing_out_or_ended() {
+            return Err(SessionFailure::new(
+                SessionFailureKind::SignedOut,
+                "账号正在退出或已退出，需要重新登录",
+            ));
+        }
         if rejected.is_some_and(|version| {
             self.record
                 .as_ref()
@@ -250,6 +256,12 @@ impl AuthFile {
     }
 
     pub fn usable_credentials(&self) -> Result<UsableCredentials, SessionFailure> {
+        if self.signing_out_or_ended() {
+            return Err(SessionFailure::new(
+                SessionFailureKind::SignedOut,
+                "账号正在退出或已退出，需要重新登录",
+            ));
+        }
         let record = self
             .record
             .as_ref()

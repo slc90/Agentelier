@@ -1,7 +1,8 @@
 use crate::credentials::{CredentialClient, CredentialIntent};
 use agentelier_login::{
-    AuthFile, BrowserLogin, CredentialPreparation, LoginFailure, LoginStage, RestoreFailure,
-    RestoredAccount, SessionActivity, SessionFailure, SessionFailureKind, UsableCredentials,
+    AuthFile, BrowserLogin, CredentialPreparation, LoginFailure, LoginStage, RemoteRevocation,
+    RestoreFailure, RestoredAccount, SessionActivity, SessionFailure, SessionFailureKind,
+    SignOutFailure, SignOutPreparation, SignOutStage, UsableCredentials,
 };
 use std::path::PathBuf;
 use std::thread::JoinHandle;
@@ -11,12 +12,19 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
 
 const COMMAND_CAPACITY: usize = 4;
+const SIGN_OUT_CAPACITY: usize = 1;
 
 pub struct AgentEvent {
     pub operation_id: u64,
     pub kind: AgentEventKind,
 }
 pub enum AgentEventKind {
+    SignOutProgress(SignOutStage),
+    SignOutFailed(SignOutFailure),
+    SignedOut {
+        snapshot: RestoredAccount,
+        remote: RemoteRevocation,
+    },
     SessionStatus {
         snapshot: RestoredAccount,
         activity: SessionActivity,
@@ -61,6 +69,8 @@ pub enum RuntimeFailure {
     Delivery(DeliveryFailure),
     CredentialState,
     Storage(String),
+    SignedOut,
+    SigningOut,
 }
 impl fmt::Display for RuntimeFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -72,6 +82,8 @@ impl fmt::Display for RuntimeFailure {
             Self::Thread => f.write_str("认证运行线程异常结束"),
             Self::CredentialState => f.write_str("凭据共享请求状态锁已损坏"),
             Self::Storage(message) => f.write_str(message),
+            Self::SignedOut => f.write_str("账号正在退出或已退出，需要重新登录"),
+            Self::SigningOut => f.write_str("退出尚未完成，禁止新的账号操作"),
             Self::Delivery(DeliveryFailure::Closed) => f.write_str("认证结果接收端已关闭"),
             Self::Delivery(DeliveryFailure::Full) => f.write_str("认证结果队列已满"),
             Self::Delivery(DeliveryFailure::Wake) => {
@@ -90,6 +102,7 @@ impl Error for RuntimeFailure {
 }
 
 pub(super) enum Command {
+    SignOut(u64),
     Credentials {
         intent: CredentialIntent,
         result: watch::Sender<Option<Result<UsableCredentials, SessionFailure>>>,
@@ -110,6 +123,7 @@ pub struct AgentRuntime {
     active: Option<(u64, CancellationToken)>,
     credentials: CredentialClient,
     shutdown: CancellationToken,
+    sign_out_commands: mpsc::Sender<u64>,
 }
 
 impl AgentRuntime {
@@ -126,6 +140,8 @@ impl AgentRuntime {
         let shutdown = CancellationToken::new();
         let runtime_shutdown = shutdown.clone();
         let credentials = CredentialClient::new(commands.clone(), shutdown.clone());
+        let owner_credentials = credentials.clone();
+        let (sign_out_commands, mut sign_out_incoming) = mpsc::channel(SIGN_OUT_CAPACITY);
         let thread = std::thread::Builder::new()
             .name("agentelier-auth".into())
             .spawn(move || {
@@ -137,17 +153,30 @@ impl AgentRuntime {
                         let mut delivery_failure = None;
                         loop {
                             let command = tokio::select! { biased;
+                                request = sign_out_incoming.recv() => match request { Some(id) => Command::SignOut(id), None => break },
                                 _ = runtime_shutdown.cancelled() => break,
                                 command = incoming.recv() => match command { Some(command) => command, None => break },
                             };
                             match command {
+                                Command::SignOut(id) => {
+                                    pending_save = None;
+                                    while let Ok(command) = incoming.try_recv() {
+                                        if let Command::Credentials { result, .. } = command {
+                                            result.send_replace(Some(Err(SessionFailure::new(SessionFailureKind::SignedOut, "退出已取消尚未开始的凭据请求"))));
+                                        }
+                                    }
+                                    let (returned, failure) = sign_out(file, id, &owner_credentials, &publish).await?;
+                                    file = returned;
+                                    if delivery_failure.is_none() { delivery_failure = failure; }
+                                    if delivery_failure.is_some() { break; }
+                                }
                                 Command::Credentials { intent, result } => {
                                     let (returned, outcome, failure) = acquire(file, intent, &publish).await?;
                                     file = returned;
                                     result.send_replace(Some(outcome));
                                     if failure.is_some() {
                                         delivery_failure = failure;
-                                        break;
+                                        if !owner_credentials.is_signing_out()? { break; }
                                     }
                                 }
                                 Command::Restore(id) => {
@@ -156,15 +185,15 @@ impl AgentRuntime {
                                         blocking(file, AuthFile::restore).await?;
                                     file = returned;
                                     let restored = result.is_ok();
-                                    emit(
+                                    capture_delivery(emit(
                                         &publish,
                                         id,
                                         AgentEventKind::Completed(
                                             result.map_err(OperationFailure::Restore),
                                         ),
-                                    )?;
+                                    ), &mut delivery_failure);
                                     if restored {
-                                        session_status(&file, SessionActivity::Idle, file.session_failure(), &publish)?;
+                                        capture_delivery(session_status(&file, SessionActivity::Idle, file.session_failure(), &publish), &mut delivery_failure);
                                     }
                                 }
                                 Command::Login {
@@ -172,10 +201,14 @@ impl AgentRuntime {
                                     consent,
                                     cancel,
                                 } => {
-                                    let (returned, pending) =
+                                    let (returned, pending, failure) =
                                         login(file, id, consent, &cancel, &publish).await?;
                                     file = returned;
                                     pending_save = pending;
+                                    if delivery_failure.is_none() { delivery_failure = failure; }
+                                    if pending_save.is_none() && matches!(file.session_snapshot().map_err(|failure| RuntimeFailure::Storage(failure.to_string()))?.credentials, agentelier_login::CredentialState::StoredSession { .. }) {
+                                        owner_credentials.resume_after_login()?;
+                                    }
                                 }
                                 Command::RetrySave(id)
                                     if pending_save
@@ -187,26 +220,28 @@ impl AgentRuntime {
                                             token.is_cancelled()
                                         },
                                     ) {
-                                        file.discard_pending();
+                                        file.discard_pending().map_err(|failure| RuntimeFailure::Storage(failure.to_string()))?;
                                         pending_save = None;
-                                        emit(&publish, id, AgentEventKind::Cancelled)?;
+                                        capture_delivery(emit(&publish, id, AgentEventKind::Cancelled), &mut delivery_failure);
+                                        if delivery_failure.is_some() && !owner_credentials.is_signing_out()? { break; }
                                         continue;
                                     }
-                                    emit(&publish, id, AgentEventKind::Saving)?;
+                                    capture_delivery(emit(&publish, id, AgentEventKind::Saving), &mut delivery_failure);
                                     let (returned, result) =
                                         blocking(file, AuthFile::save_pending).await?;
                                     file = returned;
                                     match result {
                                         Ok(snapshot) => {
                                             pending_save = None;
-                                            emit(
+                                            owner_credentials.resume_after_login()?;
+                                            capture_delivery(emit(
                                                 &publish,
                                                 id,
                                                 AgentEventKind::Completed(Ok(snapshot)),
-                                            )?;
+                                            ), &mut delivery_failure);
                                         }
                                         Err(failure) => {
-                                            emit(&publish, id, AgentEventKind::SaveFailed(failure))?
+                                            capture_delivery(emit(&publish, id, AgentEventKind::SaveFailed(failure)), &mut delivery_failure)
                                         }
                                     }
                                 }
@@ -215,14 +250,15 @@ impl AgentRuntime {
                                         .as_ref()
                                         .is_some_and(|(pending, _)| *pending == id) =>
                                 {
-                                    file.discard_pending();
+                                    file.discard_pending().map_err(|failure| RuntimeFailure::Storage(failure.to_string()))?;
                                     pending_save = None;
-                                    emit(&publish, id, AgentEventKind::Cancelled)?;
+                                    capture_delivery(emit(&publish, id, AgentEventKind::Cancelled), &mut delivery_failure);
                                 }
                                 Command::RetrySave(_) | Command::Cancel(_) => {}
                             }
+                            if delivery_failure.is_some() && !owner_credentials.is_signing_out()? { break; }
                         }
-                        if file.has_pending_session_update() {
+                        if file.has_pending_session_update() || file.has_pending_sign_out() {
                             let (_, result) = blocking(file, AuthFile::save_pending).await?;
                             result.map_err(|failure| RuntimeFailure::Storage(failure.to_string()))?;
                         }
@@ -243,6 +279,7 @@ impl AgentRuntime {
             active: None,
             credentials,
             shutdown,
+            sign_out_commands,
         })
     }
 
@@ -251,6 +288,23 @@ impl AgentRuntime {
     }
     pub fn credentials(&self) -> CredentialClient {
         self.credentials.clone()
+    }
+    pub fn sign_out(&mut self, id: u64) -> Result<(), RuntimeFailure> {
+        if self.shutdown.is_cancelled() {
+            return Err(RuntimeFailure::Closed);
+        }
+        self.credentials.begin_sign_out(|| {
+            self.sign_out_commands
+                .try_send(id)
+                .map_err(|failure| match failure {
+                    mpsc::error::TrySendError::Full(_) => RuntimeFailure::Busy,
+                    mpsc::error::TrySendError::Closed(_) => RuntimeFailure::Closed,
+                })
+        })?;
+        if let Some((_, cancel)) = &self.active {
+            cancel.cancel();
+        }
+        Ok(())
     }
     pub fn login(&mut self, id: u64, consent: bool) -> Result<(), RuntimeFailure> {
         let cancel = CancellationToken::new();
@@ -274,14 +328,16 @@ impl AgentRuntime {
         self.send(Command::Cancel(operation_id))
     }
     fn send(&self, command: Command) -> Result<(), RuntimeFailure> {
-        self.commands
-            .as_ref()
-            .ok_or(RuntimeFailure::Closed)?
-            .try_send(command)
-            .map_err(|error| match error {
-                mpsc::error::TrySendError::Full(_) => RuntimeFailure::Busy,
-                mpsc::error::TrySendError::Closed(_) => RuntimeFailure::Closed,
-            })
+        self.credentials.submit_operation(|| {
+            self.commands
+                .as_ref()
+                .ok_or(RuntimeFailure::Closed)?
+                .try_send(command)
+                .map_err(|error| match error {
+                    mpsc::error::TrySendError::Full(_) => RuntimeFailure::Busy,
+                    mpsc::error::TrySendError::Closed(_) => RuntimeFailure::Closed,
+                })
+        })
     }
     pub fn begin_shutdown(&mut self) {
         self.shutdown.cancel();
@@ -321,6 +377,96 @@ fn emit(
     .map_err(RuntimeFailure::Delivery)
 }
 
+fn capture_delivery(result: Result<(), RuntimeFailure>, failure: &mut Option<RuntimeFailure>) {
+    if let Err(error) = result {
+        error!(error = %error, "认证状态无法交付，继续完成必要的凭据提交");
+        if failure.is_none() {
+            *failure = Some(error);
+        }
+    }
+}
+
+async fn sign_out(
+    mut file: AuthFile,
+    id: u64,
+    credentials: &CredentialClient,
+    publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
+) -> Result<(AuthFile, Option<RuntimeFailure>), RuntimeFailure> {
+    let mut delivery_failure = None;
+    capture_delivery(
+        emit(
+            publish,
+            id,
+            AgentEventKind::SignOutProgress(SignOutStage::Settling),
+        ),
+        &mut delivery_failure,
+    );
+    debug!(
+        operation_id = id,
+        "退出已取得认证所有权，当前凭据更新已收敛"
+    );
+    let (returned, preparation) = blocking(file, AuthFile::prepare_sign_out).await?;
+    file = returned;
+    let prepared = match preparation {
+        Ok(SignOutPreparation::Revoke(session)) => {
+            capture_delivery(
+                emit(
+                    publish,
+                    id,
+                    AgentEventKind::SignOutProgress(SignOutStage::Revoking),
+                ),
+                &mut delivery_failure,
+            );
+            file.stage_sign_out(session.revoke().await)
+        }
+        Ok(_) => Ok(()),
+        Err(failure) => Err(failure),
+    };
+    let result = match prepared {
+        Ok(()) if file.has_pending_sign_out() => {
+            capture_delivery(
+                emit(
+                    publish,
+                    id,
+                    AgentEventKind::SignOutProgress(SignOutStage::Clearing),
+                ),
+                &mut delivery_failure,
+            );
+            let (returned, saved) = blocking(file, AuthFile::save_pending).await?;
+            file = returned;
+            saved.map(|_| ()).map_err(SignOutFailure::local_clear)
+        }
+        other => other,
+    };
+    match result {
+        Ok(()) => {
+            let remote = file
+                .sign_out_result()
+                .ok_or_else(|| RuntimeFailure::Storage("退出缺少真实清理终态".into()))?;
+            let snapshot = file
+                .session_snapshot()
+                .map_err(|failure| RuntimeFailure::Storage(failure.to_string()))?;
+            credentials.finish_sign_out()?;
+            if let RemoteRevocation::Unconfirmed(reason) = &remote {
+                tracing::warn!(operation_id = id, reason, "本地会话已清除，远端撤销未确认");
+            }
+            debug!(operation_id = id, "退出登录的本地凭据清理已提交");
+            capture_delivery(
+                emit(publish, id, AgentEventKind::SignedOut { snapshot, remote }),
+                &mut delivery_failure,
+            );
+        }
+        Err(failure) => {
+            error!(operation_id = id, error = %failure, "退出尚未完成，保持禁止新请求");
+            capture_delivery(
+                emit(publish, id, AgentEventKind::SignOutFailed(failure)),
+                &mut delivery_failure,
+            );
+        }
+    }
+    Ok((file, delivery_failure))
+}
+
 async fn blocking<T: Send + 'static>(
     mut file: AuthFile,
     operation: impl FnOnce(&mut AuthFile) -> T + Send + 'static,
@@ -339,10 +485,17 @@ async fn login(
     consent: bool,
     cancel: &CancellationToken,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
-) -> Result<(AuthFile, Option<(u64, CancellationToken)>), RuntimeFailure> {
+) -> Result<
+    (
+        AuthFile,
+        Option<(u64, CancellationToken)>,
+        Option<RuntimeFailure>,
+    ),
+    RuntimeFailure,
+> {
     if cancel.is_cancelled() {
-        emit(publish, id, AgentEventKind::Cancelled)?;
-        return Ok((file, None));
+        let delivery_failure = emit(publish, id, AgentEventKind::Cancelled).err();
+        return Ok((file, None, delivery_failure));
     }
     let (returned, preparation) = blocking(file, AuthFile::prepare_login).await?;
     file = returned;
@@ -374,33 +527,40 @@ async fn login(
     .await;
     match outcome {
         Ok(()) => {
-            emit(publish, id, AgentEventKind::Saving)?;
+            let mut delivery_failure = emit(publish, id, AgentEventKind::Saving).err();
             let (returned, result) = blocking(file, AuthFile::save_pending).await?;
             file = returned;
             match result {
                 Ok(snapshot) => {
-                    emit(publish, id, AgentEventKind::Completed(Ok(snapshot)))?;
-                    Ok((file, None))
+                    capture_delivery(
+                        emit(publish, id, AgentEventKind::Completed(Ok(snapshot))),
+                        &mut delivery_failure,
+                    );
+                    Ok((file, None, delivery_failure))
                 }
                 Err(failure) => {
-                    emit(publish, id, AgentEventKind::SaveFailed(failure))?;
-                    Ok((file, Some((id, cancel.clone()))))
+                    capture_delivery(
+                        emit(publish, id, AgentEventKind::SaveFailed(failure)),
+                        &mut delivery_failure,
+                    );
+                    Ok((file, Some((id, cancel.clone())), delivery_failure))
                 }
             }
         }
         Err(LoginRunFailure::Operation(failure)) if failure.stage == LoginStage::Cancelled => {
-            emit(publish, id, AgentEventKind::Cancelled)?;
-            Ok((file, None))
+            let delivery_failure = emit(publish, id, AgentEventKind::Cancelled).err();
+            Ok((file, None, delivery_failure))
         }
         Err(LoginRunFailure::Operation(failure)) => {
-            emit(
+            let delivery_failure = emit(
                 publish,
                 id,
                 AgentEventKind::Completed(Err(OperationFailure::Login(failure))),
-            )?;
-            Ok((file, None))
+            )
+            .err();
+            Ok((file, None, delivery_failure))
         }
-        Err(LoginRunFailure::Runtime(failure)) => Err(failure),
+        Err(LoginRunFailure::Runtime(failure)) => Ok((file, None, Some(failure))),
     }
 }
 
