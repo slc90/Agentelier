@@ -15,9 +15,11 @@ pub struct AuthFile {
     pub(crate) record: Option<AccountRecord>,
     pub(crate) pending: Option<AccountRecord>,
     pub(crate) issued_client: Option<String>,
+    pub(crate) generation: uuid::Uuid,
+    pub(crate) renewal: crate::session::RenewalState,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AccountRecord {
     pub(crate) ext_agent_host_id: String,
@@ -25,7 +27,7 @@ pub(crate) struct AccountRecord {
     pub(crate) session: Option<Session>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Registration {
     pub(crate) issuer: String,
@@ -35,9 +37,11 @@ pub(crate) struct Registration {
     pub(crate) email: Option<String>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Session {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) identity_binding: Option<IdentityBinding>,
     pub(crate) access_token: Option<String>,
     pub(crate) refresh_token: Option<String>,
     pub(crate) id_token: String,
@@ -46,6 +50,14 @@ pub(crate) struct Session {
     pub(crate) received_at: u64,
     pub(crate) expires_at: Option<u64>,
     pub(crate) refresh_not_before: Option<u64>,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct IdentityBinding {
+    pub(crate) nonce: Option<String>,
+    pub(crate) auth_time: Option<u64>,
+    pub(crate) aud: serde_json::Value,
 }
 
 #[derive(Clone, Debug)]
@@ -60,6 +72,7 @@ pub enum CredentialState {
     NoRecord,
     HostOnly,
     SignedOut,
+    ReauthenticationRequired,
     StoredSession {
         expired: bool,
         subscription_enabled: bool,
@@ -111,14 +124,22 @@ impl AuthFile {
             record: None,
             pending: None,
             issued_client: None,
+            generation: uuid::Uuid::new_v4(),
+            renewal: crate::session::RenewalState::Ready,
         }
     }
 
     pub fn restore(&mut self) -> Result<RestoredAccount, RestoreFailure> {
+        if self.pending.is_some() {
+            return Err(RestoreFailure::Invalid("pending credential update"));
+        }
         let file = match File::open(&self.path) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                self.record = None;
+                if self.record.take().is_some() {
+                    self.generation = uuid::Uuid::new_v4();
+                    self.renewal = crate::session::RenewalState::Ready;
+                }
                 return Ok(RestoredAccount {
                     account: None,
                     credentials: CredentialState::NoRecord,
@@ -141,6 +162,10 @@ impl AuthFile {
             })?;
         record.validate()?;
         let projection = record.projection()?;
+        if self.record.as_ref() != Some(&record) {
+            self.generation = uuid::Uuid::new_v4();
+            self.renewal = crate::session::RenewalState::Ready;
+        }
         self.record = Some(record);
         Ok(projection)
     }

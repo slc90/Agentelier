@@ -17,6 +17,7 @@ pub enum CredentialState {
     NoRecord,
     HostOnly,
     SignedOut,
+    ReauthenticationRequired,
     StoredSession {
         expired: bool,
         subscription_enabled: bool,
@@ -38,12 +39,40 @@ pub struct AccountEvent {
     pub kind: AccountEventKind,
 }
 pub enum AccountEventKind {
+    SessionStatus {
+        snapshot: AccountSnapshot,
+        activity: SessionActivity,
+        failure: Option<SessionFailure>,
+    },
     BrowserReady(AuthorizationLink),
     Exchanging,
     Saving,
     SaveFailed(BridgeFailure),
     Completed(Result<AccountSnapshot, BridgeFailure>),
     Cancelled,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionActivity {
+    Idle,
+    Checking,
+    Refreshing,
+    Saving,
+    SaveFailed,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionFailureKind {
+    Unavailable,
+    Temporary,
+    Uncertain,
+    ReauthenticationRequired,
+    ClientConfiguration,
+    Storage,
+}
+#[derive(Clone, Debug)]
+pub struct SessionFailure {
+    pub kind: SessionFailureKind,
+    pub retry_at: Option<u64>,
+    pub message: String,
 }
 #[derive(Clone, Debug)]
 pub struct BridgeFailure(String);
@@ -92,6 +121,7 @@ pub struct Connection {
     pending: Option<Pending>,
     stopping: bool,
     failure: Option<BridgeFailure>,
+    session_activity: SessionActivity,
 }
 impl Connection {
     pub fn start(
@@ -124,13 +154,14 @@ impl Connection {
             pending: None,
             stopping: false,
             failure: None,
+            session_activity: SessionActivity::Idle,
         })
     }
     fn allocate(&self) -> Result<u64, BridgeFailure> {
         if self.stopping || self.failure.is_some() {
             return Err(BridgeFailure("认证运行已停止".into()));
         }
-        if self.pending.is_some() {
+        if self.pending.is_some() || self.session_activity != SessionActivity::Idle {
             return Err(BridgeFailure("已有账号操作正在进行".into()));
         }
         self.next_operation
@@ -162,6 +193,24 @@ impl Connection {
             cancelling: false,
         });
         Ok(id)
+    }
+    pub fn check_session(&mut self) -> Result<(), BridgeFailure> {
+        if self.stopping
+            || self.failure.is_some()
+            || self.pending.is_some()
+            || matches!(
+                self.session_activity,
+                SessionActivity::Checking | SessionActivity::Refreshing | SessionActivity::Saving
+            )
+        {
+            return Err(BridgeFailure("认证运行当前不能接受会话检查".into()));
+        }
+        self.runtime
+            .credentials()
+            .request()
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.session_activity = SessionActivity::Checking;
+        Ok(())
     }
     pub fn retry_save(&mut self, id: u64) -> Result<(), BridgeFailure> {
         if self.stopping
@@ -216,6 +265,10 @@ impl Connection {
         loop {
             match self.events.try_recv() {
                 Ok(event) => {
+                    if let AccountEventKind::SessionStatus { activity, .. } = &event.kind {
+                        self.session_activity = *activity;
+                        return Ok(Some(event));
+                    }
                     let Some(pending) = &mut self.pending else {
                         return self.protocol_failure();
                     };
@@ -280,6 +333,41 @@ impl Drop for Connection {
 }
 fn convert(event: AgentEvent) -> AccountEvent {
     let kind = match event.kind {
+        AgentEventKind::SessionStatus {
+            snapshot,
+            activity,
+            failure,
+        } => AccountEventKind::SessionStatus {
+            snapshot: convert_snapshot(snapshot),
+            activity: match activity {
+                agentelier_agent::SessionActivity::Idle => SessionActivity::Idle,
+                agentelier_agent::SessionActivity::Checking => SessionActivity::Checking,
+                agentelier_agent::SessionActivity::Refreshing => SessionActivity::Refreshing,
+                agentelier_agent::SessionActivity::Saving => SessionActivity::Saving,
+                agentelier_agent::SessionActivity::SaveFailed => SessionActivity::SaveFailed,
+            },
+            failure: failure.map(|failure| SessionFailure {
+                kind: match failure.kind {
+                    agentelier_agent::SessionFailureKind::Temporary => {
+                        SessionFailureKind::Temporary
+                    }
+                    agentelier_agent::SessionFailureKind::Uncertain
+                    | agentelier_agent::SessionFailureKind::Identity => {
+                        SessionFailureKind::Uncertain
+                    }
+                    agentelier_agent::SessionFailureKind::ReauthenticationRequired => {
+                        SessionFailureKind::ReauthenticationRequired
+                    }
+                    agentelier_agent::SessionFailureKind::ClientConfiguration => {
+                        SessionFailureKind::ClientConfiguration
+                    }
+                    agentelier_agent::SessionFailureKind::Storage => SessionFailureKind::Storage,
+                    _ => SessionFailureKind::Unavailable,
+                },
+                retry_at: failure.retry_at,
+                message: failure.to_string(),
+            }),
+        },
         AgentEventKind::BrowserReady(url) => AccountEventKind::BrowserReady(AuthorizationLink(url)),
         AgentEventKind::Exchanging => AccountEventKind::Exchanging,
         AgentEventKind::Saving => AccountEventKind::Saving,
@@ -289,34 +377,38 @@ fn convert(event: AgentEvent) -> AccountEvent {
         AgentEventKind::Cancelled => AccountEventKind::Cancelled,
         AgentEventKind::Completed(result) => AccountEventKind::Completed(
             result
-                .map(|restored| {
-                    let account = restored.account.map(|account| AccountSummary {
-                        subject: account.subject,
-                        display_name: account.display_name,
-                        email: account.email,
-                    });
-                    let credentials = match restored.credentials {
-                        agentelier_agent::CredentialState::NoRecord => CredentialState::NoRecord,
-                        agentelier_agent::CredentialState::HostOnly => CredentialState::HostOnly,
-                        agentelier_agent::CredentialState::SignedOut => CredentialState::SignedOut,
-                        agentelier_agent::CredentialState::StoredSession {
-                            expired,
-                            subscription_enabled,
-                        } => CredentialState::StoredSession {
-                            expired,
-                            subscription_enabled,
-                        },
-                    };
-                    AccountSnapshot {
-                        account,
-                        credentials,
-                    }
-                })
+                .map(convert_snapshot)
                 .map_err(|error| BridgeFailure(error.to_string())),
         ),
     };
     AccountEvent {
         operation_id: event.operation_id,
         kind,
+    }
+}
+fn convert_snapshot(restored: agentelier_agent::RestoredAccount) -> AccountSnapshot {
+    let account = restored.account.map(|account| AccountSummary {
+        subject: account.subject,
+        display_name: account.display_name,
+        email: account.email,
+    });
+    let credentials = match restored.credentials {
+        agentelier_agent::CredentialState::NoRecord => CredentialState::NoRecord,
+        agentelier_agent::CredentialState::HostOnly => CredentialState::HostOnly,
+        agentelier_agent::CredentialState::SignedOut => CredentialState::SignedOut,
+        agentelier_agent::CredentialState::ReauthenticationRequired => {
+            CredentialState::ReauthenticationRequired
+        }
+        agentelier_agent::CredentialState::StoredSession {
+            expired,
+            subscription_enabled,
+        } => CredentialState::StoredSession {
+            expired,
+            subscription_enabled,
+        },
+    };
+    AccountSnapshot {
+        account,
+        credentials,
     }
 }

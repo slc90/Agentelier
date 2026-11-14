@@ -1,10 +1,12 @@
+use crate::credentials::{CredentialClient, CredentialIntent};
 use agentelier_login::{
-    AuthFile, BrowserLogin, LoginFailure, LoginStage, RestoreFailure, RestoredAccount,
+    AuthFile, BrowserLogin, CredentialPreparation, LoginFailure, LoginStage, RestoreFailure,
+    RestoredAccount, SessionActivity, SessionFailure, SessionFailureKind, UsableCredentials,
 };
 use std::path::PathBuf;
 use std::thread::JoinHandle;
 use std::{error::Error, fmt, io};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
 
@@ -15,6 +17,11 @@ pub struct AgentEvent {
     pub kind: AgentEventKind,
 }
 pub enum AgentEventKind {
+    SessionStatus {
+        snapshot: RestoredAccount,
+        activity: SessionActivity,
+        failure: Option<SessionFailure>,
+    },
     BrowserReady(String),
     Exchanging,
     Saving,
@@ -52,6 +59,8 @@ pub enum RuntimeFailure {
     Task,
     Thread,
     Delivery(DeliveryFailure),
+    CredentialState,
+    Storage(String),
 }
 impl fmt::Display for RuntimeFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -61,6 +70,8 @@ impl fmt::Display for RuntimeFailure {
             Self::Closed => f.write_str("认证后台已停止接收命令"),
             Self::Task => f.write_str("认证文件任务异常结束"),
             Self::Thread => f.write_str("认证运行线程异常结束"),
+            Self::CredentialState => f.write_str("凭据共享请求状态锁已损坏"),
+            Self::Storage(message) => f.write_str(message),
             Self::Delivery(DeliveryFailure::Closed) => f.write_str("认证结果接收端已关闭"),
             Self::Delivery(DeliveryFailure::Full) => f.write_str("认证结果队列已满"),
             Self::Delivery(DeliveryFailure::Wake) => {
@@ -78,7 +89,11 @@ impl Error for RuntimeFailure {
     }
 }
 
-enum Command {
+pub(super) enum Command {
+    Credentials {
+        intent: CredentialIntent,
+        result: watch::Sender<Option<Result<UsableCredentials, SessionFailure>>>,
+    },
     Restore(u64),
     Login {
         id: u64,
@@ -93,6 +108,8 @@ pub struct AgentRuntime {
     commands: Option<mpsc::Sender<Command>>,
     thread: Option<JoinHandle<Result<(), RuntimeFailure>>>,
     active: Option<(u64, CancellationToken)>,
+    credentials: CredentialClient,
+    shutdown: CancellationToken,
 }
 
 impl AgentRuntime {
@@ -106,6 +123,9 @@ impl AgentRuntime {
             .build()
             .map_err(RuntimeFailure::Startup)?;
         let (commands, mut incoming) = mpsc::channel(COMMAND_CAPACITY);
+        let shutdown = CancellationToken::new();
+        let runtime_shutdown = shutdown.clone();
+        let credentials = CredentialClient::new(commands.clone(), shutdown.clone());
         let thread = std::thread::Builder::new()
             .name("agentelier-auth".into())
             .spawn(move || {
@@ -114,13 +134,28 @@ impl AgentRuntime {
                     runtime.block_on(async move {
                         let mut file = AuthFile::new(credentials_path);
                         let mut pending_save = None;
-                        while let Some(command) = incoming.recv().await {
+                        let mut delivery_failure = None;
+                        loop {
+                            let command = tokio::select! { biased;
+                                _ = runtime_shutdown.cancelled() => break,
+                                command = incoming.recv() => match command { Some(command) => command, None => break },
+                            };
                             match command {
+                                Command::Credentials { intent, result } => {
+                                    let (returned, outcome, failure) = acquire(file, intent, &publish).await?;
+                                    file = returned;
+                                    result.send_replace(Some(outcome));
+                                    if failure.is_some() {
+                                        delivery_failure = failure;
+                                        break;
+                                    }
+                                }
                                 Command::Restore(id) => {
                                     debug!(operation_id = id, "开始恢复当前目录账号");
                                     let (returned, result) =
                                         blocking(file, AuthFile::restore).await?;
                                     file = returned;
+                                    let restored = result.is_ok();
                                     emit(
                                         &publish,
                                         id,
@@ -128,6 +163,9 @@ impl AgentRuntime {
                                             result.map_err(OperationFailure::Restore),
                                         ),
                                     )?;
+                                    if restored {
+                                        session_status(&file, SessionActivity::Idle, file.session_failure(), &publish)?;
+                                    }
                                 }
                                 Command::Login {
                                     id,
@@ -184,6 +222,11 @@ impl AgentRuntime {
                                 Command::RetrySave(_) | Command::Cancel(_) => {}
                             }
                         }
+                        if file.has_pending_session_update() {
+                            let (_, result) = blocking(file, AuthFile::save_pending).await?;
+                            result.map_err(|failure| RuntimeFailure::Storage(failure.to_string()))?;
+                        }
+                        if let Some(failure) = delivery_failure { return Err(failure); }
                         Ok(())
                     })
                 }))
@@ -198,11 +241,16 @@ impl AgentRuntime {
             commands: Some(commands),
             thread: Some(thread),
             active: None,
+            credentials,
+            shutdown,
         })
     }
 
     pub fn restore(&self, operation_id: u64) -> Result<(), RuntimeFailure> {
         self.send(Command::Restore(operation_id))
+    }
+    pub fn credentials(&self) -> CredentialClient {
+        self.credentials.clone()
     }
     pub fn login(&mut self, id: u64, consent: bool) -> Result<(), RuntimeFailure> {
         let cancel = CancellationToken::new();
@@ -236,6 +284,7 @@ impl AgentRuntime {
             })
     }
     pub fn begin_shutdown(&mut self) {
+        self.shutdown.cancel();
         if let Some((_, token)) = &self.active {
             token.cancel();
         }
@@ -358,6 +407,128 @@ async fn login(
 enum LoginRunFailure {
     Operation(LoginFailure),
     Runtime(RuntimeFailure),
+}
+
+fn session_status(
+    file: &AuthFile,
+    activity: SessionActivity,
+    failure: Option<SessionFailure>,
+    publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
+) -> Result<(), RuntimeFailure> {
+    let snapshot = file
+        .session_snapshot()
+        .map_err(|failure| RuntimeFailure::Storage(failure.to_string()))?;
+    emit(
+        publish,
+        0,
+        AgentEventKind::SessionStatus {
+            snapshot,
+            activity,
+            failure,
+        },
+    )
+}
+
+async fn acquire(
+    mut file: AuthFile,
+    intent: CredentialIntent,
+    publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
+) -> Result<
+    (
+        AuthFile,
+        Result<UsableCredentials, SessionFailure>,
+        Option<RuntimeFailure>,
+    ),
+    RuntimeFailure,
+> {
+    if let Err(failure) = session_status(&file, SessionActivity::Checking, None, publish) {
+        return Ok((
+            file,
+            Err(SessionFailure::new(
+                SessionFailureKind::Runtime,
+                "无法发布会话检查状态",
+            )),
+            Some(failure),
+        ));
+    }
+    let rejected = match &intent {
+        CredentialIntent::Acquire => None,
+        CredentialIntent::Recover(version) => Some(version),
+    };
+    let mut delivery_failure = None;
+    let result = match file.prepare_credentials(rejected) {
+        Ok(CredentialPreparation::Available(credentials)) => Ok(credentials),
+        Ok(preparation) => {
+            let mut refresh_failure = None;
+            if let CredentialPreparation::Refresh(attempt) = preparation {
+                if let Err(failure) =
+                    session_status(&file, SessionActivity::Refreshing, None, publish)
+                {
+                    return Ok((
+                        file,
+                        Err(SessionFailure::new(
+                            SessionFailureKind::Runtime,
+                            "无法发布会话续期状态",
+                        )),
+                        Some(failure),
+                    ));
+                }
+                debug!("开始按需续期当前账号会话");
+                match attempt.execute().await {
+                    Ok(update) => {
+                        if let Err(failure) = file.stage_refresh(update) {
+                            file.record_refresh_failure(failure.clone());
+                            refresh_failure = Some(failure);
+                        }
+                    }
+                    Err(failure) => {
+                        file.record_refresh_failure(failure.clone());
+                        refresh_failure = Some(failure);
+                    }
+                }
+            }
+            if file.has_pending_session_update() {
+                delivery_failure =
+                    session_status(&file, SessionActivity::Saving, None, publish).err();
+                let (returned, saved) = blocking(file, AuthFile::save_pending).await?;
+                file = returned;
+                match saved {
+                    Ok(_) => match refresh_failure {
+                        Some(failure) => Err(failure),
+                        None => file.usable_credentials(),
+                    },
+                    Err(failure) => Err(SessionFailure::new(
+                        SessionFailureKind::Storage,
+                        format!("凭据更新尚未保存，请重试保存：{failure}"),
+                    )),
+                }
+            } else {
+                match refresh_failure {
+                    Some(failure) => Err(failure),
+                    None => Err(SessionFailure::new(
+                        SessionFailureKind::Busy,
+                        "凭据更新没有可提交结果",
+                    )),
+                }
+            }
+        }
+        Err(failure) => Err(failure),
+    };
+    if let Err(failure) = &result {
+        error!(kind = ?failure.kind, error = %failure, "当前请求未取得可用凭据");
+    } else {
+        debug!("当前请求已取得持久化的可用凭据");
+    }
+    let activity = if file.has_pending_session_update() {
+        SessionActivity::SaveFailed
+    } else {
+        SessionActivity::Idle
+    };
+    let final_delivery = session_status(&file, activity, result.as_ref().err().cloned(), publish);
+    if delivery_failure.is_none() {
+        delivery_failure = final_delivery.err();
+    }
+    Ok((file, result, delivery_failure))
 }
 impl From<LoginFailure> for LoginRunFailure {
     fn from(failure: LoginFailure) -> Self {

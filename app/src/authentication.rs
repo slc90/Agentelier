@@ -3,7 +3,7 @@ use agentelier_bridge::{
 };
 use agentelier_login_ui::{
     AccountPhase, AccountState, AccountSummary, CredentialState, DataDirectoryReady, LoginAction,
-    RestoreAccount,
+    RestoreAccount, SessionActivity,
 };
 use bevy::prelude::*;
 use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
@@ -169,6 +169,7 @@ fn action_request(world: &mut World, action: LoginAction) -> Result {
         LoginAction::Consent => return request(world, Request::Login { consent: true }),
         LoginAction::OpenBrowser => return launch_browser(world),
         LoginAction::CopyLink => return copy_link(world),
+        LoginAction::CheckSession => return check_session(world),
         _ => {}
     }
     let state = world.resource::<AccountState>();
@@ -264,7 +265,9 @@ fn receive(world: &mut World) -> Result {
     };
     let mut open = false;
     for event in events {
-        if world.resource::<AccountState>().operation != Some(event.operation_id) {
+        if event.operation_id != 0
+            && world.resource::<AccountState>().operation != Some(event.operation_id)
+        {
             return Err(io::Error::other("账号界面收到非当前操作的结果").into());
         }
         let mut backend = backend
@@ -273,6 +276,39 @@ fn receive(world: &mut World) -> Result {
             .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
         let mut state = world.resource_mut::<AccountState>();
         match event.kind {
+            AccountEventKind::SessionStatus {
+                snapshot,
+                activity,
+                failure,
+            } => {
+                let was_checking = state.session_activity != SessionActivity::Idle;
+                apply_snapshot(&mut state, snapshot);
+                state.session_activity = match activity {
+                    agentelier_bridge::SessionActivity::Idle => SessionActivity::Idle,
+                    agentelier_bridge::SessionActivity::Checking => SessionActivity::Checking,
+                    agentelier_bridge::SessionActivity::Refreshing => SessionActivity::Refreshing,
+                    agentelier_bridge::SessionActivity::Saving => SessionActivity::Saving,
+                    agentelier_bridge::SessionActivity::SaveFailed => SessionActivity::SaveFailed,
+                };
+                if matches!(
+                    activity,
+                    agentelier_bridge::SessionActivity::Idle
+                        | agentelier_bridge::SessionActivity::SaveFailed
+                ) {
+                    state.session_client_error = failure.as_ref().is_some_and(|failure| {
+                        failure.kind == agentelier_bridge::SessionFailureKind::ClientConfiguration
+                    });
+                    state.session_retry_at = failure.as_ref().and_then(|failure| failure.retry_at);
+                    state.session_error = failure.map(|failure| failure.message);
+                }
+                if was_checking
+                    && activity == agentelier_bridge::SessionActivity::Idle
+                    && state.session_error.is_none()
+                {
+                    state.feedback = Some("会话凭据可用".into());
+                    info!("当前账号会话检查完成，凭据可用");
+                }
+            }
             AccountEventKind::BrowserReady(link) => {
                 if state.phase != AccountPhase::Cancelling {
                     backend.authorization = Some((event.operation_id, link));
@@ -306,6 +342,7 @@ fn receive(world: &mut World) -> Result {
                 error!(operation_id = event.operation_id, error = %failure, "登录凭据尚未保存，保留待保存结果");
             }
             AccountEventKind::Completed(result) => {
+                let was_reading = state.phase == AccountPhase::Reading;
                 backend.authorization = None;
                 open = false;
                 state.operation = None;
@@ -313,23 +350,13 @@ fn receive(world: &mut World) -> Result {
                 state.feedback = None;
                 match result {
                     Ok(snapshot) => {
-                        state.account = snapshot.account.map(|account| AccountSummary {
-                            subject: account.subject,
-                            display_name: account.display_name,
-                            email: account.email,
-                        });
-                        state.credentials = match snapshot.credentials {
-                            BridgeCredentials::NoRecord => CredentialState::NoRecord,
-                            BridgeCredentials::HostOnly => CredentialState::HostOnly,
-                            BridgeCredentials::SignedOut => CredentialState::SignedOut,
-                            BridgeCredentials::StoredSession {
-                                expired,
-                                subscription_enabled,
-                            } => CredentialState::StoredSession {
-                                expired,
-                                subscription_enabled,
-                            },
-                        };
+                        apply_snapshot(&mut state, snapshot);
+                        if !was_reading {
+                            state.session_activity = SessionActivity::Idle;
+                            state.session_client_error = false;
+                            state.session_retry_at = None;
+                            state.session_error = None;
+                        }
                         state.error = None;
                         info!(
                             operation_id = event.operation_id,
@@ -369,6 +396,65 @@ fn receive(world: &mut World) -> Result {
         launch_browser(world)?;
     }
     receive_browser(world)
+}
+fn apply_snapshot(state: &mut AccountState, snapshot: agentelier_bridge::AccountSnapshot) {
+    state.account = snapshot.account.map(|account| AccountSummary {
+        subject: account.subject,
+        display_name: account.display_name,
+        email: account.email,
+    });
+    state.credentials = match snapshot.credentials {
+        BridgeCredentials::NoRecord => CredentialState::NoRecord,
+        BridgeCredentials::HostOnly => CredentialState::HostOnly,
+        BridgeCredentials::SignedOut => CredentialState::SignedOut,
+        BridgeCredentials::ReauthenticationRequired => CredentialState::ReauthenticationRequired,
+        BridgeCredentials::StoredSession {
+            expired,
+            subscription_enabled,
+        } => CredentialState::StoredSession {
+            expired,
+            subscription_enabled,
+        },
+    };
+}
+fn check_session(world: &mut World) -> Result {
+    let state = world.resource::<AccountState>();
+    if state.phase != AccountPhase::Idle
+        || state.runtime_failed
+        || matches!(
+            state.session_activity,
+            SessionActivity::Checking | SessionActivity::Refreshing | SessionActivity::Saving
+        )
+    {
+        return Ok(());
+    }
+    let backend = world.resource::<AuthenticationBackend>().clone();
+    let mut backend = backend
+        .0
+        .lock()
+        .map_err(|_| io::Error::other("认证后台状态锁已损坏"))?;
+    if backend.stopping {
+        return Ok(());
+    }
+    let connection = backend
+        .connection
+        .as_mut()
+        .ok_or_else(|| io::Error::other("认证运行未建立"))?;
+    let result = connection.check_session();
+    let mut state = world.resource_mut::<AccountState>();
+    match result {
+        Ok(()) => {
+            state.session_activity = SessionActivity::Checking;
+            state.error = None;
+            state.feedback = None;
+            info!("用户检查当前账号会话");
+        }
+        Err(failure) => {
+            error!(error = %failure, "无法请求账号会话检查");
+            state.error = Some(failure.to_string());
+        }
+    }
+    Ok(())
 }
 fn launch_browser(world: &mut World) -> Result {
     let state = world.resource::<AccountState>();

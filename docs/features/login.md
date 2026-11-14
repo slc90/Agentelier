@@ -30,4 +30,16 @@ Token 交换、OIDC 发现与 JWKS 获取共用启用系统代理支持的 reqwe
 
 主机和会话共用 Windows 受保护 DACL 与同目录原子提交。只有当前用户及 SYSTEM 被允许访问，文件写入秘密前即受保护。目标为普通文件，不接受重解析点或目录。仅身份授权允许没有 Access/Refresh Token，不虚构缺失的凭据、范围或有效期。
 
-本次只实现授权，不实现自动刷新或退出登录。错误以 `LoginFailure` 区分准备、回调、Token、身份、保存、取消与超时，HTTP/JWT 原始内容不进入错误文本。详见[认证设计](../design/modules/authentication.md)。
+当前实现授权及按需续期，不实现退出登录。错误以 `LoginFailure` 区分准备、回调、Token、身份、保存、取消与超时，HTTP/JWT 原始内容不进入错误文本。详见[认证设计](../design/modules/authentication.md)。
+
+## 可用会话与续期
+
+`AuthFile::prepare_credentials(rejected)` 检查会话、订阅授权、有效期与最早刷新时间，返回直接可用的凭据、刷新尝试或待保存记录。Access Token 到期前 60 秒进入续期窗口；尚未到最早刷新时间时，有效 Token 继续使用，已过期或已被认证拒绝则返回 `NotYetRefreshable` 及允许的重试时间。
+
+`RefreshAttempt::execute()` 仅访问固定 Token 服务，发送实际客户端标识、当前 Refresh Token 与 resource，不发送 scope。成功必须有新的 Access/Refresh Token 和有效时间；scope 省略时保留原授权。ID Token 可省略并保留原值；提供新 ID Token 时校验签名、签发方、客户端 audience 与原始身份绑定，subject 不得改变。原始 audience、nonce 和 auth_time 保存为可选 identity_binding，以便多次旋转仍以最初身份为准。
+
+`stage_refresh()` 与 `save_pending()` 保持同一份待提交记录，保存成功才更新内存记录及随机会话代次。旋转待保存或失效清理待保存时拒绝交付旧凭据，不允许恢复文件覆盖待保存结果。`UsableCredentials` 和 `CredentialVersion` 不实现 Debug 或 Reflect，Token 只能由运行侧消费者读取。
+
+`SessionFailure` 区分临时、结果不确定、需要重新登录、客户端配置、存储及暂不可用。连接建立失败与限流采用 30 秒重试间隔；超时、非可判定响应及成功响应校验失败停止在当前运行中重复消费旧刷新凭据，保留账号及磁盘会话，允许显式重新授权。明确失效的刷新错误先禁止使用，再清除会话并保留登记；清理失败保留待提交记录供重试。`invalid_client` 不清除登记，不要求重复浏览器登录。
+
+`AuthenticatedRequest` 固定触发请求的账号和凭据代次；输出开始前的首次 401 可消耗一次恢复预算。403、其他状态、已开始输出或已消耗预算均不提供恢复。实际请求重发由后续模型通信负责，不在这里调用模型服务。

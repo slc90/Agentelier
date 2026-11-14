@@ -20,6 +20,10 @@ pub struct AccountState {
     pub feedback: Option<String>,
     pub browser_opening: bool,
     pub runtime_failed: bool,
+    pub session_activity: SessionActivity,
+    pub session_client_error: bool,
+    pub session_retry_at: Option<u64>,
+    pub session_error: Option<String>,
 }
 #[derive(Reflect, Clone)]
 pub struct AccountSummary {
@@ -34,6 +38,7 @@ pub enum CredentialState {
     NoRecord,
     HostOnly,
     SignedOut,
+    ReauthenticationRequired,
     StoredSession {
         expired: bool,
         subscription_enabled: bool,
@@ -51,6 +56,15 @@ pub enum AccountPhase {
     SaveFailed,
     Cancelling,
 }
+#[derive(Reflect, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SessionActivity {
+    #[default]
+    Idle,
+    Checking,
+    Refreshing,
+    Saving,
+    SaveFailed,
+}
 #[derive(Event)]
 pub struct RestoreAccount;
 #[derive(Event, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +75,7 @@ pub enum LoginAction {
     CopyLink,
     Cancel,
     RetrySave,
+    CheckSession,
 }
 #[derive(Component, Clone, Copy)]
 enum ButtonAction {
@@ -106,13 +121,21 @@ fn status(state: &AccountState) -> &'static str {
         AccountPhase::Cancelling => return "正在取消登录…",
         AccountPhase::Idle => {}
     }
+    match state.session_activity {
+        SessionActivity::Checking => return "正在检查可用会话…",
+        SessionActivity::Refreshing => return "正在刷新账号会话…",
+        SessionActivity::Saving => return "正在保存更新后的凭据…",
+        SessionActivity::SaveFailed => return "凭据更新尚未保存，请重试保存",
+        SessionActivity::Idle => {}
+    }
     match state.credentials {
         CredentialState::Unknown if state.error.is_some() => "无法恢复账号",
         CredentialState::Unknown => "正在读取账号…",
         CredentialState::NoRecord | CredentialState::HostOnly | CredentialState::SignedOut => {
             "未登录"
         }
-        CredentialState::StoredSession { expired: true, .. } => "会话已过期，请重新登录",
+        CredentialState::ReauthenticationRequired => "会话已失效，请重新登录",
+        CredentialState::StoredSession { expired: true, .. } => "会话已过期，可检查会话以尝试续期",
         CredentialState::StoredSession {
             subscription_enabled: false,
             ..
@@ -134,6 +157,12 @@ fn label(state: &AccountState, action: ButtonAction) -> &'static str {
         ButtonAction::Login(LoginAction::CopyLink) => "复制登录链接",
         ButtonAction::Login(LoginAction::Cancel) => "取消登录",
         ButtonAction::Login(LoginAction::RetrySave) => "重试保存",
+        ButtonAction::Login(LoginAction::CheckSession)
+            if state.session_activity == SessionActivity::SaveFailed =>
+        {
+            "重试保存凭据"
+        }
+        ButtonAction::Login(LoginAction::CheckSession) => "检查会话",
     }
 }
 fn button_state(state: &AccountState, action: ButtonAction) -> (bool, bool, bool) {
@@ -168,12 +197,28 @@ fn button_state(state: &AccountState, action: ButtonAction) -> (bool, bool, bool
             matches!(state.phase, AccountPhase::SaveFailed | AccountPhase::Saving),
             state.phase == AccountPhase::Saving,
         ),
+        ButtonAction::Login(LoginAction::CheckSession) => (
+            idle && state.account.is_some(),
+            matches!(
+                state.session_activity,
+                SessionActivity::Checking | SessionActivity::Refreshing | SessionActivity::Saving
+            ),
+        ),
     };
     let browser_busy =
         matches!(action, ButtonAction::Login(LoginAction::OpenBrowser)) && state.browser_opening;
     (
         visible,
-        state.runtime_failed || loading || browser_busy,
+        state.runtime_failed
+            || loading
+            || browser_busy
+            || (state.session_activity != SessionActivity::Idle
+                && !matches!(action, ButtonAction::Login(LoginAction::CheckSession)))
+            || (state.session_client_error
+                && matches!(
+                    action,
+                    ButtonAction::Login(LoginAction::Login | LoginAction::Consent)
+                )),
         loading || browser_busy,
     )
 }
@@ -199,7 +244,11 @@ fn button(state: &AccountState, action: ButtonAction, name: &'static str) -> imp
 pub(crate) fn account_panel(state: &AccountState) -> impl Scene {
     let name = identity(state);
     let status = status(state);
-    let error = state.error.clone().unwrap_or_default();
+    let error = state
+        .error
+        .clone()
+        .or_else(|| state.session_error.clone())
+        .unwrap_or_default();
     let feedback = state.feedback.clone().unwrap_or_default();
     bsn! {
         Name("AccountPanel")
@@ -216,6 +265,7 @@ pub(crate) fn account_panel(state: &AccountState) -> impl Scene {
             Children [
                 @button(state, ButtonAction::Login(LoginAction::Login), "AccountLogin")--
                 @button(state, ButtonAction::Login(LoginAction::Consent), "AccountConsent")--
+                @button(state, ButtonAction::Login(LoginAction::CheckSession), "AccountCheckSession")--
                 @button(state, ButtonAction::Login(LoginAction::OpenBrowser), "AccountOpenBrowser")--
                 @button(state, ButtonAction::Login(LoginAction::CopyLink), "AccountCopyLink")--
                 @button(state, ButtonAction::Login(LoginAction::RetrySave), "AccountRetrySave")--
@@ -267,7 +317,11 @@ fn update_panel(
         } else if is_status {
             text.0 = status(&state).into();
         } else if is_error {
-            text.0 = state.error.clone().unwrap_or_default();
+            text.0 = state
+                .error
+                .clone()
+                .or_else(|| state.session_error.clone())
+                .unwrap_or_default();
         } else if is_feedback {
             text.0 = state.feedback.clone().unwrap_or_default();
         } else if let Some(button) = button {

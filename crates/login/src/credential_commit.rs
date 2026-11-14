@@ -94,6 +94,15 @@ impl AuthFile {
         commit(&self.path, record, false)
             .map_err(|error| LoginFailure::storage(LoginStage::Save, error))?;
         self.record = self.pending.take();
+        self.generation = uuid::Uuid::new_v4();
+        self.renewal = if matches!(
+            self.renewal,
+            crate::session::RenewalState::Pending { invalid: true }
+        ) {
+            crate::session::RenewalState::Failed(crate::session::SessionFailure::reauthentication())
+        } else {
+            crate::session::RenewalState::Ready
+        };
         self.issued_client = None;
         Ok(projection)
     }

@@ -16,22 +16,23 @@ struct Discovery {
 }
 
 #[derive(Deserialize)]
-pub(super) struct Claims {
+pub(crate) struct Claims {
     pub sub: String,
     pub name: Option<String>,
     pub email: Option<String>,
-    nonce: String,
+    pub(crate) nonce: Option<String>,
+    pub(crate) auth_time: Option<u64>,
     iat: u64,
     exp: u64,
-    aud: serde_json::Value,
+    pub(crate) aud: serde_json::Value,
     azp: Option<String>,
 }
 
-pub(super) async fn verify(
+pub(crate) async fn verify(
     client: &reqwest::Client,
     id_token: &str,
     client_id: &str,
-    nonce: &str,
+    nonce: Option<&str>,
 ) -> Result<Claims, LoginFailure> {
     let failure = || {
         LoginFailure::new(
@@ -81,7 +82,12 @@ pub(super) async fn verify(
         .map_err(|_| failure())?
         .as_secs();
     if claims.sub.trim().is_empty()
-        || !bool::from(claims.nonce.as_bytes().ct_eq(nonce.as_bytes()))
+        || nonce.is_some_and(|expected| {
+            claims
+                .nonce
+                .as_deref()
+                .is_none_or(|actual| !bool::from(actual.as_bytes().ct_eq(expected.as_bytes())))
+        })
         || claims.iat > now.saturating_add(CLOCK_TOLERANCE_SECONDS)
         || claims.exp <= claims.iat
         || claims

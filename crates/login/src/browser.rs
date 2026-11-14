@@ -1,5 +1,5 @@
 mod callback;
-mod identity;
+pub(crate) mod identity;
 
 use crate::authentication::{AccountRecord, ISSUER, Registration, Session};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -12,15 +12,15 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 const AUTHORIZE_ENDPOINT: &str = "https://auth.openai.com/api/accounts/authorize";
-const TOKEN_ENDPOINT: &str = "https://auth.openai.com/api/accounts/oauth/token";
-const RESOURCE: &str = "https://api.openai.com/v1";
+pub(crate) const TOKEN_ENDPOINT: &str = "https://auth.openai.com/api/accounts/oauth/token";
+pub(crate) const RESOURCE: &str = "https://api.openai.com/v1";
 const SCOPES: &str =
     "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
 const DYNAMIC_CLIENT: &str = "dynamic_agent_client";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 const RANDOM_BYTES: usize = 32;
-const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
 pub struct AuthorizationContext {
     pub(crate) host_id: String,
@@ -135,16 +135,7 @@ impl BrowserLogin {
                 query.append_pair("prompt", "consent");
             }
         }
-        let client = reqwest::Client::builder()
-            .user_agent(concat!("Agentelier/", env!("CARGO_PKG_VERSION")))
-            .default_headers(reqwest::header::HeaderMap::from_iter([(
-                reqwest::header::ACCEPT,
-                reqwest::header::HeaderValue::from_static("application/json"),
-            )]))
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(REQUEST_TIMEOUT)
-            .build()
-            .map_err(|_| LoginFailure::new(LoginStage::Prepare, "无法建立安全 HTTP 客户端"))?;
+        let client = http_client()?;
         Ok(Self {
             context,
             listener,
@@ -219,7 +210,7 @@ impl BrowserLogin {
         let claims = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(LoginFailure::cancelled()),
-            result = identity::verify(&self.client, &response.id_token, client_id, &self.nonce) => result?,
+            result = identity::verify(&self.client, response.id_token.as_deref().ok_or_else(|| LoginFailure::new(LoginStage::Identity, "缺少 ID Token"))?, client_id, Some(&self.nonce)) => result?,
         };
         if self
             .context
@@ -232,7 +223,7 @@ impl BrowserLogin {
                 "返回账号与现有登记不一致，原会话保持不变",
             ));
         }
-        let session = response.into_session(received_at)?;
+        let session = response.into_session(received_at, None)?;
         Ok(VerifiedLogin {
             record: AccountRecord {
                 ext_agent_host_id: self.context.host_id,
@@ -250,18 +241,22 @@ impl BrowserLogin {
 }
 
 #[derive(Deserialize)]
-struct TokenResponse {
-    id_token: String,
-    access_token: Option<String>,
-    refresh_token: Option<String>,
+pub(crate) struct TokenResponse {
+    pub(crate) id_token: Option<String>,
+    pub(crate) access_token: Option<String>,
+    pub(crate) refresh_token: Option<String>,
     token_type: Option<String>,
-    scope: String,
+    scope: Option<String>,
     expires_in: Option<u64>,
     earliest_refresh_at: Option<serde_json::Value>,
 }
 
 impl TokenResponse {
-    fn into_session(self, received_at: u64) -> Result<Session, LoginFailure> {
+    pub(crate) fn into_session(
+        self,
+        received_at: u64,
+        previous: Option<&Session>,
+    ) -> Result<Session, LoginFailure> {
         let invalid =
             || LoginFailure::new(LoginStage::Token, "服务返回的凭据、授权范围或有效期不完整");
         let expires_at = self
@@ -290,17 +285,39 @@ impl TokenResponse {
             Some(_) => return Err(invalid()),
         };
         let session = Session {
+            identity_binding: previous.and_then(|session| session.identity_binding.clone()),
             access_token: self.access_token,
             refresh_token: self.refresh_token,
-            id_token: self.id_token,
+            id_token: self
+                .id_token
+                .or_else(|| previous.map(|session| session.id_token.clone()))
+                .ok_or_else(invalid)?,
             token_type: self.token_type,
-            scopes: self.scope.split_whitespace().map(str::to_owned).collect(),
+            scopes: match self.scope {
+                Some(scope) => scope.split_whitespace().map(str::to_owned).collect(),
+                None => previous
+                    .map(|session| session.scopes.clone())
+                    .ok_or_else(invalid)?,
+            },
             received_at,
             expires_at,
             refresh_not_before,
         };
         Ok(session)
     }
+}
+
+pub(crate) fn http_client() -> Result<reqwest::Client, LoginFailure> {
+    reqwest::Client::builder()
+        .user_agent(concat!("Agentelier/", env!("CARGO_PKG_VERSION")))
+        .default_headers(reqwest::header::HeaderMap::from_iter([(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        )]))
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .map_err(|_| LoginFailure::new(LoginStage::Prepare, "无法建立安全 HTTP 客户端"))
 }
 
 pub(super) async fn parse_response<T: serde::de::DeserializeOwned>(
