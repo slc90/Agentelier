@@ -89,6 +89,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 name = "agentelier"
 version = "0.1.0"
 dependencies = [
+ "agentelier_bridge",
  "agentelier_login",
  "agentelier_login_ui",
  "bevy",
@@ -106,16 +107,28 @@ dependencies = [
 [[package]]
 name = "agentelier_agent"
 version = "0.1.0"
+dependencies = [
+ "agentelier_login",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "agentelier_bridge"
 version = "0.1.0"
+dependencies = [
+ "agentelier_agent",
+ "tracing",
+]
 
 [[package]]
 name = "agentelier_login"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "tempfile",
+ "uuid",
  "winsafe",
 ]
 

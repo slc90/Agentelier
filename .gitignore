@@ -1,4 +1,5 @@
 /target
+/codex_data/
 /app/logs/
 
 # Python caches and compiled files

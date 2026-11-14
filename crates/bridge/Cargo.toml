@@ -4,5 +4,9 @@ publish = false
 version.workspace = true
 edition.workspace = true
 
+[dependencies]
+agentelier_agent = { path = "../agent" }
+tracing.workspace = true
+
 [lints]
 workspace = true

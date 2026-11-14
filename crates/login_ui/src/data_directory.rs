@@ -52,6 +52,7 @@ impl Plugin for LoginUiPlugin {
             app.add_plugins(WidgetryFileDialogPlugin);
         }
         crate::directory_settings::install(app);
+        crate::account::install(app);
         app.insert_resource(StartupUi {
             options: self.options.clone(),
             host: None,

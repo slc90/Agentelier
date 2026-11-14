@@ -4,5 +4,10 @@ publish = false
 version.workspace = true
 edition.workspace = true
 
+[dependencies]
+agentelier_login = { path = "../login" }
+tokio.workspace = true
+tracing.workspace = true
+
 [lints]
 workspace = true

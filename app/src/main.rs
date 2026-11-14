@@ -3,8 +3,10 @@
 #[cfg(not(all(target_os = "windows", target_pointer_width = "64")))]
 compile_error!("This application template supports Windows x64 only");
 
+mod authentication;
 mod config;
 mod diagnostics;
+mod shutdown;
 
 use agentelier_login::DataEnvironment;
 use agentelier_login_ui::{DataDirectoryReady, LoginUiHost, LoginUiPlugin};
@@ -15,7 +17,7 @@ use bevy::{prelude::*, render::RenderPlugin, tasks::block_on};
 use bevy_app_assets::AppAssetPlugin;
 use bevy_brp_runtime::BrpRuntimePlugin;
 use bevy_widgetry::app_logging::{AppLogging, LoggingGuard, log_plugin};
-use bevy_widgetry::job::{JobManager, ShutdownPhase};
+use bevy_widgetry::job::JobManager;
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::ui_scale::{WidgetryUiScale, WidgetryUiScalePlugin};
 use bevy_widgetry::window::{
@@ -24,11 +26,7 @@ use bevy_widgetry::window::{
 };
 use bevy_widgetry_path_display::display_path;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
-use tracing::{debug, warn};
-
-const JOB_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
-const JOB_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(10);
+use tracing::debug;
 
 fn main() -> std::process::ExitCode {
     let mut logging_ready = false;
@@ -115,32 +113,16 @@ fn run(
         .add_systems(Startup, setup)
         .add_observer(enter_main);
     let manager = app.world().resource::<JobManager>().clone();
+    let backend = authentication::AuthenticationBackend::default();
+    authentication::install(&mut app, backend.clone());
+    shutdown::install(&mut app);
     debug!("应用装配完成，进入主循环");
     let exit = app.run();
-    finish_jobs(&manager)?;
+    let backend_result = backend.finish();
+    let jobs_result = shutdown::finish_jobs(&manager);
+    backend_result?;
+    jobs_result?;
     Ok(exit)
-}
-
-fn finish_jobs(manager: &JobManager) -> Result {
-    let shutdown = manager
-        .begin_shutdown(JOB_SHUTDOWN_TIMEOUT)
-        .map_err(|failure| failure.into_bevy_error())?;
-    let mut timeout_reported = false;
-    loop {
-        let status = shutdown.status();
-        if status.phase == ShutdownPhase::Finished {
-            debug!("应用辅助后台任务已全部结束");
-            return Ok(());
-        }
-        if status.phase == ShutdownPhase::TimedOut && !timeout_reported {
-            warn!(
-                remaining = status.remaining.len(),
-                "后台任务收尾超时，继续等待实际结束"
-            );
-            timeout_reported = true;
-        }
-        std::thread::sleep(JOB_SHUTDOWN_POLL_INTERVAL);
-    }
 }
 
 fn enter_main(

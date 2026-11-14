@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agentelier_bridge = { path = "../crates/bridge" }
 bevy.workspace = true
 bevy_app_assets = { path = "../crates/assets" }
 agentelier_login = { path = "../crates/login" }
