@@ -1,7 +1,7 @@
 use agentelier_account::{
     Account, AccountCommand, AccountEventKind, AccountFailure, CredentialClient,
 };
-use agentelier_llm_model::{ModelFailure, ModelFailureKind, ModelReply};
+use agentelier_llm_model::{ModelFailure, ModelFailureKind, ModelRequest, ModelResult};
 use std::path::PathBuf;
 use std::thread::JoinHandle;
 use std::{error::Error, fmt, io};
@@ -20,7 +20,7 @@ pub struct AgentEvent {
 }
 pub enum AgentEventKind {
     Account(AccountEventKind),
-    ModelCompleted(Result<ModelReply, ModelFailure>),
+    ModelCompleted(Result<ModelResult, ModelFailure>),
     ModelCancelled,
 }
 #[derive(Debug)]
@@ -56,8 +56,12 @@ impl From<AccountFailure> for RuntimeFailure {
 }
 enum Command {
     Account(AccountCommand),
-    VerifyModel { id: u64, control: ModelControl },
-    ModelFinished(Result<Option<Result<ModelReply, ModelFailure>>, tokio::task::JoinError>),
+    Model {
+        id: u64,
+        control: ModelControl,
+        request: ModelRequest,
+    },
+    ModelFinished(Result<Option<Result<ModelResult, ModelFailure>>, tokio::task::JoinError>),
 }
 
 pub struct AgentRuntime {
@@ -78,17 +82,22 @@ struct ModelControl {
 struct ModelTask {
     id: u64,
     control: ModelControl,
-    handle: tokio::task::JoinHandle<Option<Result<ModelReply, ModelFailure>>>,
+    handle: tokio::task::JoinHandle<Option<Result<ModelResult, ModelFailure>>>,
 }
 impl ModelTask {
-    fn start(id: u64, control: ModelControl, credentials: CredentialClient) -> Self {
+    fn start(
+        id: u64,
+        control: ModelControl,
+        credentials: CredentialClient,
+        request: ModelRequest,
+    ) -> Self {
         let cancel = control.cancel.clone();
         let handle = tokio::spawn(async move {
             let started = std::time::Instant::now();
             debug!(operation_id = id, "模型连接操作执行体已启动");
             let result = tokio::select! { biased;
                 _ = cancel.cancelled() => None,
-                result = agentelier_llm_model::verify(credentials) => Some(result),
+                result = agentelier_llm_model::execute(credentials, request) => Some(result),
             };
             debug!(
                 operation_id = id,
@@ -106,7 +115,7 @@ impl ModelTask {
     }
 }
 fn model_event(
-    result: Result<Option<Result<ModelReply, ModelFailure>>, tokio::task::JoinError>,
+    result: Result<Option<Result<ModelResult, ModelFailure>>, tokio::task::JoinError>,
 ) -> AgentEventKind {
     match result {
         Ok(Some(result)) => AgentEventKind::ModelCompleted(result),
@@ -163,12 +172,14 @@ impl AgentRuntime {
             .name("agentelier-auth".into())
             .spawn(move || {
                 debug!("认证运行线程已启动");
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    runtime.block_on(async move {
-                        let mut account = Account::new(credentials_path, owner_credentials.clone());
-                        let mut delivery_failure = None;
-                        let mut model: Option<ModelTask> = None;
-                        let execution = async {
+                let outcome =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        runtime.block_on(async move {
+                            let mut account =
+                                Account::new(credentials_path, owner_credentials.clone());
+                            let mut delivery_failure = None;
+                            let mut model: Option<ModelTask> = None;
+                            let execution = async {
                             loop {
                                 let command = tokio::select! { biased;
                                     request = sign_out_incoming.recv() => match request {
@@ -186,7 +197,7 @@ impl AgentRuntime {
                                     },
                                 };
                                 match command {
-                                    Command::VerifyModel { id, control } => {
+                                    Command::Model { id, control, request } => {
                                         if model.is_some() {
                                             return Err(AccountFailure::Busy.into());
                                         }
@@ -194,6 +205,7 @@ impl AgentRuntime {
                                             id,
                                             control,
                                             owner_credentials.clone(),
+                                            request,
                                         ));
                                     }
                                     Command::ModelFinished(result) => {
@@ -221,7 +233,7 @@ impl AgentRuntime {
                                                     Command::Account(command) => {
                                                         command.reject_for_sign_out()
                                                     }
-                                                    Command::VerifyModel { control, .. } => {
+                                                    Command::Model { control, .. } => {
                                                         control.finished.cancel()
                                                     }
                                                     _ => {}
@@ -256,18 +268,18 @@ impl AgentRuntime {
                             Ok::<Account, RuntimeFailure>(account)
                         }
                         .await;
-                        capture_delivery(
-                            stop_model(&mut model, &publish).await,
-                            &mut delivery_failure,
-                        );
-                        execution?.finish().await?;
-                        if let Some(failure) = delivery_failure {
-                            return Err(failure);
-                        }
-                        Ok(())
-                    })
-                }))
-                .unwrap_or(Err(RuntimeFailure::Thread));
+                            capture_delivery(
+                                stop_model(&mut model, &publish).await,
+                                &mut delivery_failure,
+                            );
+                            execution?.finish().await?;
+                            if let Some(failure) = delivery_failure {
+                                return Err(failure);
+                            }
+                            Ok(())
+                        })
+                    }))
+                    .unwrap_or(Err(RuntimeFailure::Thread));
                 drop(runtime);
                 debug!("认证执行体与 Tokio 已结束");
                 let notification = finished()
@@ -292,13 +304,14 @@ impl AgentRuntime {
     pub fn credentials(&self) -> CredentialClient {
         self.credentials.clone()
     }
-    pub fn verify_model(&mut self, id: u64) -> Result<(), RuntimeFailure> {
+    pub fn request_model(&mut self, id: u64, request: ModelRequest) -> Result<(), RuntimeFailure> {
         let control = ModelControl {
             cancel: CancellationToken::new(),
             finished: CancellationToken::new(),
         };
-        self.send(Command::VerifyModel {
+        self.send(Command::Model {
             id,
+            request,
             control: control.clone(),
         })?;
         self.model = Some(control);

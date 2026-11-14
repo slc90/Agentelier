@@ -6,6 +6,7 @@ members = [
   "crates/ui/assets",
   "crates/ui/login_ui",
   "crates/ui/agent_host",
+  "crates/ui/chat_ui",
   "crates/agent/login",
   "crates/agent/account",
   "crates/agent/llm_model",

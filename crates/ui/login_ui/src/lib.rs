@@ -5,11 +5,10 @@ mod account;
 mod authentication;
 mod data_directory;
 mod directory_settings;
-mod model;
 
 pub use account::{
     AccountPhase, AccountState, AccountSummary, CredentialState, LoginAction, RestoreAccount,
     SessionActivity,
 };
 pub use data_directory::{DataDirectoryReady, LoginUiHost, LoginUiPlugin};
-pub use model::{ModelState, VerifyModel};
+pub use directory_settings::HomeContent;

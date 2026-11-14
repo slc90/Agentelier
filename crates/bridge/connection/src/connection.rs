@@ -148,10 +148,13 @@ impl Connection {
         });
         Ok(id)
     }
-    pub fn verify_model(&mut self) -> Result<u64, BridgeFailure> {
+    pub fn request_model(
+        &mut self,
+        request: agentelier_llm_model_bridge::ModelRequest,
+    ) -> Result<u64, BridgeFailure> {
         let id = self.allocate()?;
         self.runtime
-            .verify_model(id)
+            .request_model(id, agentelier_llm_model_bridge::request(request))
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
         self.next_operation = id;
         self.model = Some(id);

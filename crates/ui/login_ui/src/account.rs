@@ -332,12 +332,12 @@ fn activate(
     event: On<Activate>,
     actions: Query<&ButtonAction>,
     state: Res<AccountState>,
-    model: Res<crate::ModelState>,
+    model: Res<agentelier_agent_host::HostActivity>,
     mut commands: Commands,
 ) -> Result {
     let action = *actions.get(event.entity)?;
     let (visible, disabled, _) = button_state(&state, action);
-    if visible && !disabled && !model_blocks(model.operation.is_some(), action) {
+    if visible && !disabled && !model_blocks(model.model_busy, action) {
         match action {
             ButtonAction::Restore => {
                 commands.trigger(RestoreAccount);
@@ -351,7 +351,7 @@ fn activate(
 }
 fn update_panel(
     state: Res<AccountState>,
-    model: Res<crate::ModelState>,
+    model: Res<agentelier_agent_host::HostActivity>,
     mut text: Query<(
         &mut Text,
         Has<AccountIdentity>,
@@ -385,7 +385,7 @@ fn update_panel(
     }
     for (entity, action, mut node) in &mut buttons {
         let (visible, disabled, loading) = button_state(&state, *action);
-        let disabled = disabled || model_blocks(model.operation.is_some(), *action);
+        let disabled = disabled || model_blocks(model.model_busy, *action);
         node.display = if visible {
             Display::Flex
         } else {

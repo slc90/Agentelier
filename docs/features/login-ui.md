@@ -8,7 +8,7 @@
 
 新路径保存成功或旧路径检查成功后，环境写入共享单次初始化槽；任务真实完成后发布 `DataDirectoryReady`。宿主据此更新界面和配置投影。取消选择或失败恢复会请求正常退出，关闭窗口也沿宿主退出流程执行。
 
-宿主在安装插件前通过 `LoginUiPlugin::account_runtime()` 取得同一运行的 `AccountRuntime` 句柄。退出时先调用 `begin_shutdown()`，通过 `is_finished()` 非阻塞等待并以 `finish()` 取得真实结果；主循环结束后再次兜底收尾，再停止并等待共享 JobManager，关闭日志并释放共享环境槽。界面不安装第二套日志或事件循环，不把凭据内容放入反射状态或事件。应用装配见[总体架构](../design/architecture.md)，存放与错误契约见[数据目录与启动](../design/mechanisms/application-data.md)。
+application 安装共享 `AgentHostPlugin` 并保留其 `AgentHost` 句柄；登录插件不持有后台连接或读取公共队列。账号事件由共享宿主分发，授权地址和浏览器任务保留在登录交互层。退出时先调用 `begin_shutdown()`，通过 `is_finished()` 非阻塞等待并以 `finish()` 取得真实结果；主循环结束后再次兜底收尾，再停止并等待共享 JobManager，关闭日志并释放共享环境槽。模型目录和验证界面由独立 chat_ui 在主页的 HomeContent 位置组合；登录界面不安装第二套日志或事件循环，不把凭据内容放入反射状态或事件。应用装配见[总体架构](../design/architecture.md)，存放与错误契约见[数据目录与启动](../design/mechanisms/application-data.md)。
 
 ## 数据与存储设置
 

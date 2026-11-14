@@ -15,7 +15,26 @@ const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DIAGNOSTIC_CHARS: usize = 2048;
 
+#[derive(Clone)]
+pub struct ModelInfo {
+    pub slug: String,
+    pub display_name: String,
+    pub supported_reasoning_levels: Vec<String>,
+    pub default_reasoning_level: Option<String>,
+}
+
+pub enum ModelRequest {
+    Catalog,
+    Verify { slug: String, display_name: String },
+}
+
+pub enum ModelResult {
+    Catalog(Vec<ModelInfo>),
+    Verified(ModelReply),
+}
+
 pub struct ModelReply {
+    pub slug: String,
     pub model: String,
     pub text: String,
 }
@@ -68,7 +87,10 @@ impl fmt::Display for ModelFailure {
 }
 impl Error for ModelFailure {}
 
-pub async fn verify(credentials: CredentialClient) -> Result<ModelReply, ModelFailure> {
+pub async fn execute(
+    credentials: CredentialClient,
+    operation: ModelRequest,
+) -> Result<ModelResult, ModelFailure> {
     let client = Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
@@ -77,44 +99,72 @@ pub async fn verify(credentials: CredentialClient) -> Result<ModelReply, ModelFa
         .build()
         .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "无法建立安全模型客户端"))?;
     let mut current = acquire(&credentials).await?;
-    let mut catalog_request = AuthenticatedRequest::new(&current);
-    let catalog = loop {
-        let response = client
-            .get(MODELS_URL)
-            .bearer_auth(current.access_token())
-            .send()
-            .await
-            .map_err(network)?;
-        if response.status().is_success() {
-            let status = response.status().as_u16();
-            let id = request_id(&response);
-            break read_json(response)
+    let ModelRequest::Verify { slug, display_name } = operation else {
+        let mut catalog_request = AuthenticatedRequest::new(&current);
+        let catalog = loop {
+            let response = client
+                .get(MODELS_URL)
+                .bearer_auth(current.access_token())
+                .send()
                 .await
-                .map_err(|failure| with_response(failure, status, id))?;
-        }
-        let failure = http_failure(response).await;
-        if let Some(replacement) =
-            recover(&credentials, &mut catalog_request, &current, &failure).await?
+                .map_err(network)?;
+            if response.status().is_success() {
+                let status = response.status().as_u16();
+                let id = request_id(&response);
+                break read_json(response)
+                    .await
+                    .map_err(|failure| with_response(failure, status, id))?;
+            }
+            let failure = http_failure(response).await;
+            if let Some(replacement) =
+                recover(&credentials, &mut catalog_request, &current, &failure).await?
+            {
+                current = replacement;
+            } else {
+                return Err(failure);
+            }
+        };
+        let models = catalog
+            .get("models")
+            .and_then(Value::as_array)
+            .ok_or_else(|| protocol("模型目录缺少 models 数组"))?;
+        let mut result = Vec::new();
+        for model in models
+            .iter()
+            .filter(|model| model.get("visibility").and_then(Value::as_str) == Some("list"))
         {
-            current = replacement;
-        } else {
-            return Err(failure);
+            let slug = required_text(model, "slug", "可显示模型缺少 slug")?.to_owned();
+            let display_name =
+                required_text(model, "display_name", "可显示模型缺少 display_name")?.to_owned();
+            let supported_reasoning_levels = model
+                .get("supported_reasoning_levels")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|level| level.get("effort").and_then(Value::as_str))
+                .map(str::to_owned)
+                .collect();
+            let default_reasoning_level = model
+                .get("default_reasoning_level")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if result.iter().any(|entry: &ModelInfo| entry.slug == slug) {
+                return Err(protocol("模型目录含有重复 slug"));
+            }
+            result.push(ModelInfo {
+                slug,
+                display_name,
+                supported_reasoning_levels,
+                default_reasoning_level,
+            });
         }
+        tracing::debug!(model_count = result.len(), "已读取当前账号模型目录");
+        return Ok(ModelResult::Catalog(result));
     };
-    let models = catalog
-        .get("models")
-        .and_then(Value::as_array)
-        .ok_or_else(|| protocol("模型目录缺少 models 数组"))?;
-    let model = models
-        .iter()
-        .find(|model| model.get("visibility").and_then(Value::as_str) == Some("list"))
-        .ok_or_else(|| protocol("当前账号没有可显示的模型"))?;
-    let slug = required_text(model, "slug", "可显示模型缺少 slug")?;
-    let display_name = required_text(model, "display_name", "可显示模型缺少 display_name")?;
-    tracing::debug!(model = slug, "已选择当前账号模型目录中的首个可显示模型");
-    let latest = acquire(&credentials).await?;
-    same_account(&current, &latest)?;
-    current = latest;
+    if slug.trim().is_empty() {
+        return Err(protocol("未选择模型"));
+    }
+    tracing::debug!(model = slug, "使用显式选择的模型验证连接");
     let mut request = AuthenticatedRequest::new(&current);
     loop {
         let response = client
@@ -138,10 +188,11 @@ pub async fn verify(credentials: CredentialClient) -> Result<ModelReply, ModelFa
         };
         match outcome {
             Ok(text) => {
-                return Ok(ModelReply {
-                    model: display_name.to_owned(),
+                return Ok(ModelResult::Verified(ModelReply {
+                    slug,
+                    model: display_name,
                     text,
-                });
+                }));
             }
             Err(failure) => {
                 if let Some(replacement) =

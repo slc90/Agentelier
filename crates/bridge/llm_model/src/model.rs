@@ -1,6 +1,34 @@
 use std::fmt;
 
+#[derive(Clone)]
+pub struct ModelInfo {
+    pub slug: String,
+    pub display_name: String,
+    pub supported_reasoning_levels: Vec<String>,
+    pub default_reasoning_level: Option<String>,
+}
+
+pub enum ModelRequest {
+    Catalog,
+    Verify { slug: String, display_name: String },
+}
+
+pub enum ModelResult {
+    Catalog(Vec<ModelInfo>),
+    Verified(ModelReply),
+}
+
+pub fn request(request: ModelRequest) -> agentelier_llm_model::ModelRequest {
+    match request {
+        ModelRequest::Catalog => agentelier_llm_model::ModelRequest::Catalog,
+        ModelRequest::Verify { slug, display_name } => {
+            agentelier_llm_model::ModelRequest::Verify { slug, display_name }
+        }
+    }
+}
+
 pub struct ModelReply {
+    pub slug: String,
     pub model: String,
     pub text: String,
 }
@@ -37,20 +65,36 @@ impl fmt::Display for ModelFailure {
     }
 }
 pub enum ModelEventKind {
-    Completed(Result<ModelReply, ModelFailure>),
+    Completed(Result<ModelResult, ModelFailure>),
     Cancelled,
 }
 
 pub fn convert(
-    result: Option<Result<agentelier_llm_model::ModelReply, agentelier_llm_model::ModelFailure>>,
+    result: Option<Result<agentelier_llm_model::ModelResult, agentelier_llm_model::ModelFailure>>,
 ) -> ModelEventKind {
     match result {
         None => ModelEventKind::Cancelled,
         Some(result) => ModelEventKind::Completed(
             result
-                .map(|reply| ModelReply {
-                    model: reply.model,
-                    text: reply.text,
+                .map(|result| match result {
+                    agentelier_llm_model::ModelResult::Catalog(models) => ModelResult::Catalog(
+                        models
+                            .into_iter()
+                            .map(|model| ModelInfo {
+                                slug: model.slug,
+                                display_name: model.display_name,
+                                supported_reasoning_levels: model.supported_reasoning_levels,
+                                default_reasoning_level: model.default_reasoning_level,
+                            })
+                            .collect(),
+                    ),
+                    agentelier_llm_model::ModelResult::Verified(reply) => {
+                        ModelResult::Verified(ModelReply {
+                            slug: reply.slug,
+                            model: reply.model,
+                            text: reply.text,
+                        })
+                    }
                 })
                 .map_err(|failure| ModelFailure {
                     kind: match failure.kind {

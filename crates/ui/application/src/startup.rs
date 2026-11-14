@@ -1,7 +1,7 @@
 use crate::{config, diagnostics, shutdown};
 use agentelier_agent_host::AgentHostPlugin;
 use agentelier_login::DataEnvironment;
-use agentelier_login_ui::{DataDirectoryReady, LoginUiHost, LoginUiPlugin};
+use agentelier_login_ui::{DataDirectoryReady, HomeContent, LoginUiHost, LoginUiPlugin};
 use bevy::log::LogPlugin;
 use bevy::window::{MonitorSelection, PrimaryWindow, WindowPosition, WindowResolution};
 use bevy::winit::WinitSettings;
@@ -105,7 +105,9 @@ fn run_application(
     app.insert_resource(config_store)
         .add_plugins((AppAssetPlugin, WidgetryWindowPlugin, host_plugin, login_ui))
         .add_systems(Startup, setup)
-        .add_observer(enter_main);
+        .add_observer(enter_main)
+        .add_observer(mount_chat);
+    agentelier_chat_ui::install(&mut app)?;
     let manager = app.world().resource::<JobManager>().clone();
     shutdown::install(&mut app);
     debug!("应用装配完成，进入主循环");
@@ -159,4 +161,12 @@ fn setup(mut commands: Commands, primary_window: Query<Entity, With<PrimaryWindo
         )
     });
     Ok(())
+}
+
+fn mount_chat(event: On<Add<HomeContent>>, mut commands: Commands) {
+    let host = event.entity;
+    commands.spawn_scene_with_error_handler(bsn! {
+        agentelier_chat_ui::ChatUiHost ChildOf(host)
+        Node { width: percent(100), height: percent(100), min_height: px(0) }
+    });
 }

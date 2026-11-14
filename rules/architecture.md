@@ -9,7 +9,9 @@
 - `app/`：仅保留可执行包所需的 `Cargo.toml` 和程序入口 `src/main.rs`。`main.rs` 只承担入口级平台声明并调用 `crates/` 提供的启动接口，不实现业务、配置、窗口/UI 装配、诊断或生命周期协调，也不声明其他功能 Module。下层库 crate 不得依赖 `app`。
 - 所有功能实现必须放在 `crates/`，按真实职责归入 `ui/`、`agent/`、`bridge/` 三个领域。领域目录只是架构边界，不是 Rust Crate，不预先创建空库，也不建立承担整个领域功能的总包。
 - `crates/ui/application/`：通用应用宿主，负责配置、日志、诊断、窗口/插件装配与整体启动退出协调，不接管具体账号界面、认证协议或模型执行。
-- `crates/ui/login_ui/`：目录、账号及模型验证界面，以及相应的 Bevy/Bridge 交互衔接和浏览器交互。
+- `crates/ui/login_ui/`：目录、账号界面，以及相应的 Bevy/Bridge 交互衔接和浏览器交互。
+- `crates/ui/agent_host/`（`agentelier_agent_host`）：共享执行连接、Winit 唤醒、命令转交、业务消息分发和执行收尾。
+- `crates/ui/chat_ui/`（`agentelier_chat_ui`）：模型准备和相应的交互投影，不接管认证、HTTP 或运行线程。
 - `crates/ui/assets/`：统一管理应用 Asset。
 - `crates/agent/login/`（`agentelier_login`）：OAuth 协议、Token、认证文件持久化及数据环境，不承担统一运行调度。
 - `crates/agent/account/`（`agentelier_account`）：账号操作与会话运行状态、共享凭据请求、登录/恢复/续期/退出协调，具体协议和文件读写由 Login 实现。

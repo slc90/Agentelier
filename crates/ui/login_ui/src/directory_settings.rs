@@ -27,6 +27,9 @@ const BUTTON_HEIGHT: f32 = 40.0;
 const BUTTON_WIDTH: f32 = 144.0;
 const BUTTON_GAP: f32 = 12.0;
 
+#[derive(Component, Clone, Default)]
+pub struct HomeContent;
+
 #[derive(Resource)]
 struct DirectorySettings {
     host: Entity,
@@ -153,15 +156,17 @@ fn render(world: &mut World) -> Result {
         entity.despawn();
     }
     let account = world.resource::<crate::AccountState>().clone();
-    let model = world.resource::<crate::ModelState>().clone();
+    let model_busy = world
+        .resource::<agentelier_agent_host::AgentHost>()
+        .model_busy()?;
     let screen = match view {
         View::Home => world.commands().spawn_scene_with_error_handler(bsn! {
             Name("DirectorySettingsHome") ChildOf(host)
             Node { width: percent(100), height: percent(100), flex_direction: FlexDirection::Column, align_items: AlignItems::Start, padding: UiRect::all(px(PANEL_PADDING)), row_gap: px(FIELD_GAP) }
             Children [
                 @button("设置", "DirectorySettingsEntry", Action::Settings, false)--
-                @crate::account::account_panel(&account, model.operation.is_some())--
-                @crate::model::panel(&model, &account)
+                @crate::account::account_panel(&account, model_busy)--
+                HomeContent Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }
             ]
         }).id(),
         View::Settings => {

@@ -31,7 +31,7 @@ Bridge、Agent、login 都不依赖 Bevy。`agentelier_agent_host::AgentHost` �
 
 ## 单次模型操作
 
-`verify_model()` 分配独立操作 ID，接纳后阻止新的登录、恢复、检查和重复验证，直到实际终态；退出仍可发起。Agent 在同一 Tokio 中启动一个模型任务，认证所有者继续处理该任务的 CredentialClient 请求。Runtime 的 `ModelCompleted`/`ModelCancelled` 经过 LLM Model Bridge 转成 `ModelEventKind::Completed`/`Cancelled`；Completed 提供该 Bridge 自己的 ModelReply 或 ModelFailure（分类、HTTP 状态、代码、请求标识、诊断原因），Cancelled 表示执行体已实际结束。模型结果入队后沿相同 Winit 通知路径唤醒应用。
+`request_model(ModelRequest)` 为目录读取或指定模型验证分配独立操作 ID，接纳后阻止新的登录、恢复、检查和重复验证，直到实际终态；退出仍可发起。Agent 在同一 Tokio 中启动一个模型任务，认证所有者继续处理该任务的 CredentialClient 请求。Runtime 的 `ModelCompleted`/`ModelCancelled` 经过 LLM Model Bridge 转成 `ModelEventKind::Completed`/`Cancelled`；Completed 提供该 Bridge 自己的 ModelResult（目录或 ModelReply）或 ModelFailure（分类、HTTP 状态、代码、请求标识、诊断原因），Cancelled 表示执行体已实际结束。模型结果入队后沿相同 Winit 通知路径唤醒应用。
 
 退出登录先取消并 join 当前模型任务，再撤销/清理会话；Bridge 隔离其迟到结果。关闭同样取消并等待模型任务，然后结束认证/Tokio。模型取消不会撤销认证所有者已经开始的刷新或丢弃待保存结果。目录和流协议见[模型连接验证](model-request.md)。
 

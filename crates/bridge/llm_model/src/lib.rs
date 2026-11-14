@@ -3,4 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod model;
 
-pub use model::{ModelEventKind, ModelFailure, ModelFailureKind, ModelReply, convert};
+pub use model::{
+    ModelEventKind, ModelFailure, ModelFailureKind, ModelInfo, ModelReply, ModelRequest,
+    ModelResult, convert, request,
+};

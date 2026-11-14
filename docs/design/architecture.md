@@ -10,8 +10,9 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | --- | --- | --- |
 | `crates/ui/application/` | `agentelier_application` | 通用宿主、配置、日志、诊断、窗口装配与整体生命周期 |
 | `crates/ui/assets/` | `bevy_app_assets` | 应用 Asset 的统一注册 |
+| `crates/ui/chat_ui/` | `agentelier_chat_ui` | 模型目录、显式选择、连接验证与相应交互投影 |
 | `crates/ui/agent_host/` | `agentelier_agent_host` | 唯一 Connection、Winit 唤醒、命令提交、业务消息分发及执行收尾 |
-| `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、账号、模型验证界面，Bevy/Bridge 衔接及浏览器/剪贴板交互 |
+| `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、账号界面，Bevy/Bridge 衔接及浏览器/剪贴板交互 |
 | `crates/agent/login/` | `agentelier_login` | 数据环境、OAuth、Token、身份校验、认证文件与受保护原子提交 |
 | `crates/agent/account/` | `agentelier_account` | 账号操作与会话状态、共享凭据门控和按需续期协调 |
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录、Responses、SSE 和模型错误语义 |
@@ -29,11 +30,14 @@ flowchart TD
     App --> Assets["UI · assets"]
     App --> Login["Agent · login"]
     UI --> Login
+    App --> ChatUI["UI · chat_ui"]
+    ChatUI --> UI
+    ChatUI --> Host
     App --> Host["UI · agent_host"]
     UI --> Host
     Host --> Connection["Bridge · connection"]
     UI --> AccountBridge["Bridge · account"]
-    UI --> ModelBridge["Bridge · llm_model"]
+    ChatUI --> ModelBridge["Bridge · llm_model"]
     Connection --> Runtime["Agent · runtime"]
     Connection --> AccountBridge
     Connection --> ModelBridge
@@ -63,7 +67,7 @@ Login 实现具体协议、身份与文件规则。Account 的 `Account` 持有�
 
 Account 的可克隆 CredentialClient 管理接纳、会话失效令牌和在途请求合并。它通过 Runtime 赋予的命令提交能力进入同一个有界队列，不反向依赖 Runtime。Token、会话代次和旋转待保存结果只留在执行侧；启动仅恢复文件，无周期保活。按需更新保存成功才交付凭据，取消等待者不丢弃已经开始的旋转。
 
-LLM Model 通过 Account 获取凭据，不读写认证文件，也不建立第二份账号缓存。它负责模型目录、模型选择、Responses HTTP 请求、一次有界认证恢复、SSE 完成判定及错误分类。协议见[单次模型请求](modules/model-request.md)。
+LLM Model 通过 Account 获取凭据，不读写认证文件，也不建立第二份账号缓存。它负责模型目录、显式模型请求配置、Responses HTTP 请求、一次有界认证恢复、SSE 完成判定及错误分类。协议见[单次模型请求](modules/model-request.md)。
 
 Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模型任务。Runtime 拥有线程、队列、取消令牌、JoinHandle 及真实回收信号；账号处理期间模型任务仍可并发等待网络。它不包含 OAuth、认证文件实现或模型网络协议。依赖为 Runtime → Account → Login，以及 Runtime → LLM Model → Account，无循环。
 
@@ -75,7 +79,7 @@ Account Bridge 将 AccountEventKind 转为自己的账号事件和安全摘要�
 
 Connection 只包装和调用对应业务转换，返回带 operation_id 的 BridgeEvent；BridgeEventKind 区分 Account 与 Model。它分配操作身份、隔离迟到结果、协调在途操作、转发控制命令并持有连接收尾句柄，不实现字段投影或业务错误分类。UI 显式消费连接封装和相应业务类型。
 
-命令队列容量为四，退出控制队列为一，结果队列为八。当前只接纳一个在途账号操作或模型验证，退出可停止当前操作；保存重试沿用同一操作 ID，全局 SessionStatus 使用保留 ID 0。满队列、通道关闭、通知失败和意外停止形成明确错误。
+命令队列容量为四，退出控制队列为一，结果队列为八。当前只接纳一个在途账号操作、模型目录读取或指定模型验证，退出可停止当前操作；保存重试沿用同一操作 ID，全局 SessionStatus 使用保留 ID 0。满队列、通道关闭、通知失败和意外停止形成明确错误。
 
 结果先入队再通过 UI 提供的通知能力唤醒 Winit，ECS 非阻塞消费事件并更新自己的投影。Bridge 不依赖 Winit 或 Bevy 类型，也不把通知信号当作业务数据。
 
@@ -119,3 +123,5 @@ flowchart LR
 ```
 
 所有库使用宿主统一配置的 tracing。日志只包含安全的操作标识、阶段与诊断，不泄露 Token、授权地址或模型正文。开发与 BRP 验证须保护现有登录状态，未经授权不退出、重新授权、重置凭据或更换数据环境。
+
+模型准备区由 chat_ui 构造并持有 UI 投影，通过共享宿主读取目录和验证显式模型。登录主页以 HomeContent 提供内容位置，application 使用 BSN 挂载 ChatUiHost，不把模型状态或网络逻辑放入通用装配。模型目录与验证复用现有模型任务生命周期，结果按业务类型在 LLM Model Bridge 转换；账号自然续期保留准备区，账号身份变化或退出后清除旧目录与选择。

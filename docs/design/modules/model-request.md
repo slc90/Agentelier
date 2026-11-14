@@ -9,17 +9,18 @@ sequenceDiagram
     participant Model as Tokio 模型任务
     participant Auth as 串行认证所有者
     participant API as 公共模型服务
-    App->>Bridge: verify_model
+    App->>Bridge: request_model(Catalog 或 Verify)
     Bridge->>Model: 操作 ID
     Model->>Auth: 请求可用凭据
     Auth-->>Model: 已持久化凭据
-    Model->>API: GET /v1/models
-    API-->>Model: 当前账号目录
-    Model->>Auth: 再次请求当前凭据
-    Auth-->>Model: 同一账号最新凭据
-    Model->>API: POST /v1/responses
-    API-->>Model: SSE 事件至终态
-    Model-->>Bridge: 完整正文或实际失败
+    alt 读取目录
+        Model->>API: GET /v1/models
+        API-->>Model: 当前账号目录
+    else 验证明确模型
+        Model->>API: POST /v1/responses + 所选 slug
+        API-->>Model: SSE 事件至终态
+    end
+    Model-->>Bridge: 目录、完整正文或实际失败
     Bridge-->>App: 入队并唤醒 Winit
 ```
 
@@ -27,12 +28,16 @@ sequenceDiagram
 
 模型任务取消只丢弃自己的网络/凭据等待 Future。已提交给认证所有者的刷新独立继续，不因等待者取消而丢失旋转结果。主窗口以真实终态结束等待；退出期间 Bridge 消费并隔离旧模型及认证结果。
 
-模型目录采用当前账号服务顺序的首个公开项目。目录之后再次获取凭据，通过 CredentialVersion 的账号比较检查 client_id 和 subject；认证恢复沿 AuthenticatedRequest 的一次恢复预算执行。HTTP 401 可在输出前触发恢复；输出项或文本开始后标记禁止重放。
+模型目录保留全部可显示项目及服务顺序，用户显式选择 slug 后独立验证。每次操作取得当前可用凭据；认证恢复沿 AuthenticatedRequest 的一次恢复预算执行，通过 CredentialVersion 比较 client_id 和 subject，避免恢复到另一账号。HTTP 401 可在输出前触发恢复；输出项或文本开始后标记禁止重放。
 
 SSE 解析器跨 HTTP 块保留当前行和事件数据，支持 LF、CRLF、CR、多行 data 及开头 BOM，空行才派发事件。只以完成对象的 output 数组为正文权威来源，按 message/content 顺序提取 output_text；增量仅用于标记输出已经开始。未完成、失败和显式错误独立传播，EOF 没有完成事件不成功。大小和时间限制见[模型连接验证](../../features/model-request.md)。
 
 ModelFailure 保留分类、可取得的 HTTP 状态、结构化代码、请求标识与诊断文本。LLM Model Bridge (`agentelier_llm_model_bridge`) 将其转成自己的业务类型，应用不依赖 Agent 内部错误。日志记录操作、所选模型、耗时、状态和错误分类，不记录认证头、Token、模型正文或完整原始响应。
 
-`login_ui::ModelState` 仅保存当前操作及安全展示结果；BSN 构造按钮、状态区与 WidgetryScrollArea。最终正文在 PostUpdate 的 UiSystems::Content 前更新，切换设置页不取消请求，返回时按当前投影重建。数据环境仍为启动时已占用的目录，更改下次目录不改变正在执行的请求。
+`chat_ui::ModelState` 保存目录、当前选择、操作及安全展示结果；BSN 构造模型 ComboBox、按钮、状态区与 WidgetryScrollArea。最终正文在 PostUpdate 的 UiSystems::Content 前更新，切换设置页不取消请求，返回时按当前投影重建。数据环境仍为启动时已占用的目录，更改下次目录不改变正在执行的请求。
 
 Runtime (`agentelier_agent_runtime`) 负责 ModelControl、Tokio 任务启动、取消及 JoinHandle 回收，不实现 HTTP/SSE。Connection (`agentelier_bridge_connection`) 关联模型操作 ID，调用 LLM Model Bridge 转换结果并封装为 BridgeEventKind::Model。账号状态事件由 Account Bridge 独立转换；模型库只依赖 Account，不依赖 Login、Runtime 或 Bridge。
+
+## 显式模型准备
+
+LLM Model 以 ModelRequest::Catalog 读取全部可显示模型，以 Verify 携带明确 slug 和名称执行固定输入验证。ModelResult 分别表达目录及验证回复；Runtime 共用一种可取消模型任务，LLM Model Bridge 转换自己的请求和结果类型，Connection 只分配并关联操作。chat_ui 独立持有目录与选择，login_ui 只依赖共享宿主的活动状态来禁用冲突的账号操作。

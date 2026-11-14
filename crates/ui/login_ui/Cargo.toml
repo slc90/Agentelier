@@ -7,7 +7,6 @@ edition.workspace = true
 [dependencies]
 agentelier_agent_host = { path = "../agent_host" }
 agentelier_account_bridge = { path = "../../bridge/account" }
-agentelier_llm_model_bridge = { path = "../../bridge/llm_model" }
 agentelier_login = { path = "../../agent/login" }
 bevy.workspace = true
 bevy_widgetry_path_display.workspace = true

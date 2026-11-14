@@ -1,8 +1,8 @@
 # 模型连接验证
 
-主窗口提供“验证模型连接”。账号已登录且获得 `chatgpt.tokens.use.direct` 时可使用；未登录或缺少授权时提示先完成账号操作。每次点击发送固定输入“请简短回复，确认连接正常”，不携带上次响应，不保存聊天历史。
+主窗口的模型准备区提供“刷新模型目录”、模型下拉选择和“验证模型连接”。账号已登录且获得 `chatgpt.tokens.use.direct` 时可使用；未登录或缺少授权时提示先完成账号操作。选择模型后，每次验证发送固定输入“请简短回复，确认连接正常”，不携带上次响应，不保存聊天历史。
 
-通过当前 OAuth Access Token 读取 `GET https://api.openai.com/v1/models`，保持服务顺序并选取首个 `visibility=list` 的模型。界面显示 `display_name`，请求使用 `slug`；目录无可显示模型或标识缺失时报错，没有默认模型、目录缓存或模型配置。
+用户显式刷新时，通过当前 OAuth Access Token 读取 `GET https://api.openai.com/v1/models`，保持服务顺序并展示全部 `visibility=list` 的模型，同时保留目录提供的推理能力元数据。界面显示 `display_name` 和 `slug`，验证请求使用明确选择的 `slug`，不会自动选择首项或使用硬编码兜底。目录投影仅保留在本次运行内，不写入配置；目录刷新不改变已有选择，原模型消失时保留其名称并说明不可用。读取失败保留原目录及选择并显示真实错误，空目录禁用验证。
 
 请求发送到公共 `POST https://api.openai.com/v1/responses`，仅包含模型、独立用户消息列表、`store=false` 和 `stream=true`。传输在 Agent 的 Tokio 中进行，不由 Bevy 或辅助 Job 发送认证 HTTP。
 
@@ -19,3 +19,5 @@ JSON 和单个 SSE 事件最多 4 MiB，总事件流最多 16 MiB；模型 HTTP 
 实现关系见[单次模型请求](../design/modules/model-request.md)，运行与消息接口见[账号后台与业务桥接](auth-runtime.md)。
 
 模型协议由 `agentelier_llm_model` 实现，通过 `agentelier_account` 获取凭据，由 `agentelier_agent_runtime` 管理任务。`agentelier_llm_model_bridge` 转换结果及取消/完成状态，`agentelier_bridge_connection` 负责操作关联、消息与唤醒。
+
+模型目录读取与指定模型验证使用不同的类型化请求和结果，仍复用同一 Runtime 任务、取消及回收路径。模型准备区及验证投影属于 `agentelier_chat_ui`，账号界面不保存模型目录；`agentelier_agent_host` 只协调共享连接及活动状态。所选模型、目录读取中、读取失败、验证中及实际使用的 slug 可独立观察。

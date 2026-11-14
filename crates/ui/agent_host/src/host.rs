@@ -17,11 +17,17 @@ struct HostState {
     startup: Option<ConnectionStartup>,
     stopping: bool,
     failed: bool,
+    model_busy: bool,
 }
 
 struct ConnectionStartup {
     path: PathBuf,
     notify: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+#[derive(Resource, Default)]
+pub struct HostActivity {
+    pub model_busy: bool,
 }
 
 #[derive(Message)]
@@ -58,6 +64,7 @@ impl AgentHostPlugin {
 impl Plugin for AgentHostPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.host.clone())
+            .init_resource::<HostActivity>()
             .add_message::<AccountEvent>()
             .add_message::<ModelEvent>()
             .add_message::<HostFailed>()
@@ -128,10 +135,17 @@ impl AgentHost {
         self.submit(Connection::check_session)
     }
     pub fn sign_out(&self) -> Result<u64> {
-        self.submit(Connection::sign_out)
+        let id = self.submit(Connection::sign_out)?;
+        self.state()?.model_busy = false;
+        Ok(id)
     }
-    pub fn verify_model(&self) -> Result<u64> {
-        self.submit(Connection::verify_model)
+    pub fn request_model(&self, request: agentelier_llm_model_bridge::ModelRequest) -> Result<u64> {
+        let id = self.submit(|connection| connection.request_model(request))?;
+        self.state()?.model_busy = true;
+        Ok(id)
+    }
+    pub fn model_busy(&self) -> Result<bool> {
+        Ok(self.state()?.model_busy)
     }
 
     pub fn is_stopping(&self) -> Result<bool> {
@@ -201,6 +215,7 @@ fn receive(world: &mut World) -> Result {
                 });
             }
             BridgeEventKind::Model(kind) => {
+                host.state()?.model_busy = false;
                 world.write_message(ModelEvent {
                     operation_id: event.operation_id,
                     kind,
@@ -209,7 +224,12 @@ fn receive(world: &mut World) -> Result {
         }
     }
     if let Some(reason) = failure {
+        host.state()?.model_busy = false;
         world.write_message(HostFailed { reason });
+    }
+    let busy = host.model_busy()?;
+    if world.resource::<HostActivity>().model_busy != busy {
+        world.resource_mut::<HostActivity>().model_busy = busy;
     }
     Ok(())
 }

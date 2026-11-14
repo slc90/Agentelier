@@ -136,6 +136,7 @@ name = "agentelier_application"
 version = "0.1.0"
 dependencies = [
  "agentelier_agent_host",
+ "agentelier_chat_ui",
  "agentelier_login",
  "agentelier_login_ui",
  "bevy",
@@ -157,6 +158,18 @@ dependencies = [
  "agentelier_account_bridge",
  "agentelier_agent_runtime",
  "agentelier_llm_model_bridge",
+ "tracing",
+]
+
+[[package]]
+name = "agentelier_chat_ui"
+version = "0.1.0"
+dependencies = [
+ "agentelier_agent_host",
+ "agentelier_llm_model_bridge",
+ "agentelier_login_ui",
+ "bevy",
+ "bevy_widgetry",
  "tracing",
 ]
 
@@ -208,7 +221,6 @@ version = "0.1.0"
 dependencies = [
  "agentelier_account_bridge",
  "agentelier_agent_host",
- "agentelier_llm_model_bridge",
  "agentelier_login",
  "bevy",
  "bevy_widgetry",
@@ -1955,11 +1967,13 @@ source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d21
 dependencies = [
  "bevy_widgetry_app_logging",
  "bevy_widgetry_button",
+ "bevy_widgetry_combo_box",
  "bevy_widgetry_core",
  "bevy_widgetry_cursor",
  "bevy_widgetry_diagnostics",
  "bevy_widgetry_file_dialog",
  "bevy_widgetry_job",
+ "bevy_widgetry_list_view",
  "bevy_widgetry_scroll_area",
  "bevy_widgetry_theme",
  "bevy_widgetry_ui_scale",
