@@ -1,4 +1,4 @@
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag};
 use std::ops::Range;
 
 #[derive(Clone, Default, PartialEq)]
@@ -17,6 +17,17 @@ pub(crate) enum BlockKind {
     Raw,
     Rule,
     Code { language: String, text: String },
+    Table(Table),
+}
+#[derive(Clone, PartialEq)]
+pub(crate) struct Cell {
+    pub runs: Vec<Run>,
+    pub links: Vec<String>,
+}
+#[derive(Clone, PartialEq)]
+pub(crate) struct Table {
+    pub alignments: Vec<Alignment>,
+    pub rows: Vec<Vec<Cell>>,
 }
 #[derive(Clone, PartialEq)]
 pub(crate) struct ListPosition {
@@ -46,7 +57,11 @@ fn append(stack: &mut [Tree], roots: &mut Vec<Tree>, node: Tree) {
 pub(crate) fn parse(source: &str) -> Vec<Block> {
     let mut roots = Vec::new();
     let mut stack: Vec<Tree> = Vec::new();
-    for (event, range) in Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter()
+    for (event, range) in Parser::new_ext(
+        source,
+        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS,
+    )
+    .into_offset_iter()
     {
         match event {
             Event::Start(tag) => stack.push(Tree {
@@ -97,6 +112,31 @@ fn collect(nodes: &[Tree], source: &str, quote: bool, blocks: &mut Vec<Block>) {
         }
         index += 1;
         match &node.event {
+            Event::Start(Tag::Table(alignments)) => {
+                let rows = node
+                    .children
+                    .iter()
+                    .map(|row| {
+                        row.children
+                            .iter()
+                            .map(|cell| {
+                                let (runs, links) = inline(&cell.children);
+                                Cell { runs, links }
+                            })
+                            .collect()
+                    })
+                    .collect();
+                blocks.push(Block {
+                    kind: BlockKind::Table(Table {
+                        alignments: alignments.clone(),
+                        rows,
+                    }),
+                    quote,
+                    runs: Vec::new(),
+                    links: Vec::new(),
+                    list: None,
+                });
+            }
             Event::Start(Tag::BlockQuote(_)) => collect(&node.children, source, true, blocks),
             Event::Start(Tag::List(start)) => {
                 for (offset, item) in node.children.iter().enumerate() {
@@ -184,6 +224,7 @@ fn is_inline(event: &Event<'_>) -> bool {
             | Event::InlineHtml(_)
             | Event::SoftBreak
             | Event::HardBreak
+            | Event::TaskListMarker(_)
             | Event::Start(
                 Tag::Strong
                     | Tag::Emphasis
@@ -237,6 +278,7 @@ fn inlines(nodes: &[Tree], style: Run, runs: &mut Vec<Run>, links: &mut Vec<Stri
                 text.to_string()
             }
             Event::SoftBreak | Event::HardBreak => "\n".into(),
+            Event::TaskListMarker(checked) => if *checked { "[x] " } else { "[ ] " }.into(),
             _ => String::new(),
         };
         if !text.is_empty() {

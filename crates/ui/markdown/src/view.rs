@@ -5,7 +5,7 @@ use bevy::ui::UiSystems;
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
 
-const BODY_SIZE: f32 = 18.0;
+pub(crate) const BODY_SIZE: f32 = 18.0;
 const BLOCK_GAP: f32 = 10.0;
 const QUOTE_INSET: f32 = 14.0;
 const HEADING_SIZES: [f32; 6] = [30.0, 26.0, 23.0, 20.0, 20.0, 20.0];
@@ -38,6 +38,7 @@ impl Plugin for MarkdownPlugin {
         app.register_type::<MarkdownSource>()
             .add_systems(PostUpdate, render.before(UiSystems::Prepare));
         crate::links::install(app);
+        crate::table::install(app);
     }
 }
 #[derive(Component)]
@@ -77,6 +78,15 @@ fn render(world: &mut World) -> Result {
                     ordered.push(*entity);
                     continue;
             }
+            if let Some((entity, _, old)) = existing.iter().find(|(_, old_index, old)| {
+                *old_index == index && old.list == block.list && old.quote == block.quote
+                    && matches!((&old.kind, &block.kind), (BlockKind::Table(old), BlockKind::Table(new)) if old.alignments == new.alignments)
+            }) && let (BlockKind::Table(_), BlockKind::Table(table)) = (&old.kind, &block.kind) {
+                crate::table::update(world, *entity, table)?;
+                world.get_mut::<RenderedBlock>(*entity).ok_or_else(|| std::io::Error::other("表格缺少渲染状态"))?.block = block;
+                ordered.push(*entity);
+                continue;
+            }
             let scene = block_scene(&block);
             let entity = world
                 .commands()
@@ -115,6 +125,9 @@ fn block_scene(block: &Block) -> Box<dyn Scene> {
     if let BlockKind::Code { language, text } = &block.kind {
         return crate::code::scene(language, text);
     }
+    if let BlockKind::Table(table) = &block.kind {
+        return crate::table::scene(table);
+    }
     if block.kind == BlockKind::Rule {
         return Box::new(
             bsn! { Node { width: percent(100), height: px(RULE_THICKNESS), flex_shrink: 0.0 } BackgroundColor(RULE_COLOR) },
@@ -147,7 +160,7 @@ fn block_scene(block: &Block) -> Box<dyn Scene> {
         ]
     })
 }
-fn span(run: &Run, size: f32, heading: bool) -> Box<dyn Scene> {
+pub(crate) fn span(run: &Run, size: f32, heading: bool) -> Box<dyn Scene> {
     let font = TextFont {
         font_size: size.into(),
         font: if run.code {
