@@ -13,3 +13,5 @@
 已实现的目录选择、配置保存与启动占用流程见[数据目录与启动](design/mechanisms/application-data.md)，文件账号恢复与后台生命周期见[认证运行与凭据管理](design/modules/authentication.md)。浏览器登录、按需会话续期与退出登录已接入；[模型连接验证](features/model-request.md)已接入，通信与取消关系见[单次模型请求](design/modules/model-request.md)，历史实施顺序见[登录增量导航](../plans/登录/00-overview.md)。
 
 模型准备区已接入[聊天与流式回复](features/chat.md)，会话及执行关系见[内存聊天与流式投影](design/architecture.md#内存聊天与流式投影)。
+
+助手正文采用[原生 Markdown 展示](design/modules/markdown.md)，支持范围和阅读行为见[聊天功能](features/chat.md)。

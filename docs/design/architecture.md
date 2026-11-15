@@ -10,6 +10,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | --- | --- | --- |
 | `crates/ui/application/` | `agentelier_application` | 通用宿主、配置、日志、诊断、窗口装配与整体生命周期 |
 | `crates/ui/assets/` | `bevy_app_assets` | 应用 Asset 的统一注册 |
+| `crates/ui/markdown/` | `agentelier_markdown` | 原生 Markdown 解析、块更新、行内样式与用户主动链接交互 |
 | `crates/ui/chat_ui/` | `agentelier_chat_ui` | 模型准备、会话与草稿、多轮流式聊天和相应交互投影 |
 | `crates/ui/agent_host/` | `agentelier_agent_host` | 唯一 Connection、Winit 唤醒、命令提交、业务消息分发及执行收尾 |
 | `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、账号界面，Bevy/Bridge 衔接及浏览器/剪贴板交互 |
@@ -33,6 +34,7 @@ flowchart TD
     App --> Login["Agent · login"]
     UI --> Login
     App --> ChatUI["UI · chat_ui"]
+    ChatUI --> Markdown["UI · markdown"]
     ChatUI --> UI
     ChatUI --> Host
     App --> Host["UI · agent_host"]
@@ -147,3 +149,5 @@ LLM Model 解析 Responses 输出项、内容段、公开 phase 和文本增量�
 chat_ui 仅管理展示投影与草稿，通过 BSN 和 Widgetry 多行 TextField、ScrollArea 构造消息列表。接纳前保留草稿；Accepted 后只清空尚未被继续编辑的原内容。消息更新复用既有行实体，切换设置页不改变后台任务，返回时按投影恢复。具体行为与限制见[聊天会话与流式回复](../features/chat.md)。
 
 协议历史和安全展示摘要的具体关系见[聊天会话与协议历史](modules/conversation.md)。
+
+Markdown 的原文、解析块和原生布局由独立 UI crate 管理，不依赖 Agent/Bridge，也不改变协议正文。Chat UI 保存会话投影并把每条助手原文交给 MarkdownView；底部跟随属于聊天阅读行为。具体边界见[原生 Markdown](modules/markdown.md)。

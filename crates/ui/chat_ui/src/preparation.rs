@@ -108,6 +108,8 @@ struct ModelStatus;
 struct ModelText;
 
 pub fn install(app: &mut App) -> Result {
+    app.add_plugins(agentelier_markdown::MarkdownPlugin);
+    crate::reading::install(app);
     reasoning::install(app)?;
     crate::conversation::install(app);
     app.register_widgetry_combo_box::<ModelChoice>()
@@ -116,7 +118,7 @@ pub fn install(app: &mut App) -> Result {
         .register_type::<ModelState>()
         .add_systems(Startup, initialize)
         .add_observer(mount)
-        .add_observer(restore_selection)
+        .add_systems(Update, restore_selection)
         .add_systems(Update, receive.after(ReceiveAgentEvents))
         .add_systems(PostUpdate, update.before(UiSystems::Content));
     Ok(())
@@ -187,7 +189,7 @@ fn action_button(label: &'static str, name: &'static str, action: ModelAction) -
 }
 
 fn restore_selection(
-    event: On<Add<ModelSelector>>,
+    selectors: Query<Entity, Added<ModelSelector>>,
     state: Res<ModelState>,
     mut commands: Commands,
 ) {
@@ -197,7 +199,9 @@ fn restore_selection(
             .iter()
             .position(|model| model.slug == selected.slug)
     }) {
-        WidgetryComboBox::<ModelChoice>::select_index(&mut commands, event.entity, index);
+        for entity in &selectors {
+            WidgetryComboBox::<ModelChoice>::select_index(&mut commands, entity, index);
+        }
     }
 }
 

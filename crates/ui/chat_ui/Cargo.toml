@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agentelier_markdown = { path = "../markdown" }
 agentelier_agent_host = { path = "../agent_host" }
 agentelier_login_ui = { path = "../login_ui" }
 agentelier_llm_model_bridge = { path = "../../bridge/llm_model" }

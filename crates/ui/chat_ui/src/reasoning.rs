@@ -68,7 +68,7 @@ pub(crate) fn install(app: &mut App) -> Result {
     app.register_widgetry_combo_box::<ReasoningSetting>()
         .map_err(|failure| failure.into_bevy_error())?;
     app.add_systems(Startup, initialize)
-        .add_observer(restore_selection)
+        .add_systems(Update, restore_selection)
         .add_systems(PostUpdate, update.before(UiSystems::Content));
     Ok(())
 }
@@ -125,7 +125,7 @@ pub(crate) fn sync(world: &mut World) -> Result {
 }
 
 fn restore_selection(
-    event: On<Add<ReasoningSelector>>,
+    selectors: Query<Entity, Added<ReasoningSelector>>,
     state: Res<ModelState>,
     mut commands: Commands,
 ) {
@@ -133,7 +133,9 @@ fn restore_selection(
         .iter()
         .position(|option| *option == state.reasoning)
     {
-        WidgetryComboBox::<ReasoningSetting>::select_index(&mut commands, event.entity, index);
+        for entity in &selectors {
+            WidgetryComboBox::<ReasoningSetting>::select_index(&mut commands, entity, index);
+        }
     }
 }
 

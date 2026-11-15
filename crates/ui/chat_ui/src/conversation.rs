@@ -7,6 +7,7 @@ use agentelier_conversation_bridge::{
     ConversationEvent, ConversationRequest, SessionSettings, SessionView, TurnStatus,
 };
 use agentelier_login_ui::{AccountState, CredentialState};
+use agentelier_markdown::{MarkdownSource, MarkdownView};
 use bevy::ecs::message::MessageCursor;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
@@ -126,6 +127,8 @@ struct MessageList;
 #[derive(Component, Clone, Default)]
 struct SessionSummary;
 #[derive(Component, Clone, Default)]
+struct MessageLabel;
+#[derive(Component, Clone, Default)]
 struct ChatStatus;
 #[derive(Component, Clone, Default)]
 struct ReplacementPrompt;
@@ -200,7 +203,7 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
                     Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP) }
                 }) as Box<dyn SceneList>)}
             }
-            Name("ChatMessageScroll") Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }--
+            Name("ChatMessageScroll") crate::reading::ChatReadingScroll Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }--
             @WidgetryTextField {
                 @value: {draft}, @multiline: true,
                 @auto_size: {Some(AutoSize { min_rows: COMPOSER_MIN_ROWS, max_rows: COMPOSER_MAX_ROWS })},
@@ -211,7 +214,8 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
             Children [
                 @button("发送", "SendChatMessage", ChatAction::Send)--
                 @button("停止", "StopChatGeneration", ChatAction::Stop)--
-                @button("重试最近尝试", "RetryChatTurn", ChatAction::Retry)
+                @button("重试最近尝试", "RetryChatTurn", ChatAction::Retry)--
+                @crate::reading::bottom_button()
             ]
         ]
     }
@@ -794,8 +798,8 @@ fn reconcile(world: &mut World) -> Result {
                     output_index: None,
                     item_id: None,
                 };
-                if !desired.iter().any(|(key, _)| key == &user_key) {
-                    desired.push((user_key, format!("你\n{}", turn.input)));
+                if !desired.iter().any(|(key, _, _)| key == &user_key) {
+                    desired.push((user_key, format!("你\n{}", turn.input), None));
                 }
                 if turn.messages.is_empty() {
                     desired.push((
@@ -811,6 +815,7 @@ fn reconcile(world: &mut World) -> Result {
                             if turn.is_retry { " · 重试" } else { "" },
                             status
                         ),
+                        None,
                     ));
                 }
                 for message in &turn.messages {
@@ -822,22 +827,40 @@ fn reconcile(world: &mut World) -> Result {
                             output_index: Some(message.output_index),
                             item_id: Some(message.id.clone()),
                         },
-                        format!("助手 · {phase}{status}\n{}", message.text),
+                        format!("助手 · {phase}{status}"),
+                        Some(message.text.clone()),
                     ));
                 }
             }
         }
         for (entity, key) in &existing {
-            if !desired.iter().any(|(wanted, _)| wanted == key) {
+            if !desired.iter().any(|(wanted, _, _)| wanted == key) {
                 world.entity_mut(*entity).despawn();
             }
         }
-        for (key, text) in desired {
+        for (key, text, markdown) in desired {
             if let Some((entity, _)) = existing.iter().find(|(_, row)| *row == key) {
-                world
-                    .get_mut::<Text>(*entity)
-                    .ok_or_else(|| io::Error::other("聊天消息缺少正文组件"))?
-                    .set_if_neq(Text::new(text));
+                if let Some(markdown) = markdown {
+                    let children = world
+                        .get::<Children>(*entity)
+                        .ok_or_else(|| io::Error::other("助手消息缺少内容区域"))?
+                        .to_vec();
+                    for child in children {
+                        if let Some(mut source) = world.get_mut::<MarkdownSource>(child) {
+                            source.set_if_neq(MarkdownSource(markdown.clone()));
+                        }
+                        if world.get::<MessageLabel>(child).is_some()
+                            && let Some(mut label) = world.get_mut::<Text>(child)
+                        {
+                            label.set_if_neq(Text(text.clone()));
+                        }
+                    }
+                } else {
+                    world
+                        .get_mut::<Text>(*entity)
+                        .ok_or_else(|| io::Error::other("聊天消息缺少正文组件"))?
+                        .set_if_neq(Text::new(text));
+                }
             } else {
                 let name = format!(
                     "ChatMessage-{}-{}-{}",
@@ -847,12 +870,20 @@ fn reconcile(world: &mut World) -> Result {
                         .map(|index| index.to_string())
                         .unwrap_or_else(|| key.item_id.clone().unwrap_or_else(|| "user".into()))
                 );
-                world.commands().spawn_scene_with_error_handler(bsn! {
-                    Name(name) ChildOf(list) Text(text) WidgetryText
-                    template(move |_| Ok(key.clone()))
-                    TextLayout::linebreak(LineBreak::AnyCharacter)
-                    Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }
-                });
+                if let Some(source) = markdown {
+                    world.commands().spawn_scene_with_error_handler(bsn! {
+                        Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
+                        Node { width: percent(100), min_width: px(0), flex_shrink: 0.0, flex_direction: FlexDirection::Column, row_gap: px(6) }
+                        Children [Text(text) WidgetryText MessageLabel-- @MarkdownView { @source: source }]
+                    });
+                } else {
+                    world.commands().spawn_scene_with_error_handler(bsn! {
+                        Name(name) ChildOf(list) Text(text) WidgetryText
+                        template(move |_| Ok(key.clone()))
+                        TextLayout::linebreak(LineBreak::AnyCharacter)
+                        Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }
+                    });
+                }
             }
         }
     }

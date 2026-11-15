@@ -7,6 +7,7 @@ members = [
   "crates/ui/login_ui",
   "crates/ui/agent_host",
   "crates/ui/chat_ui",
+  "crates/ui/markdown",
   "crates/agent/login",
   "crates/agent/account",
   "crates/agent/llm_model",
@@ -23,6 +24,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+pulldown-cmark = { version = "0.13.6", default-features = false }
 bevy_widgetry_path_display = { git = "https://github.com/slc90/bevy_widgetry" }
 bevy_widgetry = { git = "https://github.com/slc90/bevy_widgetry", default-features = false, features = [
   "window",
@@ -87,6 +89,7 @@ features = [
   "png",
   "complex_script_segmentation",
   "system_clipboard",
+  "system_font_discovery",
 ]
 
 [workspace.lints.rust]
