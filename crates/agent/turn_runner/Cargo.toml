@@ -5,9 +5,11 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agentelier_tools = { path = "../tools" }
 agentelier_conversation = { path = "../conversation" }
 agentelier_llm_model = { path = "../llm_model" }
 agentelier_account = { path = "../account" }
+tracing.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 

@@ -21,10 +21,13 @@ pub enum TurnStatus {
     Completed,
     Cancelled,
     Failed(String),
+    Limited,
 }
 #[derive(Clone)]
 pub enum HistoryItem {
     User,
+    FunctionCall { call_id: String, name: String },
+    FunctionResult { call_id: String },
     Assistant { phase: Option<String> },
     Reasoning { encrypted: bool },
 }
@@ -32,8 +35,22 @@ pub enum HistoryItem {
 pub struct MessageView {
     pub id: String,
     pub output_index: usize,
+    pub request_index: u32,
     pub phase: Option<String>,
     pub text: String,
+}
+#[derive(Clone)]
+pub struct ToolView {
+    pub request_index: u32,
+    pub id: String,
+    pub output_index: usize,
+    pub call_id: String,
+    pub name: String,
+    pub arguments: String,
+    pub arguments_truncated: bool,
+    pub status: String,
+    pub output: Option<String>,
+    pub retained: bool,
 }
 #[derive(Clone)]
 pub struct TurnView {
@@ -45,16 +62,21 @@ pub struct TurnView {
     pub messages: Vec<MessageView>,
     pub status: TurnStatus,
     pub request_items: Vec<HistoryItem>,
+    pub request_index: u32,
+    pub committed_steps: u32,
+    pub tools: Vec<ToolView>,
+    pub phase: String,
     pub request_instructions: Vec<InstructionMessage>,
 }
 #[derive(Clone)]
 pub struct SessionView {
     pub id: u64,
     pub settings: SessionSettings,
-    pub turn: Option<TurnView>,
+    pub turn: Option<Box<TurnView>>,
     pub previous_turns: Vec<TurnView>,
     pub committed_items: Vec<HistoryItem>,
     pub execution_blocked: bool,
+    pub tool_catalog: Vec<(String, String)>,
 }
 pub enum ConversationEvent {
     Created(SessionView),
@@ -112,6 +134,7 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
 fn view(session: agentelier_conversation::SessionView) -> SessionView {
     SessionView {
         execution_blocked: session.execution_blocked,
+        tool_catalog: session.tool_catalog,
         id: session.id.0,
         settings: SessionSettings {
             slug: session.settings.slug,
@@ -120,7 +143,7 @@ fn view(session: agentelier_conversation::SessionView) -> SessionView {
             account_subject: session.settings.account_subject,
             instructions: session.settings.instructions,
         },
-        turn: session.turn.map(turn_view),
+        turn: session.turn.map(|turn| Box::new(turn_view(*turn))),
         previous_turns: session.previous_turns.into_iter().map(turn_view).collect(),
         committed_items: session
             .committed_items
@@ -133,6 +156,12 @@ fn view(session: agentelier_conversation::SessionView) -> SessionView {
 fn history_item(item: agentelier_conversation::ProtocolItemSummary) -> HistoryItem {
     match item {
         agentelier_conversation::ProtocolItemSummary::User => HistoryItem::User,
+        agentelier_conversation::ProtocolItemSummary::FunctionCall { call_id, name } => {
+            HistoryItem::FunctionCall { call_id, name }
+        }
+        agentelier_conversation::ProtocolItemSummary::FunctionResult { call_id } => {
+            HistoryItem::FunctionResult { call_id }
+        }
         agentelier_conversation::ProtocolItemSummary::Assistant { phase } => {
             HistoryItem::Assistant { phase }
         }
@@ -143,6 +172,39 @@ fn history_item(item: agentelier_conversation::ProtocolItemSummary) -> HistoryIt
 }
 fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
     TurnView {
+        request_index: turn.request_index,
+        committed_steps: turn.committed_steps,
+        phase: match turn.phase {
+            agentelier_conversation::TaskPhase::RequestingModel => "model",
+            agentelier_conversation::TaskPhase::ExecutingTool => "tool",
+        }
+        .into(),
+        tools: turn
+            .tools
+            .into_iter()
+            .map(|tool| ToolView {
+                request_index: tool.request_index,
+                id: tool.id,
+                output_index: tool.output_index,
+                call_id: tool.call_id,
+                name: tool.name,
+                arguments: tool.arguments,
+                arguments_truncated: tool.arguments_truncated,
+                output: tool.output,
+                retained: tool.retained,
+                status: match tool.status {
+                    agentelier_conversation::ToolStatus::Receiving => "receiving",
+                    agentelier_conversation::ToolStatus::Pending => "pending",
+                    agentelier_conversation::ToolStatus::Running => "running",
+                    agentelier_conversation::ToolStatus::Succeeded => "succeeded",
+                    agentelier_conversation::ToolStatus::Failed => "failed",
+                    agentelier_conversation::ToolStatus::TimedOut => "timed_out",
+                    agentelier_conversation::ToolStatus::Cancelled => "cancelled",
+                    agentelier_conversation::ToolStatus::NotExecuted => "not_executed",
+                }
+                .into(),
+            })
+            .collect(),
         id: turn.id.0,
         input_id: turn.input_id.0,
         is_retry: turn.is_retry,
@@ -154,6 +216,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
             .map(|message| MessageView {
                 id: message.id,
                 output_index: message.output_index,
+                request_index: message.request_index,
                 phase: message.phase,
                 text: message
                     .content
@@ -166,6 +229,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
         request_items: turn.request_items.into_iter().map(history_item).collect(),
         request_instructions: turn.request_instructions,
         status: match turn.status {
+            agentelier_conversation::TurnStatus::Limited => TurnStatus::Limited,
             agentelier_conversation::TurnStatus::Running => TurnStatus::Running,
             agentelier_conversation::TurnStatus::Completed => TurnStatus::Completed,
             agentelier_conversation::TurnStatus::Cancelled => TurnStatus::Cancelled,

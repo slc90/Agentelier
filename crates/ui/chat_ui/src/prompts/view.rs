@@ -165,10 +165,7 @@ pub(super) fn render(world: &mut World) -> Result {
             }),
             Page::Session => {
                 let state = world.resource::<crate::conversation::ChatState>();
-                let value = state.session.as_ref().map(|session| format!("Session {}\n模型：{}\n推理强度：{}\n固定指令快照：\n{}\n最近请求的指令消息：\n{}",
-                    session.id, session.slug, session.effort.as_deref().unwrap_or("服务默认"), session.instruction_snapshot,
-                    session.turn.as_ref().map(|turn| turn.request_instructions.as_str()).unwrap_or("尚未发送")))
-                    .unwrap_or_else(|| "尚未创建会话".into());
+                let value = crate::conversation::request_details(state);
                 Box::new(bsn! { @readonly(value, "PromptSessionSnapshot") })
             }
         };

@@ -19,6 +19,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录、Responses、SSE 和模型错误语义 |
 | `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的内存聊天会话、Turn 身份、展示记录与结果收敛 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
+| `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、严格输入校验、诊断计算与等待、取消期限及有界业务结果 |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、正文增量和受控取消 |
 | `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型任务取消/回收及执行收尾 |
 | `crates/bridge/account/` | `agentelier_account_bridge` | 账号摘要、凭据安全投影、授权地址及账号事件转换 |
@@ -63,6 +64,9 @@ flowchart TD
     Runner --> Conversation
     Runner --> Model
     Runner --> Account
+    Runner --> Tools["Agent · tools"]
+    Model --> Tools
+    Conversation --> Tools
     Conversation --> Model
     Conversation --> Prompts
     ConversationBridge --> Conversation
@@ -153,7 +157,7 @@ flowchart LR
 
 Conversation 固定 Session 的模型、推理设置和账号身份，分配独立 Session/Turn 身份并管理稳定会话；开始任务时签出 ActiveTurn 和协议历史，由 Turn Runner 独占推进，Conversation 只保留占用身份和展示快照。Runtime 拥有业务对象及唯一网络任务、取消和 JoinHandle，回收后归还记录。聊天请求通过同一 CredentialClient 获取凭据并核对账号主体，不重新读取认证文件。当前支持一个内存 Session 的连续多轮交流，空闲时可确认新建或重置为全新身份与空历史。成功输入与完整协议输出由该 Session 原子提交，失败和取消只保留展示记录。
 
-LLM Model 解析 Responses 输出项、内容段、公开 phase 和文本增量；只有 response.completed 及可接受完整输出才成功。聊天无总生成时长限制，合法 SSE 活动维持 120 秒空闲期限；连接验证仍保留原总超时。工具输出明确失败，普通拒绝正文正常展示。任务 join 后才释放操作占用，失败/取消保留已经显示的部分回复。
+LLM Model 解析 Responses 输出项、内容段、公开 phase 和文本增量；只有 response.completed 及可接受完整输出才成功。聊天无总生成时长限制，合法 SSE 活动维持 120 秒空闲期限；连接验证仍保留原总超时。聊天启用固定 Direct function tools；LLM Model 只解析调用和映射结果，Runner 在完整响应和身份检查后执行。普通拒绝正文正常展示。任务 join 后才释放操作占用，失败/取消保留已经显示的部分回复。
 
 网络任务经容量为 32 的有界 Tokio 通道传递文本变化，发送等待可被任务取消。Runner 消费模型增量并发布累计展示快照，Runtime 校验所属身份并转交；Bridge 保留单个可替换快照，原先的有界控制/终态队列保持独立。每个快照包含此前全部消息和文本，合并不丢片段或跨轮次混接；终态返回前先交付最后快照。AgentHost 每次更新最多消费 32 项，仍有消息时继续唤醒，避免高频文本长期占用一个界面更新。
 
@@ -170,3 +174,7 @@ Prompts 是无 Bevy、网络和线程依赖的业务库，管理来源与派生�
 Chat UI 管理提示词库、组合预览和会话核对界面，并在创建 Session 时提交解析后的完整 InstructionSnapshot。Conversation 固定快照；重置复制当前设置，重试沿用原快照。LLM Model 在每次请求中将快照转换为有序 `developer` 消息，置于已提交协议历史和本轮输入之前，避免把指令重复写入历史。Bridge 传递快照与请求指令安全投影；UI 可核对文本、来源版本、哈希、角色及顺序，不公开凭据或加密推理内容。详见[提示词管理](modules/prompts.md)。
 
 任务取消由 Runner 接收并结束当前模型等待，随后归还已有活动记录；Runtime 不在外层丢弃整个 Runner。普通网络失败和停止保留既有展示与历史语义；异常退出不能归还可信记录时，当前会话禁止继续发送或重试，用户必须重置或新建会话。
+
+## Direct 工具往返
+
+会话创建时固定只读工具目录，请求声明与分发共用它。Tools 不依赖模型、账号、Bridge 或 Bevy；当前只提供无外部副作用的诊断计算与异步等待。Runner 最多发送两次模型请求并接纳一次工具执行，超额整批写入未执行结果后触限；后续多步能力尚未接入。每个完整模型输出及其全部匹配工具结果形成封闭步骤，失败或停止仍归还已封闭历史；已有提交点的任务禁用原样重试。调用和正文按任务内请求序号区分，接收中的参数不触发执行。

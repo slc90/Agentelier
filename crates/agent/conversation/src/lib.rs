@@ -5,7 +5,9 @@ mod conversation;
 
 pub use conversation::{
     ActiveTurn, Conversation, ConversationEvent, ConversationFailure, ConversationRequest,
-    SessionId, SessionSettings, SessionView, TurnId, TurnStatus, TurnView,
+    SessionId, SessionSettings, SessionView, TaskPhase, ToolView, TurnId, TurnStatus, TurnView,
 };
 
 pub use agentelier_llm_model::ProtocolItemSummary;
+
+pub use agentelier_tools::ToolStatus;

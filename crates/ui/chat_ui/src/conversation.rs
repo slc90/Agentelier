@@ -36,6 +36,7 @@ const COMPOSER_MAX_ROWS: usize = 6;
 pub struct ChatMessage {
     pub id: String,
     pub output_index: usize,
+    pub request_index: u32,
     pub phase: Option<String>,
     pub text: String,
 }
@@ -45,12 +46,28 @@ pub enum ChatTurnStatus {
     Completed,
     Cancelled,
     Failed(String),
+    Limited,
 }
 #[derive(Clone, Reflect)]
 pub enum ChatHistoryItem {
     User,
+    FunctionCall { call_id: String, name: String },
+    FunctionResult { call_id: String },
     Assistant { phase: Option<String> },
     Reasoning { encrypted: bool },
+}
+#[derive(Clone, Reflect)]
+pub struct ChatTool {
+    pub request_index: u32,
+    pub id: String,
+    pub output_index: usize,
+    pub call_id: String,
+    pub name: String,
+    pub arguments: String,
+    pub arguments_truncated: bool,
+    pub status: String,
+    pub output: Option<String>,
+    pub retained: bool,
 }
 #[derive(Clone, Reflect)]
 pub struct ChatTurn {
@@ -62,6 +79,10 @@ pub struct ChatTurn {
     pub messages: Vec<ChatMessage>,
     pub status: ChatTurnStatus,
     pub request_items: Vec<ChatHistoryItem>,
+    pub request_index: u32,
+    pub committed_steps: u32,
+    pub tools: Vec<ChatTool>,
+    pub phase: String,
     pub request_instructions: String,
 }
 #[derive(Clone, Reflect)]
@@ -76,6 +97,7 @@ pub struct ChatSession {
     pub previous_turns: Vec<ChatTurn>,
     pub committed_items: Vec<ChatHistoryItem>,
     pub execution_blocked: bool,
+    pub tool_catalog: Vec<(String, String)>,
 }
 #[derive(Clone, Reflect)]
 pub struct ChatReplacement {
@@ -152,6 +174,7 @@ enum ChatAction {
 }
 #[derive(Component, Clone, PartialEq, Eq)]
 struct ChatRow {
+    request_index: u32,
     session: u64,
     turn: u64,
     output_index: Option<usize>,
@@ -395,10 +418,11 @@ fn can_retry(
                     .as_ref()
                     .is_some_and(|account| account.subject == session.account_subject)
                 && session.turn.as_ref().is_some_and(|turn| {
-                    matches!(
-                        turn.status,
-                        ChatTurnStatus::Failed(_) | ChatTurnStatus::Cancelled
-                    )
+                    turn.committed_steps == 0
+                        && matches!(
+                            turn.status,
+                            ChatTurnStatus::Failed(_) | ChatTurnStatus::Cancelled
+                        )
                 })
         })
 }
@@ -603,6 +627,12 @@ fn process_input(world: &mut World) -> Result {
 fn history_item(item: agentelier_conversation_bridge::HistoryItem) -> ChatHistoryItem {
     match item {
         agentelier_conversation_bridge::HistoryItem::User => ChatHistoryItem::User,
+        agentelier_conversation_bridge::HistoryItem::FunctionCall { call_id, name } => {
+            ChatHistoryItem::FunctionCall { call_id, name }
+        }
+        agentelier_conversation_bridge::HistoryItem::FunctionResult { call_id } => {
+            ChatHistoryItem::FunctionResult { call_id }
+        }
         agentelier_conversation_bridge::HistoryItem::Assistant { phase } => {
             ChatHistoryItem::Assistant { phase }
         }
@@ -613,6 +643,25 @@ fn history_item(item: agentelier_conversation_bridge::HistoryItem) -> ChatHistor
 }
 fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTurn> {
     Ok(ChatTurn {
+        request_index: turn.request_index,
+        committed_steps: turn.committed_steps,
+        phase: turn.phase,
+        tools: turn
+            .tools
+            .into_iter()
+            .map(|tool| ChatTool {
+                request_index: tool.request_index,
+                id: tool.id,
+                output_index: tool.output_index,
+                call_id: tool.call_id,
+                name: tool.name,
+                arguments: tool.arguments,
+                arguments_truncated: tool.arguments_truncated,
+                status: tool.status,
+                output: tool.output,
+                retained: tool.retained,
+            })
+            .collect(),
         id: turn.id,
         input_id: turn.input_id,
         is_retry: turn.is_retry,
@@ -624,11 +673,13 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
             .map(|message| ChatMessage {
                 id: message.id,
                 output_index: message.output_index,
+                request_index: message.request_index,
                 phase: message.phase,
                 text: message.text,
             })
             .collect(),
         status: match turn.status {
+            TurnStatus::Limited => ChatTurnStatus::Limited,
             TurnStatus::Running => ChatTurnStatus::Running,
             TurnStatus::Completed => ChatTurnStatus::Completed,
             TurnStatus::Cancelled => ChatTurnStatus::Cancelled,
@@ -641,13 +692,14 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
 fn project(session: SessionView) -> Result<ChatSession> {
     Ok(ChatSession {
         execution_blocked: session.execution_blocked,
+        tool_catalog: session.tool_catalog,
         id: session.id,
         slug: session.settings.slug,
         display_name: session.settings.display_name,
         effort: session.settings.effort,
         account_subject: session.settings.account_subject,
         instruction_snapshot: serde_json::to_string_pretty(session.settings.instructions.as_ref())?,
-        turn: session.turn.map(project_turn).transpose()?,
+        turn: session.turn.map(|turn| project_turn(*turn)).transpose()?,
         previous_turns: session
             .previous_turns
             .into_iter()
@@ -729,6 +781,10 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                             error = reason,
                             "聊天轮次失败，保留部分正文"
                         ),
+                        TurnStatus::Limited => info!(
+                            operation_id = event.operation_id,
+                            "聊天任务已触限，保留完整步骤"
+                        ),
                         TurnStatus::Running => {
                             return Err(io::Error::other("聊天终态仍标记为生成中").into());
                         }
@@ -804,11 +860,18 @@ fn reconcile(world: &mut World) -> Result {
         if let Some(session) = &session {
             for turn in session.previous_turns.iter().chain(session.turn.iter()) {
                 let status = match &turn.status {
-                    ChatTurnStatus::Cancelled => " · 已取消，未进入上下文",
-                    ChatTurnStatus::Failed(_) => " · 失败，未进入上下文",
+                    ChatTurnStatus::Cancelled if turn.committed_steps == 0 => {
+                        " · 已取消，未进入上下文"
+                    }
+                    ChatTurnStatus::Cancelled => " · 已取消，完整步骤已保留",
+                    ChatTurnStatus::Failed(_) if turn.committed_steps == 0 => {
+                        " · 失败，未进入上下文"
+                    }
+                    ChatTurnStatus::Failed(_) => " · 失败，完整步骤已保留",
                     _ => "",
                 };
                 let user_key = ChatRow {
+                    request_index: 0,
                     session: session.id,
                     turn: turn.input_id,
                     output_index: None,
@@ -820,6 +883,7 @@ fn reconcile(world: &mut World) -> Result {
                 if turn.messages.is_empty() {
                     desired.push((
                         ChatRow {
+                            request_index: 0,
                             session: session.id,
                             turn: turn.id,
                             output_index: None,
@@ -838,6 +902,7 @@ fn reconcile(world: &mut World) -> Result {
                     let phase = message.phase.as_deref().unwrap_or("回答");
                     desired.push((
                         ChatRow {
+                            request_index: message.request_index,
                             session: session.id,
                             turn: turn.id,
                             output_index: Some(message.output_index),
@@ -879,7 +944,8 @@ fn reconcile(world: &mut World) -> Result {
                 }
             } else {
                 let name = format!(
-                    "ChatMessage-{}-{}-{}",
+                    "ChatMessage-{}-{}-{}-{}",
+                    key.request_index,
                     key.session,
                     key.turn,
                     key.output_index
@@ -933,10 +999,27 @@ fn status(state: &ChatState) -> String {
         .and_then(|session| session.turn.as_ref())
     {
         return match &turn.status {
-            ChatTurnStatus::Running => "正在生成…".into(),
+            ChatTurnStatus::Running => format!(
+                "{} · 模型请求 {}",
+                if turn.phase == "tool" {
+                    "正在执行工具…"
+                } else {
+                    "正在请求模型…"
+                },
+                turn.request_index
+            ),
+            ChatTurnStatus::Limited => {
+                format!("任务触限；已保留 {} 个完整步骤", turn.committed_steps)
+            }
             ChatTurnStatus::Completed => "本轮已完成".into(),
-            ChatTurnStatus::Cancelled => "本轮已取消；部分回复未进入上下文".into(),
-            ChatTurnStatus::Failed(reason) => format!("本轮失败；部分回复未进入上下文：{reason}"),
+            ChatTurnStatus::Cancelled => format!(
+                "本轮已取消；保留 {} 个完整步骤，未完成响应未进入上下文",
+                turn.committed_steps
+            ),
+            ChatTurnStatus::Failed(reason) => format!(
+                "本轮失败；保留 {} 个完整步骤，未完成响应未进入上下文：{reason}",
+                turn.committed_steps
+            ),
         };
     }
     if state.operation.is_some() {
@@ -1012,4 +1095,46 @@ fn update(
             text.set_if_neq(Text::new(status(&state)));
         }
     }
+}
+
+pub(crate) fn request_details(state: &ChatState) -> String {
+    let Some(session) = &state.session else {
+        return "尚未创建会话".into();
+    };
+    let mut text = format!(
+        "Session {}\n模型：{}\n推理强度：{}\n固定指令快照：\n{}\n固定工具目录：\n",
+        session.id,
+        session.slug,
+        session.effort.as_deref().unwrap_or("服务默认"),
+        session.instruction_snapshot
+    );
+    for (name, description) in &session.tool_catalog {
+        text.push_str(&format!("{name}: {description}\n"));
+    }
+    for turn in session.previous_turns.iter().chain(session.turn.iter()) {
+        text.push_str(&format!(
+            "\n模型请求序号：{}；已保留步骤：{}\n最近请求指令：\n{}\n",
+            turn.request_index, turn.committed_steps, turn.request_instructions
+        ));
+        for tool in &turn.tools {
+            text.push_str(&format!(
+                "\n请求 {} / 输出 {} / {} / {}\n工具 {}；{}；已保留 {}\n参数{}：{}\n结果：{}\n",
+                tool.request_index,
+                tool.output_index,
+                tool.id,
+                tool.call_id,
+                tool.name,
+                tool.status,
+                tool.retained,
+                if tool.arguments_truncated {
+                    "（超限，仅显示前缀）"
+                } else {
+                    ""
+                },
+                tool.arguments,
+                tool.output.as_deref().unwrap_or("尚无结果")
+            ));
+        }
+    }
+    text
 }

@@ -188,6 +188,7 @@ version = "0.1.0"
 dependencies = [
  "agentelier_llm_model",
  "agentelier_prompts",
+ "agentelier_tools",
 ]
 
 [[package]]
@@ -204,6 +205,7 @@ version = "0.1.0"
 dependencies = [
  "agentelier_account",
  "agentelier_prompts",
+ "agentelier_tools",
  "reqwest",
  "serde",
  "serde_json",
@@ -281,14 +283,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentelier_tools"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
 name = "agentelier_turn_runner"
 version = "0.1.0"
 dependencies = [
  "agentelier_account",
  "agentelier_conversation",
  "agentelier_llm_model",
+ "agentelier_tools",
  "tokio",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]

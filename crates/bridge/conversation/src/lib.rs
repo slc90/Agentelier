@@ -5,5 +5,5 @@ mod conversation;
 
 pub use conversation::{
     ConversationEvent, ConversationRequest, HistoryItem, MessageView, SessionSettings, SessionView,
-    TurnStatus, TurnView, convert, request,
+    ToolView, TurnStatus, TurnView, convert, request,
 };

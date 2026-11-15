@@ -6,7 +6,7 @@ use crate::protocol::{ProtocolItem, ProtocolOutput};
 use agentelier_account::AuthenticatedRequest;
 use reqwest::Response;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::time::{Instant, timeout_at};
@@ -24,14 +24,25 @@ pub struct OutputText {
 pub struct OutputMessage {
     pub id: String,
     pub output_index: usize,
+    pub request_index: u32,
     pub phase: Option<String>,
     pub content: Vec<OutputText>,
 }
+#[derive(Clone)]
+pub struct FunctionCall {
+    pub id: String,
+    pub output_index: usize,
+    pub call_id: String,
+    pub name: String,
+    pub arguments: String,
+}
 pub struct GenerationResult {
+    pub calls: Vec<FunctionCall>,
     pub messages: Vec<OutputMessage>,
     pub output: ProtocolOutput,
 }
 pub enum StreamEvent {
+    FunctionCall(FunctionCall),
     Item(OutputMessage),
     Part {
         item_id: String,
@@ -90,13 +101,29 @@ fn message(item: &Value, output_index: usize) -> Result<OutputMessage, ModelFail
     Ok(OutputMessage {
         id: field(item, "id")?.to_owned(),
         output_index,
+        request_index: 0,
         phase,
         content,
     })
 }
+fn function_call(item: &Value, output_index: usize) -> Result<FunctionCall, ModelFailure> {
+    let call = FunctionCall {
+        id: field(item, "id")?.to_owned(),
+        output_index,
+        call_id: field(item, "call_id")?.to_owned(),
+        name: field(item, "name")?.to_owned(),
+        arguments: field(item, "arguments")?.to_owned(),
+    };
+    if call.id.is_empty() || call.call_id.is_empty() || call.name.is_empty() {
+        return Err(protocol("工具调用缺少有效身份或名称"));
+    }
+    Ok(call)
+}
+
 fn completed(
     response: &Value,
     completed_reasoning: &HashMap<String, Value>,
+    observed: &HashMap<usize, Value>,
 ) -> Result<GenerationResult, ModelFailure> {
     if field(response, "status")? != "completed" {
         return Err(protocol("完成事件的响应状态不一致"));
@@ -106,8 +133,26 @@ fn completed(
         .and_then(Value::as_array)
         .ok_or_else(|| protocol("完成响应缺少输出数组"))?;
     let mut messages = Vec::new();
+    let mut calls = Vec::new();
+    let mut item_ids = HashSet::new();
+    let mut call_ids = HashSet::new();
     let mut protocol_items = Vec::new();
     for (index, item) in output.iter().enumerate() {
+        let id = field(item, "id")?;
+        if id.is_empty() || !item_ids.insert(id) {
+            return Err(protocol("模型输出项身份重复或为空"));
+        }
+        if let Some(previous) = observed.get(&index) {
+            if field(previous, "id")? != id || field(previous, "type")? != field(item, "type")? {
+                return Err(protocol("完成输出与增量身份冲突"));
+            }
+            if field(item, "type")? == "function_call"
+                && (field(previous, "call_id")? != field(item, "call_id")?
+                    || field(previous, "name")? != field(item, "name")?)
+            {
+                return Err(protocol("完成工具调用与增量身份冲突"));
+            }
+        }
         match field(item, "type")? {
             "message" => {
                 let message = message(item, index)?;
@@ -134,10 +179,31 @@ fn completed(
                     .is_some_and(|value| !value.is_empty());
                 protocol_items.push(ProtocolItem::Reasoning { raw, encrypted });
             }
-            _ => return Err(protocol("不支持该模型输出类型；当前未启用工具执行")),
+            "function_call" => {
+                let call = function_call(item, index)?;
+                if !call_ids.insert(call.call_id.clone()) {
+                    return Err(protocol("模型重复使用调用身份"));
+                }
+                protocol_items.push(ProtocolItem::FunctionCall {
+                    raw: item.clone(),
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                });
+                calls.push(call);
+            }
+            _ => return Err(protocol("不支持该模型输出类型")),
+        }
+    }
+    for (index, previous) in observed {
+        if output
+            .get(*index)
+            .is_none_or(|item| item.get("id") != previous.get("id"))
+        {
+            return Err(protocol("完成输出丢失已观察的输出项"));
         }
     }
     Ok(GenerationResult {
+        calls,
         messages,
         output: ProtocolOutput(protocol_items),
     })
@@ -232,6 +298,7 @@ pub(crate) async fn consume(
     }
     let mut parser = Sse::default();
     let mut completed_reasoning = HashMap::new();
+    let mut observed: HashMap<usize, Value> = HashMap::new();
     let mut received = 0usize;
     let mut deadline = Instant::now() + STREAM_IDLE_TIMEOUT;
     loop {
@@ -273,6 +340,7 @@ pub(crate) async fn consume(
                             .get("response")
                             .ok_or_else(|| protocol("完成事件缺少响应对象"))?,
                         &completed_reasoning,
+                        &observed,
                     );
                 }
                 "response.failed" => {
@@ -307,6 +375,24 @@ pub(crate) async fn consume(
                     let item = event
                         .get("item")
                         .ok_or_else(|| protocol("输出事件缺少 item"))?;
+                    let output_index = index(&event, "output_index")?;
+                    if let Some(previous) = observed.get(&output_index)
+                        && (field(previous, "id")? != field(item, "id")?
+                            || field(previous, "type")? != field(item, "type")?)
+                    {
+                        return Err(protocol("模型输出项身份冲突"));
+                    }
+                    if let Some(previous) = observed.get(&output_index)
+                        && field(item, "type")? == "function_call"
+                        && (field(previous, "call_id")? != field(item, "call_id")?
+                            || field(previous, "name")? != field(item, "name")?)
+                    {
+                        return Err(protocol("工具调用身份在接收期间变化"));
+                    }
+                    if progress.is_none() && field(item, "type")? == "function_call" {
+                        return Err(protocol("连接验证未声明工具，不能处理工具输出"));
+                    }
+                    observed.insert(output_index, item.clone());
                     match field(item, "type")? {
                         "message" => {
                             publish(
@@ -321,8 +407,39 @@ pub(crate) async fn consume(
                                     .insert(field(item, "id")?.to_owned(), item.clone());
                             }
                         }
-                        _ => return Err(protocol("不支持该模型输出类型；当前未启用工具执行")),
+                        "function_call" => {
+                            publish(
+                                progress,
+                                StreamEvent::FunctionCall(function_call(item, output_index)?),
+                            )
+                            .await?
+                        }
+                        _ => return Err(protocol("不支持该模型输出类型")),
                     }
+                }
+                "response.function_call_arguments.delta"
+                | "response.function_call_arguments.done" => {
+                    request.mark_output_started();
+                    let output_index = index(&event, "output_index")?;
+                    let item = observed
+                        .get_mut(&output_index)
+                        .ok_or_else(|| protocol("工具参数缺少对应调用"))?;
+                    if field(item, "type")? != "function_call"
+                        || field(item, "id")? != field(&event, "item_id")?
+                    {
+                        return Err(protocol("工具参数身份不匹配"));
+                    }
+                    let arguments = if kind.ends_with(".delta") {
+                        format!("{}{}", field(item, "arguments")?, field(&event, "delta")?)
+                    } else {
+                        field(&event, "arguments")?.to_owned()
+                    };
+                    item["arguments"] = Value::String(arguments);
+                    publish(
+                        progress,
+                        StreamEvent::FunctionCall(function_call(item, output_index)?),
+                    )
+                    .await?;
                 }
                 "response.content_part.added" | "response.content_part.done" => {
                     request.mark_output_started();

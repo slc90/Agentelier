@@ -20,6 +20,7 @@ pub struct GenerationRequest {
     pub context: ProtocolHistory,
     pub instructions: Arc<InstructionSnapshot>,
     pub account_subject: String,
+    pub tools: Arc<agentelier_tools::ToolCatalog>,
 }
 
 pub async fn generate(
@@ -59,6 +60,11 @@ pub async fn generate(
         "store": false,
         "stream": true,
     });
+    payload["tools"] = serde_json::Value::Array(generation.tools.definitions().iter().map(|tool| serde_json::json!({
+        "type":"function", "name":tool.name, "description":tool.description, "parameters":tool.parameters, "strict":true
+    })).collect());
+    payload["tool_choice"] = serde_json::json!("auto");
+    payload["parallel_tool_calls"] = serde_json::json!(false);
     if let Some(effort) = &generation.effort {
         payload["reasoning"] = serde_json::json!({"effort": effort});
     }

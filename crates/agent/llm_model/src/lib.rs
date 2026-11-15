@@ -8,7 +8,7 @@ mod stream;
 
 pub use generation::{GenerationRequest, generate};
 pub use protocol::{ProtocolHistory, ProtocolItemSummary, ProtocolOutput};
-pub use stream::{GenerationResult, OutputMessage, OutputText, StreamEvent};
+pub use stream::{FunctionCall, GenerationResult, OutputMessage, OutputText, StreamEvent};
 
 pub use model::{
     ModelFailure, ModelFailureKind, ModelInfo, ModelReply, ModelRequest, ModelResult, execute,

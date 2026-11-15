@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agentelier_tools = { path = "../tools" }
 agentelier_account = { path = "../account" }
 agentelier_prompts = { path = "../prompts" }
 reqwest.workspace = true
