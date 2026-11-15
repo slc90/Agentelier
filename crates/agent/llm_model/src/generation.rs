@@ -64,7 +64,7 @@ pub async fn generate(
         "type":"function", "name":tool.name, "description":tool.description, "parameters":tool.parameters, "strict":true
     })).collect());
     payload["tool_choice"] = serde_json::json!("auto");
-    payload["parallel_tool_calls"] = serde_json::json!(false);
+    payload["parallel_tool_calls"] = serde_json::json!(true);
     if let Some(effort) = &generation.effort {
         payload["reasoning"] = serde_json::json!({"effort": effort});
     }

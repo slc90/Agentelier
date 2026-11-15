@@ -46,4 +46,4 @@ LLM Model 以 ModelRequest::Catalog 读取全部可显示模型，以 Verify 携
 
 聊天 GenerationRequest 额外携带固定的 InstructionSnapshot。生成前核对快照，并通过其统一 `messages()` 映射将基础覆盖及有序补充文本构造成 `developer` 输入消息，再追加 ProtocolHistory 和当前用户输入；基础与补充槽位不对应不同协议优先级。默认空配置保持原有请求行为。指令材料解析与保存归 Prompts，LLM Model 不读提示词文件，不在模型连接验证中自动注入准备区指令。
 
-聊天 generate 在请求中附带会话固定的 strict function tools、自动选择及 parallel_tool_calls=false；独立的目录/连接验证操作不附带工具。SSE 接收函数参数增量只发布展示，最终 response.completed 校验身份、完整输出及 reasoning 后返回完整调用。协议历史按原顺序重放 function_call，并以 call_id 关联 function_call_output 的有界 JSON 字符串。
+聊天 generate 在请求中附带会话固定的 strict function tools、自动选择及 parallel_tool_calls=true（仅允许模型提出多项调用，实际执行仍串行）；独立的目录/连接验证操作不附带工具。SSE 接收函数参数增量只发布展示，最终 response.completed 校验身份、完整输出及 reasoning 后返回完整调用。协议历史按原顺序重放 function_call，并以 call_id 关联 function_call_output 的有界 JSON 字符串。

@@ -8,7 +8,6 @@ use tokio_util::sync::CancellationToken;
 const MODEL_PROGRESS_CAPACITY: usize = 32;
 const MAX_MODEL_REQUESTS: usize = 32;
 const MAX_TOOL_CALLS: usize = 64;
-const MAX_CALLS_PER_RESPONSE: usize = 1;
 
 async fn publish(
     active: &ActiveTurn,
@@ -100,8 +99,7 @@ pub async fn run(
             active.finish(TurnStatus::Completed)?;
             return Ok(active);
         }
-        let limited = result.calls.len() > MAX_CALLS_PER_RESPONSE
-            || result.calls.len() > MAX_TOOL_CALLS.saturating_sub(tools_used);
+        let limited = result.calls.len() > MAX_TOOL_CALLS.saturating_sub(tools_used);
         tools_used += result.calls.len();
         for call in &result.calls {
             let outcome = if limited {
