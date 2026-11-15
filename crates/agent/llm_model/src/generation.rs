@@ -5,7 +5,9 @@ use crate::model::{
 use crate::protocol::ProtocolHistory;
 use crate::stream::{GenerationResult, STREAM_IDLE_TIMEOUT, StreamEvent, consume};
 use agentelier_account::{AuthenticatedRequest, CredentialClient};
+use agentelier_prompts::InstructionSnapshot;
 use reqwest::Client;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 
@@ -16,6 +18,7 @@ pub struct GenerationRequest {
     pub slug: String,
     pub effort: Option<String>,
     pub context: ProtocolHistory,
+    pub instructions: Arc<InstructionSnapshot>,
     pub account_subject: String,
 }
 
@@ -38,9 +41,20 @@ pub async fn generate(
             "账号身份已变化，请创建新聊天会话",
         ));
     }
+    generation
+        .instructions
+        .validate()
+        .map_err(|_| ModelFailure::new(ModelFailureKind::Protocol, "会话指令快照无效"))?;
+    let mut input: Vec<_> = generation
+        .instructions
+        .messages()
+        .into_iter()
+        .map(|message| serde_json::json!({"role": message.role, "content": message.text}))
+        .collect();
+    input.extend(generation.context.into_input());
     let mut payload = serde_json::json!({
         "model": generation.slug,
-        "input": generation.context.into_input(),
+        "input": input,
         "include": ["reasoning.encrypted_content"],
         "store": false,
         "stream": true,

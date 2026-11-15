@@ -2,6 +2,8 @@ use agentelier_llm_model::{
     GenerationRequest, GenerationResult, ModelFailure, OutputMessage, OutputText, ProtocolHistory,
     ProtocolItemSummary, StreamEvent,
 };
+use agentelier_prompts::{InstructionMessage, InstructionSnapshot};
+use std::sync::Arc;
 use std::{error::Error, fmt};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -15,6 +17,7 @@ pub struct SessionSettings {
     pub display_name: String,
     pub effort: Option<String>,
     pub account_subject: String,
+    pub instructions: Arc<InstructionSnapshot>,
 }
 pub enum ConversationRequest {
     Create(SessionSettings),
@@ -39,6 +42,7 @@ pub struct TurnView {
     pub messages: Vec<OutputMessage>,
     pub status: TurnStatus,
     pub request_items: Vec<ProtocolItemSummary>,
+    pub request_instructions: Vec<InstructionMessage>,
 }
 #[derive(Clone)]
 pub struct SessionView {
@@ -115,6 +119,10 @@ impl Conversation {
             .next_session
             .checked_add(1)
             .ok_or(ConversationFailure("聊天会话标识已耗尽"))?;
+        settings
+            .instructions
+            .validate()
+            .map_err(|_| ConversationFailure("会话指令快照无效"))?;
         let session = SessionView {
             id: SessionId(id),
             settings,
@@ -177,6 +185,7 @@ impl Conversation {
             effort: session.view.settings.effort.clone(),
             context,
             account_subject: session.view.settings.account_subject.clone(),
+            instructions: session.view.settings.instructions.clone(),
         };
         if let Some(previous) = session.view.turn.take() {
             session.view.previous_turns.push(previous);
@@ -190,6 +199,7 @@ impl Conversation {
             messages: Vec::new(),
             status: TurnStatus::Running,
             request_items,
+            request_instructions: session.view.settings.instructions.messages(),
         });
         self.next_turn = id;
         Ok((session.view.clone(), request))

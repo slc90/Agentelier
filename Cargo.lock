@@ -173,8 +173,11 @@ dependencies = [
  "agentelier_llm_model_bridge",
  "agentelier_login_ui",
  "agentelier_markdown",
+ "agentelier_prompts",
  "bevy",
+ "bevy_app_assets",
  "bevy_widgetry",
+ "serde_json",
  "tracing",
 ]
 
@@ -183,6 +186,7 @@ name = "agentelier_conversation"
 version = "0.1.0"
 dependencies = [
  "agentelier_llm_model",
+ "agentelier_prompts",
 ]
 
 [[package]]
@@ -190,6 +194,7 @@ name = "agentelier_conversation_bridge"
 version = "0.1.0"
 dependencies = [
  "agentelier_conversation",
+ "agentelier_prompts",
 ]
 
 [[package]]
@@ -197,6 +202,7 @@ name = "agentelier_llm_model"
 version = "0.1.0"
 dependencies = [
  "agentelier_account",
+ "agentelier_prompts",
  "reqwest",
  "serde",
  "serde_json",
@@ -260,6 +266,17 @@ dependencies = [
  "tracing",
  "url",
  "winsafe",
+]
+
+[[package]]
+name = "agentelier_prompts"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "uuid",
 ]
 
 [[package]]

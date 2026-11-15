@@ -14,4 +14,6 @@
 
 模型准备区已接入[聊天与流式回复](features/chat.md)，会话及执行关系见[内存聊天与流式投影](design/architecture.md#内存聊天与流式投影)。
 
+准备区的[提示词管理](features/prompts.md)支持来源版本、组合预设和固定会话指令；数据边界见[提示词版本与快照](design/modules/prompts.md)。
+
 助手正文采用[原生 Markdown 展示](design/modules/markdown.md)，支持范围和阅读行为见[聊天功能](features/chat.md)。

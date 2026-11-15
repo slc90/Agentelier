@@ -18,6 +18,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/account/` | `agentelier_account` | 账号操作与会话状态、共享凭据门控和按需续期协调 |
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录、Responses、SSE 和模型错误语义 |
 | `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的内存聊天会话、Turn 身份、展示记录与结果收敛 |
+| `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
 | `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型任务取消/回收及执行收尾 |
 | `crates/bridge/account/` | `agentelier_account_bridge` | 账号摘要、凭据安全投影、授权地址及账号事件转换 |
 | `crates/bridge/llm_model/` | `agentelier_llm_model_bridge` | 模型结果、错误分类、取消和完成状态转换 |
@@ -43,6 +44,8 @@ flowchart TD
     UI --> AccountBridge["Bridge · account"]
     ChatUI --> ModelBridge["Bridge · llm_model"]
     ChatUI --> ConversationBridge["Bridge · conversation"]
+    ChatUI --> Prompts["Agent · prompts"]
+    ChatUI --> Assets
     Host --> AccountBridge
     Host --> ModelBridge
     Host --> ConversationBridge
@@ -56,7 +59,10 @@ flowchart TD
     Runtime --> Model
     Runtime --> Conversation["Agent · conversation"]
     Conversation --> Model
+    Conversation --> Prompts
     ConversationBridge --> Conversation
+    ConversationBridge --> Prompts
+    Model --> Prompts
     Model --> Account
     Account --> Login
 ```
@@ -151,3 +157,9 @@ chat_ui 仅管理展示投影与草稿，通过 BSN 和 Widgetry 多行 TextFiel
 协议历史和安全展示摘要的具体关系见[聊天会话与协议历史](modules/conversation.md)。
 
 Markdown 的原文、解析块和原生布局由独立 UI crate 管理，不依赖 Agent/Bridge，也不改变协议正文。Chat UI 保存会话投影并把每条助手原文交给 MarkdownView；底部跟随属于聊天阅读行为。具体边界见[原生 Markdown](modules/markdown.md)。
+
+## 提示词库与固定指令
+
+Prompts 是无 Bevy、网络和线程依赖的业务库，管理来源与派生版本、基础覆盖及有序补充配置、预设解析和完整快照。应用内置来源数据由 Assets 提供，Chat UI 在启动数据目录就绪后，通过 Widgetry JobManager 加载该目录的 `prompts.json`；保存和 UTF-8 导入同样使用辅助 Job，并等待真实终态后更新 UI。来源版本与旧版本不被编辑覆盖，文件原子替换不接触账号凭据。
+
+Chat UI 管理提示词库、组合预览和会话核对界面，并在创建 Session 时提交解析后的完整 InstructionSnapshot。Conversation 固定快照；重置复制当前设置，重试沿用原快照。LLM Model 在每次请求中将快照转换为有序 `developer` 消息，置于已提交协议历史和本轮输入之前，避免把指令重复写入历史。Bridge 传递快照与请求指令安全投影；UI 可核对文本、来源版本、哈希、角色及顺序，不公开凭据或加密推理内容。详见[提示词管理](modules/prompts.md)。

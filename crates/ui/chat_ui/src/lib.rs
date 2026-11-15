@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod conversation;
 mod preparation;
+mod prompts;
 mod reading;
 mod reasoning;
 

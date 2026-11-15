@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 agentelier_account = { path = "../account" }
+agentelier_prompts = { path = "../prompts" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

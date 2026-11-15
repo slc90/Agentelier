@@ -43,3 +43,5 @@ Runtime (`agentelier_agent_runtime`) 负责 ModelControl、Tokio 任务启动、
 LLM Model 以 ModelRequest::Catalog 读取全部可显示模型，以 Verify 携带明确 slug、名称和可选 effort 执行固定输入验证。ModelResult 分别表达目录及验证回复；Runtime 共用一种可取消模型任务，LLM Model Bridge 转换自己的请求和结果类型，Connection 只分配并关联操作。chat_ui 独立持有目录与选择，login_ui 只依赖共享宿主的活动状态来禁用冲突的账号操作。
 
 推理能力从目录的 supported_reasoning_levels 和 default_reasoning_level 解析；畸形能力数据或与支持列表不一致的默认值作为协议失败。UI 的 ReasoningSetting 区分 ServiceDefault 与 Effort，选择不进入账号状态。Bridge 逐字段转换可选 effort，LLM Model 只在显式值存在时序列化 reasoning.effort；验证回复带回实际提交设置，UI 不从服务是否成功反推使用了哪个档位。
+
+聊天 GenerationRequest 额外携带固定的 InstructionSnapshot。生成前核对快照，并通过其统一 `messages()` 映射将基础覆盖及有序补充文本构造成 `developer` 输入消息，再追加 ProtocolHistory 和当前用户输入；基础与补充槽位不对应不同协议优先级。默认空配置保持原有请求行为。指令材料解析与保存归 Prompts，LLM Model 不读提示词文件，不在模型连接验证中自动注入准备区指令。

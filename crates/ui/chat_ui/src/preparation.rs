@@ -112,6 +112,7 @@ pub fn install(app: &mut App) -> Result {
     crate::reading::install(app);
     reasoning::install(app)?;
     crate::conversation::install(app);
+    crate::prompts::install(app)?;
     app.register_widgetry_combo_box::<ModelChoice>()
         .map_err(|failure| failure.into_bevy_error())?;
     app.init_resource::<ModelState>()
@@ -160,8 +161,12 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
                     Node { width: px(MODEL_SELECTOR_WIDTH), flex_shrink: 0.0 }
                     on(select_model)--
                     @reasoning::selector(reasoning_source)--
-                    @action_button("验证模型连接", "VerifyModelConnection", ModelAction::Verify)
+                    @action_button("验证模型连接", "VerifyModelConnection", ModelAction::Verify)--
+                    @crate::prompts::entry()
                 ]--
+                crate::prompts::NormalContent
+                Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(PANEL_GAP) }
+                Children [
                 Text(summary) WidgetryText ModelStatus Name("ModelConnectionStatus")
                 TextLayout::linebreak(LineBreak::AnyCharacter)--
                 @WidgetryScrollArea {
@@ -173,6 +178,9 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
                 }
                 Node { width: percent(100), height: px(64), flex_shrink: 0.0 }--
                 @crate::conversation::panel(&chat)
+                ]--
+                crate::prompts::PromptWorkspace Name("PromptWorkspace")
+                Node { display: Display::None, width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column }
             ]
         });
         world.commands().spawn_scene_with_error_handler(scene);

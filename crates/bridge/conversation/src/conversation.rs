@@ -1,9 +1,13 @@
+use agentelier_prompts::{InstructionMessage, InstructionSnapshot};
+use std::sync::Arc;
+
 #[derive(Clone)]
 pub struct SessionSettings {
     pub slug: String,
     pub display_name: String,
     pub effort: Option<String>,
     pub account_subject: String,
+    pub instructions: Arc<InstructionSnapshot>,
 }
 pub enum ConversationRequest {
     Create(SessionSettings),
@@ -41,6 +45,7 @@ pub struct TurnView {
     pub messages: Vec<MessageView>,
     pub status: TurnStatus,
     pub request_items: Vec<HistoryItem>,
+    pub request_instructions: Vec<InstructionMessage>,
 }
 #[derive(Clone)]
 pub struct SessionView {
@@ -79,6 +84,7 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
                     display_name: settings.display_name,
                     effort: settings.effort,
                     account_subject: settings.account_subject,
+                    instructions: settings.instructions,
                 },
             )
         }
@@ -110,6 +116,7 @@ fn view(session: agentelier_conversation::SessionView) -> SessionView {
             display_name: session.settings.display_name,
             effort: session.settings.effort,
             account_subject: session.settings.account_subject,
+            instructions: session.settings.instructions,
         },
         turn: session.turn.map(turn_view),
         previous_turns: session.previous_turns.into_iter().map(turn_view).collect(),
@@ -155,6 +162,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
             })
             .collect(),
         request_items: turn.request_items.into_iter().map(history_item).collect(),
+        request_instructions: turn.request_instructions,
         status: match turn.status {
             agentelier_conversation::TurnStatus::Running => TurnStatus::Running,
             agentelier_conversation::TurnStatus::Completed => TurnStatus::Completed,

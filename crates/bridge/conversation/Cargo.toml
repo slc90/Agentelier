@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 agentelier_conversation = { path = "../../agent/conversation" }
+agentelier_prompts = { path = "../../agent/prompts" }
 
 [lints]
 workspace = true

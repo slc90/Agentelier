@@ -8,6 +8,7 @@ use agentelier_conversation_bridge::{
 };
 use agentelier_login_ui::{AccountState, CredentialState};
 use agentelier_markdown::{MarkdownSource, MarkdownView};
+use agentelier_prompts::InstructionSnapshot;
 use bevy::ecs::message::MessageCursor;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
@@ -23,6 +24,7 @@ use bevy_widgetry::scroll_area::WidgetryScrollArea;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{AutoSize, WidgetryTextField, WidgetryTextFieldHeadless};
 use std::io;
+use std::sync::Arc;
 use tracing::{error, info};
 
 const CONTENT_GAP: f32 = 12.0;
@@ -60,6 +62,7 @@ pub struct ChatTurn {
     pub messages: Vec<ChatMessage>,
     pub status: ChatTurnStatus,
     pub request_items: Vec<ChatHistoryItem>,
+    pub request_instructions: String,
 }
 #[derive(Clone, Reflect)]
 pub struct ChatSession {
@@ -68,6 +71,7 @@ pub struct ChatSession {
     pub display_name: String,
     pub effort: Option<String>,
     pub account_subject: String,
+    pub instruction_snapshot: String,
     pub turn: Option<ChatTurn>,
     pub previous_turns: Vec<ChatTurn>,
     pub committed_items: Vec<ChatHistoryItem>,
@@ -79,6 +83,8 @@ pub struct ChatReplacement {
     pub display_name: String,
     pub effort: Option<String>,
     pub account_subject: String,
+    #[reflect(ignore)]
+    pub instructions: Arc<InstructionSnapshot>,
 }
 #[derive(Resource, Clone, Reflect, Default)]
 #[reflect(Resource)]
@@ -275,6 +281,7 @@ fn create_session(world: &mut World) -> Result {
         display_name: choice.display_name.clone(),
         effort: model.reasoning.effort(),
         account_subject: subject,
+        instructions: Arc::new(crate::prompts::snapshot(world)?),
     };
     if state.session.is_some() {
         world.resource_mut::<ChatState>().replacement = Some(ChatReplacement {
@@ -283,6 +290,7 @@ fn create_session(world: &mut World) -> Result {
             display_name: settings.display_name,
             effort: settings.effort,
             account_subject: settings.account_subject,
+            instructions: settings.instructions,
         });
         return Ok(());
     }
@@ -321,6 +329,7 @@ fn prepare_reset(world: &mut World) -> Result {
         display_name: session.display_name.clone(),
         effort: session.effort.clone(),
         account_subject: session.account_subject.clone(),
+        instructions: Arc::new(serde_json::from_str(&session.instruction_snapshot)?),
     };
     world.resource_mut::<ChatState>().replacement = Some(pending);
     Ok(())
@@ -349,6 +358,7 @@ fn confirm_replacement(world: &mut World) -> Result {
             display_name: pending.display_name,
             effort: pending.effort,
             account_subject: pending.account_subject,
+            instructions: pending.instructions,
         }),
     };
     let result = world.resource::<AgentHost>().request_conversation(request);
@@ -598,8 +608,8 @@ fn history_item(item: agentelier_conversation_bridge::HistoryItem) -> ChatHistor
         }
     }
 }
-fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> ChatTurn {
-    ChatTurn {
+fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTurn> {
+    Ok(ChatTurn {
         id: turn.id,
         input_id: turn.input_id,
         is_retry: turn.is_retry,
@@ -622,27 +632,29 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> ChatTurn {
             TurnStatus::Failed(reason) => ChatTurnStatus::Failed(reason),
         },
         request_items: turn.request_items.into_iter().map(history_item).collect(),
-    }
+        request_instructions: serde_json::to_string_pretty(&turn.request_instructions)?,
+    })
 }
-fn project(session: SessionView) -> ChatSession {
-    ChatSession {
+fn project(session: SessionView) -> Result<ChatSession> {
+    Ok(ChatSession {
         id: session.id,
         slug: session.settings.slug,
         display_name: session.settings.display_name,
         effort: session.settings.effort,
         account_subject: session.settings.account_subject,
-        turn: session.turn.map(project_turn),
+        instruction_snapshot: serde_json::to_string_pretty(session.settings.instructions.as_ref())?,
+        turn: session.turn.map(project_turn).transpose()?,
         previous_turns: session
             .previous_turns
             .into_iter()
             .map(project_turn)
-            .collect(),
+            .collect::<Result<Vec<_>>>()?,
         committed_items: session
             .committed_items
             .into_iter()
             .map(history_item)
             .collect(),
-    }
+    })
 }
 
 fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) -> Result {
@@ -732,11 +744,11 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             }
             ConversationEvent::Created(view) => {
                 let mut state = world.resource_mut::<ChatState>();
-                state.session = Some(project(view));
+                state.session = Some(project(view)?);
                 state.replacement = None;
             }
             ConversationEvent::Updated(view) | ConversationEvent::Finished(view) => {
-                world.resource_mut::<ChatState>().session = Some(project(view));
+                world.resource_mut::<ChatState>().session = Some(project(view)?);
             }
             ConversationEvent::Accepted(view) => {
                 world.resource_mut::<InputIntents>().clear_accepted = view
@@ -744,7 +756,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                     .as_ref()
                     .filter(|turn| !turn.is_retry)
                     .map(|turn| turn.input.clone());
-                world.resource_mut::<ChatState>().session = Some(project(view));
+                world.resource_mut::<ChatState>().session = Some(project(view)?);
             }
         }
         if terminal {

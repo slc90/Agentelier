@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 agentelier_llm_model = { path = "../llm_model" }
+agentelier_prompts = { path = "../prompts" }
 
 [lints]
 workspace = true
