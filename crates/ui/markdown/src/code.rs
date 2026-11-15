@@ -3,6 +3,7 @@ use bevy::picking::events::PointerScroll;
 use bevy::prelude::*;
 use bevy::text::{FontSource, LineBreak, LineHeight};
 use bevy::ui::{OverflowAxis, ScrollPosition};
+use bevy::ui_widgets::Activate;
 use bevy::ui_widgets::ScrollArea;
 use bevy_widgetry::scroll_area::{ScrollAxis, WidgetryScrollArea};
 use bevy_widgetry::text::WidgetryText;
@@ -15,6 +16,36 @@ const HEADER_GAP: f32 = 6.0;
 struct CodeText;
 #[derive(Component, Clone, Default)]
 struct CodeScroll;
+#[derive(Component, Clone, Default)]
+struct CodeBlock;
+
+fn copy_code(event: On<Activate>, mut commands: Commands) {
+    let button = event.entity;
+    commands.queue(move |world: &mut World| -> Result {
+        let mut root = button;
+        while world.get::<CodeBlock>(root).is_none() {
+            root = world
+                .get::<ChildOf>(root)
+                .ok_or_else(|| std::io::Error::other("代码复制缺少所属代码块"))?
+                .parent();
+        }
+        let mut pending = vec![root];
+        while let Some(entity) = pending.pop() {
+            if let Some(children) = world.get::<Children>(entity) {
+                pending.extend(children.iter());
+            }
+            if world.get::<CodeText>(entity).is_some() {
+                let text = world
+                    .get::<Text>(entity)
+                    .ok_or_else(|| std::io::Error::other("代码复制缺少正文"))?
+                    .0
+                    .clone();
+                return crate::source::copy(world, button, &text, "代码");
+            }
+        }
+        Err(std::io::Error::other("代码块缺少正文").into())
+    });
+}
 
 fn height(text: &str) -> f32 {
     text.split('\n').count() as f32 * CODE_LINE_HEIGHT + SCROLLBAR_SPACE
@@ -88,10 +119,11 @@ pub(crate) fn scene(language: &str, text: &str) -> Box<dyn Scene> {
         ..default()
     };
     Box::new(bsn! {
-        Name("MarkdownCodeBlock")
+        CodeBlock Name("MarkdownCodeBlock")
         Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(HEADER_GAP), flex_shrink: 0.0 }
         Children [
-            Text(label) WidgetryText--
+            Node { column_gap: px(HEADER_GAP), align_items: AlignItems::Center, flex_shrink: 0.0 }
+            Children [Text(label) WidgetryText-- @crate::source::copy_button("复制代码", "MarkdownCopyCode") on(copy_code)]--
             @WidgetryScrollArea {
                 @axis: ScrollAxis::Horizontal,
                 @content: {Some(Box::new(bsn! { on(forward_vertical) }) as Box<dyn Scene>)},

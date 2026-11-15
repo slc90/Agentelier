@@ -4,6 +4,7 @@ compile_error!("This application supports Windows x64 only");
 mod code;
 mod links;
 mod parse;
+mod source;
 mod table;
 mod view;
 

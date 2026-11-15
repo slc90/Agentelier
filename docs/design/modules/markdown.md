@@ -11,3 +11,5 @@
 聊天阅读由 chat_ui 管理：公开 ScrollPosition 与布局尺寸确定是否在底部，用户向上滚动后停止自动跟随；更新后布局只在跟随时移到底部。回到底部按钮恢复跟随，必要时请求重绘。页面重建恢复内存中的阅读状态。
 
 解析器依据：[官方指南](https://pulldown-cmark.github.io/pulldown-cmark/)、[0.13.6 API](https://docs.rs/pulldown-cmark/0.13.6/pulldown_cmark/)。具体支持范围见[聊天功能](../../features/chat.md)。
+
+原文与排版共用一个 MarkdownSource。MarkdownView 的工具栏、渲染正文和只读 TextField 均保持身份，切换只改变展示，不重新请求。原文更新通过 WidgetryTextFieldHeadless 公开 API 同步，保留控件允许保留的选择位置。复制正文直接取当前 MarkdownSource；代码复制直接取当前解析代码文本。同步系统剪贴板结果显示在对应按钮并记录操作结果，正文不写入日志。渲染子树尚在 Scene 构造时仅保留待处理身份，完成后再同步。

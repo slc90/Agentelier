@@ -10,7 +10,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | --- | --- | --- |
 | `crates/ui/application/` | `agentelier_application` | 通用宿主、配置、日志、诊断、窗口装配与整体生命周期 |
 | `crates/ui/assets/` | `bevy_app_assets` | 应用 Asset 的统一注册 |
-| `crates/ui/markdown/` | `agentelier_markdown` | 原生 Markdown 解析、块更新、行内样式与用户主动链接交互 |
+| `crates/ui/markdown/` | `agentelier_markdown` | 原生 Markdown 解析、块更新、行内样式、原文复制与用户主动链接交互 |
 | `crates/ui/chat_ui/` | `agentelier_chat_ui` | 模型准备、会话与草稿、多轮流式聊天和相应交互投影 |
 | `crates/ui/agent_host/` | `agentelier_agent_host` | 唯一 Connection、Winit 唤醒、命令提交、业务消息分发及执行收尾 |
 | `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、账号界面，Bevy/Bridge 衔接及浏览器/剪贴板交互 |

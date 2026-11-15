@@ -6,7 +6,11 @@ edition.workspace = true
 
 [dependencies]
 bevy.workspace = true
-bevy_widgetry = { workspace = true, features = ["button", "scroll_area"] }
+bevy_widgetry = { workspace = true, features = [
+  "button",
+  "scroll_area",
+  "text_field",
+] }
 pulldown-cmark.workspace = true
 url.workspace = true
 winsafe = { workspace = true, features = ["ole", "shell"] }

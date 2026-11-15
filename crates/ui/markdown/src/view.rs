@@ -6,7 +6,7 @@ use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
 
 pub(crate) const BODY_SIZE: f32 = 18.0;
-const BLOCK_GAP: f32 = 10.0;
+pub(crate) const BLOCK_GAP: f32 = 10.0;
 const QUOTE_INSET: f32 = 14.0;
 const HEADING_SIZES: [f32; 6] = [30.0, 26.0, 23.0, 20.0, 20.0, 20.0];
 const LINK_GAP: f32 = 6.0;
@@ -28,8 +28,7 @@ pub struct MarkdownProps {
 }
 impl MarkdownView {
     fn scene(props: MarkdownProps) -> impl Scene {
-        let source = props.source;
-        bsn! { MarkdownSource(source) Name("MarkdownView") Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(BLOCK_GAP), flex_shrink: 0.0 } }
+        crate::source::scene(props.source)
     }
 }
 pub struct MarkdownPlugin;
@@ -39,6 +38,7 @@ impl Plugin for MarkdownPlugin {
             .add_systems(PostUpdate, render.before(UiSystems::Prepare));
         crate::links::install(app);
         crate::table::install(app);
+        crate::source::install(app);
     }
 }
 #[derive(Component)]
@@ -46,13 +46,25 @@ struct RenderedBlock {
     index: usize,
     block: Block,
 }
-fn render(world: &mut World) -> Result {
+fn render(world: &mut World, mut pending: Local<Vec<Entity>>) -> Result {
     let mut changed = world.query_filtered::<(Entity, &MarkdownSource), Changed<MarkdownSource>>();
-    let updates: Vec<_> = changed
+    let mut updates: Vec<_> = changed
         .iter(world)
         .map(|(entity, source)| (entity, source.0.clone()))
         .collect();
+    for entity in pending.drain(..) {
+        if !updates.iter().any(|(root, _)| *root == entity)
+            && let Some(source) = world.get::<MarkdownSource>(entity)
+        {
+            updates.push((entity, source.0.clone()));
+        }
+    }
     for (root, source) in updates {
+        let Some(body) = crate::source::sync(world, root, &source)? else {
+            pending.push(root);
+            continue;
+        };
+        let root = body;
         let blocks = parse::parse(&source);
         let mut query = world.query::<(Entity, &RenderedBlock, &ChildOf)>();
         let existing: Vec<_> = query
