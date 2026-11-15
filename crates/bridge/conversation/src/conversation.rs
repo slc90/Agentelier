@@ -52,6 +52,28 @@ pub struct ToolView {
     pub output: Option<String>,
     pub retained: bool,
 }
+#[derive(Clone, Copy)]
+pub enum SteerState {
+    Accepted,
+    Applied,
+    NotApplied,
+}
+#[derive(Clone)]
+pub struct SteerView {
+    pub id: u64,
+    pub text: String,
+    pub state: SteerState,
+    pub applied_request: Option<u32>,
+}
+pub enum InputDecision {
+    Accepted,
+    Applied,
+    Rejected(String),
+}
+pub struct InputReceipt {
+    pub id: u64,
+    pub decision: InputDecision,
+}
 #[derive(Clone)]
 pub struct TurnView {
     pub id: u64,
@@ -66,6 +88,7 @@ pub struct TurnView {
     pub committed_steps: u32,
     pub tools: Vec<ToolView>,
     pub phase: String,
+    pub steers: Vec<SteerView>,
     pub request_instructions: Vec<InstructionMessage>,
 }
 #[derive(Clone)]
@@ -84,6 +107,7 @@ pub enum ConversationEvent {
     Updated(SessionView),
     Finished(SessionView),
     Rejected(String),
+    InputReceipt(InputReceipt),
 }
 
 impl ConversationEvent {
@@ -172,6 +196,20 @@ fn history_item(item: agentelier_conversation::ProtocolItemSummary) -> HistoryIt
 }
 fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
     TurnView {
+        steers: turn
+            .steers
+            .into_iter()
+            .map(|input| SteerView {
+                id: input.id,
+                text: input.text,
+                applied_request: input.applied_request,
+                state: match input.state {
+                    agentelier_conversation::SteerState::Accepted => SteerState::Accepted,
+                    agentelier_conversation::SteerState::Applied => SteerState::Applied,
+                    agentelier_conversation::SteerState::NotApplied => SteerState::NotApplied,
+                },
+            })
+            .collect(),
         request_index: turn.request_index,
         committed_steps: turn.committed_steps,
         phase: match turn.phase {
@@ -240,6 +278,18 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
 
 pub fn convert(event: agentelier_conversation::ConversationEvent) -> ConversationEvent {
     match event {
+        agentelier_conversation::ConversationEvent::InputReceipt(receipt) => {
+            ConversationEvent::InputReceipt(InputReceipt {
+                id: receipt.id,
+                decision: match receipt.decision {
+                    agentelier_conversation::InputDecision::Accepted => InputDecision::Accepted,
+                    agentelier_conversation::InputDecision::Applied => InputDecision::Applied,
+                    agentelier_conversation::InputDecision::Rejected(reason) => {
+                        InputDecision::Rejected(reason)
+                    }
+                },
+            })
+        }
         agentelier_conversation::ConversationEvent::Created(session) => {
             ConversationEvent::Created(view(session))
         }
@@ -255,5 +305,21 @@ pub fn convert(event: agentelier_conversation::ConversationEvent) -> Conversatio
         agentelier_conversation::ConversationEvent::Rejected(reason) => {
             ConversationEvent::Rejected(reason)
         }
+    }
+}
+
+pub fn steer_input(
+    id: u64,
+    session: u64,
+    turn: u64,
+    operation_id: u64,
+    text: String,
+) -> agentelier_conversation::SteerInput {
+    agentelier_conversation::SteerInput {
+        id,
+        session: agentelier_conversation::SessionId(session),
+        turn: agentelier_conversation::TurnId(turn),
+        operation_id,
+        text,
     }
 }

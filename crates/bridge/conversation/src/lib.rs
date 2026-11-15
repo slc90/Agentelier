@@ -7,3 +7,7 @@ pub use conversation::{
     ConversationEvent, ConversationRequest, HistoryItem, MessageView, SessionSettings, SessionView,
     ToolView, TurnStatus, TurnView, convert, request,
 };
+
+pub use conversation::{InputDecision, InputReceipt, SteerState, SteerView};
+
+pub use conversation::steer_input;

@@ -1,11 +1,12 @@
 use agentelier_account_bridge::{AccountEventKind, SessionActivity};
 use agentelier_agent_runtime::{AgentEventKind, AgentRuntime, DeliveryFailure};
 use agentelier_llm_model_bridge::ModelEventKind;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::{error::Error, fmt};
 
-const RESULT_CAPACITY: usize = 8;
+const RESULT_CAPACITY: usize = 32;
 type Notify = Box<dyn Fn() -> bool + Send + Sync>;
 
 pub struct BridgeEvent {
@@ -73,6 +74,7 @@ pub struct Connection {
     session_activity: SessionActivity,
     sign_out: Option<PendingSignOut>,
     model: Option<u64>,
+    controls: HashMap<u64, u64>,
 }
 impl Connection {
     pub fn start(
@@ -134,6 +136,7 @@ impl Connection {
             session_activity: SessionActivity::Idle,
             sign_out: None,
             model: None,
+            controls: HashMap::new(),
         })
     }
     fn allocate(&self) -> Result<u64, BridgeFailure> {
@@ -188,6 +191,34 @@ impl Connection {
         self.model = Some(id);
         Ok(id)
     }
+    pub fn steer_conversation(
+        &mut self,
+        session: u64,
+        turn: u64,
+        operation: u64,
+        text: String,
+    ) -> Result<u64, BridgeFailure> {
+        if self.stopping
+            || self.failure.is_some()
+            || self.sign_out.is_some()
+            || self.model != Some(operation)
+        {
+            return Err(BridgeFailure("当前任务不能接纳补充输入".into()));
+        }
+        let id = self
+            .next_operation
+            .checked_add(1)
+            .ok_or_else(|| BridgeFailure("输入身份已耗尽".into()))?;
+        self.next_operation = id;
+        self.runtime
+            .steer_conversation(agentelier_conversation_bridge::steer_input(
+                id, session, turn, operation, text,
+            ))
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.controls.insert(id, operation);
+        Ok(id)
+    }
+
     pub fn cancel_conversation(
         &mut self,
         session: u64,
@@ -360,10 +391,30 @@ impl Connection {
                             return Ok(Some(event));
                         }
                         BridgeEventKind::Conversation(kind) => {
+                            if let agentelier_conversation_bridge::ConversationEvent::InputReceipt(
+                                receipt,
+                            ) = kind
+                            {
+                                if !self.controls.contains_key(&receipt.id)
+                                    || self.controls.get(&receipt.id) != self.model.as_ref()
+                                    || receipt.id != event.operation_id
+                                {
+                                    return self.protocol_failure();
+                                }
+                                if !matches!(
+                                    receipt.decision,
+                                    agentelier_conversation_bridge::InputDecision::Accepted
+                                ) {
+                                    self.controls.remove(&receipt.id);
+                                }
+                                return Ok(Some(event));
+                            }
                             if self.model != Some(event.operation_id) {
                                 return self.protocol_failure();
                             }
                             if kind.is_terminal() {
+                                self.controls
+                                    .retain(|_, operation| *operation != event.operation_id);
                                 if let Some(progress) = self.take_progress()? {
                                     if progress.operation_id != event.operation_id {
                                         return self.protocol_failure();

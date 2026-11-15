@@ -1,7 +1,7 @@
 use super::{AgentEvent, AgentEventKind, ModelControl, RuntimeFailure, emit};
 use agentelier_account::{CredentialClient, DeliveryFailure};
 use agentelier_conversation::{
-    ActiveTurn, Conversation, ConversationEvent, ConversationFailure, SessionView,
+    ActiveTurn, Conversation, ConversationEvent, ConversationFailure, RunnerEvent, SteerInput,
 };
 use agentelier_llm_model::{ModelFailure, ModelFailureKind, ModelRequest, ModelResult};
 use tokio::sync::mpsc;
@@ -15,7 +15,11 @@ pub(super) enum TaskResult {
 }
 pub(super) enum TaskRequest {
     Model(ModelRequest),
-    Chat(Box<ActiveTurn>, mpsc::Sender<SessionView>),
+    Chat(
+        Box<ActiveTurn>,
+        mpsc::Sender<RunnerEvent>,
+        mpsc::Receiver<SteerInput>,
+    ),
 }
 pub(super) struct ModelTask {
     pub(super) id: u64,
@@ -39,8 +43,8 @@ impl ModelTask {
                     result = agentelier_llm_model::execute(credentials, request) => Some(TaskResult::Model(result)),
                     _ = cancel.cancelled() => None,
                 },
-                TaskRequest::Chat(active, progress) => Some(TaskResult::Chat(
-                    agentelier_turn_runner::run(*active, credentials, cancel, progress)
+                TaskRequest::Chat(active, progress, steers) => Some(TaskResult::Chat(
+                    agentelier_turn_runner::run(*active, credentials, cancel, progress, steers)
                         .await
                         .map(Box::new),
                 )),
@@ -60,21 +64,30 @@ impl ModelTask {
 pub(super) fn progress(
     conversation: &mut Conversation,
     id: u64,
-    event: SessionView,
+    event: RunnerEvent,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
-    let view = conversation.update(id, event)?;
-    emit(
-        publish,
-        id,
-        AgentEventKind::Conversation(ConversationEvent::Updated(view)),
-    )
+    match event {
+        RunnerEvent::Progress(view) => {
+            let view = conversation.update(id, view)?;
+            emit(
+                publish,
+                id,
+                AgentEventKind::Conversation(ConversationEvent::Updated(view)),
+            )
+        }
+        RunnerEvent::Receipt(receipt) => emit(
+            publish,
+            receipt.id,
+            AgentEventKind::Conversation(ConversationEvent::InputReceipt(receipt)),
+        ),
+    }
 }
 
 pub(super) fn drain_progress(
     conversation: &mut Conversation,
     id: u64,
-    incoming: &mut Option<mpsc::Receiver<SessionView>>,
+    incoming: &mut Option<mpsc::Receiver<RunnerEvent>>,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
     if let Some(receiver) = incoming {
@@ -127,22 +140,45 @@ pub(super) fn complete(
 
 pub(super) async fn stop_model(
     model: &mut Option<ModelTask>,
-    incoming: &mut Option<mpsc::Receiver<SessionView>>,
+    incoming: &mut Option<mpsc::Receiver<RunnerEvent>>,
     conversation: &mut Conversation,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
     if let Some(task) = model.take() {
         task.control.cancel.cancel();
         debug!(operation_id = task.id, "已请求取消模型操作，等待执行体结束");
-        let result = task.handle.await;
+        let mut progress_failure = None;
+        let mut handle = task.handle;
+        let result = loop {
+            tokio::select! { biased;
+                result = &mut handle => break result,
+                event = async {match incoming.as_mut() {
+                    Some(receiver) => receiver.recv().await,
+                    None => std::future::pending().await,
+                }} => match event {
+                    Some(event) => if let Err(failure) = progress(conversation,task.id,event,publish) {
+                        tracing::error!(error=%failure,"取消收尾时状态交付失败，继续回收任务");
+                        progress_failure=progress_failure.or(Some(failure));
+                    },
+                    None => *incoming = None,
+                },
+            }
+        };
         task.control.finished.cancel();
-        drain_progress(conversation, task.id, incoming, publish)?;
+        if let Err(failure) = drain_progress(conversation, task.id, incoming, publish) {
+            tracing::error!(error=%failure,"取消收尾时末次进度交付失败");
+            progress_failure = progress_failure.or(Some(failure));
+        }
         debug!(operation_id = task.id, "模型操作已真实结束并回收");
-        emit(
+        let delivery = emit(
             publish,
             task.id,
             complete(conversation, task.id, task.chat, result)?,
-        )?;
+        );
+        if let Some(failure) = progress_failure {
+            return Err(failure);
+        }
+        delivery?;
     }
     Ok(())
 }

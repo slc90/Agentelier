@@ -164,6 +164,16 @@ impl AgentHost {
     pub fn cancel_conversation(&self, session: u64, turn: u64, operation: u64) -> Result<bool> {
         self.submit(|connection| connection.cancel_conversation(session, turn, operation))
     }
+    pub fn steer_conversation(
+        &self,
+        session: u64,
+        turn: u64,
+        operation: u64,
+        text: String,
+    ) -> Result<u64> {
+        self.submit(|connection| connection.steer_conversation(session, turn, operation, text))
+    }
+
     pub fn model_busy(&self) -> Result<bool> {
         Ok(self.state()?.model_busy)
     }

@@ -2,7 +2,8 @@ use agentelier_account::{
     Account, AccountCommand, AccountEventKind, AccountFailure, CredentialClient,
 };
 use agentelier_conversation::{
-    Conversation, ConversationEvent, ConversationFailure, ConversationRequest, SessionView,
+    Conversation, ConversationEvent, ConversationFailure, ConversationRequest, MAX_PENDING_STEERS,
+    RunnerEvent, SteerInput,
 };
 use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
 mod model_task;
@@ -80,11 +81,12 @@ enum Command {
         request: ModelRequest,
     },
     ModelFinished(ModelJoin),
-    Stream(Option<SessionView>),
+    Stream(Option<RunnerEvent>),
     Conversation {
         id: u64,
         control: ModelControl,
         request: ConversationRequest,
+        steers: mpsc::Receiver<SteerInput>,
     },
 }
 
@@ -104,6 +106,7 @@ struct ModelControl {
     turn: Arc<OnceLock<(u64, u64)>>,
     cancel: CancellationToken,
     finished: CancellationToken,
+    steers: mpsc::Sender<SteerInput>,
 }
 impl AgentRuntime {
     pub fn start(
@@ -140,7 +143,7 @@ impl AgentRuntime {
                         let mut model: Option<ModelTask> = None;
                         let mut conversation = Conversation::default();
                         let mut current_subject: Option<String> = None;
-                        let mut progress_events: Option<mpsc::Receiver<SessionView>> = None;
+                        let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
                             loop {
                                 let command = tokio::select! { biased;
@@ -220,6 +223,7 @@ impl AgentRuntime {
                                         id,
                                         control,
                                         request,
+                                        steers,
                                     } => {
                                         if model.is_some() {
                                             return Err(AccountFailure::Busy.into());
@@ -278,7 +282,7 @@ impl AgentRuntime {
                                                             id,
                                                             control,
                                                             owner_credentials.clone(),
-                                                            TaskRequest::Chat(Box::new(request), sender),
+                                                            TaskRequest::Chat(Box::new(request), sender, steers),
                                                         ));
                                                     }
                                                     Err(failure) => {
@@ -426,12 +430,15 @@ impl AgentRuntime {
         self.credentials.clone()
     }
     pub fn request_model(&mut self, id: u64, request: ModelRequest) -> Result<(), RuntimeFailure> {
+        let (steer_sender, steers) = mpsc::channel(MAX_PENDING_STEERS);
         let control = ModelControl {
             id,
             turn: Arc::new(OnceLock::new()),
             cancel: CancellationToken::new(),
             finished: CancellationToken::new(),
+            steers: steer_sender,
         };
+        drop(steers);
         self.send(Command::Model {
             id,
             request,
@@ -445,13 +452,16 @@ impl AgentRuntime {
         id: u64,
         request: ConversationRequest,
     ) -> Result<(), RuntimeFailure> {
+        let (steer_sender, steers) = mpsc::channel(MAX_PENDING_STEERS);
         let control = ModelControl {
             id,
             turn: Arc::new(OnceLock::new()),
             cancel: CancellationToken::new(),
             finished: CancellationToken::new(),
+            steers: steer_sender,
         };
         self.send(Command::Conversation {
+            steers,
             id,
             control: control.clone(),
             request,
@@ -459,6 +469,28 @@ impl AgentRuntime {
         self.model = Some(control);
         Ok(())
     }
+    pub fn steer_conversation(&self, input: SteerInput) -> Result<(), RuntimeFailure> {
+        let control = self
+            .model
+            .as_ref()
+            .filter(|control| {
+                !self.shutdown.is_cancelled()
+                    && !control.cancel.is_cancelled()
+                    && !control.finished.is_cancelled()
+                    && control.id == input.operation_id
+                    && control.turn.get() == Some(&(input.session.0, input.turn.0))
+            })
+            .ok_or(AccountFailure::Busy)?;
+        control
+            .steers
+            .try_send(input)
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => AccountFailure::Busy,
+                mpsc::error::TrySendError::Closed(_) => AccountFailure::Closed,
+            })?;
+        Ok(())
+    }
+
     pub fn cancel_conversation(&self, session: u64, turn: u64, operation: u64) -> bool {
         let Some(control) = self.model.as_ref().filter(|control| {
             control.id == operation

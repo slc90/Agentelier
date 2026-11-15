@@ -1,5 +1,8 @@
+use crate::control;
 use agentelier_account::CredentialClient;
-use agentelier_conversation::{ActiveTurn, ConversationFailure, SessionView, TurnStatus};
+use agentelier_conversation::{
+    ActiveTurn, ConversationFailure, InputDecision, RunnerEvent, SteerInput, TurnStatus,
+};
 use agentelier_llm_model::{GenerationResult, ModelFailure, ModelFailureKind};
 use agentelier_tools::ToolResult;
 use tokio::sync::mpsc;
@@ -11,12 +14,12 @@ const MAX_TOOL_CALLS: usize = 64;
 
 async fn publish(
     active: &ActiveTurn,
-    progress: &mpsc::Sender<SessionView>,
+    progress: &mpsc::Sender<RunnerEvent>,
     cancel: &CancellationToken,
 ) -> Result<(), ConversationFailure> {
     tokio::select! { biased;
         _ = cancel.cancelled() => Ok(()),
-        result = progress.send(active.view()) => result.map_err(|_| ConversationFailure::new("任务进度接收端已关闭")),
+        result = progress.send(RunnerEvent::Progress(active.view())) => result.map_err(|_| ConversationFailure::new("任务进度接收端已关闭")),
     }
 }
 
@@ -24,10 +27,15 @@ async fn request_once(
     active: &mut ActiveTurn,
     credentials: CredentialClient,
     cancel: &CancellationToken,
-    progress: &mpsc::Sender<SessionView>,
+    progress: &mpsc::Sender<RunnerEvent>,
+    steers: &mut mpsc::Receiver<SteerInput>,
 ) -> Result<Option<Result<GenerationResult, ModelFailure>>, ConversationFailure> {
     let (sender, mut events) = mpsc::channel(MODEL_PROGRESS_CAPACITY);
+    let applied = active.apply_steers()?;
     let request = active.request()?;
+    for id in applied {
+        control::receipt(progress, id, InputDecision::Applied).await?;
+    }
     publish(active, progress, cancel).await?;
     let outcome = {
         let generation = agentelier_llm_model::generate(credentials, request, sender);
@@ -36,6 +44,9 @@ async fn request_once(
             tokio::select! { biased;
                 result = &mut generation => break Some(result),
                 _ = cancel.cancelled() => break None,
+                input = steers.recv(), if !steers.is_closed() => {
+                    if let Some(input) = input {control::accept(active,input,progress).await?;publish(active,progress,cancel).await?;}
+                }
                 event = events.recv() => {
                     if let Some(event) = event {
                         if let Err(failure) = active.update(event) {
@@ -68,47 +79,60 @@ pub async fn run(
     mut active: ActiveTurn,
     credentials: CredentialClient,
     cancel: CancellationToken,
-    progress: mpsc::Sender<SessionView>,
+    progress: mpsc::Sender<RunnerEvent>,
+    mut steers: mpsc::Receiver<SteerInput>,
 ) -> Result<ActiveTurn, ConversationFailure> {
+    let outcome = run_task(&mut active, credentials, &cancel, &progress, &mut steers).await;
+    control::close(&mut steers, &progress).await?;
+    active.finish(outcome?)?;
+    Ok(active)
+}
+
+async fn run_task(
+    active: &mut ActiveTurn,
+    credentials: CredentialClient,
+    cancel: &CancellationToken,
+    progress: &mpsc::Sender<RunnerEvent>,
+    steers: &mut mpsc::Receiver<SteerInput>,
+) -> Result<TurnStatus, ConversationFailure> {
     let catalog = active.catalog();
     let mut tools_used = 0;
     for request_index in 0..MAX_MODEL_REQUESTS {
+        control::drain(active, steers, progress).await?;
         if cancel.is_cancelled() {
-            active.finish(TurnStatus::Cancelled)?;
-            return Ok(active);
+            return Ok(TurnStatus::Cancelled);
         }
         let result =
-            match request_once(&mut active, credentials.clone(), &cancel, &progress).await? {
+            match request_once(active, credentials.clone(), cancel, progress, steers).await? {
                 Some(Ok(result)) => result,
-                Some(Err(failure)) => {
-                    active.finish(TurnStatus::Failed(failure.to_string()))?;
-                    return Ok(active);
-                }
-                None => {
-                    active.finish(TurnStatus::Cancelled)?;
-                    return Ok(active);
-                }
+                Some(Err(failure)) => return Ok(TurnStatus::Failed(failure.to_string())),
+                None => return Ok(TurnStatus::Cancelled),
             };
         if let Err(failure) = active.accept_response(&result) {
-            active.finish(TurnStatus::Failed(failure.to_string()))?;
-            return Ok(active);
+            return Ok(TurnStatus::Failed(failure.to_string()));
         }
-        publish(&active, &progress, &cancel).await?;
+        publish(active, progress, cancel).await?;
+        control::drain(active, steers, progress).await?;
         if result.calls.is_empty() {
             active.seal(result)?;
-            active.finish(TurnStatus::Completed)?;
-            return Ok(active);
+            if active.has_pending_steer() {
+                continue;
+            }
+            return Ok(TurnStatus::Completed);
         }
         let limited = result.calls.len() > MAX_TOOL_CALLS.saturating_sub(tools_used);
         tools_used += result.calls.len();
         for call in &result.calls {
+            control::drain(active, steers, progress).await?;
             let outcome = if limited {
                 ToolResult::not_executed("tool_budget", "本批调用超过任务限额，整批未执行")
             } else if cancel.is_cancelled() {
                 ToolResult::not_executed("stopped", "用户已停止，工具未执行")
+            } else if active.has_pending_steer() {
+                ToolResult::not_executed("steered", "补充输入已接纳，旧调用未执行")
             } else {
                 active.tool_started(&call.call_id)?;
-                publish(&active, &progress, &cancel).await?;
+                publish(active, progress, cancel).await?;
                 let started = std::time::Instant::now();
                 tracing::debug!(
                     request_index = request_index + 1,
@@ -116,8 +140,19 @@ pub async fn run(
                     tool = call.name,
                     "工具执行开始"
                 );
-                let outcome =
-                    agentelier_tools::execute(&catalog, &call.name, &call.arguments, &cancel).await;
+                let outcome = {
+                    let execution =
+                        agentelier_tools::execute(&catalog, &call.name, &call.arguments, cancel);
+                    tokio::pin!(execution);
+                    loop {
+                        tokio::select! {biased;
+                            result = &mut execution => break result,
+                            input = steers.recv(), if !steers.is_closed() => {
+                                if let Some(input) = input {control::accept(active,input,progress).await?;publish(active,progress,cancel).await?;}
+                            }
+                        }
+                    }
+                };
                 tracing::debug!(
                     request_index = request_index + 1,
                     call_id = call.call_id,
@@ -135,18 +170,15 @@ pub async fn run(
                 outcome
             };
             active.tool_result(&call.call_id, outcome)?;
-            publish(&active, &progress, &cancel).await?;
+            publish(active, progress, cancel).await?;
         }
         active.seal(result)?;
         if cancel.is_cancelled() {
-            active.finish(TurnStatus::Cancelled)?;
-            return Ok(active);
+            return Ok(TurnStatus::Cancelled);
         }
         if limited {
-            active.finish(TurnStatus::Limited)?;
-            return Ok(active);
+            return Ok(TurnStatus::Limited);
         }
     }
-    active.finish(TurnStatus::Limited)?;
-    Ok(active)
+    Ok(TurnStatus::Limited)
 }

@@ -1,9 +1,8 @@
-use agentelier_llm_model::{
-    FunctionCall, GenerationRequest, GenerationResult, OutputMessage, OutputText, ProtocolHistory,
-    ProtocolItemSummary, StreamEvent,
-};
+use crate::active::ActiveTurn;
+use crate::control::SteerView;
+use agentelier_llm_model::{OutputMessage, ProtocolHistory, ProtocolItemSummary};
 use agentelier_prompts::{InstructionMessage, InstructionSnapshot};
-use agentelier_tools::{MAX_TOOL_BODY_BYTES, ToolCatalog, ToolResult, ToolStatus};
+use agentelier_tools::{ToolCatalog, ToolStatus};
 use std::sync::Arc;
 use std::{error::Error, fmt};
 
@@ -66,6 +65,7 @@ pub struct TurnView {
     pub committed_steps: u32,
     pub tools: Vec<ToolView>,
     pub phase: TaskPhase,
+    pub steers: Vec<SteerView>,
     pub request_instructions: Vec<InstructionMessage>,
 }
 #[derive(Clone)]
@@ -84,6 +84,7 @@ pub enum ConversationEvent {
     Updated(SessionView),
     Finished(SessionView),
     Rejected(String),
+    InputReceipt(crate::control::InputReceipt),
 }
 
 #[derive(Debug)]
@@ -244,12 +245,14 @@ impl Conversation {
             committed_steps: 0,
             tools: Vec::new(),
             phase: TaskPhase::RequestingModel,
+            steers: Vec::new(),
             request_instructions: session.view.settings.instructions.messages(),
         }));
         self.next_turn = id;
         let active = ActiveTurn {
             view: session.view.clone(),
             tools: session.tools.clone(),
+            input_retained: false,
             history: session
                 .history
                 .take()
@@ -274,6 +277,9 @@ impl Conversation {
                     .filter(|previous| {
                         previous.id == turn
                             && previous.committed_steps == 0
+                            && !previous.steers.iter().any(|input| {
+                                matches!(input.state, crate::control::SteerState::Applied)
+                            })
                             && matches!(
                                 previous.status,
                                 TurnStatus::Failed(_) | TurnStatus::Cancelled
@@ -360,297 +366,5 @@ impl Conversation {
             .ok_or(ConversationFailure("任务缺少会话"))?;
         session.view.execution_blocked = true;
         Ok(session.view.clone())
-    }
-}
-
-pub struct ActiveTurn {
-    view: SessionView,
-    history: ProtocolHistory,
-    tools: Arc<ToolCatalog>,
-}
-impl ActiveTurn {
-    pub fn view(&self) -> SessionView {
-        self.view.clone()
-    }
-
-    pub fn request(&mut self) -> Result<GenerationRequest, ConversationFailure> {
-        let turn = self
-            .view
-            .turn
-            .as_mut()
-            .ok_or(ConversationFailure("活动任务缺少轮次"))?;
-        turn.request_index = turn
-            .request_index
-            .checked_add(1)
-            .ok_or(ConversationFailure("模型请求序号已耗尽"))?;
-        turn.phase = TaskPhase::RequestingModel;
-        let context = if turn.committed_steps == 0 {
-            self.history.with_user(&turn.input)
-        } else {
-            self.history.clone()
-        };
-        turn.request_items = context.summary();
-        Ok(GenerationRequest {
-            slug: self.view.settings.slug.clone(),
-            effort: self.view.settings.effort.clone(),
-            context,
-            tools: self.tools.clone(),
-            account_subject: self.view.settings.account_subject.clone(),
-            instructions: self.view.settings.instructions.clone(),
-        })
-    }
-
-    pub fn update(&mut self, event: StreamEvent) -> Result<SessionView, ConversationFailure> {
-        let turn = self
-            .view
-            .turn
-            .as_mut()
-            .ok_or(ConversationFailure("活动任务缺少轮次"))?;
-        match event {
-            StreamEvent::FunctionCall(call) => {
-                Self::upsert_tool(turn, call, ToolStatus::Receiving)?;
-            }
-            StreamEvent::Item(mut message) => {
-                message.request_index = turn.request_index;
-                if let Some(existing) = turn.messages.iter_mut().find(|existing| {
-                    existing.output_index == message.output_index
-                        && existing.request_index == turn.request_index
-                }) {
-                    if existing.id != message.id {
-                        return Err(ConversationFailure("模型输出项身份不一致"));
-                    }
-                    *existing = message;
-                } else {
-                    turn.messages.push(message);
-                }
-                turn.messages
-                    .sort_by_key(|message| (message.request_index, message.output_index));
-            }
-            StreamEvent::Part {
-                item_id,
-                output_index,
-                part,
-            } => {
-                let message = turn
-                    .messages
-                    .iter_mut()
-                    .find(|message| {
-                        message.output_index == output_index
-                            && message.id == item_id
-                            && message.request_index == turn.request_index
-                    })
-                    .ok_or(ConversationFailure("正文片段缺少对应输出项"))?;
-                if let Some(existing) = message
-                    .content
-                    .iter_mut()
-                    .find(|existing| existing.content_index == part.content_index)
-                {
-                    *existing = part;
-                } else {
-                    message.content.push(part);
-                }
-                message.content.sort_by_key(|part| part.content_index);
-            }
-            StreamEvent::Delta {
-                item_id,
-                output_index,
-                content_index,
-                text,
-            } => {
-                let message = turn
-                    .messages
-                    .iter_mut()
-                    .find(|message| {
-                        message.output_index == output_index
-                            && message.id == item_id
-                            && message.request_index == turn.request_index
-                    })
-                    .ok_or(ConversationFailure("文本增量缺少对应输出项"))?;
-                if let Some(part) = message
-                    .content
-                    .iter_mut()
-                    .find(|part| part.content_index == content_index)
-                {
-                    part.text.push_str(&text);
-                } else {
-                    message.content.push(OutputText {
-                        content_index,
-                        text,
-                    });
-                    message.content.sort_by_key(|part| part.content_index);
-                }
-            }
-        }
-        Ok(self.view.clone())
-    }
-
-    pub fn catalog(&self) -> Arc<ToolCatalog> {
-        self.tools.clone()
-    }
-
-    fn upsert_tool(
-        turn: &mut TurnView,
-        call: FunctionCall,
-        status: ToolStatus,
-    ) -> Result<(), ConversationFailure> {
-        let existing = turn.tools.iter().position(|tool| {
-            tool.request_index == turn.request_index && tool.output_index == call.output_index
-        });
-        if let Some(index) = existing {
-            let tool = &turn.tools[index];
-            if tool.id != call.id || tool.call_id != call.call_id || tool.name != call.name {
-                return Err(ConversationFailure("工具输出身份冲突"));
-            }
-        }
-        let mut arguments = call.arguments;
-        let arguments_truncated = arguments.len() > MAX_TOOL_BODY_BYTES;
-        if arguments_truncated {
-            let mut end = MAX_TOOL_BODY_BYTES;
-            while !arguments.is_char_boundary(end) {
-                end -= 1;
-            }
-            arguments.truncate(end);
-        }
-        let view = ToolView {
-            request_index: turn.request_index,
-            id: call.id,
-            output_index: call.output_index,
-            call_id: call.call_id,
-            name: call.name,
-            arguments,
-            arguments_truncated,
-            status,
-            output: None,
-            retained: false,
-        };
-        if let Some(index) = existing {
-            turn.tools[index] = view;
-        } else {
-            turn.tools.push(view);
-        }
-        Ok(())
-    }
-
-    pub fn accept_response(
-        &mut self,
-        result: &GenerationResult,
-    ) -> Result<(), ConversationFailure> {
-        let turn = self
-            .view
-            .turn
-            .as_mut()
-            .ok_or(ConversationFailure("活动任务缺少轮次"))?;
-        if result.calls.iter().any(|call| {
-            turn.tools
-                .iter()
-                .any(|tool| tool.request_index < turn.request_index && tool.call_id == call.call_id)
-        }) {
-            return Err(ConversationFailure("任务重复使用已有 call_id"));
-        }
-        turn.messages
-            .retain(|message| message.request_index != turn.request_index);
-        turn.messages
-            .extend(result.messages.iter().cloned().map(|mut message| {
-                message.request_index = turn.request_index;
-                message
-            }));
-        for call in &result.calls {
-            Self::upsert_tool(turn, call.clone(), ToolStatus::Pending)?;
-        }
-        Ok(())
-    }
-
-    pub fn tool_started(&mut self, call_id: &str) -> Result<(), ConversationFailure> {
-        let turn = self
-            .view
-            .turn
-            .as_mut()
-            .ok_or(ConversationFailure("活动任务缺少轮次"))?;
-        turn.phase = TaskPhase::ExecutingTool;
-        let tool = turn
-            .tools
-            .iter_mut()
-            .find(|tool| tool.request_index == turn.request_index && tool.call_id == call_id)
-            .ok_or(ConversationFailure("执行工具缺少调用记录"))?;
-        tool.status = ToolStatus::Running;
-        Ok(())
-    }
-
-    pub fn tool_result(
-        &mut self,
-        call_id: &str,
-        result: ToolResult,
-    ) -> Result<(), ConversationFailure> {
-        let turn = self
-            .view
-            .turn
-            .as_mut()
-            .ok_or(ConversationFailure("活动任务缺少轮次"))?;
-        let tool = turn
-            .tools
-            .iter_mut()
-            .find(|tool| tool.request_index == turn.request_index && tool.call_id == call_id)
-            .ok_or(ConversationFailure("工具结果缺少调用记录"))?;
-        tool.status = result.status;
-        tool.output = Some(result.output);
-        Ok(())
-    }
-
-    pub fn seal(&mut self, result: GenerationResult) -> Result<(), ConversationFailure> {
-        let turn = self
-            .view
-            .turn
-            .as_mut()
-            .ok_or(ConversationFailure("活动任务缺少轮次"))?;
-        let results = result
-            .calls
-            .iter()
-            .map(|call| {
-                let output = turn
-                    .tools
-                    .iter()
-                    .find(|tool| {
-                        tool.request_index == turn.request_index && tool.call_id == call.call_id
-                    })
-                    .and_then(|tool| tool.output.clone())
-                    .ok_or(ConversationFailure("工具步骤尚未封闭"))?;
-                Ok((call.call_id.clone(), output))
-            })
-            .collect::<Result<Vec<_>, ConversationFailure>>()?;
-        self.history
-            .seal(
-                (turn.committed_steps == 0).then_some(turn.input.as_str()),
-                result.output,
-                results,
-            )
-            .map_err(|_| ConversationFailure("工具历史关系损坏"))?;
-        turn.committed_steps += 1;
-        for tool in &mut turn.tools {
-            if tool.request_index == turn.request_index {
-                tool.retained = true;
-            }
-        }
-        self.view.committed_items = self.history.summary();
-        Ok(())
-    }
-
-    pub fn finish(&mut self, status: TurnStatus) -> Result<(), ConversationFailure> {
-        let turn = self
-            .view
-            .turn
-            .as_mut()
-            .ok_or(ConversationFailure("活动任务缺少轮次"))?;
-        for tool in &mut turn.tools {
-            if matches!(tool.status, ToolStatus::Receiving | ToolStatus::Pending) {
-                let result = ToolResult::not_executed(
-                    "incomplete_response",
-                    "模型响应未完成或调用未接纳，工具未执行",
-                );
-                tool.status = result.status;
-                tool.output = Some(result.output);
-            }
-        }
-        turn.status = status;
-        Ok(())
     }
 }

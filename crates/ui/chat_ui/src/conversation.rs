@@ -1,3 +1,4 @@
+use crate::active_input::{ChatSteer, ChatSteerState, PendingDraft};
 use crate::preparation::ModelState;
 use agentelier_agent_host::{
     AgentHost, ConversationEvent as HostConversationEvent, HostActivity, HostFailed,
@@ -83,6 +84,7 @@ pub struct ChatTurn {
     pub committed_steps: u32,
     pub tools: Vec<ChatTool>,
     pub phase: String,
+    pub steers: Vec<ChatSteer>,
     pub request_instructions: String,
 }
 #[derive(Clone, Reflect)]
@@ -119,6 +121,9 @@ pub struct ChatState {
     pub draft: String,
     pub error: Option<String>,
     pub expanded_tools: Vec<String>,
+    pub draft_revision: u64,
+    pub(crate) pending_inputs: Vec<PendingDraft>,
+    pub input_feedback: Option<String>,
 }
 impl ChatState {
     fn can_send(
@@ -144,12 +149,29 @@ impl ChatState {
                         .is_some_and(|account| account.subject == session.account_subject)
             })
     }
+    fn can_steer(&self, account: &AccountState) -> bool {
+        !self.cancelling
+            && self.replacement.is_none()
+            && !account.runtime_failed
+            && !self.draft.trim().is_empty()
+            && !self
+                .pending_inputs
+                .iter()
+                .any(|input| input.revision == self.draft_revision && input.text == self.draft)
+            && self.session.as_ref().is_some_and(|session| {
+                !session.execution_blocked
+                    && session.turn.as_ref().is_some_and(|turn| {
+                        self.operation == Some(turn.operation_id)
+                            && matches!(turn.status, ChatTurnStatus::Running)
+                    })
+            })
+    }
 }
 
 #[derive(Resource, Default)]
 struct InputIntents {
     send: bool,
-    clear_accepted: Option<String>,
+    clear_accepted: Option<PendingDraft>,
 }
 #[derive(Component, Clone, Default)]
 struct Composer;
@@ -161,6 +183,8 @@ struct SessionSummary;
 struct MessageLabel;
 #[derive(Component, Clone, Default)]
 struct ChatStatus;
+#[derive(Component, Clone, Default)]
+struct SendLabel;
 #[derive(Component, Clone, Default)]
 struct ReplacementPrompt;
 #[derive(Component, Clone, Copy)]
@@ -240,7 +264,7 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
             @WidgetryTextField {
                 @value: {draft}, @multiline: true,
                 @auto_size: {Some(AutoSize { min_rows: COMPOSER_MIN_ROWS, max_rows: COMPOSER_MAX_ROWS })},
-                @hint_text: {Some("输入消息；Enter 发送，Shift+Enter 换行".into())},
+                @hint_text: {Some("输入消息；Enter 提交，Shift+Enter 换行".into())},
             }
             Composer Name("ChatComposer") Node { width: percent(100), flex_shrink: 0.0 }--
             Node { column_gap: px(CONTENT_GAP), flex_shrink: 0.0 }
@@ -255,8 +279,13 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
 }
 
 fn button(label: &'static str, name: &'static str, action: ChatAction) -> impl Scene {
+    let children: Box<dyn SceneList> = if matches!(action, ChatAction::Send) {
+        Box::new(bsn_list! {Text(label) WidgetryText SendLabel})
+    } else {
+        Box::new(bsn_list! {Text(label) WidgetryText})
+    };
     bsn! {
-        @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)} }
+        @WidgetryButton { @children: {Some(children)} }
         Name(name) template(move |_| Ok(action))
         Node { min_width: px(128), height: px(BUTTON_HEIGHT), align_self: AlignSelf::Start, flex_shrink: 0.0 }
         on(activate)
@@ -421,6 +450,10 @@ fn can_retry(
                     .is_some_and(|account| account.subject == session.account_subject)
                 && session.turn.as_ref().is_some_and(|turn| {
                     turn.committed_steps == 0
+                        && !turn
+                            .steers
+                            .iter()
+                            .any(|input| matches!(input.state, ChatSteerState::Applied))
                         && matches!(
                             turn.status,
                             ChatTurnStatus::Failed(_) | ChatTurnStatus::Cancelled
@@ -505,6 +538,9 @@ fn stop(world: &mut World) -> Result {
 }
 
 fn send(world: &mut World) -> Result {
+    if world.resource::<ChatState>().operation.is_some() {
+        return steer(world);
+    }
     let state = world.resource::<ChatState>();
     if !state.can_send(
         world.resource::<ModelState>(),
@@ -520,6 +556,11 @@ fn send(world: &mut World) -> Result {
         .ok_or_else(|| io::Error::other("发送消息缺少聊天会话"))?
         .id;
     let input = state.draft.clone();
+    let submitted = PendingDraft {
+        id: 0,
+        text: input.clone(),
+        revision: state.draft_revision,
+    };
     let result = world
         .resource::<AgentHost>()
         .request_conversation(ConversationRequest::Send { session, input });
@@ -527,12 +568,51 @@ fn send(world: &mut World) -> Result {
     match result {
         Ok(id) => {
             state.operation = Some(id);
+            state.pending_inputs.push(PendingDraft { id, ..submitted });
+            state.input_feedback = None;
             state.error = None;
             info!(operation_id = id, session_id = session, "开始提交聊天消息");
         }
         Err(failure) => {
             error!(error = %failure, "无法提交聊天消息");
             state.error = Some(failure.to_string());
+        }
+    }
+    Ok(())
+}
+
+fn steer(world: &mut World) -> Result {
+    let state = world.resource::<ChatState>();
+    if !state.can_steer(world.resource::<AccountState>()) {
+        return Ok(());
+    }
+    let session = state
+        .session
+        .as_ref()
+        .ok_or_else(|| io::Error::other("补充输入缺少会话"))?;
+    let turn = session
+        .turn
+        .as_ref()
+        .ok_or_else(|| io::Error::other("补充输入缺少任务"))?;
+    let submitted = PendingDraft {
+        id: 0,
+        text: state.draft.clone(),
+        revision: state.draft_revision,
+    };
+    let result = world.resource::<AgentHost>().steer_conversation(
+        session.id,
+        turn.id,
+        turn.operation_id,
+        submitted.text.clone(),
+    );
+    let mut state = world.resource_mut::<ChatState>();
+    match result {
+        Ok(id) => {
+            state.pending_inputs.push(PendingDraft { id, ..submitted });
+            state.input_feedback = Some("正在提交补充输入…".into());
+        }
+        Err(failure) => {
+            state.input_feedback = Some(format!("补充输入未提交：{failure}；草稿保留"));
         }
     }
     Ok(())
@@ -611,13 +691,21 @@ fn process_input(world: &mut World) -> Result {
         }
         let mut value = WidgetryTextFieldHeadless::text(world, root)
             .map_err(|failure| failure.into_bevy_error())?;
-        if clear.as_ref() == Some(&value) {
+        if clear.as_ref().is_some_and(|submitted| {
+            submitted.text == value
+                && submitted.revision == world.resource::<ChatState>().draft_revision
+        }) {
             WidgetryTextFieldHeadless::set_text_in_world(world, root, "")
                 .map_err(|failure| failure.into_bevy_error())?;
             value.clear();
         }
         if world.resource::<ChatState>().draft != value {
-            world.resource_mut::<ChatState>().draft = value;
+            let mut state = world.resource_mut::<ChatState>();
+            state.draft = value;
+            state.draft_revision = state
+                .draft_revision
+                .checked_add(1)
+                .ok_or_else(|| io::Error::other("草稿修订已耗尽"))?;
         }
     }
     if std::mem::take(&mut world.resource_mut::<InputIntents>().send) {
@@ -645,6 +733,24 @@ fn history_item(item: agentelier_conversation_bridge::HistoryItem) -> ChatHistor
 }
 fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTurn> {
     Ok(ChatTurn {
+        steers: turn
+            .steers
+            .into_iter()
+            .map(|input| ChatSteer {
+                id: input.id,
+                text: input.text,
+                applied_request: input.applied_request,
+                state: match input.state {
+                    agentelier_conversation_bridge::SteerState::Accepted => {
+                        ChatSteerState::Accepted
+                    }
+                    agentelier_conversation_bridge::SteerState::Applied => ChatSteerState::Applied,
+                    agentelier_conversation_bridge::SteerState::NotApplied => {
+                        ChatSteerState::NotApplied
+                    }
+                },
+            })
+            .collect(),
         request_index: turn.request_index,
         committed_steps: turn.committed_steps,
         phase: turn.phase,
@@ -745,6 +851,15 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         .drain()
         .collect();
     for event in events {
+        if let ConversationEvent::InputReceipt(receipt) = event.kind {
+            let clear =
+                crate::active_input::receipt(&mut world.resource_mut::<ChatState>(), receipt);
+            if clear.is_some() {
+                world.resource_mut::<InputIntents>().clear_accepted = clear;
+            }
+            changed = true;
+            continue;
+        }
         if world.resource::<ChatState>().operation != Some(event.operation_id) {
             continue;
         }
@@ -798,29 +913,40 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 error = reason,
                 "聊天操作未被接纳"
             ),
-            ConversationEvent::Updated(_) => {}
+            ConversationEvent::Updated(_) | ConversationEvent::InputReceipt(_) => {}
         }
         match event.kind {
             ConversationEvent::Rejected(reason) => {
-                world.resource_mut::<ChatState>().error = Some(reason);
+                let mut state = world.resource_mut::<ChatState>();
+                state
+                    .pending_inputs
+                    .retain(|input| input.id != event.operation_id);
+                state.error = Some(reason);
             }
             ConversationEvent::Created(view) => {
                 let mut state = world.resource_mut::<ChatState>();
                 state.session = Some(project(view)?);
                 state.expanded_tools.clear();
+                state.input_feedback = None;
+                state.pending_inputs.clear();
                 state.replacement = None;
             }
             ConversationEvent::Updated(view) | ConversationEvent::Finished(view) => {
                 world.resource_mut::<ChatState>().session = Some(project(view)?);
             }
             ConversationEvent::Accepted(view) => {
-                world.resource_mut::<InputIntents>().clear_accepted = view
-                    .turn
-                    .as_ref()
-                    .filter(|turn| !turn.is_retry)
-                    .map(|turn| turn.input.clone());
+                let clear = {
+                    let mut state = world.resource_mut::<ChatState>();
+                    state
+                        .pending_inputs
+                        .iter()
+                        .position(|input| input.id == event.operation_id)
+                        .map(|index| state.pending_inputs.remove(index))
+                };
+                world.resource_mut::<InputIntents>().clear_accepted = clear;
                 world.resource_mut::<ChatState>().session = Some(project(view)?);
             }
+            ConversationEvent::InputReceipt(_) => {}
         }
         if terminal {
             world.resource_mut::<ChatState>().cancelling = false;
@@ -834,6 +960,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
     {
         let mut state = world.resource_mut::<ChatState>();
         state.operation = None;
+        state.pending_inputs.clear();
         state.cancelling = false;
         state.error = Some(reason);
         changed = true;
@@ -933,6 +1060,26 @@ fn reconcile(world: &mut World) -> Result {
                         RowContent::Tool(tool.clone()),
                     ));
                 }
+                for input in &turn.steers {
+                    let label = match input.state {
+                        ChatSteerState::Accepted => "已接纳，等待生效",
+                        ChatSteerState::Applied => "已用于模型请求",
+                        ChatSteerState::NotApplied => "未生效",
+                    };
+                    output.push((
+                        ChatRow {
+                            session: session.id,
+                            turn: turn.id,
+                            request_index: input.applied_request.unwrap_or(u32::MAX),
+                            output_index: None,
+                            item_id: Some(format!("steer-{}", input.id)),
+                        },
+                        RowContent::Plain(format!(
+                            "你 · 补充 {} · {label}\n{}",
+                            input.id, input.text
+                        )),
+                    ));
+                }
                 output.sort_by_key(|(key, _)| (key.request_index, key.output_index));
                 desired.extend(output);
             }
@@ -1030,6 +1177,14 @@ fn summary(state: &ChatState) -> String {
         .unwrap_or_else(|| "选择模型与推理设置后创建会话".into())
 }
 fn status(state: &ChatState) -> String {
+    let mut value = task_status(state);
+    if let Some(feedback) = &state.input_feedback {
+        value.push('\n');
+        value.push_str(feedback);
+    }
+    value
+}
+fn task_status(state: &ChatState) -> String {
     if state.cancelling {
         return "正在停止…等待任务结束与回收".into();
     }
@@ -1078,7 +1233,12 @@ fn update(
     account: Res<AccountState>,
     activity: Res<HostActivity>,
     buttons: Query<(Entity, &ChatAction)>,
-    mut texts: Query<(&mut Text, Has<SessionSummary>, Has<ChatStatus>)>,
+    mut texts: Query<(
+        &mut Text,
+        Has<SessionSummary>,
+        Has<ChatStatus>,
+        Has<SendLabel>,
+    )>,
     mut prompts: Query<&mut Node, With<ReplacementPrompt>>,
     mut commands: Commands,
 ) {
@@ -1112,7 +1272,9 @@ fn update(
                 state.replacement.is_some() && state.operation.is_none() && !activity.model_busy
             }
             ChatAction::Retry => can_retry(&state, &model, &account, &activity),
-            ChatAction::Send => state.can_send(&model, &account, &activity),
+            ChatAction::Send => {
+                state.can_send(&model, &account, &activity) || state.can_steer(&account)
+            }
             ChatAction::Stop => {
                 !state.cancelling
                     && state
@@ -1131,7 +1293,14 @@ fn update(
             commands.entity(entity).insert(InteractionDisabled);
         }
     }
-    for (mut text, is_summary, is_status) in &mut texts {
+    for (mut text, is_summary, is_status, is_send) in &mut texts {
+        if is_send {
+            text.set_if_neq(Text::new(if state.operation.is_some() {
+                "补充当前任务"
+            } else {
+                "发送"
+            }));
+        }
         if is_summary {
             text.set_if_neq(Text::new(summary(&state)));
         } else if is_status {
