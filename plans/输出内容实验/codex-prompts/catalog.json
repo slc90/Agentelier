@@ -1,0 +1,129 @@
+{
+  "entries": [
+    {
+      "id": "none",
+      "label": "空白基线",
+      "category": "empty",
+      "coverage": "empty",
+      "chat_preset": true,
+      "notes": "基础和开发者补充文本都为空；不意味着服务侧没有规则。"
+    },
+    {
+      "id": "model-main",
+      "label": "模型主指令（gpt-6-astra）",
+      "category": "base",
+      "coverage": "complete-text",
+      "chat_preset": true,
+      "en": "en/model-main.md",
+      "zh": "zh/model-main.md",
+      "notes": "选定模型的完整主指令文本；包含工具与技能说明，但不提供对应运行能力。"
+    },
+    {
+      "id": "default-base",
+      "label": "默认基础指令",
+      "category": "base",
+      "coverage": "complete-text",
+      "chat_preset": true,
+      "en": "en/default-base.md",
+      "zh": "zh/default-base.md",
+      "notes": "默认基础文件全文；不等同于所有模型当前使用的完整指令。"
+    },
+    {
+      "id": "style-excerpt",
+      "label": "表达风格片段",
+      "category": "base",
+      "coverage": "excerpt",
+      "chat_preset": true,
+      "en": "en/style-excerpt.md",
+      "zh": "zh/style-excerpt.md",
+      "notes": "从所收录模型主指令中直接抽出的表达章节，不是完整主指令。"
+    },
+    {
+      "id": "collaboration-default",
+      "label": "Default 协作模式",
+      "category": "conditional",
+      "coverage": "complete-text",
+      "chat_preset": false,
+      "en": "en/collaboration-default.md",
+      "zh": "zh/collaboration-default.md",
+      "notes": "协作模式说明；仅供查阅，不默认注入纯聊天。"
+    },
+    {
+      "id": "persistent-mode",
+      "label": "持续工作",
+      "category": "template",
+      "coverage": "complete-text",
+      "chat_preset": false,
+      "parameters": [
+        "approval_request_channel"
+      ],
+      "en": "en/persistent-mode.md",
+      "zh": "zh/persistent-mode.md",
+      "notes": "持续工作的条件模板；本阶段无自动采样与后台跟进机制。"
+    },
+    {
+      "id": "compact",
+      "label": "上下文压缩",
+      "category": "task",
+      "coverage": "complete-text",
+      "chat_preset": false,
+      "en": "en/compact.md",
+      "zh": "zh/compact.md",
+      "notes": "压缩任务提示词；本阶段不实现自动压缩。"
+    },
+    {
+      "id": "compact-prefix",
+      "label": "摘要交接前缀",
+      "category": "conditional",
+      "coverage": "complete-text",
+      "chat_preset": false,
+      "en": "en/compact-prefix.md",
+      "zh": "zh/compact-prefix.md",
+      "notes": "已有摘要的交接前缀；本阶段不自动插入。"
+    },
+    {
+      "id": "review",
+      "label": "Code Review 准则",
+      "category": "task",
+      "coverage": "complete-text",
+      "chat_preset": false,
+      "en": "en/review.md",
+      "zh": "zh/review.md",
+      "notes": "完整 Review 准则与输出格式；本阶段不建立 Review 执行模式。"
+    },
+    {
+      "id": "model-replacement",
+      "label": "模型与基础指令替换",
+      "category": "template",
+      "coverage": "assembled-fragment",
+      "chat_preset": false,
+      "parameters": [
+        "model",
+        "instructions"
+      ],
+      "en": "en/model-replacement.md",
+      "zh": "zh/model-replacement.md",
+      "notes": "按代码组装的模型与指令同时变化分支；参数需要显式处理。"
+    },
+    {
+      "id": "model-removal",
+      "label": "撤销基础指令",
+      "category": "conditional",
+      "coverage": "assembled-fragment",
+      "chat_preset": false,
+      "en": "en/model-removal.md",
+      "zh": "zh/model-removal.md",
+      "notes": "按代码组装的基础指令撤销片段；本阶段不在活动 Session 中替换指令。"
+    },
+    {
+      "id": "turn-aborted",
+      "label": "Turn 中断提示",
+      "category": "conditional",
+      "coverage": "assembled-fragment",
+      "chat_preset": false,
+      "en": "en/turn-aborted.md",
+      "zh": "zh/turn-aborted.md",
+      "notes": "按 user 消息版本组装；其中工具后台状态不适用于本阶段纯聊天。"
+    }
+  ]
+}
