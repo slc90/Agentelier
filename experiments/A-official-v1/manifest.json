@@ -1,0 +1,3045 @@
+{
+  "schema_version": 1,
+  "batch_id": "A-official-v1",
+  "created_at": "2026-11-15T02:37:20.139Z",
+  "repository_commit": "07e6833",
+  "status": "complete",
+  "scope": "A_small_batch",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "high",
+  "formal_case_version": "1.0.0",
+  "conditions": [
+    {
+      "condition_id": "A0",
+      "config": {
+        "supplements": [],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A1-EN",
+      "config": {
+        "supplements": [
+          {
+            "id": "A1-EN",
+            "version": 1
+          }
+        ],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A1-ZH",
+      "config": {
+        "supplements": [
+          {
+            "id": "A1-ZH",
+            "version": 1
+          }
+        ],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A2-EN",
+      "config": {
+        "supplements": [
+          {
+            "id": "A2-EN",
+            "version": 1
+          }
+        ],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A2-ZH",
+      "config": {
+        "supplements": [
+          {
+            "id": "A2-ZH",
+            "version": 1
+          }
+        ],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A3-EN",
+      "config": {
+        "supplements": [
+          {
+            "id": "A3-EN",
+            "version": 1
+          }
+        ],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A3-ZH",
+      "config": {
+        "supplements": [
+          {
+            "id": "A3-ZH",
+            "version": 1
+          }
+        ],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A4-EN",
+      "config": {
+        "supplements": [
+          {
+            "id": "A4-EN",
+            "version": 1
+          }
+        ],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A4-ZH",
+      "config": {
+        "supplements": [
+          {
+            "id": "A4-ZH",
+            "version": 1
+          }
+        ],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A5a-EN",
+      "config": {
+        "supplements": [
+          {
+            "id": "A5a-EN",
+            "version": 1
+          }
+        ],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A5a-ZH",
+      "config": {
+        "supplements": [
+          {
+            "id": "A5a-ZH",
+            "version": 1
+          }
+        ],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A5b-EN",
+      "config": {
+        "supplements": [
+          {
+            "id": "A5b-EN",
+            "version": 1
+          }
+        ],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A5b-ZH",
+      "config": {
+        "supplements": [
+          {
+            "id": "A5b-ZH",
+            "version": 1
+          }
+        ],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A6-EN",
+      "config": {
+        "supplements": [
+          {
+            "id": "A6-EN",
+            "version": 1
+          }
+        ],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A6-ZH",
+      "config": {
+        "supplements": [
+          {
+            "id": "A6-ZH",
+            "version": 1
+          }
+        ],
+        "base": "Default"
+      }
+    },
+    {
+      "condition_id": "A-F1-EN",
+      "config": {
+        "supplements": [],
+        "base": {
+          "Override": {
+            "id": "model-main-EN",
+            "version": 1
+          }
+        }
+      }
+    },
+    {
+      "condition_id": "A-F1-ZH",
+      "config": {
+        "supplements": [],
+        "base": {
+          "Override": {
+            "id": "model-main-ZH",
+            "version": 1
+          }
+        }
+      }
+    },
+    {
+      "condition_id": "A-F2-EN",
+      "config": {
+        "supplements": [],
+        "base": {
+          "Override": {
+            "id": "default-base-EN",
+            "version": 1
+          }
+        }
+      }
+    },
+    {
+      "condition_id": "A-F2-ZH",
+      "config": {
+        "supplements": [],
+        "base": {
+          "Override": {
+            "id": "default-base-ZH",
+            "version": 1
+          }
+        }
+      }
+    },
+    {
+      "condition_id": "A-F3-EN",
+      "config": {
+        "supplements": [],
+        "base": {
+          "Override": {
+            "id": "A-F3-EN",
+            "version": 1
+          }
+        }
+      }
+    },
+    {
+      "condition_id": "A-F3-ZH",
+      "config": {
+        "supplements": [],
+        "base": {
+          "Override": {
+            "id": "A-F3-ZH",
+            "version": 1
+          }
+        }
+      }
+    }
+  ],
+  "formal_cases": [
+    "T-001",
+    "T-005",
+    "T-008",
+    "T-010",
+    "T-014",
+    "T-016",
+    "T-020",
+    "T-022"
+  ],
+  "repetitions": 2,
+  "planned_runs": 336,
+  "planned_turns": 672,
+  "pilot": {
+    "conditions": [
+      "A0",
+      "A4-EN",
+      "A4-ZH"
+    ],
+    "cases": [
+      "P-001",
+      "P-002",
+      "P-003",
+      "P-004",
+      "P-005",
+      "P-006",
+      "P-007",
+      "P-008"
+    ],
+    "excluded_from_formal": true
+  },
+  "holdout": {
+    "cases": [
+      "H-001",
+      "H-002",
+      "H-003",
+      "H-004",
+      "H-005",
+      "H-006",
+      "H-007",
+      "H-008"
+    ],
+    "not_used_for_tuning": true,
+    "status": "reserved"
+  },
+  "order_policy": "case and repetition blocks with rotated condition order; reverse the order for repetition 2",
+  "execution_order": [
+    {
+      "run_id": "A0__T-001__R1",
+      "condition_id": "A0",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 1,
+      "original_ordinal": 1
+    },
+    {
+      "run_id": "A1-EN__T-001__R1",
+      "condition_id": "A1-EN",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 2,
+      "original_ordinal": 2
+    },
+    {
+      "run_id": "A1-ZH__T-001__R1",
+      "condition_id": "A1-ZH",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 3,
+      "original_ordinal": 3
+    },
+    {
+      "run_id": "A2-EN__T-001__R1",
+      "condition_id": "A2-EN",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 4,
+      "original_ordinal": 4
+    },
+    {
+      "run_id": "A2-ZH__T-001__R1",
+      "condition_id": "A2-ZH",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 5,
+      "original_ordinal": 5
+    },
+    {
+      "run_id": "A3-EN__T-001__R1",
+      "condition_id": "A3-EN",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 6,
+      "original_ordinal": 6
+    },
+    {
+      "run_id": "A3-ZH__T-001__R1",
+      "condition_id": "A3-ZH",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 7,
+      "original_ordinal": 7
+    },
+    {
+      "run_id": "A4-EN__T-001__R1",
+      "condition_id": "A4-EN",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 8,
+      "original_ordinal": 8
+    },
+    {
+      "run_id": "A4-ZH__T-001__R1",
+      "condition_id": "A4-ZH",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 9,
+      "original_ordinal": 9
+    },
+    {
+      "run_id": "A5a-EN__T-001__R1",
+      "condition_id": "A5a-EN",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 10,
+      "original_ordinal": 10
+    },
+    {
+      "run_id": "A5a-ZH__T-001__R1",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 11,
+      "original_ordinal": 11
+    },
+    {
+      "run_id": "A5b-EN__T-001__R1",
+      "condition_id": "A5b-EN",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 12,
+      "original_ordinal": 12
+    },
+    {
+      "run_id": "A5b-ZH__T-001__R1",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 13,
+      "original_ordinal": 13
+    },
+    {
+      "run_id": "A6-EN__T-001__R1",
+      "condition_id": "A6-EN",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 14,
+      "original_ordinal": 14
+    },
+    {
+      "run_id": "A6-ZH__T-001__R1",
+      "condition_id": "A6-ZH",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 15,
+      "original_ordinal": 15
+    },
+    {
+      "run_id": "A-F1-EN__T-001__R1",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 16,
+      "original_ordinal": 16
+    },
+    {
+      "run_id": "A-F1-ZH__T-001__R1",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 17,
+      "original_ordinal": 17
+    },
+    {
+      "run_id": "A-F2-EN__T-001__R1",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 18,
+      "original_ordinal": 18
+    },
+    {
+      "run_id": "A-F2-ZH__T-001__R1",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 19,
+      "original_ordinal": 19
+    },
+    {
+      "run_id": "A-F3-EN__T-001__R1",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 20,
+      "original_ordinal": 20
+    },
+    {
+      "run_id": "A-F3-ZH__T-001__R1",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-001",
+      "repeat": 1,
+      "ordinal": 21,
+      "original_ordinal": 21
+    },
+    {
+      "run_id": "A-F3-ZH__T-005__R1",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 22,
+      "original_ordinal": 85
+    },
+    {
+      "run_id": "A0__T-005__R1",
+      "condition_id": "A0",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 23,
+      "original_ordinal": 86
+    },
+    {
+      "run_id": "A1-EN__T-005__R1",
+      "condition_id": "A1-EN",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 24,
+      "original_ordinal": 87
+    },
+    {
+      "run_id": "A1-ZH__T-005__R1",
+      "condition_id": "A1-ZH",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 25,
+      "original_ordinal": 88
+    },
+    {
+      "run_id": "A2-EN__T-005__R1",
+      "condition_id": "A2-EN",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 26,
+      "original_ordinal": 89
+    },
+    {
+      "run_id": "A2-ZH__T-005__R1",
+      "condition_id": "A2-ZH",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 27,
+      "original_ordinal": 90
+    },
+    {
+      "run_id": "A3-EN__T-005__R1",
+      "condition_id": "A3-EN",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 28,
+      "original_ordinal": 91
+    },
+    {
+      "run_id": "A3-ZH__T-005__R1",
+      "condition_id": "A3-ZH",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 29,
+      "original_ordinal": 92
+    },
+    {
+      "run_id": "A4-EN__T-005__R1",
+      "condition_id": "A4-EN",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 30,
+      "original_ordinal": 93
+    },
+    {
+      "run_id": "A4-ZH__T-005__R1",
+      "condition_id": "A4-ZH",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 31,
+      "original_ordinal": 94
+    },
+    {
+      "run_id": "A5a-EN__T-005__R1",
+      "condition_id": "A5a-EN",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 32,
+      "original_ordinal": 95
+    },
+    {
+      "run_id": "A5a-ZH__T-005__R1",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 33,
+      "original_ordinal": 96
+    },
+    {
+      "run_id": "A5b-EN__T-005__R1",
+      "condition_id": "A5b-EN",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 34,
+      "original_ordinal": 97
+    },
+    {
+      "run_id": "A5b-ZH__T-005__R1",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 35,
+      "original_ordinal": 98
+    },
+    {
+      "run_id": "A6-EN__T-005__R1",
+      "condition_id": "A6-EN",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 36,
+      "original_ordinal": 99
+    },
+    {
+      "run_id": "A6-ZH__T-005__R1",
+      "condition_id": "A6-ZH",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 37,
+      "original_ordinal": 100
+    },
+    {
+      "run_id": "A-F1-EN__T-005__R1",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 38,
+      "original_ordinal": 101
+    },
+    {
+      "run_id": "A-F1-ZH__T-005__R1",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 39,
+      "original_ordinal": 102
+    },
+    {
+      "run_id": "A-F2-EN__T-005__R1",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 40,
+      "original_ordinal": 103
+    },
+    {
+      "run_id": "A-F2-ZH__T-005__R1",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 41,
+      "original_ordinal": 104
+    },
+    {
+      "run_id": "A-F3-EN__T-005__R1",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-005",
+      "repeat": 1,
+      "ordinal": 42,
+      "original_ordinal": 105
+    },
+    {
+      "run_id": "A6-ZH__T-008__R1",
+      "condition_id": "A6-ZH",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 43,
+      "original_ordinal": 148
+    },
+    {
+      "run_id": "A-F1-EN__T-008__R1",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 44,
+      "original_ordinal": 149
+    },
+    {
+      "run_id": "A-F1-ZH__T-008__R1",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 45,
+      "original_ordinal": 150
+    },
+    {
+      "run_id": "A-F2-EN__T-008__R1",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 46,
+      "original_ordinal": 151
+    },
+    {
+      "run_id": "A-F2-ZH__T-008__R1",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 47,
+      "original_ordinal": 152
+    },
+    {
+      "run_id": "A-F3-EN__T-008__R1",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 48,
+      "original_ordinal": 153
+    },
+    {
+      "run_id": "A-F3-ZH__T-008__R1",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 49,
+      "original_ordinal": 154
+    },
+    {
+      "run_id": "A0__T-008__R1",
+      "condition_id": "A0",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 50,
+      "original_ordinal": 155
+    },
+    {
+      "run_id": "A1-EN__T-008__R1",
+      "condition_id": "A1-EN",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 51,
+      "original_ordinal": 156
+    },
+    {
+      "run_id": "A1-ZH__T-008__R1",
+      "condition_id": "A1-ZH",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 52,
+      "original_ordinal": 157
+    },
+    {
+      "run_id": "A2-EN__T-008__R1",
+      "condition_id": "A2-EN",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 53,
+      "original_ordinal": 158
+    },
+    {
+      "run_id": "A2-ZH__T-008__R1",
+      "condition_id": "A2-ZH",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 54,
+      "original_ordinal": 159
+    },
+    {
+      "run_id": "A3-EN__T-008__R1",
+      "condition_id": "A3-EN",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 55,
+      "original_ordinal": 160
+    },
+    {
+      "run_id": "A3-ZH__T-008__R1",
+      "condition_id": "A3-ZH",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 56,
+      "original_ordinal": 161
+    },
+    {
+      "run_id": "A4-EN__T-008__R1",
+      "condition_id": "A4-EN",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 57,
+      "original_ordinal": 162
+    },
+    {
+      "run_id": "A4-ZH__T-008__R1",
+      "condition_id": "A4-ZH",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 58,
+      "original_ordinal": 163
+    },
+    {
+      "run_id": "A5a-EN__T-008__R1",
+      "condition_id": "A5a-EN",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 59,
+      "original_ordinal": 164
+    },
+    {
+      "run_id": "A5a-ZH__T-008__R1",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 60,
+      "original_ordinal": 165
+    },
+    {
+      "run_id": "A5b-EN__T-008__R1",
+      "condition_id": "A5b-EN",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 61,
+      "original_ordinal": 166
+    },
+    {
+      "run_id": "A5b-ZH__T-008__R1",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 62,
+      "original_ordinal": 167
+    },
+    {
+      "run_id": "A6-EN__T-008__R1",
+      "condition_id": "A6-EN",
+      "case_id": "T-008",
+      "repeat": 1,
+      "ordinal": 63,
+      "original_ordinal": 168
+    },
+    {
+      "run_id": "A2-EN__T-010__R1",
+      "condition_id": "A2-EN",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 64,
+      "original_ordinal": 190
+    },
+    {
+      "run_id": "A2-ZH__T-010__R1",
+      "condition_id": "A2-ZH",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 65,
+      "original_ordinal": 191
+    },
+    {
+      "run_id": "A3-EN__T-010__R1",
+      "condition_id": "A3-EN",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 66,
+      "original_ordinal": 192
+    },
+    {
+      "run_id": "A3-ZH__T-010__R1",
+      "condition_id": "A3-ZH",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 67,
+      "original_ordinal": 193
+    },
+    {
+      "run_id": "A4-EN__T-010__R1",
+      "condition_id": "A4-EN",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 68,
+      "original_ordinal": 194
+    },
+    {
+      "run_id": "A4-ZH__T-010__R1",
+      "condition_id": "A4-ZH",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 69,
+      "original_ordinal": 195
+    },
+    {
+      "run_id": "A5a-EN__T-010__R1",
+      "condition_id": "A5a-EN",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 70,
+      "original_ordinal": 196
+    },
+    {
+      "run_id": "A5a-ZH__T-010__R1",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 71,
+      "original_ordinal": 197
+    },
+    {
+      "run_id": "A5b-EN__T-010__R1",
+      "condition_id": "A5b-EN",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 72,
+      "original_ordinal": 198
+    },
+    {
+      "run_id": "A5b-ZH__T-010__R1",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 73,
+      "original_ordinal": 199
+    },
+    {
+      "run_id": "A6-EN__T-010__R1",
+      "condition_id": "A6-EN",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 74,
+      "original_ordinal": 200
+    },
+    {
+      "run_id": "A6-ZH__T-010__R1",
+      "condition_id": "A6-ZH",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 75,
+      "original_ordinal": 201
+    },
+    {
+      "run_id": "A-F1-EN__T-010__R1",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 76,
+      "original_ordinal": 202
+    },
+    {
+      "run_id": "A-F1-ZH__T-010__R1",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 77,
+      "original_ordinal": 203
+    },
+    {
+      "run_id": "A-F2-EN__T-010__R1",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 78,
+      "original_ordinal": 204
+    },
+    {
+      "run_id": "A-F2-ZH__T-010__R1",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 79,
+      "original_ordinal": 205
+    },
+    {
+      "run_id": "A-F3-EN__T-010__R1",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 80,
+      "original_ordinal": 206
+    },
+    {
+      "run_id": "A-F3-ZH__T-010__R1",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 81,
+      "original_ordinal": 207
+    },
+    {
+      "run_id": "A0__T-010__R1",
+      "condition_id": "A0",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 82,
+      "original_ordinal": 208
+    },
+    {
+      "run_id": "A1-EN__T-010__R1",
+      "condition_id": "A1-EN",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 83,
+      "original_ordinal": 209
+    },
+    {
+      "run_id": "A1-ZH__T-010__R1",
+      "condition_id": "A1-ZH",
+      "case_id": "T-010",
+      "repeat": 1,
+      "ordinal": 84,
+      "original_ordinal": 210
+    },
+    {
+      "run_id": "A1-ZH__T-014__R1",
+      "condition_id": "A1-ZH",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 85,
+      "original_ordinal": 274
+    },
+    {
+      "run_id": "A2-EN__T-014__R1",
+      "condition_id": "A2-EN",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 86,
+      "original_ordinal": 275
+    },
+    {
+      "run_id": "A2-ZH__T-014__R1",
+      "condition_id": "A2-ZH",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 87,
+      "original_ordinal": 276
+    },
+    {
+      "run_id": "A3-EN__T-014__R1",
+      "condition_id": "A3-EN",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 88,
+      "original_ordinal": 277
+    },
+    {
+      "run_id": "A3-ZH__T-014__R1",
+      "condition_id": "A3-ZH",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 89,
+      "original_ordinal": 278
+    },
+    {
+      "run_id": "A4-EN__T-014__R1",
+      "condition_id": "A4-EN",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 90,
+      "original_ordinal": 279
+    },
+    {
+      "run_id": "A4-ZH__T-014__R1",
+      "condition_id": "A4-ZH",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 91,
+      "original_ordinal": 280
+    },
+    {
+      "run_id": "A5a-EN__T-014__R1",
+      "condition_id": "A5a-EN",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 92,
+      "original_ordinal": 281
+    },
+    {
+      "run_id": "A5a-ZH__T-014__R1",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 93,
+      "original_ordinal": 282
+    },
+    {
+      "run_id": "A5b-EN__T-014__R1",
+      "condition_id": "A5b-EN",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 94,
+      "original_ordinal": 283
+    },
+    {
+      "run_id": "A5b-ZH__T-014__R1",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 95,
+      "original_ordinal": 284
+    },
+    {
+      "run_id": "A6-EN__T-014__R1",
+      "condition_id": "A6-EN",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 96,
+      "original_ordinal": 285
+    },
+    {
+      "run_id": "A6-ZH__T-014__R1",
+      "condition_id": "A6-ZH",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 97,
+      "original_ordinal": 286
+    },
+    {
+      "run_id": "A-F1-EN__T-014__R1",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 98,
+      "original_ordinal": 287
+    },
+    {
+      "run_id": "A-F1-ZH__T-014__R1",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 99,
+      "original_ordinal": 288
+    },
+    {
+      "run_id": "A-F2-EN__T-014__R1",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 100,
+      "original_ordinal": 289
+    },
+    {
+      "run_id": "A-F2-ZH__T-014__R1",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 101,
+      "original_ordinal": 290
+    },
+    {
+      "run_id": "A-F3-EN__T-014__R1",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 102,
+      "original_ordinal": 291
+    },
+    {
+      "run_id": "A-F3-ZH__T-014__R1",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 103,
+      "original_ordinal": 292
+    },
+    {
+      "run_id": "A0__T-014__R1",
+      "condition_id": "A0",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 104,
+      "original_ordinal": 293
+    },
+    {
+      "run_id": "A1-EN__T-014__R1",
+      "condition_id": "A1-EN",
+      "case_id": "T-014",
+      "repeat": 1,
+      "ordinal": 105,
+      "original_ordinal": 294
+    },
+    {
+      "run_id": "A5b-ZH__T-016__R1",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 106,
+      "original_ordinal": 316
+    },
+    {
+      "run_id": "A6-EN__T-016__R1",
+      "condition_id": "A6-EN",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 107,
+      "original_ordinal": 317
+    },
+    {
+      "run_id": "A6-ZH__T-016__R1",
+      "condition_id": "A6-ZH",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 108,
+      "original_ordinal": 318
+    },
+    {
+      "run_id": "A-F1-EN__T-016__R1",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 109,
+      "original_ordinal": 319
+    },
+    {
+      "run_id": "A-F1-ZH__T-016__R1",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 110,
+      "original_ordinal": 320
+    },
+    {
+      "run_id": "A-F2-EN__T-016__R1",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 111,
+      "original_ordinal": 321
+    },
+    {
+      "run_id": "A-F2-ZH__T-016__R1",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 112,
+      "original_ordinal": 322
+    },
+    {
+      "run_id": "A-F3-EN__T-016__R1",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 113,
+      "original_ordinal": 323
+    },
+    {
+      "run_id": "A-F3-ZH__T-016__R1",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 114,
+      "original_ordinal": 324
+    },
+    {
+      "run_id": "A0__T-016__R1",
+      "condition_id": "A0",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 115,
+      "original_ordinal": 325
+    },
+    {
+      "run_id": "A1-EN__T-016__R1",
+      "condition_id": "A1-EN",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 116,
+      "original_ordinal": 326
+    },
+    {
+      "run_id": "A1-ZH__T-016__R1",
+      "condition_id": "A1-ZH",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 117,
+      "original_ordinal": 327
+    },
+    {
+      "run_id": "A2-EN__T-016__R1",
+      "condition_id": "A2-EN",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 118,
+      "original_ordinal": 328
+    },
+    {
+      "run_id": "A2-ZH__T-016__R1",
+      "condition_id": "A2-ZH",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 119,
+      "original_ordinal": 329
+    },
+    {
+      "run_id": "A3-EN__T-016__R1",
+      "condition_id": "A3-EN",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 120,
+      "original_ordinal": 330
+    },
+    {
+      "run_id": "A3-ZH__T-016__R1",
+      "condition_id": "A3-ZH",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 121,
+      "original_ordinal": 331
+    },
+    {
+      "run_id": "A4-EN__T-016__R1",
+      "condition_id": "A4-EN",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 122,
+      "original_ordinal": 332
+    },
+    {
+      "run_id": "A4-ZH__T-016__R1",
+      "condition_id": "A4-ZH",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 123,
+      "original_ordinal": 333
+    },
+    {
+      "run_id": "A5a-EN__T-016__R1",
+      "condition_id": "A5a-EN",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 124,
+      "original_ordinal": 334
+    },
+    {
+      "run_id": "A5a-ZH__T-016__R1",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 125,
+      "original_ordinal": 335
+    },
+    {
+      "run_id": "A5b-EN__T-016__R1",
+      "condition_id": "A5b-EN",
+      "case_id": "T-016",
+      "repeat": 1,
+      "ordinal": 126,
+      "original_ordinal": 336
+    },
+    {
+      "run_id": "A5b-EN__T-020__R1",
+      "condition_id": "A5b-EN",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 127,
+      "original_ordinal": 400
+    },
+    {
+      "run_id": "A5b-ZH__T-020__R1",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 128,
+      "original_ordinal": 401
+    },
+    {
+      "run_id": "A6-EN__T-020__R1",
+      "condition_id": "A6-EN",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 129,
+      "original_ordinal": 402
+    },
+    {
+      "run_id": "A6-ZH__T-020__R1",
+      "condition_id": "A6-ZH",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 130,
+      "original_ordinal": 403
+    },
+    {
+      "run_id": "A-F1-EN__T-020__R1",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 131,
+      "original_ordinal": 404
+    },
+    {
+      "run_id": "A-F1-ZH__T-020__R1",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 132,
+      "original_ordinal": 405
+    },
+    {
+      "run_id": "A-F2-EN__T-020__R1",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 133,
+      "original_ordinal": 406
+    },
+    {
+      "run_id": "A-F2-ZH__T-020__R1",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 134,
+      "original_ordinal": 407
+    },
+    {
+      "run_id": "A-F3-EN__T-020__R1",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 135,
+      "original_ordinal": 408
+    },
+    {
+      "run_id": "A-F3-ZH__T-020__R1",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 136,
+      "original_ordinal": 409
+    },
+    {
+      "run_id": "A0__T-020__R1",
+      "condition_id": "A0",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 137,
+      "original_ordinal": 410
+    },
+    {
+      "run_id": "A1-EN__T-020__R1",
+      "condition_id": "A1-EN",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 138,
+      "original_ordinal": 411
+    },
+    {
+      "run_id": "A1-ZH__T-020__R1",
+      "condition_id": "A1-ZH",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 139,
+      "original_ordinal": 412
+    },
+    {
+      "run_id": "A2-EN__T-020__R1",
+      "condition_id": "A2-EN",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 140,
+      "original_ordinal": 413
+    },
+    {
+      "run_id": "A2-ZH__T-020__R1",
+      "condition_id": "A2-ZH",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 141,
+      "original_ordinal": 414
+    },
+    {
+      "run_id": "A3-EN__T-020__R1",
+      "condition_id": "A3-EN",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 142,
+      "original_ordinal": 415
+    },
+    {
+      "run_id": "A3-ZH__T-020__R1",
+      "condition_id": "A3-ZH",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 143,
+      "original_ordinal": 416
+    },
+    {
+      "run_id": "A4-EN__T-020__R1",
+      "condition_id": "A4-EN",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 144,
+      "original_ordinal": 417
+    },
+    {
+      "run_id": "A4-ZH__T-020__R1",
+      "condition_id": "A4-ZH",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 145,
+      "original_ordinal": 418
+    },
+    {
+      "run_id": "A5a-EN__T-020__R1",
+      "condition_id": "A5a-EN",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 146,
+      "original_ordinal": 419
+    },
+    {
+      "run_id": "A5a-ZH__T-020__R1",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-020",
+      "repeat": 1,
+      "ordinal": 147,
+      "original_ordinal": 420
+    },
+    {
+      "run_id": "A0__T-022__R1",
+      "condition_id": "A0",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 148,
+      "original_ordinal": 442
+    },
+    {
+      "run_id": "A1-EN__T-022__R1",
+      "condition_id": "A1-EN",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 149,
+      "original_ordinal": 443
+    },
+    {
+      "run_id": "A1-ZH__T-022__R1",
+      "condition_id": "A1-ZH",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 150,
+      "original_ordinal": 444
+    },
+    {
+      "run_id": "A2-EN__T-022__R1",
+      "condition_id": "A2-EN",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 151,
+      "original_ordinal": 445
+    },
+    {
+      "run_id": "A2-ZH__T-022__R1",
+      "condition_id": "A2-ZH",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 152,
+      "original_ordinal": 446
+    },
+    {
+      "run_id": "A3-EN__T-022__R1",
+      "condition_id": "A3-EN",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 153,
+      "original_ordinal": 447
+    },
+    {
+      "run_id": "A3-ZH__T-022__R1",
+      "condition_id": "A3-ZH",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 154,
+      "original_ordinal": 448
+    },
+    {
+      "run_id": "A4-EN__T-022__R1",
+      "condition_id": "A4-EN",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 155,
+      "original_ordinal": 449
+    },
+    {
+      "run_id": "A4-ZH__T-022__R1",
+      "condition_id": "A4-ZH",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 156,
+      "original_ordinal": 450
+    },
+    {
+      "run_id": "A5a-EN__T-022__R1",
+      "condition_id": "A5a-EN",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 157,
+      "original_ordinal": 451
+    },
+    {
+      "run_id": "A5a-ZH__T-022__R1",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 158,
+      "original_ordinal": 452
+    },
+    {
+      "run_id": "A5b-EN__T-022__R1",
+      "condition_id": "A5b-EN",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 159,
+      "original_ordinal": 453
+    },
+    {
+      "run_id": "A5b-ZH__T-022__R1",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 160,
+      "original_ordinal": 454
+    },
+    {
+      "run_id": "A6-EN__T-022__R1",
+      "condition_id": "A6-EN",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 161,
+      "original_ordinal": 455
+    },
+    {
+      "run_id": "A6-ZH__T-022__R1",
+      "condition_id": "A6-ZH",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 162,
+      "original_ordinal": 456
+    },
+    {
+      "run_id": "A-F1-EN__T-022__R1",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 163,
+      "original_ordinal": 457
+    },
+    {
+      "run_id": "A-F1-ZH__T-022__R1",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 164,
+      "original_ordinal": 458
+    },
+    {
+      "run_id": "A-F2-EN__T-022__R1",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 165,
+      "original_ordinal": 459
+    },
+    {
+      "run_id": "A-F2-ZH__T-022__R1",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 166,
+      "original_ordinal": 460
+    },
+    {
+      "run_id": "A-F3-EN__T-022__R1",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 167,
+      "original_ordinal": 461
+    },
+    {
+      "run_id": "A-F3-ZH__T-022__R1",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-022",
+      "repeat": 1,
+      "ordinal": 168,
+      "original_ordinal": 462
+    },
+    {
+      "run_id": "A5a-ZH__T-001__R2",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 169,
+      "original_ordinal": 505
+    },
+    {
+      "run_id": "A5a-EN__T-001__R2",
+      "condition_id": "A5a-EN",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 170,
+      "original_ordinal": 506
+    },
+    {
+      "run_id": "A4-ZH__T-001__R2",
+      "condition_id": "A4-ZH",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 171,
+      "original_ordinal": 507
+    },
+    {
+      "run_id": "A4-EN__T-001__R2",
+      "condition_id": "A4-EN",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 172,
+      "original_ordinal": 508
+    },
+    {
+      "run_id": "A3-ZH__T-001__R2",
+      "condition_id": "A3-ZH",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 173,
+      "original_ordinal": 509
+    },
+    {
+      "run_id": "A3-EN__T-001__R2",
+      "condition_id": "A3-EN",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 174,
+      "original_ordinal": 510
+    },
+    {
+      "run_id": "A2-ZH__T-001__R2",
+      "condition_id": "A2-ZH",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 175,
+      "original_ordinal": 511
+    },
+    {
+      "run_id": "A2-EN__T-001__R2",
+      "condition_id": "A2-EN",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 176,
+      "original_ordinal": 512
+    },
+    {
+      "run_id": "A1-ZH__T-001__R2",
+      "condition_id": "A1-ZH",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 177,
+      "original_ordinal": 513
+    },
+    {
+      "run_id": "A1-EN__T-001__R2",
+      "condition_id": "A1-EN",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 178,
+      "original_ordinal": 514
+    },
+    {
+      "run_id": "A0__T-001__R2",
+      "condition_id": "A0",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 179,
+      "original_ordinal": 515
+    },
+    {
+      "run_id": "A-F3-ZH__T-001__R2",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 180,
+      "original_ordinal": 516
+    },
+    {
+      "run_id": "A-F3-EN__T-001__R2",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 181,
+      "original_ordinal": 517
+    },
+    {
+      "run_id": "A-F2-ZH__T-001__R2",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 182,
+      "original_ordinal": 518
+    },
+    {
+      "run_id": "A-F2-EN__T-001__R2",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 183,
+      "original_ordinal": 519
+    },
+    {
+      "run_id": "A-F1-ZH__T-001__R2",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 184,
+      "original_ordinal": 520
+    },
+    {
+      "run_id": "A-F1-EN__T-001__R2",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 185,
+      "original_ordinal": 521
+    },
+    {
+      "run_id": "A6-ZH__T-001__R2",
+      "condition_id": "A6-ZH",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 186,
+      "original_ordinal": 522
+    },
+    {
+      "run_id": "A6-EN__T-001__R2",
+      "condition_id": "A6-EN",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 187,
+      "original_ordinal": 523
+    },
+    {
+      "run_id": "A5b-ZH__T-001__R2",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 188,
+      "original_ordinal": 524
+    },
+    {
+      "run_id": "A5b-EN__T-001__R2",
+      "condition_id": "A5b-EN",
+      "case_id": "T-001",
+      "repeat": 2,
+      "ordinal": 189,
+      "original_ordinal": 525
+    },
+    {
+      "run_id": "A5a-EN__T-005__R2",
+      "condition_id": "A5a-EN",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 190,
+      "original_ordinal": 589
+    },
+    {
+      "run_id": "A4-ZH__T-005__R2",
+      "condition_id": "A4-ZH",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 191,
+      "original_ordinal": 590
+    },
+    {
+      "run_id": "A4-EN__T-005__R2",
+      "condition_id": "A4-EN",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 192,
+      "original_ordinal": 591
+    },
+    {
+      "run_id": "A3-ZH__T-005__R2",
+      "condition_id": "A3-ZH",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 193,
+      "original_ordinal": 592
+    },
+    {
+      "run_id": "A3-EN__T-005__R2",
+      "condition_id": "A3-EN",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 194,
+      "original_ordinal": 593
+    },
+    {
+      "run_id": "A2-ZH__T-005__R2",
+      "condition_id": "A2-ZH",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 195,
+      "original_ordinal": 594
+    },
+    {
+      "run_id": "A2-EN__T-005__R2",
+      "condition_id": "A2-EN",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 196,
+      "original_ordinal": 595
+    },
+    {
+      "run_id": "A1-ZH__T-005__R2",
+      "condition_id": "A1-ZH",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 197,
+      "original_ordinal": 596
+    },
+    {
+      "run_id": "A1-EN__T-005__R2",
+      "condition_id": "A1-EN",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 198,
+      "original_ordinal": 597
+    },
+    {
+      "run_id": "A0__T-005__R2",
+      "condition_id": "A0",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 199,
+      "original_ordinal": 598
+    },
+    {
+      "run_id": "A-F3-ZH__T-005__R2",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 200,
+      "original_ordinal": 599
+    },
+    {
+      "run_id": "A-F3-EN__T-005__R2",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 201,
+      "original_ordinal": 600
+    },
+    {
+      "run_id": "A-F2-ZH__T-005__R2",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 202,
+      "original_ordinal": 601
+    },
+    {
+      "run_id": "A-F2-EN__T-005__R2",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 203,
+      "original_ordinal": 602
+    },
+    {
+      "run_id": "A-F1-ZH__T-005__R2",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 204,
+      "original_ordinal": 603
+    },
+    {
+      "run_id": "A-F1-EN__T-005__R2",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 205,
+      "original_ordinal": 604
+    },
+    {
+      "run_id": "A6-ZH__T-005__R2",
+      "condition_id": "A6-ZH",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 206,
+      "original_ordinal": 605
+    },
+    {
+      "run_id": "A6-EN__T-005__R2",
+      "condition_id": "A6-EN",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 207,
+      "original_ordinal": 606
+    },
+    {
+      "run_id": "A5b-ZH__T-005__R2",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 208,
+      "original_ordinal": 607
+    },
+    {
+      "run_id": "A5b-EN__T-005__R2",
+      "condition_id": "A5b-EN",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 209,
+      "original_ordinal": 608
+    },
+    {
+      "run_id": "A5a-ZH__T-005__R2",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-005",
+      "repeat": 2,
+      "ordinal": 210,
+      "original_ordinal": 609
+    },
+    {
+      "run_id": "A2-EN__T-008__R2",
+      "condition_id": "A2-EN",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 211,
+      "original_ordinal": 652
+    },
+    {
+      "run_id": "A1-ZH__T-008__R2",
+      "condition_id": "A1-ZH",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 212,
+      "original_ordinal": 653
+    },
+    {
+      "run_id": "A1-EN__T-008__R2",
+      "condition_id": "A1-EN",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 213,
+      "original_ordinal": 654
+    },
+    {
+      "run_id": "A0__T-008__R2",
+      "condition_id": "A0",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 214,
+      "original_ordinal": 655
+    },
+    {
+      "run_id": "A-F3-ZH__T-008__R2",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 215,
+      "original_ordinal": 656
+    },
+    {
+      "run_id": "A-F3-EN__T-008__R2",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 216,
+      "original_ordinal": 657
+    },
+    {
+      "run_id": "A-F2-ZH__T-008__R2",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 217,
+      "original_ordinal": 658
+    },
+    {
+      "run_id": "A-F2-EN__T-008__R2",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 218,
+      "original_ordinal": 659
+    },
+    {
+      "run_id": "A-F1-ZH__T-008__R2",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 219,
+      "original_ordinal": 660
+    },
+    {
+      "run_id": "A-F1-EN__T-008__R2",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 220,
+      "original_ordinal": 661
+    },
+    {
+      "run_id": "A6-ZH__T-008__R2",
+      "condition_id": "A6-ZH",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 221,
+      "original_ordinal": 662
+    },
+    {
+      "run_id": "A6-EN__T-008__R2",
+      "condition_id": "A6-EN",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 222,
+      "original_ordinal": 663
+    },
+    {
+      "run_id": "A5b-ZH__T-008__R2",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 223,
+      "original_ordinal": 664
+    },
+    {
+      "run_id": "A5b-EN__T-008__R2",
+      "condition_id": "A5b-EN",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 224,
+      "original_ordinal": 665
+    },
+    {
+      "run_id": "A5a-ZH__T-008__R2",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 225,
+      "original_ordinal": 666
+    },
+    {
+      "run_id": "A5a-EN__T-008__R2",
+      "condition_id": "A5a-EN",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 226,
+      "original_ordinal": 667
+    },
+    {
+      "run_id": "A4-ZH__T-008__R2",
+      "condition_id": "A4-ZH",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 227,
+      "original_ordinal": 668
+    },
+    {
+      "run_id": "A4-EN__T-008__R2",
+      "condition_id": "A4-EN",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 228,
+      "original_ordinal": 669
+    },
+    {
+      "run_id": "A3-ZH__T-008__R2",
+      "condition_id": "A3-ZH",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 229,
+      "original_ordinal": 670
+    },
+    {
+      "run_id": "A3-EN__T-008__R2",
+      "condition_id": "A3-EN",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 230,
+      "original_ordinal": 671
+    },
+    {
+      "run_id": "A2-ZH__T-008__R2",
+      "condition_id": "A2-ZH",
+      "case_id": "T-008",
+      "repeat": 2,
+      "ordinal": 231,
+      "original_ordinal": 672
+    },
+    {
+      "run_id": "A6-EN__T-010__R2",
+      "condition_id": "A6-EN",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 232,
+      "original_ordinal": 694
+    },
+    {
+      "run_id": "A5b-ZH__T-010__R2",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 233,
+      "original_ordinal": 695
+    },
+    {
+      "run_id": "A5b-EN__T-010__R2",
+      "condition_id": "A5b-EN",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 234,
+      "original_ordinal": 696
+    },
+    {
+      "run_id": "A5a-ZH__T-010__R2",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 235,
+      "original_ordinal": 697
+    },
+    {
+      "run_id": "A5a-EN__T-010__R2",
+      "condition_id": "A5a-EN",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 236,
+      "original_ordinal": 698
+    },
+    {
+      "run_id": "A4-ZH__T-010__R2",
+      "condition_id": "A4-ZH",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 237,
+      "original_ordinal": 699
+    },
+    {
+      "run_id": "A4-EN__T-010__R2",
+      "condition_id": "A4-EN",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 238,
+      "original_ordinal": 700
+    },
+    {
+      "run_id": "A3-ZH__T-010__R2",
+      "condition_id": "A3-ZH",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 239,
+      "original_ordinal": 701
+    },
+    {
+      "run_id": "A3-EN__T-010__R2",
+      "condition_id": "A3-EN",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 240,
+      "original_ordinal": 702
+    },
+    {
+      "run_id": "A2-ZH__T-010__R2",
+      "condition_id": "A2-ZH",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 241,
+      "original_ordinal": 703
+    },
+    {
+      "run_id": "A2-EN__T-010__R2",
+      "condition_id": "A2-EN",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 242,
+      "original_ordinal": 704
+    },
+    {
+      "run_id": "A1-ZH__T-010__R2",
+      "condition_id": "A1-ZH",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 243,
+      "original_ordinal": 705
+    },
+    {
+      "run_id": "A1-EN__T-010__R2",
+      "condition_id": "A1-EN",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 244,
+      "original_ordinal": 706
+    },
+    {
+      "run_id": "A0__T-010__R2",
+      "condition_id": "A0",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 245,
+      "original_ordinal": 707
+    },
+    {
+      "run_id": "A-F3-ZH__T-010__R2",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 246,
+      "original_ordinal": 708
+    },
+    {
+      "run_id": "A-F3-EN__T-010__R2",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 247,
+      "original_ordinal": 709
+    },
+    {
+      "run_id": "A-F2-ZH__T-010__R2",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 248,
+      "original_ordinal": 710
+    },
+    {
+      "run_id": "A-F2-EN__T-010__R2",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 249,
+      "original_ordinal": 711
+    },
+    {
+      "run_id": "A-F1-ZH__T-010__R2",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 250,
+      "original_ordinal": 712
+    },
+    {
+      "run_id": "A-F1-EN__T-010__R2",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 251,
+      "original_ordinal": 713
+    },
+    {
+      "run_id": "A6-ZH__T-010__R2",
+      "condition_id": "A6-ZH",
+      "case_id": "T-010",
+      "repeat": 2,
+      "ordinal": 252,
+      "original_ordinal": 714
+    },
+    {
+      "run_id": "A5b-ZH__T-014__R2",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 253,
+      "original_ordinal": 778
+    },
+    {
+      "run_id": "A5b-EN__T-014__R2",
+      "condition_id": "A5b-EN",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 254,
+      "original_ordinal": 779
+    },
+    {
+      "run_id": "A5a-ZH__T-014__R2",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 255,
+      "original_ordinal": 780
+    },
+    {
+      "run_id": "A5a-EN__T-014__R2",
+      "condition_id": "A5a-EN",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 256,
+      "original_ordinal": 781
+    },
+    {
+      "run_id": "A4-ZH__T-014__R2",
+      "condition_id": "A4-ZH",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 257,
+      "original_ordinal": 782
+    },
+    {
+      "run_id": "A4-EN__T-014__R2",
+      "condition_id": "A4-EN",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 258,
+      "original_ordinal": 783
+    },
+    {
+      "run_id": "A3-ZH__T-014__R2",
+      "condition_id": "A3-ZH",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 259,
+      "original_ordinal": 784
+    },
+    {
+      "run_id": "A3-EN__T-014__R2",
+      "condition_id": "A3-EN",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 260,
+      "original_ordinal": 785
+    },
+    {
+      "run_id": "A2-ZH__T-014__R2",
+      "condition_id": "A2-ZH",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 261,
+      "original_ordinal": 786
+    },
+    {
+      "run_id": "A2-EN__T-014__R2",
+      "condition_id": "A2-EN",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 262,
+      "original_ordinal": 787
+    },
+    {
+      "run_id": "A1-ZH__T-014__R2",
+      "condition_id": "A1-ZH",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 263,
+      "original_ordinal": 788
+    },
+    {
+      "run_id": "A1-EN__T-014__R2",
+      "condition_id": "A1-EN",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 264,
+      "original_ordinal": 789
+    },
+    {
+      "run_id": "A0__T-014__R2",
+      "condition_id": "A0",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 265,
+      "original_ordinal": 790
+    },
+    {
+      "run_id": "A-F3-ZH__T-014__R2",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 266,
+      "original_ordinal": 791
+    },
+    {
+      "run_id": "A-F3-EN__T-014__R2",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 267,
+      "original_ordinal": 792
+    },
+    {
+      "run_id": "A-F2-ZH__T-014__R2",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 268,
+      "original_ordinal": 793
+    },
+    {
+      "run_id": "A-F2-EN__T-014__R2",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 269,
+      "original_ordinal": 794
+    },
+    {
+      "run_id": "A-F1-ZH__T-014__R2",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 270,
+      "original_ordinal": 795
+    },
+    {
+      "run_id": "A-F1-EN__T-014__R2",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 271,
+      "original_ordinal": 796
+    },
+    {
+      "run_id": "A6-ZH__T-014__R2",
+      "condition_id": "A6-ZH",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 272,
+      "original_ordinal": 797
+    },
+    {
+      "run_id": "A6-EN__T-014__R2",
+      "condition_id": "A6-EN",
+      "case_id": "T-014",
+      "repeat": 2,
+      "ordinal": 273,
+      "original_ordinal": 798
+    },
+    {
+      "run_id": "A1-EN__T-016__R2",
+      "condition_id": "A1-EN",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 274,
+      "original_ordinal": 820
+    },
+    {
+      "run_id": "A0__T-016__R2",
+      "condition_id": "A0",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 275,
+      "original_ordinal": 821
+    },
+    {
+      "run_id": "A-F3-ZH__T-016__R2",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 276,
+      "original_ordinal": 822
+    },
+    {
+      "run_id": "A-F3-EN__T-016__R2",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 277,
+      "original_ordinal": 823
+    },
+    {
+      "run_id": "A-F2-ZH__T-016__R2",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 278,
+      "original_ordinal": 824
+    },
+    {
+      "run_id": "A-F2-EN__T-016__R2",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 279,
+      "original_ordinal": 825
+    },
+    {
+      "run_id": "A-F1-ZH__T-016__R2",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 280,
+      "original_ordinal": 826
+    },
+    {
+      "run_id": "A-F1-EN__T-016__R2",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 281,
+      "original_ordinal": 827
+    },
+    {
+      "run_id": "A6-ZH__T-016__R2",
+      "condition_id": "A6-ZH",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 282,
+      "original_ordinal": 828
+    },
+    {
+      "run_id": "A6-EN__T-016__R2",
+      "condition_id": "A6-EN",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 283,
+      "original_ordinal": 829
+    },
+    {
+      "run_id": "A5b-ZH__T-016__R2",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 284,
+      "original_ordinal": 830
+    },
+    {
+      "run_id": "A5b-EN__T-016__R2",
+      "condition_id": "A5b-EN",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 285,
+      "original_ordinal": 831
+    },
+    {
+      "run_id": "A5a-ZH__T-016__R2",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 286,
+      "original_ordinal": 832
+    },
+    {
+      "run_id": "A5a-EN__T-016__R2",
+      "condition_id": "A5a-EN",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 287,
+      "original_ordinal": 833
+    },
+    {
+      "run_id": "A4-ZH__T-016__R2",
+      "condition_id": "A4-ZH",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 288,
+      "original_ordinal": 834
+    },
+    {
+      "run_id": "A4-EN__T-016__R2",
+      "condition_id": "A4-EN",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 289,
+      "original_ordinal": 835
+    },
+    {
+      "run_id": "A3-ZH__T-016__R2",
+      "condition_id": "A3-ZH",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 290,
+      "original_ordinal": 836
+    },
+    {
+      "run_id": "A3-EN__T-016__R2",
+      "condition_id": "A3-EN",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 291,
+      "original_ordinal": 837
+    },
+    {
+      "run_id": "A2-ZH__T-016__R2",
+      "condition_id": "A2-ZH",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 292,
+      "original_ordinal": 838
+    },
+    {
+      "run_id": "A2-EN__T-016__R2",
+      "condition_id": "A2-EN",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 293,
+      "original_ordinal": 839
+    },
+    {
+      "run_id": "A1-ZH__T-016__R2",
+      "condition_id": "A1-ZH",
+      "case_id": "T-016",
+      "repeat": 2,
+      "ordinal": 294,
+      "original_ordinal": 840
+    },
+    {
+      "run_id": "A0__T-020__R2",
+      "condition_id": "A0",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 295,
+      "original_ordinal": 904
+    },
+    {
+      "run_id": "A-F3-ZH__T-020__R2",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 296,
+      "original_ordinal": 905
+    },
+    {
+      "run_id": "A-F3-EN__T-020__R2",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 297,
+      "original_ordinal": 906
+    },
+    {
+      "run_id": "A-F2-ZH__T-020__R2",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 298,
+      "original_ordinal": 907
+    },
+    {
+      "run_id": "A-F2-EN__T-020__R2",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 299,
+      "original_ordinal": 908
+    },
+    {
+      "run_id": "A-F1-ZH__T-020__R2",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 300,
+      "original_ordinal": 909
+    },
+    {
+      "run_id": "A-F1-EN__T-020__R2",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 301,
+      "original_ordinal": 910
+    },
+    {
+      "run_id": "A6-ZH__T-020__R2",
+      "condition_id": "A6-ZH",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 302,
+      "original_ordinal": 911
+    },
+    {
+      "run_id": "A6-EN__T-020__R2",
+      "condition_id": "A6-EN",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 303,
+      "original_ordinal": 912
+    },
+    {
+      "run_id": "A5b-ZH__T-020__R2",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 304,
+      "original_ordinal": 913
+    },
+    {
+      "run_id": "A5b-EN__T-020__R2",
+      "condition_id": "A5b-EN",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 305,
+      "original_ordinal": 914
+    },
+    {
+      "run_id": "A5a-ZH__T-020__R2",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 306,
+      "original_ordinal": 915
+    },
+    {
+      "run_id": "A5a-EN__T-020__R2",
+      "condition_id": "A5a-EN",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 307,
+      "original_ordinal": 916
+    },
+    {
+      "run_id": "A4-ZH__T-020__R2",
+      "condition_id": "A4-ZH",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 308,
+      "original_ordinal": 917
+    },
+    {
+      "run_id": "A4-EN__T-020__R2",
+      "condition_id": "A4-EN",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 309,
+      "original_ordinal": 918
+    },
+    {
+      "run_id": "A3-ZH__T-020__R2",
+      "condition_id": "A3-ZH",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 310,
+      "original_ordinal": 919
+    },
+    {
+      "run_id": "A3-EN__T-020__R2",
+      "condition_id": "A3-EN",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 311,
+      "original_ordinal": 920
+    },
+    {
+      "run_id": "A2-ZH__T-020__R2",
+      "condition_id": "A2-ZH",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 312,
+      "original_ordinal": 921
+    },
+    {
+      "run_id": "A2-EN__T-020__R2",
+      "condition_id": "A2-EN",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 313,
+      "original_ordinal": 922
+    },
+    {
+      "run_id": "A1-ZH__T-020__R2",
+      "condition_id": "A1-ZH",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 314,
+      "original_ordinal": 923
+    },
+    {
+      "run_id": "A1-EN__T-020__R2",
+      "condition_id": "A1-EN",
+      "case_id": "T-020",
+      "repeat": 2,
+      "ordinal": 315,
+      "original_ordinal": 924
+    },
+    {
+      "run_id": "A5a-ZH__T-022__R2",
+      "condition_id": "A5a-ZH",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 316,
+      "original_ordinal": 946
+    },
+    {
+      "run_id": "A5a-EN__T-022__R2",
+      "condition_id": "A5a-EN",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 317,
+      "original_ordinal": 947
+    },
+    {
+      "run_id": "A4-ZH__T-022__R2",
+      "condition_id": "A4-ZH",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 318,
+      "original_ordinal": 948
+    },
+    {
+      "run_id": "A4-EN__T-022__R2",
+      "condition_id": "A4-EN",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 319,
+      "original_ordinal": 949
+    },
+    {
+      "run_id": "A3-ZH__T-022__R2",
+      "condition_id": "A3-ZH",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 320,
+      "original_ordinal": 950
+    },
+    {
+      "run_id": "A3-EN__T-022__R2",
+      "condition_id": "A3-EN",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 321,
+      "original_ordinal": 951
+    },
+    {
+      "run_id": "A2-ZH__T-022__R2",
+      "condition_id": "A2-ZH",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 322,
+      "original_ordinal": 952
+    },
+    {
+      "run_id": "A2-EN__T-022__R2",
+      "condition_id": "A2-EN",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 323,
+      "original_ordinal": 953
+    },
+    {
+      "run_id": "A1-ZH__T-022__R2",
+      "condition_id": "A1-ZH",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 324,
+      "original_ordinal": 954
+    },
+    {
+      "run_id": "A1-EN__T-022__R2",
+      "condition_id": "A1-EN",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 325,
+      "original_ordinal": 955
+    },
+    {
+      "run_id": "A0__T-022__R2",
+      "condition_id": "A0",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 326,
+      "original_ordinal": 956
+    },
+    {
+      "run_id": "A-F3-ZH__T-022__R2",
+      "condition_id": "A-F3-ZH",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 327,
+      "original_ordinal": 957
+    },
+    {
+      "run_id": "A-F3-EN__T-022__R2",
+      "condition_id": "A-F3-EN",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 328,
+      "original_ordinal": 958
+    },
+    {
+      "run_id": "A-F2-ZH__T-022__R2",
+      "condition_id": "A-F2-ZH",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 329,
+      "original_ordinal": 959
+    },
+    {
+      "run_id": "A-F2-EN__T-022__R2",
+      "condition_id": "A-F2-EN",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 330,
+      "original_ordinal": 960
+    },
+    {
+      "run_id": "A-F1-ZH__T-022__R2",
+      "condition_id": "A-F1-ZH",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 331,
+      "original_ordinal": 961
+    },
+    {
+      "run_id": "A-F1-EN__T-022__R2",
+      "condition_id": "A-F1-EN",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 332,
+      "original_ordinal": 962
+    },
+    {
+      "run_id": "A6-ZH__T-022__R2",
+      "condition_id": "A6-ZH",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 333,
+      "original_ordinal": 963
+    },
+    {
+      "run_id": "A6-EN__T-022__R2",
+      "condition_id": "A6-EN",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 334,
+      "original_ordinal": 964
+    },
+    {
+      "run_id": "A5b-ZH__T-022__R2",
+      "condition_id": "A5b-ZH",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 335,
+      "original_ordinal": 965
+    },
+    {
+      "run_id": "A5b-EN__T-022__R2",
+      "condition_id": "A5b-EN",
+      "case_id": "T-022",
+      "repeat": 2,
+      "ordinal": 336,
+      "original_ordinal": 966
+    }
+  ],
+  "case_provenance": "All cases are synthetic because no reusable anonymized real conversations were supplied.",
+  "input_method": "BRP Custom Pointer focus + world.write_message Ime::Commit + BRP keyboard/button send. No direct ECS state mutation.",
+  "identity_policy": "Compare the existing subject in memory, persist only same-account pseudonym and consistency result; no credentials or account details.",
+  "usage_policy": "Client projection does not expose token usage; persist null, never estimate.",
+  "server_hidden_instructions": "unobservable",
+  "raw_records": [
+    "run-starts.jsonl",
+    "turns.jsonl",
+    "runs.jsonl"
+  ],
+  "human_evaluation": "Completely blank; preserve existing comparison files on regeneration.",
+  "scope_exclusions": [
+    "No product experiment runner",
+    "No independent driver program or persisted automation script",
+    "No B-F interventions in the A batch"
+  ],
+  "preflight": {
+    "effective_instructions_sha256": "1E78E639E71C8ADBD9B4E4D5947DEE406F5D1C2768BA266D27986393F4B52B5E",
+    "pilot_aborted_before_send": 1,
+    "source_hash_checks": 20,
+    "pilot_valid_runs": 24,
+    "frozen_case_sha256": "281B89DAF73BA42418598DFFCD4214CE9AC0F07964ABACEB7CAA3347DA19DAC5",
+    "source_exact_containment_checks": 20
+  },
+  "scope_revision": {
+    "reason": "User reduced full matrix to the previously offered smaller batch and confirmed continuation.",
+    "date": "2026-11-15",
+    "supplemental_completed_at_revision": 17,
+    "case_selection": "One frozen case per category, balancing multi-turn and single-turn behaviors. Existing records outside this subset remain supplemental and are not mixed into the active matrix.",
+    "active_completed_at_revision": 21
+  },
+  "collection_progress": {
+    "valid_active_runs": 336,
+    "checkpoint_at": "2026-11-15T06:40:29.7185913Z",
+    "completed_active_runs": 336,
+    "second_repetition_complete": true,
+    "first_repetition_complete": true
+  },
+  "completed_at": "2026-11-15T06:43:05.4876612Z",
+  "integrity_result": "integrity-check.json",
+  "finalized_at": "2026-11-15T06:45:02.7371988Z",
+  "cleanup": {
+    "pointer_phase": "inactive",
+    "client_source_changes": false,
+    "temporary_prompt_library": "removed after verifying it matched this batch preparation",
+    "pointer_last_error": null,
+    "shutdown": "graceful",
+    "credentials": "not read or modified by the development agent"
+  }
+}

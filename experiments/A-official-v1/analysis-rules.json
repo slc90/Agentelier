@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "frozen_at": "2026-11-15T02:49:48.961Z",
+  "rules": [
+    {
+      "id": "cn_summary_1",
+      "type": "literal_case_insensitive",
+      "text": "总之"
+    },
+    {
+      "id": "cn_summary_2",
+      "type": "literal_case_insensitive",
+      "text": "综上所述"
+    },
+    {
+      "id": "cn_transition_1",
+      "type": "literal_case_insensitive",
+      "text": "值得注意的是"
+    },
+    {
+      "id": "cn_transition_2",
+      "type": "literal_case_insensitive",
+      "text": "需要注意的是"
+    },
+    {
+      "id": "cn_summary_3",
+      "type": "literal_case_insensitive",
+      "text": "简而言之"
+    },
+    {
+      "id": "en_bottom_line",
+      "type": "literal_case_insensitive",
+      "text": "Bottom Line"
+    },
+    {
+      "id": "en_delve",
+      "type": "literal_case_insensitive",
+      "text": "delve"
+    },
+    {
+      "id": "en_foster",
+      "type": "literal_case_insensitive",
+      "text": "foster"
+    },
+    {
+      "id": "en_leverage",
+      "type": "literal_case_insensitive",
+      "text": "leverage"
+    },
+    {
+      "id": "en_genuinely",
+      "type": "literal_case_insensitive",
+      "text": "genuinely"
+    },
+    {
+      "id": "en_worth_noting",
+      "type": "literal_case_insensitive",
+      "text": "it's worth noting"
+    },
+    {
+      "id": "en_important",
+      "type": "literal_case_insensitive",
+      "text": "importantly"
+    }
+  ],
+  "patterns": [
+    {
+      "id": "cn_contrast",
+      "pattern": "不是[^。！？\\n]{0,80}而是",
+      "flags": "gu"
+    },
+    {
+      "id": "en_contrast",
+      "pattern": "This isn['’]t about[^.\\n]{0,100}It['’]s about",
+      "flags": "giu"
+    }
+  ],
+  "position_convention": "Zero-based Unicode code-point offsets in each output item; preserve exact matched text and output_index.",
+  "length_metric": "Unicode code points including whitespace; raw Markdown preserved.",
+  "paragraph_metric": "Non-empty blocks separated by blank lines; not a semantic paragraph score.",
+  "heading_metric": "ATX Markdown headings outside fenced code.",
+  "quality_policy": "Lexical hits and length are descriptive, not quality judgments. Correctness and checkpoint coverage stay unassessed unless evidence is explicitly reviewed."
+}

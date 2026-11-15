@@ -1,0 +1,25 @@
+{
+  "checked_at": "2026-11-15T06:41:07.0669082Z",
+  "status": "passed",
+  "active_runs": 336,
+  "active_turns": 672,
+  "supplemental_runs": 17,
+  "unique_sessions": 353,
+  "snapshot_body_hash_checks": 320,
+  "history_replay_checks": 672,
+  "comparison_blocks": 336,
+  "blank_human_evaluations": 336,
+  "matrix_rows": 168,
+  "issues": [],
+  "raw_file_sha256": {
+    "turns.jsonl": "eb27a4691a3a936ff711017616145d15a48c7cb8091fb47724b7a9f3f0769d7e",
+    "cases/cases.jsonl": "281b89daf73ba42418598dffcd4214ce9ac0f07964abaceb7caa3347da19dac5",
+    "analysis-rules.json": "64e660a720d5b4d1108dd74a2c3bfa0759888158037d6baefce67cee4740e9bb",
+    "content-reviews.jsonl": "7ed2f44a60f4bfc548244caa08bf8495f344cc884aa3e581df67a50fac4e6c2e",
+    "run-starts.jsonl": "02cf883788bc5fb7b3e0fb1abeb4425ca34ee1f3d6eebb4223f2e551e3571314",
+    "prompts/effective-instructions.jsonl": "1e78e639e71c8adbd9b4e4d5947dee406f5d1c2768ba266d27986393f4b52b5e",
+    "runs.jsonl": "f1e979854821cb4db047944e0ec73fcf8cb96cf6218cb3f01e1a79482a5b19e9",
+    "pilot-runs.jsonl": "465046b5291d4b0105b0021a98dd4c7eee13fa7dd1bf9b4abb86822b1e6f3cb9"
+  },
+  "scope": "Data integrity and technical collection validity; does not assign human style judgments"
+}

@@ -1,0 +1,8 @@
+{"case_id":"P-001","version":"pilot-1","category":"日常聊天","split":"pilot","origin":"synthetic","user_turns":["今天开会开了一天，终于能歇一会了。"],"checkpoints":[],"correctness_evaluation":"not_evaluated"}
+{"case_id":"P-002","version":"pilot-1","category":"知识问答","split":"pilot","origin":"synthetic","user_turns":["冰块浮在水面上，最直接的原因是什么？"],"checkpoints":[],"correctness_evaluation":"not_evaluated"}
+{"case_id":"P-003","version":"pilot-1","category":"技术解释","split":"pilot","origin":"synthetic","user_turns":["用简单的话说说函数参数和值的关系。"],"checkpoints":[],"correctness_evaluation":"not_evaluated"}
+{"case_id":"P-004","version":"pilot-1","category":"技术讨论","split":"pilot","origin":"synthetic","user_turns":["我的小项目现在只有一个页面，适合马上做通用框架吗？"],"checkpoints":[],"correctness_evaluation":"not_evaluated"}
+{"case_id":"P-005","version":"pilot-1","category":"问题排查","split":"pilot","origin":"synthetic","user_turns":["日志显示任务仍在运行，按钮却显示完成了，先确认什么？"],"checkpoints":[],"correctness_evaluation":"not_evaluated"}
+{"case_id":"P-006","version":"pilot-1","category":"文档写作","split":"pilot","origin":"synthetic","user_turns":["根据事实写说明：文件导入只接受 UTF-8；失败会显示原因。"],"checkpoints":[],"correctness_evaluation":"not_evaluated"}
+{"case_id":"P-007","version":"pilot-1","category":"数学推理","split":"pilot","origin":"synthetic","user_turns":["实数 x 满足 2x+3=9，求 x 并代回检查。"],"checkpoints":[],"correctness_evaluation":"not_evaluated"}
+{"case_id":"P-008","version":"pilot-1","category":"科研讨论","split":"pilot","origin":"synthetic","user_turns":["一项没有对照组的前后测发现分数提高，这能直接证明干预有效吗？"],"checkpoints":[],"correctness_evaluation":"not_evaluated"}
