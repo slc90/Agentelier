@@ -2,9 +2,9 @@ use agentelier_account::{
     Account, AccountCommand, AccountEventKind, AccountFailure, CredentialClient,
 };
 use agentelier_conversation::{
-    Conversation, ConversationEvent, ConversationFailure, ConversationRequest,
+    Conversation, ConversationEvent, ConversationFailure, ConversationRequest, SessionView,
 };
-use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult, StreamEvent};
+use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
 mod model_task;
 use model_task::{
     ModelJoin, ModelTask, PROGRESS_CAPACITY, TaskRequest, complete, drain_progress, progress,
@@ -80,7 +80,7 @@ enum Command {
         request: ModelRequest,
     },
     ModelFinished(ModelJoin),
-    Stream(Option<StreamEvent>),
+    Stream(Option<SessionView>),
     Conversation {
         id: u64,
         control: ModelControl,
@@ -140,7 +140,7 @@ impl AgentRuntime {
                         let mut model: Option<ModelTask> = None;
                         let mut conversation = Conversation::default();
                         let mut current_subject: Option<String> = None;
-                        let mut progress_events: Option<mpsc::Receiver<StreamEvent>> = None;
+                        let mut progress_events: Option<mpsc::Receiver<SessionView>> = None;
                         let execution = async {
                             loop {
                                 let command = tokio::select! { biased;
@@ -278,7 +278,7 @@ impl AgentRuntime {
                                                             id,
                                                             control,
                                                             owner_credentials.clone(),
-                                                            TaskRequest::Chat(request, sender),
+                                                            TaskRequest::Chat(Box::new(request), sender),
                                                         ));
                                                     }
                                                     Err(failure) => {

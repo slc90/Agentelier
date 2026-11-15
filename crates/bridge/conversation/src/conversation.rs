@@ -54,6 +54,7 @@ pub struct SessionView {
     pub turn: Option<TurnView>,
     pub previous_turns: Vec<TurnView>,
     pub committed_items: Vec<HistoryItem>,
+    pub execution_blocked: bool,
 }
 pub enum ConversationEvent {
     Created(SessionView),
@@ -110,6 +111,7 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
 
 fn view(session: agentelier_conversation::SessionView) -> SessionView {
     SessionView {
+        execution_blocked: session.execution_blocked,
         id: session.id.0,
         settings: SessionSettings {
             slug: session.settings.slug,

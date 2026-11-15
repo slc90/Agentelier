@@ -128,6 +128,7 @@ dependencies = [
  "agentelier_account",
  "agentelier_conversation",
  "agentelier_llm_model",
+ "agentelier_turn_runner",
  "tokio",
  "tokio-util",
  "tracing",
@@ -277,6 +278,17 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "uuid",
+]
+
+[[package]]
+name = "agentelier_turn_runner"
+version = "0.1.0"
+dependencies = [
+ "agentelier_account",
+ "agentelier_conversation",
+ "agentelier_llm_model",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

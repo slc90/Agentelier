@@ -4,8 +4,8 @@ compile_error!("This application supports Windows x64 only");
 mod conversation;
 
 pub use conversation::{
-    Conversation, ConversationEvent, ConversationFailure, ConversationRequest, SessionId,
-    SessionSettings, SessionView, TurnId, TurnStatus, TurnView,
+    ActiveTurn, Conversation, ConversationEvent, ConversationFailure, ConversationRequest,
+    SessionId, SessionSettings, SessionView, TurnId, TurnStatus, TurnView,
 };
 
 pub use agentelier_llm_model::ProtocolItemSummary;

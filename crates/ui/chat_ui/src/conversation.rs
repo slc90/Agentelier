@@ -75,6 +75,7 @@ pub struct ChatSession {
     pub turn: Option<ChatTurn>,
     pub previous_turns: Vec<ChatTurn>,
     pub committed_items: Vec<ChatHistoryItem>,
+    pub execution_blocked: bool,
 }
 #[derive(Clone, Reflect)]
 pub struct ChatReplacement {
@@ -109,10 +110,11 @@ impl ChatState {
             && model.can_request(account)
             && !self.draft.trim().is_empty()
             && self.session.as_ref().is_some_and(|session| {
-                session
-                    .turn
-                    .as_ref()
-                    .is_none_or(|turn| !matches!(turn.status, ChatTurnStatus::Running))
+                !session.execution_blocked
+                    && session
+                        .turn
+                        .as_ref()
+                        .is_none_or(|turn| !matches!(turn.status, ChatTurnStatus::Running))
                     && account
                         .account
                         .as_ref()
@@ -387,10 +389,11 @@ fn can_retry(
         && !activity.model_busy
         && model.can_request(account)
         && state.session.as_ref().is_some_and(|session| {
-            account
-                .account
-                .as_ref()
-                .is_some_and(|account| account.subject == session.account_subject)
+            !session.execution_blocked
+                && account
+                    .account
+                    .as_ref()
+                    .is_some_and(|account| account.subject == session.account_subject)
                 && session.turn.as_ref().is_some_and(|turn| {
                     matches!(
                         turn.status,
@@ -637,6 +640,7 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
 }
 fn project(session: SessionView) -> Result<ChatSession> {
     Ok(ChatSession {
+        execution_blocked: session.execution_blocked,
         id: session.id,
         slug: session.settings.slug,
         display_name: session.settings.display_name,

@@ -1,0 +1,15 @@
+[package]
+name = "agentelier_turn_runner"
+publish = false
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+agentelier_conversation = { path = "../conversation" }
+agentelier_llm_model = { path = "../llm_model" }
+agentelier_account = { path = "../account" }
+tokio.workspace = true
+tokio-util.workspace = true
+
+[lints]
+workspace = true

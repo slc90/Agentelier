@@ -13,6 +13,7 @@ members = [
   "crates/agent/llm_model",
   "crates/agent/runtime",
   "crates/agent/conversation",
+  "crates/agent/turn_runner",
   "crates/agent/prompts",
   "crates/bridge/conversation",
   "crates/bridge/account",

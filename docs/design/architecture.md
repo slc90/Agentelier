@@ -19,6 +19,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录、Responses、SSE 和模型错误语义 |
 | `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的内存聊天会话、Turn 身份、展示记录与结果收敛 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
+| `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、正文增量和受控取消 |
 | `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型任务取消/回收及执行收尾 |
 | `crates/bridge/account/` | `agentelier_account_bridge` | 账号摘要、凭据安全投影、授权地址及账号事件转换 |
 | `crates/bridge/llm_model/` | `agentelier_llm_model_bridge` | 模型结果、错误分类、取消和完成状态转换 |
@@ -58,6 +59,10 @@ flowchart TD
     Runtime --> Account
     Runtime --> Model
     Runtime --> Conversation["Agent · conversation"]
+    Runtime --> Runner["Agent · turn_runner"]
+    Runner --> Conversation
+    Runner --> Model
+    Runner --> Account
     Conversation --> Model
     Conversation --> Prompts
     ConversationBridge --> Conversation
@@ -87,7 +92,7 @@ Account 的可克隆 CredentialClient 管理接纳、会话失效令牌和在途
 
 LLM Model 通过 Account 获取凭据，不读写认证文件，也不建立第二份账号缓存。它负责模型目录、显式模型请求配置、Responses HTTP 请求、一次有界认证恢复、SSE 完成判定及错误分类。协议见[单次模型请求](modules/model-request.md)。
 
-Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模型任务。Runtime 拥有线程、队列、取消令牌、JoinHandle 及真实回收信号；账号处理期间模型任务仍可并发等待网络。它不包含 OAuth、认证文件实现或模型网络协议。依赖为 Runtime → Account → Login，以及 Runtime → LLM Model → Account，无循环。
+Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模型任务和独立 Turn Runner。Runtime 拥有线程、队列、取消令牌、JoinHandle 及真实回收信号；账号处理期间模型任务仍可并发等待网络。它不包含 OAuth、认证文件实现或模型网络协议。依赖为 Runtime → Account → Login、Runtime → LLM Model → Account，以及 Runtime → Turn Runner → Conversation / LLM Model / Account，无循环。
 
 用户请求退出时，共享门控先停止新凭据请求和旧等待者交付；独立控制队列优先处理退出。Runtime 取消并回收模型任务、结束旧排队命令，再让 Account 等待当前更新收敛并调用 Login 执行撤销和本地提交。取消、退出请求与实际完成分别表达。普通关闭不退出账号。详见[认证运行与凭据管理](modules/authentication.md)。
 
@@ -146,11 +151,11 @@ flowchart LR
 
 ## 内存聊天与流式投影
 
-Conversation 固定 Session 的模型、推理设置和账号身份，分配独立 Session/Turn 身份并管理展示记录；Runtime 拥有业务对象及唯一网络任务、取消和 JoinHandle。聊天请求通过同一 CredentialClient 获取凭据并核对账号主体，不重新读取认证文件。当前支持一个内存 Session 的连续多轮交流，空闲时可确认新建或重置为全新身份与空历史。成功输入与完整协议输出由该 Session 原子提交，失败和取消只保留展示记录。
+Conversation 固定 Session 的模型、推理设置和账号身份，分配独立 Session/Turn 身份并管理稳定会话；开始任务时签出 ActiveTurn 和协议历史，由 Turn Runner 独占推进，Conversation 只保留占用身份和展示快照。Runtime 拥有业务对象及唯一网络任务、取消和 JoinHandle，回收后归还记录。聊天请求通过同一 CredentialClient 获取凭据并核对账号主体，不重新读取认证文件。当前支持一个内存 Session 的连续多轮交流，空闲时可确认新建或重置为全新身份与空历史。成功输入与完整协议输出由该 Session 原子提交，失败和取消只保留展示记录。
 
 LLM Model 解析 Responses 输出项、内容段、公开 phase 和文本增量；只有 response.completed 及可接受完整输出才成功。聊天无总生成时长限制，合法 SSE 活动维持 120 秒空闲期限；连接验证仍保留原总超时。工具输出明确失败，普通拒绝正文正常展示。任务 join 后才释放操作占用，失败/取消保留已经显示的部分回复。
 
-网络任务经容量为 32 的有界 Tokio 通道传递文本变化，发送等待可被任务取消。Runtime 推进权威状态后发布累计展示快照；Bridge 保留单个可替换快照，原先的有界控制/终态队列保持独立。每个快照包含此前全部消息和文本，合并不丢片段或跨轮次混接；终态返回前先交付最后快照。AgentHost 每次更新最多消费 32 项，仍有消息时继续唤醒，避免高频文本长期占用一个界面更新。
+网络任务经容量为 32 的有界 Tokio 通道传递文本变化，发送等待可被任务取消。Runner 消费模型增量并发布累计展示快照，Runtime 校验所属身份并转交；Bridge 保留单个可替换快照，原先的有界控制/终态队列保持独立。每个快照包含此前全部消息和文本，合并不丢片段或跨轮次混接；终态返回前先交付最后快照。AgentHost 每次更新最多消费 32 项，仍有消息时继续唤醒，避免高频文本长期占用一个界面更新。
 
 chat_ui 仅管理展示投影与草稿，通过 BSN 和 Widgetry 多行 TextField、ScrollArea 构造消息列表。接纳前保留草稿；Accepted 后只清空尚未被继续编辑的原内容。消息更新复用既有行实体，切换设置页不改变后台任务，返回时按投影恢复。具体行为与限制见[聊天会话与流式回复](../features/chat.md)。
 
@@ -163,3 +168,5 @@ Markdown 的原文、解析块和原生布局由独立 UI crate 管理，不依�
 Prompts 是无 Bevy、网络和线程依赖的业务库，管理来源与派生版本、基础覆盖及有序补充配置、预设解析和完整快照。应用内置来源数据由 Assets 提供，Chat UI 在启动数据目录就绪后，通过 Widgetry JobManager 加载该目录的 `prompts.json`；保存和 UTF-8 导入同样使用辅助 Job，并等待真实终态后更新 UI。来源版本与旧版本不被编辑覆盖，文件原子替换不接触账号凭据。
 
 Chat UI 管理提示词库、组合预览和会话核对界面，并在创建 Session 时提交解析后的完整 InstructionSnapshot。Conversation 固定快照；重置复制当前设置，重试沿用原快照。LLM Model 在每次请求中将快照转换为有序 `developer` 消息，置于已提交协议历史和本轮输入之前，避免把指令重复写入历史。Bridge 传递快照与请求指令安全投影；UI 可核对文本、来源版本、哈希、角色及顺序，不公开凭据或加密推理内容。详见[提示词管理](modules/prompts.md)。
+
+任务取消由 Runner 接收并结束当前模型等待，随后归还已有活动记录；Runtime 不在外层丢弃整个 Runner。普通网络失败和停止保留既有展示与历史语义；异常退出不能归还可信记录时，当前会话禁止继续发送或重试，用户必须重置或新建会话。

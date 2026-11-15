@@ -51,6 +51,7 @@ pub struct SessionView {
     pub turn: Option<TurnView>,
     pub previous_turns: Vec<TurnView>,
     pub committed_items: Vec<ProtocolItemSummary>,
+    pub execution_blocked: bool,
 }
 pub enum ConversationEvent {
     Created(SessionView),
@@ -62,6 +63,11 @@ pub enum ConversationEvent {
 
 #[derive(Debug)]
 pub struct ConversationFailure(&'static str);
+impl ConversationFailure {
+    pub fn new(message: &'static str) -> Self {
+        Self(message)
+    }
+}
 impl fmt::Display for ConversationFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.0)
@@ -71,7 +77,7 @@ impl Error for ConversationFailure {}
 
 struct ChatSession {
     view: SessionView,
-    history: ProtocolHistory,
+    history: Option<ProtocolHistory>,
 }
 
 #[derive(Default)]
@@ -129,11 +135,12 @@ impl Conversation {
             turn: None,
             previous_turns: Vec::new(),
             committed_items: Vec::new(),
+            execution_blocked: false,
         };
         self.next_session = id;
         self.session = Some(ChatSession {
             view: session.clone(),
-            history: ProtocolHistory::default(),
+            history: Some(ProtocolHistory::default()),
         });
         Ok(session)
     }
@@ -155,7 +162,7 @@ impl Conversation {
         operation_id: u64,
         session_id: SessionId,
         input: String,
-    ) -> Result<(SessionView, GenerationRequest), ConversationFailure> {
+    ) -> Result<(SessionView, ActiveTurn), ConversationFailure> {
         if input.trim().is_empty() {
             return Err(ConversationFailure("不能发送空白消息"));
         }
@@ -178,15 +185,15 @@ impl Conversation {
             .next_turn
             .checked_add(1)
             .ok_or(ConversationFailure("聊天轮次标识已耗尽"))?;
-        let context = session.history.with_user(&input);
-        let request_items = context.summary();
-        let request = GenerationRequest {
-            slug: session.view.settings.slug.clone(),
-            effort: session.view.settings.effort.clone(),
-            context,
-            account_subject: session.view.settings.account_subject.clone(),
-            instructions: session.view.settings.instructions.clone(),
-        };
+        if session.view.execution_blocked || session.history.is_none() {
+            return Err(ConversationFailure("会话执行记录不可用，请重置或新建会话"));
+        }
+        let request_items = session
+            .history
+            .as_ref()
+            .ok_or(ConversationFailure("会话缺少历史"))?
+            .with_user(&input)
+            .summary();
         if let Some(previous) = session.view.turn.take() {
             session.view.previous_turns.push(previous);
         }
@@ -202,14 +209,21 @@ impl Conversation {
             request_instructions: session.view.settings.instructions.messages(),
         });
         self.next_turn = id;
-        Ok((session.view.clone(), request))
+        let active = ActiveTurn {
+            view: session.view.clone(),
+            history: session
+                .history
+                .take()
+                .ok_or(ConversationFailure("会话缺少历史"))?,
+        };
+        Ok((session.view.clone(), active))
     }
 
     pub fn start(
         &mut self,
         operation: u64,
         request: ConversationRequest,
-    ) -> Result<(SessionView, GenerationRequest), ConversationFailure> {
+    ) -> Result<(SessionView, ActiveTurn), ConversationFailure> {
         match request {
             ConversationRequest::Send { session, input } => self.begin(operation, session, input),
             ConversationRequest::Retry { session, turn } => {
@@ -228,7 +242,7 @@ impl Conversation {
                     .ok_or(ConversationFailure("只有最近失败或取消的输入可以重试"))?;
                 let input = previous.input.clone();
                 let input_id = previous.input_id;
-                let (_, request) = self.begin(operation, session, input)?;
+                let (_, mut active) = self.begin(operation, session, input)?;
                 let current = self
                     .session
                     .as_mut()
@@ -240,7 +254,8 @@ impl Conversation {
                     .ok_or(ConversationFailure("重试缺少轮次"))?;
                 turn.input_id = input_id;
                 turn.is_retry = true;
-                Ok((current.view.clone(), request))
+                active.view = current.view.clone();
+                Ok((current.view.clone(), active))
             }
             ConversationRequest::Create(_) | ConversationRequest::Reset { .. } => {
                 Err(ConversationFailure("创建会话不是生成操作"))
@@ -261,9 +276,83 @@ impl Conversation {
     pub fn update(
         &mut self,
         operation_id: u64,
-        event: StreamEvent,
+        view: SessionView,
     ) -> Result<SessionView, ConversationFailure> {
         let turn = self.turn(operation_id)?;
+        if view
+            .turn
+            .as_ref()
+            .is_none_or(|incoming| incoming.id != turn.id || incoming.operation_id != operation_id)
+            || self
+                .session
+                .as_ref()
+                .is_none_or(|session| session.view.id != view.id)
+        {
+            return Err(ConversationFailure("任务快照身份不匹配"));
+        }
+        let session = self
+            .session
+            .as_mut()
+            .ok_or(ConversationFailure("任务缺少会话"))?;
+        session.view = view;
+        Ok(session.view.clone())
+    }
+
+    pub fn finish(
+        &mut self,
+        operation_id: u64,
+        active: ActiveTurn,
+    ) -> Result<SessionView, ConversationFailure> {
+        let view = self.update(operation_id, active.view)?;
+        self.session
+            .as_mut()
+            .ok_or(ConversationFailure("任务缺少会话"))?
+            .history = Some(active.history);
+        Ok(view)
+    }
+
+    pub fn interrupt(&mut self, operation_id: u64) -> Result<SessionView, ConversationFailure> {
+        self.turn(operation_id)?.status =
+            TurnStatus::Failed("任务异常结束，无法归还执行记录，请重置或新建会话".into());
+        let session = self
+            .session
+            .as_mut()
+            .ok_or(ConversationFailure("任务缺少会话"))?;
+        session.view.execution_blocked = true;
+        Ok(session.view.clone())
+    }
+}
+
+pub struct ActiveTurn {
+    view: SessionView,
+    history: ProtocolHistory,
+}
+impl ActiveTurn {
+    pub fn view(&self) -> SessionView {
+        self.view.clone()
+    }
+
+    pub fn request(&self) -> Result<GenerationRequest, ConversationFailure> {
+        let turn = self
+            .view
+            .turn
+            .as_ref()
+            .ok_or(ConversationFailure("活动任务缺少轮次"))?;
+        Ok(GenerationRequest {
+            slug: self.view.settings.slug.clone(),
+            effort: self.view.settings.effort.clone(),
+            context: self.history.with_user(&turn.input),
+            account_subject: self.view.settings.account_subject.clone(),
+            instructions: self.view.settings.instructions.clone(),
+        })
+    }
+
+    pub fn update(&mut self, event: StreamEvent) -> Result<SessionView, ConversationFailure> {
+        let turn = self
+            .view
+            .turn
+            .as_mut()
+            .ok_or(ConversationFailure("活动任务缺少轮次"))?;
         match event {
             StreamEvent::Item(message) => {
                 if let Some(existing) = turn
@@ -327,37 +416,28 @@ impl Conversation {
                 }
             }
         }
-        self.session
-            .as_ref()
-            .map(|session| session.view.clone())
-            .ok_or(ConversationFailure("运行轮次缺少会话"))
+        Ok(self.view.clone())
     }
 
     pub fn finish(
         &mut self,
-        operation_id: u64,
         outcome: Option<Result<GenerationResult, ModelFailure>>,
-    ) -> Result<SessionView, ConversationFailure> {
-        self.turn(operation_id)?;
-        let session = self
-            .session
-            .as_mut()
-            .ok_or(ConversationFailure("完成轮次缺少会话"))?;
-        let turn = session
+    ) -> Result<(), ConversationFailure> {
+        let turn = self
             .view
             .turn
             .as_mut()
-            .ok_or(ConversationFailure("完成结果缺少对应轮次"))?;
+            .ok_or(ConversationFailure("活动任务缺少轮次"))?;
         turn.status = match outcome {
             Some(Ok(result)) => {
-                session.history.commit(&turn.input, result.output);
-                session.view.committed_items = session.history.summary();
+                self.history.commit(&turn.input, result.output);
+                self.view.committed_items = self.history.summary();
                 turn.messages = result.messages;
                 TurnStatus::Completed
             }
             Some(Err(failure)) => TurnStatus::Failed(failure.to_string()),
             None => TurnStatus::Cancelled,
         };
-        Ok(session.view.clone())
+        Ok(())
     }
 }

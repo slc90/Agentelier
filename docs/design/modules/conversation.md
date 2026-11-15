@@ -1,6 +1,6 @@
 # 聊天会话与协议历史
 
-`agentelier_conversation` 管理当前内存会话。内部 ChatSession 持有固定模型、推理设置与账号身份、展示记录，以及独立的 ProtocolHistory。Runtime 保管业务对象和网络任务，LLM Model 负责协议解析；UI 只持有可重建的展示投影与未发送草稿。
+`agentelier_conversation` 管理当前内存会话。内部 ChatSession 持有固定模型、推理设置与账号身份、展示快照，以及空闲时的 ProtocolHistory。运行时签出 ActiveTurn，Turn Runner 独占活动记录和协议历史，消费模型增量并处理受控取消。Runtime 保管业务对象和任务句柄，回收后归还记录，LLM Model 负责协议解析；UI 只持有可重建的展示投影与未发送草稿。
 
 ## 一轮记录怎样提交
 
@@ -44,3 +44,7 @@ Turn 的 input_id 将同一输入的多次尝试归组，id 与 operation_id 每
 ## 空白会话
 
 Create 接受准备区快照；Reset 核对当前 Session 身份并从执行侧复制其设置。运行中的 Turn 拒绝替换；空闲时分配新 Session ID，展示与 ProtocolHistory 同时置空。UI 在提交替换前持有待确认设置，用户确认后才发请求；取消确认不改变原记录，输入草稿不随记录清空。
+
+## 活动记录与异常回收
+
+活动记录包含会话、轮次、操作和输入身份，以及固定设置、已有协议历史和展示内容。执行期间 Conversation 不持有可写历史副本；它只校验并接收安全累计快照。Runner 收到取消后结束模型等待，归还记录；Runtime 在 JoinHandle 真实回收后发布终态。异常退出或无法归还可信记录时，会话阻止发送和重试，重置或新建会话才恢复。

@@ -1,10 +1,9 @@
 use super::{AgentEvent, AgentEventKind, ModelControl, RuntimeFailure, emit};
 use agentelier_account::{CredentialClient, DeliveryFailure};
-use agentelier_conversation::{Conversation, ConversationEvent};
-use agentelier_llm_model::{
-    GenerationRequest, GenerationResult, ModelFailure, ModelFailureKind, ModelRequest, ModelResult,
-    StreamEvent,
+use agentelier_conversation::{
+    ActiveTurn, Conversation, ConversationEvent, ConversationFailure, SessionView,
 };
+use agentelier_llm_model::{ModelFailure, ModelFailureKind, ModelRequest, ModelResult};
 use tokio::sync::mpsc;
 use tracing::debug;
 
@@ -12,11 +11,11 @@ pub(super) const PROGRESS_CAPACITY: usize = 32;
 pub(super) type ModelJoin = Result<Option<TaskResult>, tokio::task::JoinError>;
 pub(super) enum TaskResult {
     Model(Result<ModelResult, ModelFailure>),
-    Chat(Result<GenerationResult, ModelFailure>),
+    Chat(Result<Box<ActiveTurn>, ConversationFailure>),
 }
 pub(super) enum TaskRequest {
     Model(ModelRequest),
-    Chat(GenerationRequest, mpsc::Sender<StreamEvent>),
+    Chat(Box<ActiveTurn>, mpsc::Sender<SessionView>),
 }
 pub(super) struct ModelTask {
     pub(super) id: u64,
@@ -35,26 +34,18 @@ impl ModelTask {
         let chat = matches!(&request, TaskRequest::Chat(..));
         let handle = tokio::spawn(async move {
             debug!(operation_id = id, chat, "模型操作执行体已启动");
-            let operation = async move {
-                match request {
-                    TaskRequest::Model(request) => {
-                        TaskResult::Model(agentelier_llm_model::execute(credentials, request).await)
-                    }
-                    TaskRequest::Chat(request, progress) => TaskResult::Chat(
-                        agentelier_llm_model::generate(credentials, request, progress).await,
-                    ),
-                }
+            let result = match request {
+                TaskRequest::Model(request) => tokio::select! { biased;
+                    result = agentelier_llm_model::execute(credentials, request) => Some(TaskResult::Model(result)),
+                    _ = cancel.cancelled() => None,
+                },
+                TaskRequest::Chat(active, progress) => Some(TaskResult::Chat(
+                    agentelier_turn_runner::run(*active, credentials, cancel, progress)
+                        .await
+                        .map(Box::new),
+                )),
             };
-            let result = tokio::select! { biased;
-                _ = cancel.cancelled() => None,
-                result = operation => Some(result),
-            };
-            debug!(
-                operation_id = id,
-                chat,
-                cancelled = result.is_none(),
-                "模型操作执行体已结束"
-            );
+            debug!(operation_id = id, chat, "模型操作执行体已结束");
             result
         });
         Self {
@@ -69,7 +60,7 @@ impl ModelTask {
 pub(super) fn progress(
     conversation: &mut Conversation,
     id: u64,
-    event: StreamEvent,
+    event: SessionView,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
     let view = conversation.update(id, event)?;
@@ -83,7 +74,7 @@ pub(super) fn progress(
 pub(super) fn drain_progress(
     conversation: &mut Conversation,
     id: u64,
-    incoming: &mut Option<mpsc::Receiver<StreamEvent>>,
+    incoming: &mut Option<mpsc::Receiver<SessionView>>,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
     if let Some(receiver) = incoming {
@@ -112,14 +103,17 @@ pub(super) fn complete(
     result: ModelJoin,
 ) -> Result<AgentEventKind, RuntimeFailure> {
     if chat {
-        let outcome = match result {
-            Ok(Some(TaskResult::Chat(result))) => Some(result),
-            Ok(None) => None,
-            Err(_) => Some(Err(task_failure())),
+        let view = match result {
+            Ok(Some(TaskResult::Chat(Ok(active)))) => conversation.finish(id, *active)?,
+            Ok(Some(TaskResult::Chat(Err(failure)))) => {
+                tracing::error!(operation_id = id, error = %failure, "聊天执行记录无法归还");
+                conversation.interrupt(id)?
+            }
+            Err(_) => conversation.interrupt(id)?,
             _ => return Err(RuntimeFailure::ModelState),
         };
         Ok(AgentEventKind::Conversation(ConversationEvent::Finished(
-            conversation.finish(id, outcome)?,
+            view,
         )))
     } else {
         match result {
@@ -133,7 +127,7 @@ pub(super) fn complete(
 
 pub(super) async fn stop_model(
     model: &mut Option<ModelTask>,
-    incoming: &mut Option<mpsc::Receiver<StreamEvent>>,
+    incoming: &mut Option<mpsc::Receiver<SessionView>>,
     conversation: &mut Conversation,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
