@@ -61,7 +61,7 @@ flowchart TD
     Account --> Login
 ```
 
-图中为内部 Crate 的直接依赖。UI 库另依赖 Bevy、Widgetry 及路径显示库；application 按配置安装 BRP Runtime。Agent 与 Bridge 不依赖 Bevy，不访问 Entity、Component 或 World，也不安装日志 Subscriber。
+图中为内部 Crate 的直接依赖。UI 库另依赖 Bevy、Widgetry 及路径转换库；Login 直接依赖只使用标准库的 `bevy_widgetry_path_display`，复用 Shell 路径前缀简化。application 按配置安装 BRP Runtime。Agent 与 Bridge 不依赖 Bevy，不访问 Entity、Component 或 World，也不安装日志 Subscriber。
 
 ## UI 管理交互与通用宿主
 
@@ -71,7 +71,7 @@ flowchart TD
 
 目录设置显示本次固定路径、打开当前目录、检查并保存下次启动位置。候选检查不持有第二份长期占用，保存成功才更新配置投影；更改下次位置不搬运文件、不切换当前数据环境或账号。关系见[数据目录与启动](mechanisms/application-data.md)。
 
-UI 使用 `bevy_widgetry_path_display` 显示路径，Login 只返回原始路径。系统浏览器由 login_ui 的辅助 Job 通过 Windows Shell 打开；剪贴板由应用处理。授权地址仅作为无 Debug 的私有交互数据保存，不进入反射状态或日志。
+UI 使用 `bevy_widgetry_path_display::display_path` 显示路径，application 在序列化配置时使用同库的 `simplify_path`，Login 在调用 Windows Shell 打开数据目录时使用该函数。数据环境对外仍返回原始规范路径，目录比较与文件操作不使用显示字符串。系统浏览器由 login_ui 的辅助 Job 通过 Windows Shell 打开；剪贴板由应用处理。授权地址仅作为无 Debug 的私有交互数据保存，不进入反射状态或日志。
 
 ## Agent 的账号、模型与执行所有者
 

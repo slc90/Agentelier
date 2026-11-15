@@ -1,3 +1,4 @@
+use bevy_widgetry_path_display::simplify_path;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::windows::fs::OpenOptionsExt;
@@ -56,21 +57,17 @@ impl DataEnvironment {
 
     pub fn open_in_explorer(&self) -> io::Result<()> {
         let root = normalize_root(&self.root)?;
-        let path = root.to_str().ok_or_else(|| {
+        let path = simplify_path(&root);
+        let path = path.to_str().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "目录路径无法交给 Windows Shell",
             )
         })?;
-        let path = if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
-            format!(r"\\{unc}")
-        } else {
-            path.strip_prefix(r"\\?\").unwrap_or(path).to_owned()
-        };
         let _com = win::CoInitializeEx(co::COINIT::APARTMENTTHREADED | co::COINIT::DISABLE_OLE1DDE)
             .map_err(io::Error::other)?;
         win::HWND::NULL
-            .ShellExecute("open", &path, None, None, co::SW::SHOWNORMAL)
+            .ShellExecute("open", path, None, None, co::SW::SHOWNORMAL)
             .map_err(io::Error::other)
     }
 }

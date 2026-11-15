@@ -216,6 +216,7 @@ name = "agentelier_login"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "bevy_widgetry_path_display",
  "getrandom",
  "httparse",
  "jsonwebtoken",
@@ -1995,7 +1996,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy_widgetry_app_logging",
  "bevy_widgetry_button",
@@ -2016,7 +2017,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_app_logging"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_diagnostics",
@@ -2030,7 +2031,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_asset"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_internal_log",
@@ -2039,7 +2040,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_button"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2054,7 +2055,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_check_box"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_asset",
@@ -2067,7 +2068,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_combo_box"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_asset",
@@ -2084,7 +2085,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_core"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_asset",
@@ -2098,7 +2099,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_cursor"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_diagnostics",
@@ -2108,7 +2109,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_diagnostics"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy_ecs",
  "bevy_widgetry_internal_log",
@@ -2117,7 +2118,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_file_dialog"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_asset",
@@ -2152,7 +2153,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_internal_log"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "tracing",
 ]
@@ -2160,7 +2161,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_job"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "async-broadcast",
  "bevy",
@@ -2176,7 +2177,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_list_view"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2189,7 +2190,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_message_box"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_button",
@@ -2204,12 +2205,12 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_path_display"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 
 [[package]]
 name = "bevy_widgetry_scroll_area"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2222,7 +2223,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_text_field"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2235,7 +2236,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_theme"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_diagnostics",
@@ -2245,7 +2246,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_tooltip"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2257,7 +2258,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_ui_scale"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2269,7 +2270,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_window"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#430ddb4486c26b511c0c8a40d219664c2665fc15"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
 dependencies = [
  "bevy",
  "bevy_widgetry_asset",

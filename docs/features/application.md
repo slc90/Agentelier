@@ -4,7 +4,7 @@
 
 `agentelier_application` 是通用应用宿主。`run()` 建立日志、加载可执行文件旁的 `config/config.ron`、装配 Bevy、窗口、Asset、缩放、可选 BRP 与 LoginUiPlugin，运行主循环并返回进程退出码。配置的完整替换提交、启动诊断及整体退出协调由该库内部模块负责，不作为额外公共接口开放。
 
-保存配置时，`data_directory` 使用无 `\\?\` 前缀的盘符路径或普通 UNC 网络路径；内存中的规范化路径继续保留。已有带前缀的配置仍可读取，再次保存时使用无前缀格式。
+保存配置时，`data_directory` 通过 `bevy_widgetry_path_display::simplify_path` 将扩展盘符和 UNC 路径转换为无 `\\?\` 前缀的普通路径，其他命名空间保持原样；内存中的规范化路径继续保留。已有带前缀的配置仍可读取，再次保存时使用该转换。无法表示为 Unicode 的路径返回序列化错误，不使用有损显示文字保存。
 
 目录、账号交互归 `agentelier_login_ui`，模型准备与验证交互归 `agentelier_chat_ui`。`agentelier_agent_host` 独占公共 Connection 并分发业务消息，登录 UI 管理浏览器和剪贴板；application 提供数据环境槽、配置保存及页面 Scene 装配，保存 AgentHost 的同一运行生命周期句柄。OAuth 与文件持久化归 Login，账号状态和凭据协调归 Account，模型网络归 LLM Model，执行调度与取消回收归 Runtime。
 
