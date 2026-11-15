@@ -152,7 +152,7 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
                         @source: source,
                         @placeholder: {WidgetryComboBoxContent::new(|| bsn_list! { Text("请选择模型") WidgetryText })},
                         @renderer: {WidgetryListViewRenderer::new(|model: &ModelChoice| {
-                            let label = format!("{} · {}", model.display_name, model.slug);
+                            let label = model.display_name.clone();
                             bsn_list! { Text(label) WidgetryText }
                         })},
                     }
