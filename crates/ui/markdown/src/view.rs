@@ -14,6 +14,8 @@ const QUOTE_BORDER: f32 = 3.0;
 const RULE_THICKNESS: f32 = 1.0;
 const RULE_COLOR: Color = Color::srgb(0.5, 0.5, 0.5);
 const QUOTE_COLOR: Color = Color::srgb(0.45, 0.5, 0.6);
+const LIST_INDENT: f32 = 28.0;
+const MARKER_WIDTH: f32 = 42.0;
 #[derive(Component, Clone, Default, PartialEq, Reflect)]
 #[reflect(Component)]
 pub struct MarkdownSource(pub String);
@@ -66,6 +68,15 @@ fn render(world: &mut World) -> Result {
                 ordered.push(*entity);
                 continue;
             }
+            if let Some((entity, _, old)) = existing.iter().find(|(_, old_index, old)| {
+                *old_index == index && old.list == block.list && old.quote == block.quote
+                    && matches!((&old.kind, &block.kind), (BlockKind::Code { language: old, .. }, BlockKind::Code { language: new, .. }) if old == new)
+            }) && let (BlockKind::Code { .. }, BlockKind::Code { text, .. }) = (&old.kind, &block.kind) {
+                    crate::code::update(world, *entity, text)?;
+                    world.get_mut::<RenderedBlock>(*entity).ok_or_else(|| std::io::Error::other("代码块缺少渲染状态"))?.block = block;
+                    ordered.push(*entity);
+                    continue;
+            }
             let scene = block_scene(&block);
             let entity = world
                 .commands()
@@ -87,6 +98,23 @@ fn render(world: &mut World) -> Result {
     Ok(())
 }
 fn block_scene(block: &Block) -> Box<dyn Scene> {
+    if let Some(list) = &block.list {
+        let inset = list.depth as f32 * LIST_INDENT;
+        let marker = list.marker.clone().unwrap_or_default();
+        let mut content = block.clone();
+        content.list = None;
+        let content = block_scene(&content);
+        return Box::new(bsn! {
+            Node { width: percent(100), min_width: px(0), flex_shrink: 0.0, padding: UiRect::left(px(inset)), align_items: AlignItems::Start }
+            Children [
+                Text(marker) WidgetryText TextFont { font_size: {bevy::text::FontSize::Px(BODY_SIZE)} } Node { width: px(MARKER_WIDTH), flex_shrink: 0.0 }--
+                Node { flex_grow: 1.0, min_width: px(0), flex_basis: px(0) } Children [@{content}]
+            ]
+        });
+    }
+    if let BlockKind::Code { language, text } = &block.kind {
+        return crate::code::scene(language, text);
+    }
     if block.kind == BlockKind::Rule {
         return Box::new(
             bsn! { Node { width: percent(100), height: px(RULE_THICKNESS), flex_shrink: 0.0 } BackgroundColor(RULE_COLOR) },

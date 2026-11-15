@@ -1,4 +1,4 @@
-use pulldown_cmark::{Event, Options, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 use std::ops::Range;
 
 #[derive(Clone, Default, PartialEq)]
@@ -16,6 +16,12 @@ pub(crate) enum BlockKind {
     Heading(u8),
     Raw,
     Rule,
+    Code { language: String, text: String },
+}
+#[derive(Clone, PartialEq)]
+pub(crate) struct ListPosition {
+    pub depth: usize,
+    pub marker: Option<String>,
 }
 #[derive(Clone, PartialEq)]
 pub(crate) struct Block {
@@ -23,6 +29,7 @@ pub(crate) struct Block {
     pub quote: bool,
     pub runs: Vec<Run>,
     pub links: Vec<String>,
+    pub list: Option<ListPosition>,
 }
 pub(crate) struct Tree {
     pub event: Event<'static>,
@@ -69,9 +76,68 @@ pub(crate) fn parse(source: &str) -> Vec<Block> {
     blocks
 }
 fn collect(nodes: &[Tree], source: &str, quote: bool, blocks: &mut Vec<Block>) {
-    for node in nodes {
+    let mut index = 0;
+    while let Some(node) = nodes.get(index) {
+        if is_inline(&node.event) {
+            let end = nodes[index..]
+                .iter()
+                .take_while(|node| is_inline(&node.event))
+                .count()
+                + index;
+            let (runs, links) = inline(&nodes[index..end]);
+            blocks.push(Block {
+                kind: BlockKind::Prose,
+                quote,
+                runs,
+                links,
+                list: None,
+            });
+            index = end;
+            continue;
+        }
+        index += 1;
         match &node.event {
             Event::Start(Tag::BlockQuote(_)) => collect(&node.children, source, true, blocks),
+            Event::Start(Tag::List(start)) => {
+                for (offset, item) in node.children.iter().enumerate() {
+                    let mut item_blocks = Vec::new();
+                    collect(&item.children, source, quote, &mut item_blocks);
+                    let marker = start
+                        .map_or_else(|| "•".into(), |start| format!("{}.", start + offset as u64));
+                    for (index, mut block) in item_blocks.into_iter().enumerate() {
+                        if let Some(list) = &mut block.list {
+                            list.depth += 1;
+                        } else {
+                            block.list = Some(ListPosition {
+                                depth: 0,
+                                marker: (index == 0).then(|| marker.clone()),
+                            });
+                        }
+                        blocks.push(block);
+                    }
+                }
+            }
+            Event::Start(Tag::CodeBlock(kind)) => {
+                let language = match kind {
+                    CodeBlockKind::Fenced(language) => language.to_string(),
+                    CodeBlockKind::Indented => String::new(),
+                };
+                let text = node
+                    .children
+                    .iter()
+                    .filter_map(|child| match &child.event {
+                        Event::Text(text) => Some(text.as_ref()),
+                        _ => None,
+                    })
+                    .collect();
+                blocks.push(Block {
+                    kind: BlockKind::Code { language, text },
+                    quote,
+                    runs: Vec::new(),
+                    links: Vec::new(),
+                    list: None,
+                });
+            }
             Event::Start(Tag::Paragraph | Tag::Heading { .. }) => {
                 let kind = if let Event::Start(Tag::Heading { level, .. }) = node.event {
                     BlockKind::Heading(level as u8)
@@ -84,6 +150,7 @@ fn collect(nodes: &[Tree], source: &str, quote: bool, blocks: &mut Vec<Block>) {
                     quote,
                     runs,
                     links,
+                    list: None,
                 });
             }
             Event::Rule => blocks.push(Block {
@@ -91,6 +158,7 @@ fn collect(nodes: &[Tree], source: &str, quote: bool, blocks: &mut Vec<Block>) {
                 quote,
                 runs: Vec::new(),
                 links: Vec::new(),
+                list: None,
             }),
             _ => blocks.push(Block {
                 kind: BlockKind::Raw,
@@ -103,9 +171,27 @@ fn collect(nodes: &[Tree], source: &str, quote: bool, blocks: &mut Vec<Block>) {
                     ..Default::default()
                 }],
                 links: Vec::new(),
+                list: None,
             }),
         }
     }
+}
+fn is_inline(event: &Event<'_>) -> bool {
+    matches!(
+        event,
+        Event::Text(_)
+            | Event::Code(_)
+            | Event::InlineHtml(_)
+            | Event::SoftBreak
+            | Event::HardBreak
+            | Event::Start(
+                Tag::Strong
+                    | Tag::Emphasis
+                    | Tag::Strikethrough
+                    | Tag::Link { .. }
+                    | Tag::Image { .. }
+            )
+    )
 }
 pub(crate) fn inline(nodes: &[Tree]) -> (Vec<Run>, Vec<String>) {
     let mut runs = Vec::new();

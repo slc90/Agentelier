@@ -78,6 +78,9 @@ fn follow(
         return;
     };
     let maximum = ((node.content_size.y - node.size.y) * node.inverse_scale_factor).max(0.0);
+    if !reading.restore && (position.0.y - reading.position).abs() > BOTTOM_TOLERANCE {
+        reading.following = position.0.y >= reading.maximum - BOTTOM_TOLERANCE;
+    }
     let target = if reading.following {
         maximum
     } else if reading.restore {

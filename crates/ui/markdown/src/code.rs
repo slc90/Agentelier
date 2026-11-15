@@ -1,0 +1,108 @@
+use bevy::input::mouse::MouseScrollPixelsPerLine;
+use bevy::picking::events::PointerScroll;
+use bevy::prelude::*;
+use bevy::text::{FontSource, LineBreak, LineHeight};
+use bevy::ui::{OverflowAxis, ScrollPosition};
+use bevy::ui_widgets::ScrollArea;
+use bevy_widgetry::scroll_area::{ScrollAxis, WidgetryScrollArea};
+use bevy_widgetry::text::WidgetryText;
+
+const CODE_SIZE: f32 = 16.0;
+const CODE_LINE_HEIGHT: f32 = 24.0;
+const SCROLLBAR_SPACE: f32 = 16.0;
+const HEADER_GAP: f32 = 6.0;
+#[derive(Component, Clone, Default)]
+struct CodeText;
+#[derive(Component, Clone, Default)]
+struct CodeScroll;
+
+fn height(text: &str) -> f32 {
+    text.split('\n').count() as f32 * CODE_LINE_HEIGHT + SCROLLBAR_SPACE
+}
+
+// Bevy's horizontal ScrollArea consumes both axes, so forward the vertical delta before it stops propagation.
+pub(crate) fn forward_vertical(
+    event: On<PointerScroll>,
+    parents: Query<&ChildOf>,
+    mut areas: Query<(&Node, &ComputedNode, &mut ScrollPosition), With<ScrollArea>>,
+    conversion: Res<MouseScrollPixelsPerLine>,
+) {
+    let delta = event.to_pixels(&conversion).y;
+    if delta == 0.0 {
+        return;
+    }
+    for ancestor in parents.iter_ancestors(event.entity) {
+        if let Ok((node, computed, mut position)) = areas.get_mut(ancestor)
+            && node.overflow.y == OverflowAxis::Scroll
+        {
+            let maximum = ((computed.content_size.y - computed.size.y)
+                * computed.inverse_scale_factor)
+                .max(0.0);
+            position.0.y = (position.0.y - delta).clamp(0.0, maximum);
+            break;
+        }
+    }
+}
+
+pub(crate) fn update(world: &mut World, root: Entity, text: &str) -> Result {
+    let mut pending = vec![root];
+    let mut found_text = false;
+    let mut found_scroll = false;
+    while let Some(entity) = pending.pop() {
+        if let Some(children) = world.get::<Children>(entity) {
+            pending.extend(children.iter());
+        }
+        if world.get::<CodeText>(entity).is_some() {
+            world
+                .get_mut::<Text>(entity)
+                .ok_or_else(|| std::io::Error::other("代码块缺少正文"))?
+                .set_if_neq(Text(text.to_owned()));
+            found_text = true;
+        }
+        if world.get::<CodeScroll>(entity).is_some() {
+            world
+                .get_mut::<Node>(entity)
+                .ok_or_else(|| std::io::Error::other("代码块缺少滚动布局"))?
+                .height = px(height(text));
+            found_scroll = true;
+        }
+    }
+    if !found_text || !found_scroll {
+        return Err(std::io::Error::other("代码块结构不完整").into());
+    }
+    Ok(())
+}
+
+pub(crate) fn scene(language: &str, text: &str) -> Box<dyn Scene> {
+    let label = if language.is_empty() {
+        "代码"
+    } else {
+        language
+    }
+    .to_owned();
+    let height = height(text);
+    let text = text.to_owned();
+    let font = TextFont {
+        font: FontSource::monospace(),
+        font_size: CODE_SIZE.into(),
+        ..default()
+    };
+    Box::new(bsn! {
+        Name("MarkdownCodeBlock")
+        Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(HEADER_GAP), flex_shrink: 0.0 }
+        Children [
+            Text(label) WidgetryText--
+            @WidgetryScrollArea {
+                @axis: ScrollAxis::Horizontal,
+                @content: {Some(Box::new(bsn! { on(forward_vertical) }) as Box<dyn Scene>)},
+                @children: {Some(Box::new(bsn_list! {
+                    Text(text) WidgetryText CodeText Name("MarkdownCodeText")
+                    template(move |_| Ok(font.clone()))
+                    LineHeight::Px(CODE_LINE_HEIGHT) TextLayout::linebreak(LineBreak::NoWrap)
+                    Node { flex_shrink: 0.0 }
+                }) as Box<dyn SceneList>)}
+            }
+            Name("MarkdownCodeScroll") CodeScroll Node { width: percent(100), min_width: px(0), height: px(height), flex_shrink: 0.0 }
+        ]
+    })
+}
