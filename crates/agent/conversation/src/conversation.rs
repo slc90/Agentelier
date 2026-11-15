@@ -1,5 +1,6 @@
 use crate::active::ActiveTurn;
 use crate::control::SteerView;
+use crate::queue::QueuedInput;
 use agentelier_llm_model::{OutputMessage, ProtocolHistory, ProtocolItemSummary};
 use agentelier_prompts::{InstructionMessage, InstructionSnapshot};
 use agentelier_tools::{ToolCatalog, ToolStatus};
@@ -77,6 +78,8 @@ pub struct SessionView {
     pub committed_items: Vec<ProtocolItemSummary>,
     pub execution_blocked: bool,
     pub tool_catalog: Vec<(String, String)>,
+    pub queue: Vec<QueuedInput>,
+    pub queue_paused: bool,
 }
 pub enum ConversationEvent {
     Created(SessionView),
@@ -85,6 +88,8 @@ pub enum ConversationEvent {
     Finished(SessionView),
     Rejected(String),
     InputReceipt(crate::control::InputReceipt),
+    Queue(crate::queue::QueueEvent),
+    Started(SessionView),
 }
 
 #[derive(Debug)]
@@ -101,17 +106,17 @@ impl fmt::Display for ConversationFailure {
 }
 impl Error for ConversationFailure {}
 
-struct ChatSession {
-    view: SessionView,
-    history: Option<ProtocolHistory>,
+pub(crate) struct ChatSession {
+    pub(crate) view: SessionView,
+    pub(crate) history: Option<ProtocolHistory>,
     tools: Arc<ToolCatalog>,
 }
 
 #[derive(Default)]
 pub struct Conversation {
-    session: Option<ChatSession>,
+    pub(crate) session: Option<ChatSession>,
     next_session: u64,
-    next_turn: u64,
+    pub(crate) next_turn: u64,
 }
 
 impl Conversation {
@@ -165,6 +170,8 @@ impl Conversation {
             previous_turns: Vec::new(),
             committed_items: Vec::new(),
             execution_blocked: false,
+            queue: Vec::new(),
+            queue_paused: false,
             tool_catalog: tools
                 .definitions()
                 .iter()
@@ -322,7 +329,7 @@ impl Conversation {
     pub fn update(
         &mut self,
         operation_id: u64,
-        view: SessionView,
+        mut view: SessionView,
     ) -> Result<SessionView, ConversationFailure> {
         let turn = self.turn(operation_id)?;
         if view
@@ -340,6 +347,8 @@ impl Conversation {
             .session
             .as_mut()
             .ok_or(ConversationFailure("任务缺少会话"))?;
+        view.queue = std::mem::take(&mut session.view.queue);
+        view.queue_paused = session.view.queue_paused;
         session.view = view;
         Ok(session.view.clone())
     }
@@ -349,7 +358,19 @@ impl Conversation {
         operation_id: u64,
         active: ActiveTurn,
     ) -> Result<SessionView, ConversationFailure> {
-        let view = self.update(operation_id, active.view)?;
+        let mut view = active.view;
+        if view
+            .turn
+            .as_ref()
+            .is_some_and(|turn| !matches!(turn.status, TurnStatus::Completed))
+        {
+            self.session
+                .as_mut()
+                .ok_or(ConversationFailure("任务缺少会话"))?
+                .view
+                .queue_paused = true;
+        }
+        view = self.update(operation_id, view)?;
         self.session
             .as_mut()
             .ok_or(ConversationFailure("任务缺少会话"))?
@@ -365,6 +386,7 @@ impl Conversation {
             .as_mut()
             .ok_or(ConversationFailure("任务缺少会话"))?;
         session.view.execution_blocked = true;
+        session.view.queue_paused = true;
         Ok(session.view.clone())
     }
 }

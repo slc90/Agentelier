@@ -1,4 +1,4 @@
-use super::{AgentEvent, AgentEventKind, ModelControl, RuntimeFailure, emit};
+use super::{AgentEvent, AgentEventKind, ModelControl, RuntimeFailure, SharedModel, emit};
 use agentelier_account::{CredentialClient, DeliveryFailure};
 use agentelier_conversation::{
     ActiveTurn, Conversation, ConversationEvent, ConversationFailure, RunnerEvent, SteerInput,
@@ -180,5 +180,42 @@ pub(super) async fn stop_model(
         }
         delivery?;
     }
+    Ok(())
+}
+
+pub(super) fn start_queued(
+    conversation: &mut Conversation,
+    model: &mut Option<ModelTask>,
+    incoming: &mut Option<mpsc::Receiver<RunnerEvent>>,
+    shared: &SharedModel,
+    credentials: &CredentialClient,
+    publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
+) -> Result<(), RuntimeFailure> {
+    if model.is_some() {
+        return Ok(());
+    }
+    let Some((id, view, active)) = conversation.start_queued()? else {
+        return Ok(());
+    };
+    let (control, steers) = ModelControl::new(id);
+    let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
+    control
+        .turn
+        .set((view.id.0, turn.id.0))
+        .map_err(|_| RuntimeFailure::ModelState)?;
+    *shared.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control.clone());
+    emit(
+        publish,
+        id,
+        AgentEventKind::Conversation(ConversationEvent::Started(view)),
+    )?;
+    let (sender, receiver) = mpsc::channel(PROGRESS_CAPACITY);
+    *incoming = Some(receiver);
+    *model = Some(ModelTask::start(
+        id,
+        control,
+        credentials.clone(),
+        TaskRequest::Chat(Box::new(active), sender, steers),
+    ));
     Ok(())
 }

@@ -5,6 +5,7 @@ mod active_input;
 mod conversation;
 mod preparation;
 mod prompts;
+mod queue;
 mod reading;
 mod reasoning;
 mod tool_timeline;

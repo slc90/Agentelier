@@ -100,6 +100,8 @@ pub struct ChatSession {
     pub committed_items: Vec<ChatHistoryItem>,
     pub execution_blocked: bool,
     pub tool_catalog: Vec<(String, String)>,
+    pub queue: Vec<crate::queue::ChatQueuedInput>,
+    pub queue_paused: bool,
 }
 #[derive(Clone, Reflect)]
 pub struct ChatReplacement {
@@ -191,6 +193,7 @@ struct ReplacementPrompt;
 enum ChatAction {
     Create,
     Send,
+    Queue,
     Stop,
     Retry,
     Reset,
@@ -208,6 +211,7 @@ struct ChatRow {
 
 pub(crate) fn install(app: &mut App) {
     crate::tool_timeline::install(app);
+    crate::queue::install(app);
     app.init_resource::<ChatState>()
         .init_resource::<InputIntents>()
         .register_type::<ChatState>()
@@ -249,7 +253,7 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
             ]--
             Node { column_gap: px(CONTENT_GAP), flex_shrink: 0.0, display: Display::None } ReplacementPrompt
             Children [
-                Text("当前对话仅在内存中，确认后将清除全部记录和上下文；输入草稿保留。") WidgetryText--
+                Text("当前对话仅在内存中，确认后将清除全部记录、上下文和待办消息；输入草稿保留。") WidgetryText--
                 @button("确认清空", "ConfirmChatReplacement", ChatAction::ConfirmReplacement)--
                 @button("保留当前会话", "KeepChatSession", ChatAction::KeepSession)
             ]--
@@ -261,6 +265,7 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
                 }) as Box<dyn SceneList>)}
             }
             Name("ChatMessageScroll") crate::reading::ChatReadingScroll Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }--
+            @crate::queue::panel()--
             @WidgetryTextField {
                 @value: {draft}, @multiline: true,
                 @auto_size: {Some(AutoSize { min_rows: COMPOSER_MIN_ROWS, max_rows: COMPOSER_MAX_ROWS })},
@@ -270,6 +275,7 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
             Node { column_gap: px(CONTENT_GAP), flex_shrink: 0.0 }
             Children [
                 @button("发送", "SendChatMessage", ChatAction::Send)--
+                @button("排队", "QueueChatMessage", ChatAction::Queue)--
                 @button("停止", "StopChatGeneration", ChatAction::Stop)--
                 @button("重试最近尝试", "RetryChatTurn", ChatAction::Retry)--
                 @crate::reading::bottom_button()
@@ -301,6 +307,7 @@ fn activate(
     match actions.get(event.entity)? {
         ChatAction::Create => commands.queue(create_session),
         ChatAction::Send => intents.send = true,
+        ChatAction::Queue => commands.queue(crate::queue::enqueue),
         ChatAction::Stop => commands.queue(stop),
         ChatAction::Retry => commands.queue(retry),
         ChatAction::Reset => commands.queue(prepare_reset),
@@ -801,6 +808,16 @@ fn project(session: SessionView) -> Result<ChatSession> {
     Ok(ChatSession {
         execution_blocked: session.execution_blocked,
         tool_catalog: session.tool_catalog,
+        queue: session
+            .queue
+            .into_iter()
+            .map(|input| crate::queue::ChatQueuedInput {
+                operation_id: input.operation_id,
+                input_id: input.input_id,
+                text: input.text,
+            })
+            .collect(),
+        queue_paused: session.queue_paused,
         id: session.id,
         slug: session.settings.slug,
         display_name: session.settings.display_name,
@@ -851,6 +868,41 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         .drain()
         .collect();
     for event in events {
+        if let ConversationEvent::Queue(reply) = event.kind {
+            let clear = crate::queue::receive(&mut world.resource_mut::<ChatState>(), reply);
+            if clear.is_some() {
+                world.resource_mut::<InputIntents>().clear_accepted = clear;
+            }
+            changed = true;
+            continue;
+        }
+        if let ConversationEvent::Started(view) = event.kind {
+            let mut state = world.resource_mut::<ChatState>();
+            state.session = Some(project(view)?);
+            state.operation = Some(event.operation_id);
+            state.cancelling = false;
+            state.error = None;
+            state.input_feedback = None;
+            info!(operation_id = event.operation_id, "排队消息已开始执行");
+            changed = true;
+            continue;
+        }
+        if let ConversationEvent::Rejected(reason) = &event.kind
+            && world.resource::<ChatState>().operation != Some(event.operation_id)
+            && world
+                .resource::<ChatState>()
+                .pending_inputs
+                .iter()
+                .any(|input| input.id == event.operation_id)
+        {
+            let mut state = world.resource_mut::<ChatState>();
+            state
+                .pending_inputs
+                .retain(|input| input.id != event.operation_id);
+            state.input_feedback = Some(format!("发送未接纳：{reason}；草稿保留"));
+            changed = true;
+            continue;
+        }
         if let ConversationEvent::InputReceipt(receipt) = event.kind {
             let clear =
                 crate::active_input::receipt(&mut world.resource_mut::<ChatState>(), receipt);
@@ -913,7 +965,10 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 error = reason,
                 "聊天操作未被接纳"
             ),
-            ConversationEvent::Updated(_) | ConversationEvent::InputReceipt(_) => {}
+            ConversationEvent::Updated(_)
+            | ConversationEvent::InputReceipt(_)
+            | ConversationEvent::Queue(_)
+            | ConversationEvent::Started(_) => {}
         }
         match event.kind {
             ConversationEvent::Rejected(reason) => {
@@ -946,7 +1001,9 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 world.resource_mut::<InputIntents>().clear_accepted = clear;
                 world.resource_mut::<ChatState>().session = Some(project(view)?);
             }
-            ConversationEvent::InputReceipt(_) => {}
+            ConversationEvent::InputReceipt(_)
+            | ConversationEvent::Queue(_)
+            | ConversationEvent::Started(_) => {}
         }
         if terminal {
             world.resource_mut::<ChatState>().cancelling = false;
@@ -982,6 +1039,7 @@ enum RowContent {
 }
 
 fn reconcile(world: &mut World) -> Result {
+    crate::queue::reconcile(world)?;
     let state = world.resource::<ChatState>().clone();
     let mut lists = world.query_filtered::<Entity, With<MessageList>>();
     let lists: Vec<_> = lists.iter(world).collect();
@@ -1272,6 +1330,7 @@ fn update(
                 state.replacement.is_some() && state.operation.is_none() && !activity.model_busy
             }
             ChatAction::Retry => can_retry(&state, &model, &account, &activity),
+            ChatAction::Queue => !account.runtime_failed && crate::queue::can_enqueue(&state),
             ChatAction::Send => {
                 state.can_send(&model, &account, &activity) || state.can_steer(&account)
             }

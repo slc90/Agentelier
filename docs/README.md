@@ -17,3 +17,5 @@
 准备区的[提示词管理](features/prompts.md)支持来源版本、组合预设和固定会话指令；数据边界见[提示词版本与快照](design/modules/prompts.md)。
 
 助手正文采用[原生 Markdown 展示](design/modules/markdown.md)，支持范围和阅读行为见[聊天功能](features/chat.md)。
+
+聊天已接入 Direct 工具调用、连续决策、同批串行、运行中补充和会话待办队列。使用方式见[聊天功能](features/chat.md)，完整设计关系与边界见[Direct 工具调用](tool_call.md)。

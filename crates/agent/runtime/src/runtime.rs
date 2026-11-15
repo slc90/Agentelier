@@ -3,7 +3,7 @@ use agentelier_account::{
 };
 use agentelier_conversation::{
     Conversation, ConversationEvent, ConversationFailure, ConversationRequest, MAX_PENDING_STEERS,
-    RunnerEvent, SteerInput,
+    RunnerEvent, SessionCommand, SteerInput,
 };
 use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
 mod model_task;
@@ -12,7 +12,7 @@ use model_task::{
     stop_model,
 };
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::{error::Error, fmt, io};
 use tokio::sync::mpsc;
@@ -23,6 +23,7 @@ pub use agentelier_account::DeliveryFailure;
 
 const COMMAND_CAPACITY: usize = 4;
 const SIGN_OUT_CAPACITY: usize = 1;
+const SESSION_COMMAND_CAPACITY: usize = 16;
 
 pub struct AgentEvent {
     pub operation_id: u64,
@@ -82,6 +83,7 @@ enum Command {
     },
     ModelFinished(ModelJoin),
     Stream(Option<RunnerEvent>),
+    Session(SessionCommand),
     Conversation {
         id: u64,
         control: ModelControl,
@@ -97,8 +99,11 @@ pub struct AgentRuntime {
     credentials: CredentialClient,
     shutdown: CancellationToken,
     sign_out_commands: mpsc::Sender<u64>,
-    model: Option<ModelControl>,
+    model: SharedModel,
+    session_commands: mpsc::Sender<SessionCommand>,
 }
+
+type SharedModel = Arc<Mutex<Option<ModelControl>>>;
 
 #[derive(Clone)]
 struct ModelControl {
@@ -107,6 +112,21 @@ struct ModelControl {
     cancel: CancellationToken,
     finished: CancellationToken,
     steers: mpsc::Sender<SteerInput>,
+}
+impl ModelControl {
+    fn new(id: u64) -> (Self, mpsc::Receiver<SteerInput>) {
+        let (steers, incoming) = mpsc::channel(MAX_PENDING_STEERS);
+        (
+            Self {
+                id,
+                turn: Arc::new(OnceLock::new()),
+                cancel: CancellationToken::new(),
+                finished: CancellationToken::new(),
+                steers,
+            },
+            incoming,
+        )
+    }
 }
 impl AgentRuntime {
     pub fn start(
@@ -132,6 +152,9 @@ impl AgentRuntime {
         });
         let owner_credentials = credentials.clone();
         let (sign_out_commands, mut sign_out_incoming) = mpsc::channel(SIGN_OUT_CAPACITY);
+        let shared_model: SharedModel = Arc::new(Mutex::new(None));
+        let owner_model = shared_model.clone();
+        let (session_commands, mut session_incoming) = mpsc::channel(SESSION_COMMAND_CAPACITY);
         let thread = std::thread::Builder::new()
             .name("agentelier-auth".into())
             .spawn(move || {
@@ -156,6 +179,10 @@ impl AgentRuntime {
                                         Some(task) => (&mut task.handle).await,
                                         None => std::future::pending().await,
                                     }} => Command::ModelFinished(result),
+                                    command = session_incoming.recv() => match command {
+                                        Some(command) => Command::Session(command),
+                                        None => break,
+                                    },
                                     event = async { match &mut progress_events {
                                         Some(receiver) => receiver.recv().await,
                                         None => std::future::pending().await,
@@ -172,8 +199,11 @@ impl AgentRuntime {
                                         request,
                                     } => {
                                         if model.is_some() {
-                                            return Err(AccountFailure::Busy.into());
+                                            control.finished.cancel();
+                                            emit(&publish,id,AgentEventKind::ModelCompleted(Err(agentelier_llm_model::ModelFailure {kind:agentelier_llm_model::ModelFailureKind::Service,status:None,code:None,request_id:None,message:"当前任务正在执行，不能插入模型操作".into()})))?;
+                                            continue;
                                         }
+                                        *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?=Some(control.clone());
                                         model = Some(ModelTask::start(
                                             id,
                                             control,
@@ -207,6 +237,23 @@ impl AgentRuntime {
                                             },
                                             &mut delivery_failure,
                                         );
+                                        if delivery_failure.is_none() && !runtime_shutdown.is_cancelled() {
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish)?;
+                                        }
+                                    }
+                                    Command::Session(command) => {
+                                        if matches!(command,SessionCommand::Resume {..}) && model.is_some() {
+                                            let id=command.id();
+                                            emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Queue(agentelier_conversation::QueueEvent {
+                                                id,view:None,decision:agentelier_conversation::QueueDecision::Rejected("当前执行尚未回收，不能继续队列".into()),
+                                            })))?;
+                                            continue;
+                                        }
+                                        let event=conversation.queue_command(command);
+                                        emit(&publish,event.id,AgentEventKind::Conversation(ConversationEvent::Queue(event)))?;
+                                        if model.is_none() && !runtime_shutdown.is_cancelled() {
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish)?;
+                                        }
                                     }
                                     Command::Stream(event) => {
                                         if let Some(event) = event {
@@ -226,7 +273,9 @@ impl AgentRuntime {
                                         steers,
                                     } => {
                                         if model.is_some() {
-                                            return Err(AccountFailure::Busy.into());
+                                            control.finished.cancel();
+                                            emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Rejected("排队任务已经开始，当前发送未接纳，草稿保留".into())))?;
+                                            continue;
                                         }
                                         match request {
                                             ConversationRequest::Create(settings) => {
@@ -268,6 +317,7 @@ impl AgentRuntime {
                                                     Ok((view, request)) => {
                                                         let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
                                                         control.turn.set((view.id.0, turn.id.0)).map_err(|_| RuntimeFailure::ModelState)?;
+                                                        *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?=Some(control.clone());
                                                         emit(
                                                             &publish,
                                                             id,
@@ -419,7 +469,8 @@ impl AgentRuntime {
             credentials,
             shutdown,
             sign_out_commands,
-            model: None,
+            model: shared_model,
+            session_commands,
         })
     }
 
@@ -430,21 +481,13 @@ impl AgentRuntime {
         self.credentials.clone()
     }
     pub fn request_model(&mut self, id: u64, request: ModelRequest) -> Result<(), RuntimeFailure> {
-        let (steer_sender, steers) = mpsc::channel(MAX_PENDING_STEERS);
-        let control = ModelControl {
-            id,
-            turn: Arc::new(OnceLock::new()),
-            cancel: CancellationToken::new(),
-            finished: CancellationToken::new(),
-            steers: steer_sender,
-        };
+        let (control, steers) = ModelControl::new(id);
         drop(steers);
         self.send(Command::Model {
             id,
             request,
             control: control.clone(),
         })?;
-        self.model = Some(control);
         Ok(())
     }
     pub fn request_conversation(
@@ -452,26 +495,37 @@ impl AgentRuntime {
         id: u64,
         request: ConversationRequest,
     ) -> Result<(), RuntimeFailure> {
-        let (steer_sender, steers) = mpsc::channel(MAX_PENDING_STEERS);
-        let control = ModelControl {
-            id,
-            turn: Arc::new(OnceLock::new()),
-            cancel: CancellationToken::new(),
-            finished: CancellationToken::new(),
-            steers: steer_sender,
-        };
+        let (control, steers) = ModelControl::new(id);
         self.send(Command::Conversation {
             steers,
             id,
             control: control.clone(),
             request,
         })?;
-        self.model = Some(control);
         Ok(())
     }
+    fn active_model(&self) -> Result<Option<ModelControl>, RuntimeFailure> {
+        self.model
+            .lock()
+            .map(|model| model.clone())
+            .map_err(|_| RuntimeFailure::ModelState)
+    }
+    pub fn request_session(&self, command: SessionCommand) -> Result<(), RuntimeFailure> {
+        if self.shutdown.is_cancelled() {
+            return Err(AccountFailure::Closed.into());
+        }
+        self.session_commands
+            .try_send(command)
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => AccountFailure::Busy,
+                mpsc::error::TrySendError::Closed(_) => AccountFailure::Closed,
+            })?;
+        Ok(())
+    }
+
     pub fn steer_conversation(&self, input: SteerInput) -> Result<(), RuntimeFailure> {
-        let control = self
-            .model
+        let model = self.active_model()?;
+        let control = model
             .as_ref()
             .filter(|control| {
                 !self.shutdown.is_cancelled()
@@ -491,16 +545,22 @@ impl AgentRuntime {
         Ok(())
     }
 
-    pub fn cancel_conversation(&self, session: u64, turn: u64, operation: u64) -> bool {
-        let Some(control) = self.model.as_ref().filter(|control| {
+    pub fn cancel_conversation(
+        &self,
+        session: u64,
+        turn: u64,
+        operation: u64,
+    ) -> Result<bool, RuntimeFailure> {
+        let model = self.active_model()?;
+        let Some(control) = model.as_ref().filter(|control| {
             control.id == operation
                 && control.turn.get() == Some(&(session, turn))
                 && !control.finished.is_cancelled()
         }) else {
-            return false;
+            return Ok(false);
         };
         control.cancel.cancel();
-        true
+        Ok(true)
     }
     pub fn sign_out(&mut self, id: u64) -> Result<(), RuntimeFailure> {
         if self.shutdown.is_cancelled() {
@@ -514,7 +574,7 @@ impl AgentRuntime {
                     mpsc::error::TrySendError::Closed(_) => AccountFailure::Closed,
                 })
         })?;
-        if let Some(model) = &self.model {
+        if let Some(model) = self.active_model()? {
             model.cancel.cancel();
         }
         if let Some((_, cancel)) = &self.active {
@@ -545,7 +605,7 @@ impl AgentRuntime {
     }
     fn send(&self, command: Command) -> Result<(), RuntimeFailure> {
         if self
-            .model
+            .active_model()?
             .as_ref()
             .is_some_and(|model| !model.finished.is_cancelled())
         {
@@ -566,8 +626,10 @@ impl AgentRuntime {
     }
     pub fn begin_shutdown(&mut self) {
         self.shutdown.cancel();
-        if let Some(model) = &self.model {
-            model.cancel.cancel();
+        match self.active_model() {
+            Ok(Some(model)) => model.cancel.cancel(),
+            Ok(None) => {}
+            Err(failure) => error!(error=%failure,"关闭时无法读取活动任务，运行线程仍将回收任务"),
         }
         if let Some((_, token)) = &self.active {
             token.cancel();

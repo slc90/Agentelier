@@ -174,6 +174,13 @@ impl AgentHost {
         self.submit(|connection| connection.steer_conversation(session, turn, operation, text))
     }
 
+    pub fn request_session(
+        &self,
+        action: agentelier_conversation_bridge::SessionAction,
+    ) -> Result<u64> {
+        self.submit(|connection| connection.request_session(action))
+    }
+
     pub fn model_busy(&self) -> Result<bool> {
         Ok(self.state()?.model_busy)
     }
@@ -253,16 +260,16 @@ fn receive(world: &mut World) -> Result {
                 });
             }
             BridgeEventKind::Conversation(kind) => {
-                if kind.is_terminal() {
-                    host.state()?.model_busy = false;
-                }
+                let busy = host.submit(|connection| Ok(connection.model_busy()))?;
+                host.state()?.model_busy = busy;
                 world.write_message(ConversationEvent {
                     operation_id: event.operation_id,
                     kind,
                 });
             }
             BridgeEventKind::Model(kind) => {
-                host.state()?.model_busy = false;
+                let busy = host.submit(|connection| Ok(connection.model_busy()))?;
+                host.state()?.model_busy = busy;
                 world.write_message(ModelEvent {
                     operation_id: event.operation_id,
                     kind,

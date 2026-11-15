@@ -4,6 +4,7 @@ compile_error!("This application supports Windows x64 only");
 mod active;
 mod control;
 mod conversation;
+mod queue;
 
 pub use conversation::{
     Conversation, ConversationEvent, ConversationFailure, ConversationRequest, SessionId,
@@ -18,3 +19,5 @@ pub use active::ActiveTurn;
 pub use control::{
     InputDecision, InputReceipt, MAX_PENDING_STEERS, RunnerEvent, SteerInput, SteerState, SteerView,
 };
+
+pub use queue::{MAX_QUEUED_INPUTS, QueueDecision, QueueEvent, QueuedInput, SessionCommand};
