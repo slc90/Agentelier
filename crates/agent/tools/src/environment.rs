@@ -38,7 +38,19 @@ impl WorkingDirectory {
                 "路径必须为完整绝对路径或相对会话目录的路径",
             ));
         }
-        Ok(self.0.join(path))
+        let mut resolved = PathBuf::new();
+        for part in self.0.join(path).components() {
+            match part {
+                std::path::Component::CurDir => (),
+                std::path::Component::ParentDir => {
+                    if resolved.file_name().is_some() {
+                        resolved.pop();
+                    }
+                }
+                part => resolved.push(part.as_os_str()),
+            }
+        }
+        Ok(resolved)
     }
 
     pub fn directory(&self, candidate: Option<&Path>) -> io::Result<Self> {

@@ -160,7 +160,7 @@ async fn run_task(
         for call in &result.calls {
             control::drain(active, steers, progress).await?;
             let outcome = if cleanup_failed {
-                ToolResult::not_executed("cleanup_failed", "进程回收未确认，后续调用未执行")
+                ToolResult::not_executed("cleanup_failed", "工具资源清理未确认，后续调用未执行")
             } else if limited {
                 ToolResult::not_executed("tool_budget", "本批调用超过任务限额，整批未执行")
             } else if cancel.is_cancelled() {
@@ -230,7 +230,7 @@ async fn run_task(
         if cleanup_failed {
             active.block_execution();
             return Ok(TurnStatus::Failed(
-                "进程回收未确认，请检查运行环境后新建会话".into(),
+                "工具资源清理未确认，请检查运行环境后新建会话".into(),
             ));
         }
         if cancel.is_cancelled() {

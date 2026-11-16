@@ -279,7 +279,7 @@ impl ExecutionContext {
             report.processes.push(ProcessCleanup {
                 session_id: id,
                 cleanup_confirmed: !result.cleanup_failed,
-                output: result.output,
+                output: result.output.summary().to_owned(),
             });
         }
         report

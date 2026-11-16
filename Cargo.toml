@@ -71,6 +71,10 @@ jsonwebtoken = { version = "12", default-features = false, features = [
 ] }
 base64 = "0.23"
 sha2 = "0.10"
+image = { version = "0.25.9", default-features = false, features = [
+  "png",
+  "jpeg",
+] }
 getrandom = "0.4"
 url = "2.5"
 httparse = "1.10"

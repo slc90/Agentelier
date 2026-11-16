@@ -189,6 +189,8 @@ pub(super) fn commit(actions: Vec<Prepared>, control: &Control) -> ToolResult {
     ToolResult {
         status,
         cleanup_failed,
-        output: json!({"ok":error.is_none(),"actions":records,"error":error}).to_string(),
+        output: json!({"ok":error.is_none(),"actions":records,"error":error})
+            .to_string()
+            .into(),
     }
 }

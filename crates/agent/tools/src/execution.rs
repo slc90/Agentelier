@@ -42,10 +42,17 @@ impl Error for ToolFailure {}
 #[derive(Clone)]
 pub struct ToolResult {
     pub status: ToolStatus,
-    pub output: String,
+    pub output: crate::ToolPayload,
     pub cleanup_failed: bool,
 }
 impl ToolResult {
+    pub fn reject_image_budget(self) -> Self {
+        let message = format!(
+            "图片已读取，但加入会话将超过 16 MiB 图片预算，未保留图片载荷。读取元数据：{}",
+            self.output.summary()
+        );
+        Self::error(ToolStatus::Failed, "session_image_limit", &message)
+    }
     pub fn not_executed(code: &str, message: &str) -> Self {
         Self::error(ToolStatus::NotExecuted, code, message)
     }
@@ -58,7 +65,9 @@ impl ToolResult {
         Self {
             status,
             cleanup_failed: false,
-            output: json!({"ok":false,"error":{"code":code,"message":message}}).to_string(),
+            output: json!({"ok":false,"error":{"code":code,"message":message}})
+                .to_string()
+                .into(),
         }
     }
 }
@@ -89,6 +98,16 @@ pub async fn execute(
         crate::catalog::Implementation::Patch => {
             return crate::patch::run(arguments, context.directory.clone(), cancel).await;
         }
+        crate::catalog::Implementation::Image { supported } => {
+            if supported == Some(false) {
+                return ToolResult::error(
+                    ToolStatus::Failed,
+                    "image_capability",
+                    "模型目录明确不支持图片输入，未读取图片",
+                );
+            }
+            return crate::image::run(arguments, context.directory.clone(), cancel).await;
+        }
         crate::catalog::Implementation::Diagnostic(implementation) => implementation,
     };
     let result = tokio::select! { biased;
@@ -108,7 +127,7 @@ pub async fn execute(
                 ToolResult {
                     status: ToolStatus::Succeeded,
                     cleanup_failed: false,
-                    output,
+                    output: output.into(),
                 }
             }
         }

@@ -114,6 +114,23 @@ fn summary(tool: &ChatTool) -> String {
                     preview(&paths)
                 )
             })
+    } else if tool.name == "view_image" {
+        process
+            .as_ref()
+            .and_then(|value| value.get("data"))
+            .filter(|data| data.get("sha256").is_some())
+            .map(|data| {
+                format!(
+                    "{} · {} × {} → {} × {} · {} · SHA256 {}",
+                    data["original_format"].as_str().unwrap_or(""),
+                    data["original_width"],
+                    data["original_height"],
+                    data["width"],
+                    data["height"],
+                    preview(data["path"].as_str().unwrap_or("")),
+                    data["sha256"].as_str().unwrap_or("")
+                )
+            })
     } else {
         None
     };

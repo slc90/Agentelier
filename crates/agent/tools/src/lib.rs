@@ -6,8 +6,10 @@ mod catalog;
 mod diagnostic;
 mod environment;
 mod execution;
+mod image;
 mod output;
 mod patch;
+mod payload;
 mod process;
 mod sessions;
 
@@ -16,4 +18,5 @@ pub use environment::WorkingDirectory;
 pub use catalog::{ToolCatalog, ToolDefinition};
 pub use execution::{MAX_TOOL_BODY_BYTES, ToolFailure, ToolResult, ToolStatus, execute};
 
+pub use payload::{ImagePayload, MAX_SESSION_IMAGE_BYTES, ToolPayload};
 pub use sessions::{CleanupReport, ExecutionContext, ProcessCleanup};

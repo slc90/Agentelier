@@ -19,6 +19,7 @@ pub struct ModelInfo {
     pub display_name: String,
     pub supported_reasoning_levels: Vec<String>,
     pub default_reasoning_level: Option<String>,
+    pub image_input: Option<bool>,
 }
 
 pub enum ModelRequest {
@@ -149,7 +150,13 @@ pub async fn execute(
             if result.iter().any(|entry: &ModelInfo| entry.slug == slug) {
                 return Err(protocol("模型目录含有重复 slug"));
             }
+            let image_input = model
+                .get("input_modalities")
+                .and_then(Value::as_array)
+                .filter(|items| !items.is_empty() && items.iter().all(Value::is_string))
+                .map(|items| items.iter().any(|item| item.as_str() == Some("image")));
             result.push(ModelInfo {
+                image_input,
                 slug,
                 display_name,
                 supported_reasoning_levels,

@@ -6,6 +6,7 @@ pub struct ModelInfo {
     pub display_name: String,
     pub supported_reasoning_levels: Vec<String>,
     pub default_reasoning_level: Option<String>,
+    pub image_input: Option<bool>,
 }
 
 pub enum ModelRequest {
@@ -96,6 +97,7 @@ pub fn convert(
                                 display_name: model.display_name,
                                 supported_reasoning_levels: model.supported_reasoning_levels,
                                 default_reasoning_level: model.default_reasoning_level,
+                                image_input: model.image_input,
                             })
                             .collect(),
                     ),

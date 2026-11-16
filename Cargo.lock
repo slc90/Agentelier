@@ -207,6 +207,7 @@ dependencies = [
  "agentelier_account",
  "agentelier_prompts",
  "agentelier_tools",
+ "base64",
  "reqwest",
  "serde",
  "serde_json",
@@ -287,9 +288,11 @@ dependencies = [
 name = "agentelier_tools"
 version = "0.1.0"
 dependencies = [
+ "image",
  "process-wrap",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -4123,6 +4126,8 @@ dependencies = [
  "moxcms",
  "num-traits",
  "png",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

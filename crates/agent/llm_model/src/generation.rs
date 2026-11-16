@@ -13,6 +13,23 @@ use tokio::sync::mpsc::Sender;
 
 const RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
+
+struct RequestBytes(Vec<u8>);
+impl std::io::Write for RequestBytes {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > MAX_REQUEST_BYTES.saturating_sub(self.0.len()) {
+            return Err(std::io::Error::other(
+                "完整模型请求超过 32 MiB，历史保持不变",
+            ));
+        }
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 pub struct GenerationRequest {
     pub slug: String,
@@ -68,9 +85,33 @@ pub async fn generate(
     if let Some(effort) = &generation.effort {
         payload["reasoning"] = serde_json::json!({"effort": effort});
     }
+    let mut body = RequestBytes(Vec::new());
+    serde_json::to_writer(&mut body, &payload).map_err(|error| {
+        ModelFailure::new(
+            ModelFailureKind::Protocol,
+            format!("模型请求大小或序列化失败：{error}"),
+        )
+    })?;
+    for item in payload["input"].as_array().into_iter().flatten() {
+        if let Some(content) = item.get("output").and_then(serde_json::Value::as_array) {
+            for image in content.iter().filter(|part| part["type"] == "input_image") {
+                tracing::debug!(
+                    call_id = item["call_id"].as_str(),
+                    output_kind = "content_array",
+                    item_type = image["type"].as_str(),
+                    detail = image["detail"].as_str(),
+                    data_url = image["image_url"]
+                        .as_str()
+                        .is_some_and(|url| url.starts_with("data:image/")),
+                    "请求中已包含真实图片内容项"
+                );
+            }
+        }
+    }
     tracing::debug!(
         model = generation.slug,
         effort = generation.effort,
+        request_bytes = body.0.len(),
         "开始流式模型请求"
     );
     let mut request = AuthenticatedRequest::new(&current);
@@ -81,7 +122,8 @@ pub async fn generate(
                 .post(RESPONSES_URL)
                 .bearer_auth(current.access_token())
                 .header(reqwest::header::ACCEPT, "text/event-stream")
-                .json(&payload)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body.0.clone())
                 .send(),
         )
         .await

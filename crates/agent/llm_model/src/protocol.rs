@@ -1,3 +1,4 @@
+use agentelier_tools::ToolPayload;
 use serde_json::Value;
 
 #[derive(Clone)]
@@ -19,7 +20,7 @@ pub(crate) enum ProtocolItem {
     },
     FunctionResult {
         call_id: String,
-        output: String,
+        output: ToolPayload,
     },
     Assistant {
         raw: Value,
@@ -61,7 +62,7 @@ impl ProtocolHistory {
         &mut self,
         input: Option<&str>,
         output: ProtocolOutput,
-        results: Vec<(String, String)>,
+        results: Vec<(String, ToolPayload)>,
     ) -> Result<(), crate::ModelFailure> {
         let calls: Vec<_> = output
             .0
@@ -117,13 +118,39 @@ impl ProtocolHistory {
             .collect()
     }
 
+    pub fn image_bytes_with<'a>(&'a self, pending: impl Iterator<Item = &'a ToolPayload>) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        self.0
+            .iter()
+            .filter_map(|item| match item {
+                ProtocolItem::FunctionResult { output, .. } => output.image(),
+                _ => None,
+            })
+            .chain(pending.filter_map(ToolPayload::image))
+            .filter(|image| seen.insert(std::sync::Arc::as_ptr(image)))
+            .map(|image| image.bytes().len())
+            .sum()
+    }
+
     pub(crate) fn into_input(self) -> Vec<Value> {
         self.0
             .into_iter()
             .map(|item| match item {
                 ProtocolItem::User(input) => serde_json::json!({"role": "user", "content": input}),
                 ProtocolItem::Assistant { raw, .. } | ProtocolItem::Reasoning { raw, .. } | ProtocolItem::FunctionCall {raw, ..} => raw,
-                ProtocolItem::FunctionResult {call_id, output} => serde_json::json!({"type":"function_call_output","call_id":call_id,"output":output}),
+                ProtocolItem::FunctionResult {call_id, output} => {
+                    let body = match output {
+                        ToolPayload::Text(text) => Value::String(text),
+                        ToolPayload::Image {summary,image} => {
+                            use base64::Engine;
+                            let url = format!("data:{};base64,{}", image.mime(), base64::engine::general_purpose::STANDARD.encode(image.bytes()));
+                            let (width,height) = image.dimensions();
+                            tracing::debug!(call_id, sha256=image.digest(), mime=image.mime(), width, height, encoded_bytes=image.bytes().len(), "图片工具结果正在转换为协议内容数组");
+                            serde_json::json!([{"type":"input_text","text":summary},{"type":"input_image","image_url":url,"detail":"high"}])
+                        }
+                    };
+                    serde_json::json!({"type":"function_call_output","call_id":call_id,"output":body})
+                },
             })
             .collect()
     }

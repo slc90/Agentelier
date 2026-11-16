@@ -243,7 +243,7 @@ impl Process {
                 *stderr = Default::default();
                 return ToolResult {
                     status,
-                    output,
+                    output: output.into(),
                     cleanup_failed,
                 };
             }

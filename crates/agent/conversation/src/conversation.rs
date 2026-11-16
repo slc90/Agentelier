@@ -17,6 +17,7 @@ pub struct SessionSettings {
     pub slug: String,
     pub display_name: String,
     pub effort: Option<String>,
+    pub image_input: Option<bool>,
     pub account_subject: String,
     pub instructions: Arc<InstructionSnapshot>,
     pub working_directory: std::path::PathBuf,
@@ -172,7 +173,7 @@ impl Conversation {
                 .path()
                 .to_path_buf();
         let tools = Arc::new(
-            ToolCatalog::standard(&settings.working_directory)
+            ToolCatalog::standard(&settings.working_directory, settings.image_input)
                 .map_err(|_| ConversationFailure::new("工具目录配置无效"))?,
         );
         let session = SessionView {
@@ -275,6 +276,7 @@ impl Conversation {
             view: session.view.clone(),
             tools: session.tools.clone(),
             input_retained: false,
+            results: Default::default(),
             history: session
                 .history
                 .take()

@@ -34,7 +34,7 @@ flowchart TD
 
 ### 两个足够小的运行时诊断工具
 
-当前除本地 exec_command 与 write_stdin 外，仍保留两个无外部副作用的运行时诊断工具，作为应用自身的能力：
+当前除本地 exec_command、write_stdin、apply_patch 与 view_image 外，仍保留两个无外部副作用的运行时诊断工具，作为应用自身的能力：
 
 | 工具 | 行为 | 用途 |
 | --- | --- | --- |
@@ -75,7 +75,7 @@ Codex 的模型目录可以为模型指定 `tool_mode`，但这里不移植 Code
 
 ## 工具结果怎样进入下一次请求
 
-`llm_model` 负责协议项的序列化，工具库只返回业务结果。结果通过 `function_call_output` 携带对应 `call_id`，其中正文使用有界 JSON 字符串表示成功数据或错误。
+`llm_model` 负责协议项的序列化，工具库只返回业务结果。结果通过 `function_call_output` 携带对应 `call_id`，普通文本结果使用有界 JSON 字符串表示成功数据或错误；图片结果使用包含 input_text 与 input_image 的内容数组，不序列化为嵌套 JSON 字符串。
 
 下一次请求包含原有成功历史、当前任务输入、完整模型输出和工具结果。公开消息的阶段及顺序继续保留；需要续接的加密 reasoning 项只在执行侧保存。指令快照仍在每次请求前单独注入，不随着循环重复追加到历史。
 
@@ -319,3 +319,7 @@ GUI 验证使用 `bevy_brp_mcp` 操作实际应用：先建立焦点，再输入
 `bevy_widgetry` 提供 UI 控件和公开状态操作，`bevy_brp` 提供运行验证通道；本次不修改这些库，也不复制它们的控件或测试体系。继续使用当前锁定的依赖组合，不因引用外部文档而升级 Bevy 或上游库。
 
 新增库按现有 Workspace 管理依赖和 lint，使用 Windows x64 编译检查；执行环境为 PowerShell 7。`lib.rs` 只作模块声明与出口，内部按真实职责拆 module，不把全部工具、循环和界面塞进一个 crate，也不为每一个错误或按钮建立新库。
+
+## 本地图像结果
+
+view_image 接收唯一必填 path，按会话目录解释相对路径，按真实字节确认静态 PNG/JPEG。Tools 在可回收阻塞工作中限制原始文件 10 MiB、2500 万像素、发送最长边 2048 和单图编码 4 MiB；保存原始/发送尺寸、格式、源及发送内容 SHA256。图片不可变载荷经 ActiveTurn 封闭至协议历史，UI 只有摘要。会话图片累计 16 MiB、完整序列化请求 32 MiB，超限明确失败，不截断或自动删除旧图。机制见[图像结果](local-development-tools/04-image-results.md)。

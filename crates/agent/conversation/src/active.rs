@@ -5,7 +5,9 @@ use crate::conversation::{
 use agentelier_llm_model::{
     FunctionCall, GenerationRequest, GenerationResult, OutputText, ProtocolHistory, StreamEvent,
 };
-use agentelier_tools::{MAX_TOOL_BODY_BYTES, ToolCatalog, ToolResult, ToolStatus};
+use agentelier_tools::{
+    MAX_SESSION_IMAGE_BYTES, MAX_TOOL_BODY_BYTES, ToolCatalog, ToolPayload, ToolResult, ToolStatus,
+};
 use std::sync::Arc;
 
 pub struct ActiveTurn {
@@ -13,6 +15,7 @@ pub struct ActiveTurn {
     pub(crate) history: ProtocolHistory,
     pub(crate) tools: Arc<ToolCatalog>,
     pub(crate) input_retained: bool,
+    pub(crate) results: std::collections::BTreeMap<String, ToolPayload>,
 }
 impl ActiveTurn {
     pub fn reaping(&mut self) -> Result<(), ConversationFailure> {
@@ -333,8 +336,19 @@ impl ActiveTurn {
     pub fn tool_result(
         &mut self,
         call_id: &str,
-        result: ToolResult,
+        mut result: ToolResult,
     ) -> Result<(), ConversationFailure> {
+        if result.output.image().is_some()
+            && self
+                .history
+                .image_bytes_with(self.results.values().chain(std::iter::once(&result.output)))
+                > MAX_SESSION_IMAGE_BYTES
+        {
+            result = result.reject_image_budget();
+        }
+        if self.results.contains_key(call_id) {
+            return Err(ConversationFailure::new("工具结果身份重复"));
+        }
         let turn = self
             .view
             .turn
@@ -346,7 +360,8 @@ impl ActiveTurn {
             .find(|tool| tool.request_index == turn.request_index && tool.call_id == call_id)
             .ok_or(ConversationFailure::new("工具结果缺少调用记录"))?;
         tool.status = result.status;
-        tool.output = Some(result.output);
+        tool.output = Some(result.output.summary().to_owned());
+        self.results.insert(call_id.to_owned(), result.output);
         Ok(())
     }
 
@@ -360,13 +375,10 @@ impl ActiveTurn {
             .calls
             .iter()
             .map(|call| {
-                let output = turn
-                    .tools
-                    .iter()
-                    .find(|tool| {
-                        tool.request_index == turn.request_index && tool.call_id == call.call_id
-                    })
-                    .and_then(|tool| tool.output.clone())
+                let output = self
+                    .results
+                    .get(&call.call_id)
+                    .cloned()
                     .ok_or(ConversationFailure::new("工具步骤尚未封闭"))?;
                 Ok((call.call_id.clone(), output))
             })
@@ -379,6 +391,7 @@ impl ActiveTurn {
             )
             .map_err(|_| ConversationFailure::new("工具历史关系损坏"))?;
         self.input_retained = true;
+        self.results.clear();
         turn.committed_steps += 1;
         for tool in &mut turn.tools {
             if tool.request_index == turn.request_index {
@@ -402,7 +415,7 @@ impl ActiveTurn {
                     "模型响应未完成或调用未接纳，工具未执行",
                 );
                 tool.status = result.status;
-                tool.output = Some(result.output);
+                tool.output = Some(result.output.summary().to_owned());
             }
         }
         for input in &mut turn.steers {

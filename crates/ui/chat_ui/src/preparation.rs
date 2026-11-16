@@ -27,6 +27,7 @@ pub struct ModelChoice {
     pub display_name: String,
     pub supported_reasoning_levels: Vec<String>,
     pub default_reasoning_level: Option<String>,
+    pub image_input: Option<bool>,
 }
 
 #[derive(Clone, Copy, Default, Reflect, PartialEq, Eq)]
@@ -339,6 +340,7 @@ pub(crate) fn receive(world: &mut World, mut failures: Local<MessageCursor<HostF
                         display_name: model.display_name,
                         supported_reasoning_levels: model.supported_reasoning_levels,
                         default_reasoning_level: model.default_reasoning_level,
+                        image_input: model.image_input,
                     })
                     .collect();
                 state.catalog_loaded = true;
