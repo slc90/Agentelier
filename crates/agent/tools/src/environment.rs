@@ -26,14 +26,26 @@ impl WorkingDirectory {
         &self.0
     }
 
-    pub fn resolve(&self, path: &Path) -> PathBuf {
-        self.0.join(path)
+    pub fn resolve(&self, path: &Path) -> io::Result<PathBuf> {
+        if !path.is_absolute()
+            && (path.has_root()
+                || path
+                    .components()
+                    .any(|part| matches!(part, std::path::Component::Prefix(_))))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "路径必须为完整绝对路径或相对会话目录的路径",
+            ));
+        }
+        Ok(self.0.join(path))
     }
 
     pub fn directory(&self, candidate: Option<&Path>) -> io::Result<Self> {
         Self::validate(
             &candidate
                 .map(|path| self.resolve(path))
+                .transpose()?
                 .unwrap_or_else(|| self.0.clone()),
         )
     }

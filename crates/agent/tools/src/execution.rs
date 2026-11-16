@@ -21,16 +21,19 @@ pub enum ToolStatus {
 #[derive(Debug)]
 pub struct ToolFailure {
     pub code: &'static str,
-    message: &'static str,
+    message: String,
 }
 impl ToolFailure {
-    pub(crate) fn new(code: &'static str, message: &'static str) -> Self {
-        Self { code, message }
+    pub(crate) fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
     }
 }
 impl fmt::Display for ToolFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.message)
+        f.write_str(&self.message)
     }
 }
 impl Error for ToolFailure {}
@@ -39,14 +42,16 @@ impl Error for ToolFailure {}
 pub struct ToolResult {
     pub status: ToolStatus,
     pub output: String,
+    pub cleanup_failed: bool,
 }
 impl ToolResult {
     pub fn not_executed(code: &str, message: &str) -> Self {
         Self::error(ToolStatus::NotExecuted, code, message)
     }
-    fn error(status: ToolStatus, code: &str, message: &str) -> Self {
+    pub(crate) fn error(status: ToolStatus, code: &str, message: &str) -> Self {
         Self {
             status,
+            cleanup_failed: false,
             output: json!({"ok":false,"error":{"code":code,"message":message}}).to_string(),
         }
     }
@@ -54,6 +59,7 @@ impl ToolResult {
 
 pub async fn execute(
     catalog: &ToolCatalog,
+    working_directory: &std::path::Path,
     name: &str,
     arguments: &str,
     cancel: &CancellationToken,
@@ -71,6 +77,12 @@ pub async fn execute(
     let Some(implementation) = catalog.find(name) else {
         return ToolResult::error(ToolStatus::Failed, "unknown_tool", "未登记的工具名称");
     };
+    if let crate::catalog::Implementation::Exec = implementation {
+        return crate::process::execute(arguments, working_directory, cancel).await;
+    }
+    let crate::catalog::Implementation::Diagnostic(implementation) = implementation else {
+        return ToolResult::error(ToolStatus::Failed, "invalid_tool", "工具执行实现无效");
+    };
     let result = tokio::select! { biased;
         result = tokio::time::timeout(TOOL_TIMEOUT, diagnostic::run(implementation, arguments)) => result,
         _ = cancel.cancelled() => return ToolResult::error(ToolStatus::Cancelled, "cancelled", "工具执行已取消"),
@@ -87,11 +99,12 @@ pub async fn execute(
             } else {
                 ToolResult {
                     status: ToolStatus::Succeeded,
+                    cleanup_failed: false,
                     output,
                 }
             }
         }
-        Ok(Err(failure)) => ToolResult::error(ToolStatus::Failed, failure.code, failure.message),
+        Ok(Err(failure)) => ToolResult::error(ToolStatus::Failed, failure.code, &failure.message),
         Err(_) => ToolResult::error(
             ToolStatus::TimedOut,
             "timeout",

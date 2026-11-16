@@ -15,6 +15,10 @@ pub struct ActiveTurn {
     pub(crate) input_retained: bool,
 }
 impl ActiveTurn {
+    pub fn block_execution(&mut self) {
+        self.view.execution_blocked = true;
+    }
+
     pub fn view(&self) -> SessionView {
         self.view.clone()
     }

@@ -19,7 +19,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录、Responses、SSE 和模型错误语义 |
 | `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的内存聊天会话、Turn 身份、展示记录与结果收敛 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
-| `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、严格输入校验、诊断计算与等待、取消期限及有界业务结果 |
+| `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、诊断计算与等待、PowerShell 命令和进程树回收、有界业务结果 |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、正文增量和受控取消 |
 | `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型任务取消/回收及执行收尾 |
 | `crates/bridge/account/` | `agentelier_account_bridge` | 账号摘要、凭据安全投影、授权地址及账号事件转换 |
@@ -189,4 +189,6 @@ Conversation 保存 FIFO 待办和暂停状态。Connection 从统一操作序�
 
 ## 本地工具的工作环境
 
-chat_ui 在模型准备区保留内存目录候选并复用 Widgetry 目录选择器；Conversation 在创建时校验并固定本地工作目录，Bridge 传递 PathBuf 与安全展示。Tools 提供 WorkingDirectory 的校验和相对路径解析，尚未接入命令或文件工具执行。目录选择与账号数据目录相互独立，不改变登录环境或进程全局 cwd。
+chat_ui 在模型准备区保留内存目录候选并复用 Widgetry 目录选择器；Conversation 在创建时校验并固定本地工作目录，Bridge 传递 PathBuf 与安全展示。Tools 提供 WorkingDirectory 的校验和相对路径解析，已接入有界 PowerShell 命令执行；补丁和图像工具尚未接入。目录选择与账号数据目录相互独立，不改变登录环境或进程全局 cwd。
+
+Tools 的 process 模块拥有 PowerShell、Windows Job 与输出读取任务，output 模块负责 UTF-8 增量解码及有界开头/尾部缓冲。Runner 提供固定目录及取消令牌，进度交付失败也先请求取消并等待工具收尾，不丢弃执行 Future。process-wrap 负责挂起后入 Job、恢复及进程树终止；win32job 在恢复前登记外层观察 Job，以 active_processes 确认整个进程组结束，再调用一次 wait。这样不以根 Shell 退出或 process-wrap 的缓存状态作为子进程回收证据。两层 Job 均只服务生命周期，不设置访问隔离；源码保持 unsafe 禁令。Tokio 增加 process feature，依赖由 Workspace 统一管理。

@@ -1,4 +1,8 @@
-use crate::catalog::Implementation;
+#[derive(Clone, Copy)]
+pub(crate) enum Diagnostic {
+    Calculate,
+    Wait,
+}
 use crate::execution::ToolFailure;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -27,13 +31,10 @@ struct Wait {
     milliseconds: u64,
 }
 
-pub(crate) async fn run(
-    implementation: Implementation,
-    arguments: &str,
-) -> Result<Value, ToolFailure> {
+pub(crate) async fn run(implementation: Diagnostic, arguments: &str) -> Result<Value, ToolFailure> {
     let receipt = || uuid::Uuid::new_v4().to_string();
     match implementation {
-        Implementation::Calculate => {
+        Diagnostic::Calculate => {
             let input: Calculation = serde_json::from_str(arguments).map_err(|_| {
                 ToolFailure::new("invalid_arguments", "计算参数格式、字段或操作无效")
             })?;
@@ -60,7 +61,7 @@ pub(crate) async fn run(
             }
             Ok(json!({"result":result, "receipt":receipt()}))
         }
-        Implementation::Wait => {
+        Diagnostic::Wait => {
             let input: Wait = serde_json::from_str(arguments)
                 .map_err(|_| ToolFailure::new("invalid_arguments", "等待参数格式或字段无效"))?;
             if input.milliseconds > MAX_WAIT_MILLISECONDS {

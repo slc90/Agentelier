@@ -7,6 +7,9 @@ edition.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+process-wrap.workspace = true
+win32job.workspace = true
+windows.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true

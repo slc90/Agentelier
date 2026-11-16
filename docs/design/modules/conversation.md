@@ -72,3 +72,5 @@ Runtime 在旧 JoinHandle 回收和活动历史归还后，才申请下一条并
 ## 本地工作目录快照
 
 SessionSettings 还保存 working_directory 的 PathBuf。Create 通过 Tools 的 WorkingDirectory 校验绝对路径、规范化并确认目录类型后保存；失败不替换旧会话。Reset 从旧会话复制目录再校验，Retry、Steer 与 Queue 使用活动会话设置。Bridge 显式传递候选与规范路径，UI 使用路径显示库展示，输入候选在独立 Resource 保留，切页不重新读取 cwd。路径解析值类型位于 agent/tools，解析以快照为基准，不修改全局进程目录。
+
+本地命令的目录随会话固定工具描述发给模型。Runner 在完整响应后将 PathBuf 快照交给 Tools，串行调用不改变全局 cwd。工具若无法确认进程树收尾，剩余批次记录为未执行，已有结果仍封闭进历史；会话标记 execution_blocked，任务失败并暂停后续队列。用户停止、工具超时与命令的非零退出分别保留状态及真实输出。

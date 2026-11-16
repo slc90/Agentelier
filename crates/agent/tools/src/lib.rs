@@ -5,6 +5,8 @@ mod catalog;
 mod diagnostic;
 mod environment;
 mod execution;
+mod output;
+mod process;
 
 pub use environment::WorkingDirectory;
 

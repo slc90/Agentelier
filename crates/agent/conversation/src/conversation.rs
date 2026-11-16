@@ -170,7 +170,8 @@ impl Conversation {
                 .path()
                 .to_path_buf();
         let tools = Arc::new(
-            ToolCatalog::standard().map_err(|_| ConversationFailure::new("工具目录配置无效"))?,
+            ToolCatalog::standard(&settings.working_directory)
+                .map_err(|_| ConversationFailure::new("工具目录配置无效"))?,
         );
         let session = SessionView {
             id: SessionId(id),
