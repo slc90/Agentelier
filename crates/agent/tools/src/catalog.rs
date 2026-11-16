@@ -4,7 +4,6 @@ use std::collections::HashSet;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Implementation {
-    Diagnostic(crate::diagnostic::Diagnostic),
     Exec,
     Stdin,
     Patch,
@@ -56,23 +55,6 @@ impl ToolCatalog {
                     "close_stdin":{"type":"boolean"},"terminate":{"type":"boolean"}
                 },"required":["session_id","chars","yield_time_ms","close_stdin","terminate"],"additionalProperties":false}),
                 implementation: Implementation::Stdin,
-            },
-            ToolDefinition {
-                name: "diagnostic_calculate",
-                description: "Calculate two finite numbers. Returns the result and a fresh execution receipt.".into(),
-                parameters: json!({"type":"object", "properties":{
-                    "a":{"type":"number"}, "b":{"type":"number"},
-                    "operation":{"type":"string","enum":["add","subtract","multiply","divide"]}
-                }, "required":["a","b","operation"], "additionalProperties":false}),
-                implementation: Implementation::Diagnostic(crate::diagnostic::Diagnostic::Calculate),
-            },
-            ToolDefinition {
-                name: "diagnostic_wait",
-                description: "Wait asynchronously for 0 to 30000 milliseconds. Execution times out after 15 seconds. Returns elapsed time and a fresh receipt.".into(),
-                parameters: json!({"type":"object", "properties":{
-                    "milliseconds":{"type":"integer", "minimum":0,"maximum":30000}
-                }, "required":["milliseconds"], "additionalProperties":false}),
-                implementation: Implementation::Diagnostic(crate::diagnostic::Diagnostic::Wait),
             },
         ];
         let mut names = HashSet::new();

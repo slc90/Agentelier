@@ -90,3 +90,7 @@ ProcessCleanup 保存 session_id、cleanup_confirmed 和独立有界结果（包
 ActiveTurn.results 保存本批次的 ToolPayload，ToolView.output 只保存安全摘要。seal 按完成响应的调用顺序和 call_id 从真实结果表收集载荷，提交后清空本批表；协议历史共享不可变 ImagePayload，之后不再读取原始路径。普通文本仍使用字符串结果。加入图片前，已有历史、本批其他结果和候选结果按 Arc 身份去重，累计最多 16 MiB；超限保存带读取元数据的工具错误，不宣称图片从未读取，也不删除既有历史。
 
 图片历史与同批文字结果共同封闭；下一次请求的网络、能力或 32 MiB 请求预算失败仍保留既有步骤。ToolPayload 不跨 Bridge，图片字节不进入 ECS 反射或日志。重置或释放 Session 释放历史图片，不增加磁盘持久化或全局附件存储。会话还固定来自模型目录的 image_input 三态，UI 准备区变化不追溯修改已有会话。
+
+## 固定四工具目录
+
+新会话的只读目录仅有 exec_command、write_stdin、apply_patch、view_image；旧计算/等待工具及专属 receipt 已退役，不提供别名。工具声明、执行查找和安全目录展示仍由同一 ToolCatalog 提供，不热替换已有会话。Steer 的 InputReceipt 是业务输入回执，与已移除的诊断 receipt 无关，继续保留。

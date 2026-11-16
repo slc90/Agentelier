@@ -1,10 +1,9 @@
-use crate::{ToolCatalog, diagnostic};
+use crate::ToolCatalog;
 use serde_json::json;
-use std::{error::Error, fmt, time::Duration};
+use std::{error::Error, fmt};
 use tokio_util::sync::CancellationToken;
 
 pub const MAX_TOOL_BODY_BYTES: usize = 64 * 1024;
-const TOOL_TIMEOUT: Duration = Duration::from_secs(15);
 const ERROR_MESSAGE_BYTES: usize = 8192;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -92,11 +91,11 @@ pub async fn execute(
     let Some(implementation) = catalog.find(name) else {
         return ToolResult::error(ToolStatus::Failed, "unknown_tool", "未登记的工具名称");
     };
-    let implementation = match implementation {
-        crate::catalog::Implementation::Exec => return context.exec(arguments, cancel).await,
-        crate::catalog::Implementation::Stdin => return context.stdin(arguments, cancel).await,
+    match implementation {
+        crate::catalog::Implementation::Exec => context.exec(arguments, cancel).await,
+        crate::catalog::Implementation::Stdin => context.stdin(arguments, cancel).await,
         crate::catalog::Implementation::Patch => {
-            return crate::patch::run(arguments, context.directory.clone(), cancel).await;
+            crate::patch::run(arguments, context.directory.clone(), cancel).await
         }
         crate::catalog::Implementation::Image { supported } => {
             if supported == Some(false) {
@@ -106,36 +105,7 @@ pub async fn execute(
                     "模型目录明确不支持图片输入，未读取图片",
                 );
             }
-            return crate::image::run(arguments, context.directory.clone(), cancel).await;
+            crate::image::run(arguments, context.directory.clone(), cancel).await
         }
-        crate::catalog::Implementation::Diagnostic(implementation) => implementation,
-    };
-    let result = tokio::select! { biased;
-        result = tokio::time::timeout(TOOL_TIMEOUT, diagnostic::run(implementation, arguments)) => result,
-        _ = cancel.cancelled() => return ToolResult::error(ToolStatus::Cancelled, "cancelled", "工具执行已取消"),
-    };
-    match result {
-        Ok(Ok(value)) => {
-            let output = json!({"ok":true, "data":value}).to_string();
-            if output.len() > MAX_TOOL_BODY_BYTES {
-                ToolResult::error(
-                    ToolStatus::Failed,
-                    "result_too_large",
-                    "工具结果超过大小限制",
-                )
-            } else {
-                ToolResult {
-                    status: ToolStatus::Succeeded,
-                    cleanup_failed: false,
-                    output: output.into(),
-                }
-            }
-        }
-        Ok(Err(failure)) => ToolResult::error(ToolStatus::Failed, failure.code, &failure.message),
-        Err(_) => ToolResult::error(
-            ToolStatus::TimedOut,
-            "timeout",
-            "工具执行超过 15 秒期限，执行已结束",
-        ),
     }
 }

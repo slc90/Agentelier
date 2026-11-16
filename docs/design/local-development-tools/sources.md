@@ -7,13 +7,13 @@
 
 | 来源 | 支持的事实或用途 |
 | --- | --- |
-| [工具目录](https://github.com/slc90/Agentelier/blob/main/crates/agent/tools/src/catalog.rs) | 当前目录登记计算和等待两个诊断工具，工具名称与执行实现配对。 |
-| [工具执行](https://github.com/slc90/Agentelier/blob/main/crates/agent/tools/src/execution.rs) | 当前 15 秒统一期限、64 KiB 参数和结果限制、字符串结果、取消分支。 |
+| [工具目录](https://github.com/slc90/Agentelier/blob/main/crates/agent/tools/src/catalog.rs) | 固定登记四个本地开发工具，工具名称与执行实现配对。 |
+| [工具执行](https://github.com/slc90/Agentelier/blob/main/crates/agent/tools/src/execution.rs) | 64 KiB 参数与文字结果限制、类型化图片结果及四工具分发。 |
 | [任务循环](https://github.com/slc90/Agentelier/blob/main/crates/agent/turn_runner/src/runner.rs) | 当前 32 次模型请求、64 次工具调用预算；串行批次、Steer 和停止边界。 |
 | [会话设置与工具投影](https://github.com/slc90/Agentelier/blob/main/crates/agent/conversation/src/conversation.rs) | 会话设置快照、固定工具目录、当前展示记录的结构。 |
-| [活动任务记录](https://github.com/slc90/Agentelier/blob/main/crates/agent/conversation/src/active.rs) | 当前 `tool_result` 与 `seal` 的结果保存路径。图片扩展需要把真实载荷与展示摘要分离。 |
-| [协议历史](https://github.com/slc90/Agentelier/blob/main/crates/agent/llm_model/src/protocol.rs) | 当前 `FunctionResult` 为字符串，封闭步骤校验调用与结果的对应关系。 |
-| [模型目录](https://github.com/slc90/Agentelier/blob/main/crates/agent/llm_model/src/model.rs) | 当前 `ModelInfo` 保存模型与推理设置，没有保存图片输入能力字段。 |
+| [活动任务记录](https://github.com/slc90/Agentelier/blob/main/crates/agent/conversation/src/active.rs) | tool_result 保存真实载荷和安全展示摘要，seal 从结果表封闭历史。 |
+| [协议历史](https://github.com/slc90/Agentelier/blob/main/crates/agent/llm_model/src/protocol.rs) | FunctionResult 保存类型化载荷，文本和图片数组按 call_id 封闭并重放。 |
+| [模型目录](https://github.com/slc90/Agentelier/blob/main/crates/agent/llm_model/src/model.rs) | ModelInfo 保存模型、推理设置及服务可选的图片输入能力。 |
 | [任务启动与回收](https://github.com/slc90/Agentelier/blob/main/crates/agent/runtime/src/runtime/model_task.rs) | Runtime 等待 Runner 真实结束后归还活动记录；取消期间继续排空事件。 |
 | [总体架构](https://github.com/slc90/Agentelier/blob/main/docs/design/architecture.md) | UI、Agent、Bridge 三领域、current-thread Tokio、唯一 Connection 与宿主退出关系。 |
 
@@ -22,7 +22,7 @@
 
 [AGENTS.md](https://github.com/slc90/Agentelier/blob/main/AGENTS.md)、[项目级约束](https://github.com/slc90/Agentelier/blob/main/rules/project-context.md)、[开发流程](https://github.com/slc90/Agentelier/blob/main/rules/development.md)、[架构规则](https://github.com/slc90/Agentelier/blob/main/rules/architecture.md)、[代码规则](https://github.com/slc90/Agentelier/blob/main/rules/code.md)、[日志规则](https://github.com/slc90/Agentelier/blob/main/rules/logging.md)共同约束本阶段：Windows x64 / PowerShell 7，保留现有账号状态，使用正常应用运行与静态检查验证，不在应用仓库新增测试、Benchmark、Example 或专用测试设施。
 
-[Workspace 配置](https://github.com/slc90/Agentelier/blob/main/Cargo.toml)提供当前依赖和 lint 事实：`unsafe_code = "forbid"`；Tokio 当前未启用 `process`；新依赖及 feature 由 Workspace 统一管理。实现使用安全依赖封装，不在应用代码中绕开 unsafe 禁令。
+[Workspace 配置](https://github.com/slc90/Agentelier/blob/main/Cargo.toml)提供当前依赖和 lint 事实：`unsafe_code = "forbid"`；Tokio 已启用 `process`；新依赖及 feature 由 Workspace 统一管理。实现使用安全依赖封装，不在应用代码中绕开 unsafe 禁令。
 
 [已知问题](https://github.com/slc90/Agentelier/blob/main/docs/known_issues.md)记录 BRP 特殊按键逻辑键值问题，以及多个启用 BRP 的实例争用固定 Render 端口的限制。更换 Main 端口不能解决后者。
 
