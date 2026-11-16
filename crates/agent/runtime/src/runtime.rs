@@ -1,11 +1,13 @@
 use agentelier_account::{
     Account, AccountCommand, AccountEventKind, AccountFailure, CredentialClient,
 };
+use agentelier_conversation::SessionId;
 use agentelier_conversation::{
     Conversation, ConversationEvent, ConversationFailure, ConversationRequest, MAX_PENDING_STEERS,
     RunnerEvent, SessionCommand, SteerInput,
 };
 use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
+mod creation;
 mod model_task;
 use model_task::{
     ModelJoin, ModelTask, PROGRESS_CAPACITY, TaskRequest, complete, drain_progress, progress,
@@ -42,6 +44,7 @@ pub enum RuntimeFailure {
     ModelState,
     Account(AccountFailure),
     Conversation(ConversationFailure),
+    Store(io::Error),
 }
 impl fmt::Display for RuntimeFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -51,6 +54,7 @@ impl fmt::Display for RuntimeFailure {
             Self::ModelState => f.write_str("模型终态缺少所属任务"),
             Self::Account(error) => error.fmt(f),
             Self::Conversation(error) => error.fmt(f),
+            Self::Store(error) => write!(f, "会话存储失败：{error}"),
         }
     }
 }
@@ -60,6 +64,7 @@ impl Error for RuntimeFailure {
             Self::Startup(error) => Some(error),
             Self::Account(error) => Some(error),
             Self::Conversation(error) => Some(error),
+            Self::Store(error) => Some(error),
             Self::Thread | Self::ModelState => None,
         }
     }
@@ -75,6 +80,7 @@ impl From<ConversationFailure> for RuntimeFailure {
     }
 }
 enum Command {
+    Created(io::Result<agentelier_session_store::Commit>),
     Account(AccountCommand),
     Model {
         id: u64,
@@ -108,7 +114,7 @@ type SharedModel = Arc<Mutex<Option<ModelControl>>>;
 #[derive(Clone)]
 struct ModelControl {
     id: u64,
-    turn: Arc<OnceLock<(u64, u64)>>,
+    turn: Arc<OnceLock<(SessionId, u64)>>,
     cancel: CancellationToken,
     finished: CancellationToken,
     steers: mpsc::Sender<SteerInput>,
@@ -138,6 +144,10 @@ impl AgentRuntime {
             .enable_all()
             .build()
             .map_err(RuntimeFailure::Startup)?;
+        let data_root = credentials_path
+            .parent()
+            .ok_or_else(|| RuntimeFailure::Store(io::Error::other("凭据路径缺少数据目录")))?
+            .to_path_buf();
         let (commands, mut incoming) = mpsc::channel(COMMAND_CAPACITY);
         let shutdown = CancellationToken::new();
         let runtime_shutdown = shutdown.clone();
@@ -161,6 +171,8 @@ impl AgentRuntime {
                 debug!("认证运行线程已启动");
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     runtime.block_on(async move {
+                        let store = agentelier_session_store::SessionStore::start(data_root).map_err(RuntimeFailure::Store)?;
+                        let mut creating: Option<creation::Creation> = None;
                         let mut account = Account::new(credentials_path, owner_credentials.clone());
                         let mut delivery_failure = None;
                         let mut model: Option<ModelTask> = None;
@@ -175,6 +187,10 @@ impl AgentRuntime {
                                         None => break,
                                     },
                                     _ = runtime_shutdown.cancelled() => break,
+                                    result = async { match &mut creating {
+                                        Some(pending) => pending.wait().await,
+                                        None => std::future::pending().await,
+                                    }} => Command::Created(result),
                                     result = async { match &mut model {
                                         Some(task) => (&mut task.handle).await,
                                         None => std::future::pending().await,
@@ -193,12 +209,18 @@ impl AgentRuntime {
                                     },
                                 };
                                 match command {
+                                    Command::Created(result) => {
+                                        let pending = creating.take().ok_or(RuntimeFailure::ModelState)?;
+                                        let id = pending.id;
+                                        let event = pending.complete(result, current_subject.as_deref(), &mut conversation);
+                                        emit(&publish, id, AgentEventKind::Conversation(event))?;
+                                    }
                                     Command::Model {
                                         id,
                                         control,
                                         request,
                                     } => {
-                                        if model.is_some() {
+                                        if model.is_some() || creating.is_some() {
                                             control.finished.cancel();
                                             emit(&publish,id,AgentEventKind::ModelCompleted(Err(agentelier_llm_model::ModelFailure {kind:agentelier_llm_model::ModelFailureKind::Service,status:None,code:None,request_id:None,message:"当前任务正在执行，不能插入模型操作".into()})))?;
                                             continue;
@@ -242,7 +264,7 @@ impl AgentRuntime {
                                         }
                                     }
                                     Command::Session(command) => {
-                                        if matches!(command,SessionCommand::Resume {..}) && model.is_some() {
+                                        if creating.is_some() || (matches!(command,SessionCommand::Resume {..}) && model.is_some()) {
                                             let id=command.id();
                                             emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Queue(agentelier_conversation::QueueEvent {
                                                 id,view:None,decision:agentelier_conversation::QueueDecision::Rejected("当前执行尚未回收，不能继续队列".into()),
@@ -272,51 +294,29 @@ impl AgentRuntime {
                                         request,
                                         steers,
                                     } => {
-                                        if model.is_some() {
+                                        if model.is_some() || creating.is_some() {
                                             control.finished.cancel();
                                             emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Rejected("排队任务已经开始，当前发送未接纳，草稿保留".into())))?;
                                             continue;
                                         }
                                         match request {
-                                            ConversationRequest::Create(settings) => {
-                                                let event = if Some(&settings.account_subject)
-                                                    != current_subject.as_ref()
-                                                {
-                                                    ConversationEvent::Rejected(
-                                                        "当前账号与会话设置不一致".into(),
-                                                    )
-                                                } else {
-                                                    match conversation.create(settings) {
-                                                        Ok(view) => {
-                                                            ConversationEvent::Created(view)
-                                                        }
-                                                        Err(failure) => {
-                                                            ConversationEvent::Rejected(
-                                                                failure.to_string(),
-                                                            )
-                                                        }
+                                            request @ (ConversationRequest::Create(_) | ConversationRequest::Reset { .. }) => {
+                                                match creation::Creation::start(id, control.clone(), request, &conversation, current_subject.as_deref(), &store) {
+                                                    Ok(pending) => {
+                                                        *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control);
+                                                        creating = Some(pending);
                                                     }
-                                                };
-                                                control.finished.cancel();
-                                                emit(
-                                                    &publish,
-                                                    id,
-                                                    AgentEventKind::Conversation(event),
-                                                )?;
-                                            }
-                                            ConversationRequest::Reset { session } => {
-                                                let event = match conversation.reset(session) {
-                                                    Ok(view) => ConversationEvent::Created(view),
-                                                    Err(failure) => ConversationEvent::Rejected(failure.to_string()),
-                                                };
-                                                control.finished.cancel();
-                                                emit(&publish, id, AgentEventKind::Conversation(event))?;
+                                                    Err(failure) => {
+                                                        control.finished.cancel();
+                                                        emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
+                                                    }
+                                                }
                                             }
                                             request @ (ConversationRequest::Send { .. } | ConversationRequest::Retry { .. }) => {
                                                 match conversation.start(id, request) {
                                                     Ok((view, request)) => {
                                                         let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
-                                                        control.turn.set((view.id.0, turn.id.0)).map_err(|_| RuntimeFailure::ModelState)?;
+                                                        control.turn.set((view.id, turn.id.0)).map_err(|_| RuntimeFailure::ModelState)?;
                                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?=Some(control.clone());
                                                         emit(
                                                             &publish,
@@ -447,7 +447,28 @@ impl AgentRuntime {
                             .await,
                             &mut delivery_failure,
                         );
-                        execution?.finish().await?;
+                        let stored = store.finish().await.map_err(RuntimeFailure::Store);
+                        let pending_saved = if let Some(mut pending) = creating {
+                            let saved = pending.wait().await;
+                            pending.control.finished.cancel();
+                            saved.and_then(|commit| match commit.summary_failure {
+                                Some(failure) => Err(failure),
+                                None => Ok(()),
+                            }).map_err(RuntimeFailure::Store)
+                        } else {
+                            Ok(())
+                        };
+                        let account_finished = match execution {
+                            Ok(account) => account.finish().await.map_err(RuntimeFailure::Account),
+                            Err(failure) => Err(failure),
+                        };
+                        if let Err(failure) = stored {
+                            error!(error = %failure, "会话存储收尾失败");
+                            account_finished?;
+                            return Err(failure);
+                        }
+                        account_finished?;
+                        pending_saved?;
                         if let Some(failure) = delivery_failure {
                             return Err(failure);
                         }
@@ -532,7 +553,7 @@ impl AgentRuntime {
                     && !control.cancel.is_cancelled()
                     && !control.finished.is_cancelled()
                     && control.id == input.operation_id
-                    && control.turn.get() == Some(&(input.session.0, input.turn.0))
+                    && control.turn.get() == Some(&(input.session, input.turn.0))
             })
             .ok_or(AccountFailure::Busy)?;
         control
@@ -547,7 +568,7 @@ impl AgentRuntime {
 
     pub fn cancel_conversation(
         &self,
-        session: u64,
+        session: SessionId,
         turn: u64,
         operation: u64,
     ) -> Result<bool, RuntimeFailure> {

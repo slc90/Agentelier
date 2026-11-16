@@ -13,6 +13,7 @@ members = [
   "crates/agent/llm_model",
   "crates/agent/runtime",
   "crates/agent/conversation",
+  "crates/agent/session_store",
   "crates/agent/turn_runner",
   "crates/agent/tools",
   "crates/agent/prompts",
@@ -58,7 +59,11 @@ process-wrap = { version = "10.0.1", default-features = false, features = [
   "kill-on-drop",
   "creation-flags",
 ] }
-uuid = { version = "1", default-features = false, features = ["std", "v4"] }
+uuid = { version = "1", default-features = false, features = [
+  "std",
+  "v4",
+  "serde",
+] }
 tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 reqwest = { version = "0.13.5", default-features = false, features = [
   "native-tls",

@@ -7,8 +7,7 @@ use agentelier_tools::{ToolCatalog, ToolStatus};
 use std::sync::Arc;
 use std::{error::Error, fmt};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct SessionId(pub u64);
+pub use uuid::Uuid as SessionId;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct TurnId(pub u64);
 
@@ -116,10 +115,20 @@ pub(crate) struct ChatSession {
     tools: Arc<ToolCatalog>,
 }
 
+pub struct PreparedSession {
+    session: ChatSession,
+    pub initial: crate::InitialSession,
+}
+
+impl PreparedSession {
+    pub fn account_subject(&self) -> &str {
+        &self.session.view.settings.account_subject
+    }
+}
+
 #[derive(Default)]
 pub struct Conversation {
     pub(crate) session: Option<ChatSession>,
-    next_session: u64,
     pub(crate) next_turn: u64,
 }
 
@@ -134,10 +143,10 @@ impl Conversation {
         }
     }
 
-    pub fn create(
-        &mut self,
+    pub fn prepare(
+        &self,
         mut settings: SessionSettings,
-    ) -> Result<SessionView, ConversationFailure> {
+    ) -> Result<PreparedSession, ConversationFailure> {
         if self
             .session
             .as_ref()
@@ -157,10 +166,7 @@ impl Conversation {
                 "会话设置缺少有效模型、推理选项或账号身份",
             ));
         }
-        let id = self
-            .next_session
-            .checked_add(1)
-            .ok_or(ConversationFailure::new("聊天会话标识已耗尽"))?;
+        let id = SessionId::new_v4();
         settings
             .instructions
             .validate()
@@ -177,7 +183,7 @@ impl Conversation {
                 .map_err(|_| ConversationFailure::new("工具目录配置无效"))?,
         );
         let session = SessionView {
-            id: SessionId(id),
+            id,
             settings,
             turn: None,
             previous_turns: Vec::new(),
@@ -191,16 +197,36 @@ impl Conversation {
                 .map(|tool| (tool.name.to_owned(), tool.description.to_owned()))
                 .collect(),
         };
-        self.next_session = id;
-        self.session = Some(ChatSession {
-            view: session.clone(),
-            history: Some(ProtocolHistory::default()),
-            tools,
-        });
-        Ok(session)
+        let initial = crate::InitialSession::from_view(
+            &session,
+            tools
+                .definitions()
+                .iter()
+                .map(|tool| crate::StoredTool {
+                    name: tool.name.into(),
+                    description: tool.description.clone(),
+                    parameters: tool.parameters.clone(),
+                })
+                .collect(),
+        )?;
+        Ok(PreparedSession {
+            initial,
+            session: ChatSession {
+                view: session,
+                history: Some(ProtocolHistory::default()),
+                tools,
+            },
+        })
     }
 
-    pub fn reset(&mut self, id: SessionId) -> Result<SessionView, ConversationFailure> {
+    pub fn install(&mut self, prepared: PreparedSession) -> SessionView {
+        let view = prepared.session.view.clone();
+        self.session = Some(prepared.session);
+        self.next_turn = 0;
+        view
+    }
+
+    pub fn prepare_reset(&self, id: SessionId) -> Result<PreparedSession, ConversationFailure> {
         let settings = self
             .session
             .as_ref()
@@ -209,7 +235,7 @@ impl Conversation {
             .view
             .settings
             .clone();
-        self.create(settings)
+        self.prepare(settings)
     }
 
     pub fn begin(

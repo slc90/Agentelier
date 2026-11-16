@@ -4,6 +4,7 @@ use agentelier_agent_host::{
     AgentHost, ConversationEvent as HostConversationEvent, HostActivity, HostFailed,
     ReceiveAgentEvents,
 };
+use agentelier_conversation_bridge::SessionId;
 use agentelier_conversation_bridge::{
     ConversationEvent, ConversationRequest, SessionSettings, SessionView, TurnStatus,
 };
@@ -96,7 +97,7 @@ pub struct ChatTurn {
 }
 #[derive(Clone, Reflect)]
 pub struct ChatSession {
-    pub id: u64,
+    pub id: SessionId,
     pub slug: String,
     pub display_name: String,
     pub effort: Option<String>,
@@ -114,7 +115,7 @@ pub struct ChatSession {
 }
 #[derive(Clone, Reflect)]
 pub struct ChatReplacement {
-    pub reset_session: Option<u64>,
+    pub reset_session: Option<SessionId>,
     pub slug: String,
     pub display_name: String,
     pub effort: Option<String>,
@@ -214,7 +215,7 @@ enum ChatAction {
 #[derive(Component, Clone, PartialEq, Eq)]
 struct ChatRow {
     request_index: u32,
-    session: u64,
+    session: SessionId,
     turn: u64,
     output_index: Option<usize>,
     item_id: Option<String>,
@@ -264,8 +265,8 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
             ]--
             Node { column_gap: px(CONTENT_GAP), flex_shrink: 0.0, display: Display::None } ReplacementPrompt
             Children [
-                Text("当前对话仅在内存中，确认后将清除全部记录、上下文和待办消息；输入草稿保留。") WidgetryText--
-                @button("确认清空", "ConfirmChatReplacement", ChatAction::ConfirmReplacement)--
+                Text("确认后将创建空白会话，当前聊天记录和待办将从界面移除；已有存档与输入草稿保留。") WidgetryText--
+                @button("确认新建", "ConfirmChatReplacement", ChatAction::ConfirmReplacement)--
                 @button("保留当前会话", "KeepChatSession", ChatAction::KeepSession)
             ]--
             Text(status) WidgetryText ChatStatus Name("ChatStatus")--
@@ -552,7 +553,7 @@ fn stop(world: &mut World) -> Result {
         Ok(true) => {
             world.resource_mut::<ChatState>().cancelling = true;
             info!(
-                session_id = session,
+                session_id = %session,
                 turn_id = turn,
                 operation_id = operation,
                 "已请求停止聊天，等待任务回收"
@@ -601,7 +602,7 @@ fn send(world: &mut World) -> Result {
             state.pending_inputs.push(PendingDraft { id, ..submitted });
             state.input_feedback = None;
             state.error = None;
-            info!(operation_id = id, session_id = session, "开始提交聊天消息");
+            info!(operation_id = id, session_id = %session, "开始提交聊天消息");
         }
         Err(failure) => {
             error!(error = %failure, "无法提交聊天消息");
@@ -956,12 +957,12 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         match &event.kind {
             ConversationEvent::Created(view) => info!(
                 operation_id = event.operation_id,
-                session_id = view.id,
+                session_id = %view.id,
                 "聊天会话已创建"
             ),
             ConversationEvent::Accepted(view) => info!(
                 operation_id = event.operation_id,
-                session_id = view.id,
+                session_id = %view.id,
                 "聊天消息已接纳"
             ),
             ConversationEvent::Finished(view) => {
@@ -969,19 +970,19 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                     match &turn.status {
                         TurnStatus::Completed => info!(
                             operation_id = event.operation_id,
-                            session_id = view.id,
+                            session_id = %view.id,
                             turn_id = turn.id,
                             "聊天轮次已完成并回收"
                         ),
                         TurnStatus::Cancelled => info!(
                             operation_id = event.operation_id,
-                            session_id = view.id,
+                            session_id = %view.id,
                             turn_id = turn.id,
                             "聊天轮次已实际取消"
                         ),
                         TurnStatus::Failed(reason) => error!(
                             operation_id = event.operation_id,
-                            session_id = view.id,
+                            session_id = %view.id,
                             turn_id = turn.id,
                             error = reason,
                             "聊天轮次失败，保留部分正文"

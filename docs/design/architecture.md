@@ -18,6 +18,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/account/` | `agentelier_account` | 账号操作与会话状态、共享凭据门控和按需续期协调 |
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录、Responses、SSE 和模型错误语义 |
 | `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的内存聊天会话、Turn 身份、展示记录与结果收敛 |
+| `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话的初始存档、单写入者、提交确认与存储收尾 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
 | `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示 |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、正文增量和受控取消 |
@@ -60,6 +61,8 @@ flowchart TD
     Runtime --> Account
     Runtime --> Model
     Runtime --> Conversation["Agent · conversation"]
+    Runtime --> SessionStore["Agent · session_store"]
+    SessionStore --> Conversation
     Runtime --> Runner["Agent · turn_runner"]
     Runner --> Conversation
     Runner --> Model
@@ -138,7 +141,7 @@ Widgetry JobManager 管理目录 I/O 和浏览器等应用辅助工作；账号�
 
 `application::shutdown` 暂存 AppExit，通过 `agentelier_agent_host::AgentHost` 的 begin_shutdown/is_finished/finish 停止连接与普通业务唤醒、取消浏览器及模型等待。退出协调使用自己的 Winit 通知保持事件循环推进，在 World 和接收端仍有效时非阻塞确认线程结束并显式 join。
 
-Account 完成在途更新和必要提交，Runtime 等待模型真实回收并释放 Tokio，随后宿主结束辅助 Job、刷新日志，最后释放目录占用。两类后台均结束后才重新发布 AppExit；主循环返回后保留兜底收尾。运行收尾错误影响进程退出结果，辅助任务仍执行收尾。
+Account 完成在途更新和必要提交，Runtime 等待模型真实回收、Session Store 排空已接纳命令并回收存储线程后释放 Tokio，随后宿主结束辅助 Job、刷新日志，最后释放目录占用。两类后台均结束后才重新发布 AppExit；主循环返回后保留兜底收尾。运行收尾错误影响进程退出结果，辅助任务仍执行收尾。
 
 ```mermaid
 flowchart LR

@@ -1,5 +1,6 @@
 use agentelier_account_bridge::{AccountEventKind, SessionActivity};
 use agentelier_agent_runtime::{AgentEventKind, AgentRuntime, DeliveryFailure};
+use agentelier_conversation_bridge::SessionId;
 use agentelier_llm_model_bridge::ModelEventKind;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -207,7 +208,7 @@ impl Connection {
     }
     pub fn steer_conversation(
         &mut self,
-        session: u64,
+        session: SessionId,
         turn: u64,
         operation: u64,
         text: String,
@@ -269,7 +270,7 @@ impl Connection {
 
     pub fn cancel_conversation(
         &mut self,
-        session: u64,
+        session: SessionId,
         turn: u64,
         operation: u64,
     ) -> Result<bool, BridgeFailure> {

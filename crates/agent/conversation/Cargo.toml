@@ -5,6 +5,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
 agentelier_tools = { path = "../tools" }
 agentelier_llm_model = { path = "../llm_model" }
 agentelier_prompts = { path = "../prompts" }

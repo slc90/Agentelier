@@ -1,5 +1,6 @@
 use agentelier_account_bridge::AccountEventKind;
 use agentelier_bridge_connection::{BridgeEventKind, BridgeFailure, Connection};
+use agentelier_conversation_bridge::SessionId;
 use agentelier_llm_model_bridge::ModelEventKind;
 use bevy::prelude::*;
 use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
@@ -161,12 +162,17 @@ impl AgentHost {
         self.state()?.model_busy = true;
         Ok(id)
     }
-    pub fn cancel_conversation(&self, session: u64, turn: u64, operation: u64) -> Result<bool> {
+    pub fn cancel_conversation(
+        &self,
+        session: SessionId,
+        turn: u64,
+        operation: u64,
+    ) -> Result<bool> {
         self.submit(|connection| connection.cancel_conversation(session, turn, operation))
     }
     pub fn steer_conversation(
         &self,
-        session: u64,
+        session: SessionId,
         turn: u64,
         operation: u64,
         text: String,

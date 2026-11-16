@@ -1,3 +1,4 @@
+pub use agentelier_conversation::SessionId;
 use agentelier_prompts::{InstructionMessage, InstructionSnapshot};
 use std::sync::Arc;
 
@@ -13,9 +14,9 @@ pub struct SessionSettings {
 }
 pub enum ConversationRequest {
     Create(SessionSettings),
-    Reset { session: u64 },
-    Send { session: u64, input: String },
-    Retry { session: u64, turn: u64 },
+    Reset { session: SessionId },
+    Send { session: SessionId, input: String },
+    Retry { session: SessionId, turn: u64 },
 }
 #[derive(Clone)]
 pub enum TurnStatus {
@@ -108,9 +109,9 @@ pub struct QueuedInput {
 }
 #[derive(Clone)]
 pub enum SessionAction {
-    Enqueue { session: u64, text: String },
-    Remove { session: u64, operation: u64 },
-    Resume { session: u64 },
+    Enqueue { session: SessionId, text: String },
+    Remove { session: SessionId, operation: u64 },
+    Resume { session: SessionId },
 }
 pub enum QueueDecision {
     Enqueued,
@@ -126,7 +127,7 @@ pub struct QueueEvent {
 }
 #[derive(Clone)]
 pub struct SessionView {
-    pub id: u64,
+    pub id: SessionId,
     pub settings: SessionSettings,
     pub turn: Option<Box<TurnView>>,
     pub previous_turns: Vec<TurnView>,
@@ -175,21 +176,16 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
             )
         }
         ConversationRequest::Reset { session } => {
-            agentelier_conversation::ConversationRequest::Reset {
-                session: agentelier_conversation::SessionId(session),
-            }
+            agentelier_conversation::ConversationRequest::Reset { session }
         }
         ConversationRequest::Retry { session, turn } => {
             agentelier_conversation::ConversationRequest::Retry {
-                session: agentelier_conversation::SessionId(session),
+                session,
                 turn: agentelier_conversation::TurnId(turn),
             }
         }
         ConversationRequest::Send { session, input } => {
-            agentelier_conversation::ConversationRequest::Send {
-                session: agentelier_conversation::SessionId(session),
-                input,
-            }
+            agentelier_conversation::ConversationRequest::Send { session, input }
         }
     }
 }
@@ -208,7 +204,7 @@ fn view(session: agentelier_conversation::SessionView) -> SessionView {
             })
             .collect(),
         queue_paused: session.queue_paused,
-        id: session.id.0,
+        id: session.id,
         settings: SessionSettings {
             slug: session.settings.slug,
             display_name: session.settings.display_name,
@@ -393,14 +389,14 @@ pub fn convert(event: agentelier_conversation::ConversationEvent) -> Conversatio
 
 pub fn steer_input(
     id: u64,
-    session: u64,
+    session: SessionId,
     turn: u64,
     operation_id: u64,
     text: String,
 ) -> agentelier_conversation::SteerInput {
     agentelier_conversation::SteerInput {
         id,
-        session: agentelier_conversation::SessionId(session),
+        session,
         turn: agentelier_conversation::TurnId(turn),
         operation_id,
         text,
@@ -410,22 +406,17 @@ pub fn steer_input(
 pub fn session_command(id: u64, action: SessionAction) -> agentelier_conversation::SessionCommand {
     match action {
         SessionAction::Enqueue { session, text } => {
-            agentelier_conversation::SessionCommand::Enqueue {
-                id,
-                session: agentelier_conversation::SessionId(session),
-                text,
-            }
+            agentelier_conversation::SessionCommand::Enqueue { id, session, text }
         }
         SessionAction::Remove { session, operation } => {
             agentelier_conversation::SessionCommand::Remove {
                 id,
-                session: agentelier_conversation::SessionId(session),
+                session,
                 operation,
             }
         }
-        SessionAction::Resume { session } => agentelier_conversation::SessionCommand::Resume {
-            id,
-            session: agentelier_conversation::SessionId(session),
-        },
+        SessionAction::Resume { session } => {
+            agentelier_conversation::SessionCommand::Resume { id, session }
+        }
     }
 }

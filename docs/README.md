@@ -8,6 +8,7 @@
 - [账号界面投影](design/modules/account-ui.md)：账号状态与界面职责边界。
 - [模型请求](design/modules/model-request.md)：模型目录、请求协议、流式解析与取消。
 - [内存会话与协议历史](design/modules/conversation.md)：会话快照、任务执行、历史提交与进程收尾。
+- [会话存储](design/modules/session-store.md)：初始会话存档、提交回执、单写入者与关闭边界。
 - [提示词版本与快照](design/modules/prompts.md)：提示词版本、组合和固定指令的数据边界。
 - [Markdown 展示](design/modules/markdown.md)：正文解析、实体投影与阅读状态。
 - [Direct 工具调用](design/tool_call.md)：工具协议、执行循环、运行中补充与队列。

@@ -13,3 +13,5 @@ pub use conversation::{InputDecision, InputReceipt, SteerState, SteerView};
 pub use conversation::steer_input;
 
 pub use conversation::{QueueDecision, QueueEvent, QueuedInput, SessionAction, session_command};
+
+pub use conversation::SessionId;

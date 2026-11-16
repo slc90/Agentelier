@@ -201,7 +201,7 @@ pub(super) fn start_queued(
     let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
     control
         .turn
-        .set((view.id.0, turn.id.0))
+        .set((view.id, turn.id.0))
         .map_err(|_| RuntimeFailure::ModelState)?;
     *shared.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control.clone());
     emit(

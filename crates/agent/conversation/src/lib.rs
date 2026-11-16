@@ -2,9 +2,13 @@
 compile_error!("This application supports Windows x64 only");
 
 mod active;
+mod archive;
 mod control;
 mod conversation;
 mod queue;
+
+pub use archive::{InitialSession, SessionSummary, StoredSettings, StoredTool};
+pub use conversation::PreparedSession;
 
 pub use conversation::{
     Conversation, ConversationEvent, ConversationFailure, ConversationRequest, SessionId,
