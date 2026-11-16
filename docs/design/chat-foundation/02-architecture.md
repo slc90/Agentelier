@@ -75,6 +75,6 @@ Package 名分别使用 `agentelier_agent_host`、`agentelier_chat_ui`、`agente
 
 UI 结构通过 `bsn!`、Scene 与 SceneList 组合，持续状态放在 Component/Resource 中，Props 只初始化一次。复用 Widgetry 的公开状态 API，不修改其内部实体来绕过契约。
 
-外部依赖版本统一由根 Workspace 管理。内部模块按语义组织，使用 `foo.rs` 与 `foo/`，不引入 `mod.rs`、上游源码复制或修改版依赖。新增 crate 遵守 Windows x64 编译约束、现有错误传播和 Lint。实际实施维护临时根目录进度文件，按增量同步架构与功能文档。
+外部依赖版本统一由根 Workspace 管理。内部模块按语义组织，使用 `foo.rs` 与 `foo/`，不引入 `mod.rs`、上游源码复制或修改版依赖。新增 crate 遵守 Windows x64 编译约束、现有错误传播和 Lint。实际实施维护临时根目录进度文件，按增量同步架构与相关模块设计。
 
 工程验证使用编译、格式、Clippy、真实应用运行和 BRP。项目不编写测试代码、Benchmark 或 Example。界面验证保持已有登录状态，不为制造验证条件退出、重新授权、重置凭据或切换数据目录。

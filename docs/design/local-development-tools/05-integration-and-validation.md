@@ -86,8 +86,8 @@ Queue 仍按 FIFO 推进；只有前一任务的模型工作、进程组和工�
 
 四个真实工具各自基本验证通过后，再删除计算和等待工具的登记、执行分支、实现与专属 receipt 逻辑。仅当依赖确实不再被其他能力使用时才移除依赖项；进程 ID 等能力可能仍需要唯一标识支持。
 
-重启后的新会话默认目录只包含四个工具。新二进制不为旧诊断名称提供隐藏兼容别名，调用旧名称按未知工具返回错误。原有 `plans/Agent 工具调用/` 是历史方案，不改写成“过去没有诊断工具”；当前功能页和 `docs/tool_call.md` 中的当前边界则按实际交付更新。
+重启后的新会话默认目录只包含四个工具。新二进制不为旧诊断名称提供隐藏兼容别名，调用旧名称按未知工具返回错误。原有 `plans/Agent 工具调用/` 是历史方案，不改写成“过去没有诊断工具”；相关模块设计和 `docs/design/tool_call.md` 中的当前边界则按实际交付更新。
 
-实现完成时同步 `docs/design/architecture.md`、相关模块设计与 `docs/features/chat.md` 等受影响功能文档。更新只描述已经完成的增量，不因整份计划存在就提前宣布所有能力可用。
+实现完成时同步 `docs/design/architecture.md`、`docs/design/modules/conversation.md`、`docs/design/tool_call.md` 等受影响的设计文档。更新只描述已经完成的增量，不因整份计划存在就提前宣布所有能力可用。
 
 详细实施顺序见[执行方案总览](../../../plans/本地开发工具/local-development-tools/00-overview.md)，完整题面见[独立考题](../../../plans/本地开发工具/local-development-tools-exam.md)。

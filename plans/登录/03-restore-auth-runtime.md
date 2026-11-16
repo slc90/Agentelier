@@ -104,4 +104,4 @@ sequenceDiagram
 
 正式实现采用 Type-Driven Development 表达恢复状态和结束结果，不使用 panic、占位实现或日志代替错误传播。按 `rules/development.md` 维护临时进度，完成独立 Code Review；GUI 验证结束释放 BRP Pointer 并确认 `inactive`。
 
-同步 `docs/design/architecture.md` 中空库、实际依赖、Tokio、消息唤醒和生命周期的变化。将认证设计中已实现的记录、恢复与运行边界写入当前设计，公开库能力写入 `docs/features/`；后续 OAuth 与刷新内容随各自增量同步。
+同步 `docs/design/architecture.md` 中空库、实际依赖、Tokio、消息唤醒和生命周期的变化。将认证设计中已实现的记录、恢复与运行边界写入当前设计，公开库能力的重要契约写入相关模块设计；后续 OAuth 与刷新内容随各自增量同步。

@@ -197,7 +197,7 @@ Crate 应具有明确职责，其独立性应能够通过功能边界和依赖�
 3. **重组 Agent**：迁移 Login，提取 Account、LLM Model 和 Runtime，整理依赖关系。
 4. **重组 Bridge**：区分账号转换、LLM 业务转换和共享通信协调。
 5. **迁移 UI**：调整 Application、Assets 和 Login UI 的目录与依赖引用。
-6. **同步文档**：更新 `rules/architecture.md`、`docs/design/architecture.md`、相关模块设计及功能文档。
+6. **同步文档**：更新 `rules/architecture.md`、`docs/design/architecture.md`、相关模块及机制设计文档。
 7. **执行验证并提交**：完成适用检查后，将最终所有变更统一提交一次。
 
 这些步骤是同一个任务内部的工作顺序，不代表拆分为多个 Git Commit。

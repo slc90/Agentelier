@@ -28,6 +28,6 @@ flowchart LR
 
 在旧会话告诉模型一个临时标记，再重置并观察安全请求投影中的历史为空；不能仅以模型声称“不记得”证明隔离。修改准备区模型或推理强度后继续旧会话，核对旧快照不变；新建后核对新设置生效。
 
-通过 BRP 检查忙碌时禁用、清空提示和新界面内容，确认新建不改变账号。执行编译、格式、Clippy，更新 Session 功能文档。遵守 BSN 构造、无测试/Benchmark/Example 与进度记录要求。
+通过 BRP 检查忙碌时禁用、清空提示和新界面内容，确认新建不改变账号。执行编译、格式、Clippy，更新会话模块设计。遵守 BSN 构造、无测试/Benchmark/Example 与进度记录要求。
 
 设计依据：[会话体验](../../docs/design/chat-foundation/01-experience.md)、[设置快照](../../docs/design/chat-foundation/03-session.md)。前置：[重试](07-retry.md)。下一项：[Markdown 文本](09-markdown-prose.md)。

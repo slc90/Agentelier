@@ -161,7 +161,7 @@ LLM Model 解析 Responses 输出项、内容段、公开 phase 和文本增量�
 
 网络任务经容量为 32 的有界 Tokio 通道传递文本变化，发送等待可被任务取消。Runner 消费模型增量并发布累计展示快照，Runtime 校验所属身份并转交；Bridge 保留单个可替换快照，原先的有界控制/终态队列保持独立。每个快照包含此前全部消息和文本，合并不丢片段或跨轮次混接；终态返回前先交付最后快照。AgentHost 每次更新最多消费 32 项，仍有消息时继续唤醒，避免高频文本长期占用一个界面更新。
 
-chat_ui 仅管理展示投影与草稿，通过 BSN 和 Widgetry 多行 TextField、ScrollArea 构造消息列表。接纳前保留草稿；Accepted 后只清空尚未被继续编辑的原内容。消息更新复用既有行实体，切换设置页不改变后台任务，返回时按投影恢复。具体行为与限制见[聊天会话与流式回复](../features/chat.md)。
+chat_ui 仅管理展示投影与草稿，通过 BSN 和 Widgetry 多行 TextField、ScrollArea 构造消息列表。接纳前保留草稿；Accepted 后只清空尚未被继续编辑的原内容。消息更新复用既有行实体，切换设置页不改变后台任务，返回时按投影恢复。会话与历史边界见[内存会话与协议历史](modules/conversation.md)，正文投影见[Markdown 展示](modules/markdown.md)。
 
 协议历史和安全展示摘要的具体关系见[聊天会话与协议历史](modules/conversation.md)。
 
