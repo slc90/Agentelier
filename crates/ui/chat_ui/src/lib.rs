@@ -9,6 +9,7 @@ mod queue;
 mod reading;
 mod reasoning;
 mod tool_timeline;
+mod working_directory;
 
 pub use conversation::{
     ChatHistoryItem, ChatMessage, ChatReplacement, ChatSession, ChatState, ChatTurn, ChatTurnStatus,

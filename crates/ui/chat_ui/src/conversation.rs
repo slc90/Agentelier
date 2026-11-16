@@ -94,6 +94,7 @@ pub struct ChatSession {
     pub display_name: String,
     pub effort: Option<String>,
     pub account_subject: String,
+    pub working_directory: String,
     pub instruction_snapshot: String,
     pub turn: Option<ChatTurn>,
     pub previous_turns: Vec<ChatTurn>,
@@ -110,6 +111,7 @@ pub struct ChatReplacement {
     pub display_name: String,
     pub effort: Option<String>,
     pub account_subject: String,
+    pub working_directory: String,
     #[reflect(ignore)]
     pub instructions: Arc<InstructionSnapshot>,
 }
@@ -345,6 +347,11 @@ fn create_session(world: &mut World) -> Result {
         effort: model.reasoning.effort(),
         account_subject: subject,
         instructions: Arc::new(crate::prompts::snapshot(world)?),
+        working_directory: world
+            .resource::<crate::working_directory::DirectoryState>()
+            .input
+            .clone()
+            .into(),
     };
     if state.session.is_some() {
         world.resource_mut::<ChatState>().replacement = Some(ChatReplacement {
@@ -354,6 +361,7 @@ fn create_session(world: &mut World) -> Result {
             effort: settings.effort,
             account_subject: settings.account_subject,
             instructions: settings.instructions,
+            working_directory: settings.working_directory.to_string_lossy().into_owned(),
         });
         return Ok(());
     }
@@ -393,6 +401,7 @@ fn prepare_reset(world: &mut World) -> Result {
         effort: session.effort.clone(),
         account_subject: session.account_subject.clone(),
         instructions: Arc::new(serde_json::from_str(&session.instruction_snapshot)?),
+        working_directory: session.working_directory.clone(),
     };
     world.resource_mut::<ChatState>().replacement = Some(pending);
     Ok(())
@@ -422,6 +431,7 @@ fn confirm_replacement(world: &mut World) -> Result {
             effort: pending.effort,
             account_subject: pending.account_subject,
             instructions: pending.instructions,
+            working_directory: pending.working_directory.into(),
         }),
     };
     let result = world.resource::<AgentHost>().request_conversation(request);
@@ -823,6 +833,9 @@ fn project(session: SessionView) -> Result<ChatSession> {
         display_name: session.settings.display_name,
         effort: session.settings.effort,
         account_subject: session.settings.account_subject,
+        working_directory: bevy_widgetry_path_display::display_path(
+            &session.settings.working_directory,
+        ),
         instruction_snapshot: serde_json::to_string_pretty(session.settings.instructions.as_ref())?,
         turn: session.turn.map(|turn| project_turn(*turn)).transpose()?,
         previous_turns: session
@@ -1226,10 +1239,11 @@ fn summary(state: &ChatState) -> String {
         .as_ref()
         .map(|session| {
             format!(
-                "{} · {} · 推理：{}",
+                "{} · {} · 推理：{}\n本地工作目录：{}",
                 session.display_name,
                 session.slug,
-                session.effort.as_deref().unwrap_or("服务默认")
+                session.effort.as_deref().unwrap_or("服务默认"),
+                session.working_directory
             )
         })
         .unwrap_or_else(|| "选择模型与推理设置后创建会话".into())
@@ -1373,10 +1387,11 @@ pub(crate) fn request_details(state: &ChatState) -> String {
         return "尚未创建会话".into();
     };
     let mut text = format!(
-        "Session {}\n模型：{}\n推理强度：{}\n固定指令快照：\n{}\n固定工具目录：\n",
+        "Session {}\n模型：{}\n推理强度：{}\n本地工作目录：{}\n固定指令快照：\n{}\n固定工具目录：\n",
         session.id,
         session.slug,
         session.effort.as_deref().unwrap_or("服务默认"),
+        session.working_directory,
         session.instruction_snapshot
     );
     for (name, description) in &session.tool_catalog {

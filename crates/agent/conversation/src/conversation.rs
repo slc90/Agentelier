@@ -19,6 +19,7 @@ pub struct SessionSettings {
     pub effort: Option<String>,
     pub account_subject: String,
     pub instructions: Arc<InstructionSnapshot>,
+    pub working_directory: std::path::PathBuf,
 }
 pub enum ConversationRequest {
     Create(SessionSettings),
@@ -93,15 +94,15 @@ pub enum ConversationEvent {
 }
 
 #[derive(Debug)]
-pub struct ConversationFailure(&'static str);
+pub struct ConversationFailure(String);
 impl ConversationFailure {
-    pub fn new(message: &'static str) -> Self {
-        Self(message)
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
     }
 }
 impl fmt::Display for ConversationFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.0)
+        f.write_str(&self.0)
     }
 }
 impl Error for ConversationFailure {}
@@ -132,7 +133,7 @@ impl Conversation {
 
     pub fn create(
         &mut self,
-        settings: SessionSettings,
+        mut settings: SessionSettings,
     ) -> Result<SessionView, ConversationFailure> {
         if self
             .session
@@ -140,7 +141,7 @@ impl Conversation {
             .and_then(|current| current.view.turn.as_ref())
             .is_some_and(|turn| matches!(turn.status, TurnStatus::Running))
         {
-            return Err(ConversationFailure("生成尚未结束，不能替换会话"));
+            return Err(ConversationFailure::new("生成尚未结束，不能替换会话"));
         }
         if settings.slug.trim().is_empty()
             || settings.account_subject.is_empty()
@@ -149,20 +150,28 @@ impl Conversation {
                 .as_ref()
                 .is_some_and(|effort| effort.trim().is_empty())
         {
-            return Err(ConversationFailure(
+            return Err(ConversationFailure::new(
                 "会话设置缺少有效模型、推理选项或账号身份",
             ));
         }
         let id = self
             .next_session
             .checked_add(1)
-            .ok_or(ConversationFailure("聊天会话标识已耗尽"))?;
+            .ok_or(ConversationFailure::new("聊天会话标识已耗尽"))?;
         settings
             .instructions
             .validate()
-            .map_err(|_| ConversationFailure("会话指令快照无效"))?;
-        let tools =
-            Arc::new(ToolCatalog::standard().map_err(|_| ConversationFailure("工具目录配置无效"))?);
+            .map_err(|_| ConversationFailure::new("会话指令快照无效"))?;
+        settings.working_directory =
+            agentelier_tools::WorkingDirectory::validate(&settings.working_directory)
+                .map_err(|failure| {
+                    ConversationFailure::new(format!("本地工作目录无效：{failure}"))
+                })?
+                .path()
+                .to_path_buf();
+        let tools = Arc::new(
+            ToolCatalog::standard().map_err(|_| ConversationFailure::new("工具目录配置无效"))?,
+        );
         let session = SessionView {
             id: SessionId(id),
             settings,
@@ -192,7 +201,7 @@ impl Conversation {
             .session
             .as_ref()
             .filter(|current| current.view.id == id)
-            .ok_or(ConversationFailure("要重置的会话已变化"))?
+            .ok_or(ConversationFailure::new("要重置的会话已变化"))?
             .view
             .settings
             .clone();
@@ -206,14 +215,14 @@ impl Conversation {
         input: String,
     ) -> Result<(SessionView, ActiveTurn), ConversationFailure> {
         if input.trim().is_empty() {
-            return Err(ConversationFailure("不能发送空白消息"));
+            return Err(ConversationFailure::new("不能发送空白消息"));
         }
         let session = self
             .session
             .as_mut()
-            .ok_or(ConversationFailure("尚未创建聊天会话"))?;
+            .ok_or(ConversationFailure::new("尚未创建聊天会话"))?;
         if session.view.id != session_id {
-            return Err(ConversationFailure("聊天会话身份已变化"));
+            return Err(ConversationFailure::new("聊天会话身份已变化"));
         }
         if session
             .view
@@ -221,19 +230,21 @@ impl Conversation {
             .as_ref()
             .is_some_and(|turn| matches!(turn.status, TurnStatus::Running))
         {
-            return Err(ConversationFailure("上一轮尚未结束"));
+            return Err(ConversationFailure::new("上一轮尚未结束"));
         }
         let id = self
             .next_turn
             .checked_add(1)
-            .ok_or(ConversationFailure("聊天轮次标识已耗尽"))?;
+            .ok_or(ConversationFailure::new("聊天轮次标识已耗尽"))?;
         if session.view.execution_blocked || session.history.is_none() {
-            return Err(ConversationFailure("会话执行记录不可用，请重置或新建会话"));
+            return Err(ConversationFailure::new(
+                "会话执行记录不可用，请重置或新建会话",
+            ));
         }
         let request_items = session
             .history
             .as_ref()
-            .ok_or(ConversationFailure("会话缺少历史"))?
+            .ok_or(ConversationFailure::new("会话缺少历史"))?
             .with_user(&input)
             .summary();
         if let Some(previous) = session.view.turn.take() {
@@ -263,7 +274,7 @@ impl Conversation {
             history: session
                 .history
                 .take()
-                .ok_or(ConversationFailure("会话缺少历史"))?,
+                .ok_or(ConversationFailure::new("会话缺少历史"))?,
         };
         Ok((session.view.clone(), active))
     }
@@ -292,26 +303,26 @@ impl Conversation {
                                 TurnStatus::Failed(_) | TurnStatus::Cancelled
                             )
                     })
-                    .ok_or(ConversationFailure("只有最近失败或取消的输入可以重试"))?;
+                    .ok_or(ConversationFailure::new("只有最近失败或取消的输入可以重试"))?;
                 let input = previous.input.clone();
                 let input_id = previous.input_id;
                 let (_, mut active) = self.begin(operation, session, input)?;
                 let current = self
                     .session
                     .as_mut()
-                    .ok_or(ConversationFailure("重试缺少会话"))?;
+                    .ok_or(ConversationFailure::new("重试缺少会话"))?;
                 let turn = current
                     .view
                     .turn
                     .as_mut()
-                    .ok_or(ConversationFailure("重试缺少轮次"))?;
+                    .ok_or(ConversationFailure::new("重试缺少轮次"))?;
                 turn.input_id = input_id;
                 turn.is_retry = true;
                 active.view = current.view.clone();
                 Ok((current.view.clone(), active))
             }
             ConversationRequest::Create(_) | ConversationRequest::Reset { .. } => {
-                Err(ConversationFailure("创建会话不是生成操作"))
+                Err(ConversationFailure::new("创建会话不是生成操作"))
             }
         }
     }
@@ -323,7 +334,7 @@ impl Conversation {
             .filter(|turn| {
                 turn.operation_id == operation_id && matches!(turn.status, TurnStatus::Running)
             })
-            .ok_or(ConversationFailure("模型结果不属于当前运行轮次"))
+            .ok_or(ConversationFailure::new("模型结果不属于当前运行轮次"))
     }
 
     pub fn update(
@@ -341,12 +352,12 @@ impl Conversation {
                 .as_ref()
                 .is_none_or(|session| session.view.id != view.id)
         {
-            return Err(ConversationFailure("任务快照身份不匹配"));
+            return Err(ConversationFailure::new("任务快照身份不匹配"));
         }
         let session = self
             .session
             .as_mut()
-            .ok_or(ConversationFailure("任务缺少会话"))?;
+            .ok_or(ConversationFailure::new("任务缺少会话"))?;
         view.queue = std::mem::take(&mut session.view.queue);
         view.queue_paused = session.view.queue_paused;
         session.view = view;
@@ -366,14 +377,14 @@ impl Conversation {
         {
             self.session
                 .as_mut()
-                .ok_or(ConversationFailure("任务缺少会话"))?
+                .ok_or(ConversationFailure::new("任务缺少会话"))?
                 .view
                 .queue_paused = true;
         }
         view = self.update(operation_id, view)?;
         self.session
             .as_mut()
-            .ok_or(ConversationFailure("任务缺少会话"))?
+            .ok_or(ConversationFailure::new("任务缺少会话"))?
             .history = Some(active.history);
         Ok(view)
     }
@@ -384,7 +395,7 @@ impl Conversation {
         let session = self
             .session
             .as_mut()
-            .ok_or(ConversationFailure("任务缺少会话"))?;
+            .ok_or(ConversationFailure::new("任务缺少会话"))?;
         session.view.execution_blocked = true;
         session.view.queue_paused = true;
         Ok(session.view.clone())

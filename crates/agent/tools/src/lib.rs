@@ -3,7 +3,10 @@ compile_error!("This application supports Windows x64 only");
 
 mod catalog;
 mod diagnostic;
+mod environment;
 mod execution;
+
+pub use environment::WorkingDirectory;
 
 pub use catalog::{ToolCatalog, ToolDefinition};
 pub use execution::{MAX_TOOL_BODY_BYTES, ToolFailure, ToolResult, ToolStatus, execute};

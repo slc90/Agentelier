@@ -112,6 +112,7 @@ pub fn install(app: &mut App) -> Result {
     crate::reading::install(app);
     reasoning::install(app)?;
     crate::conversation::install(app);
+    crate::working_directory::install(app);
     crate::prompts::install(app)?;
     app.register_widgetry_combo_box::<ModelChoice>()
         .map_err(|failure| failure.into_bevy_error())?;
@@ -177,6 +178,7 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
                     }) as Box<dyn SceneList>)}
                 }
                 Node { width: percent(100), height: px(64), flex_shrink: 0.0 }--
+                @crate::working_directory::panel(world.resource::<crate::working_directory::DirectoryState>())--
                 @crate::conversation::panel(&chat)
                 ]--
                 crate::prompts::PromptWorkspace Name("PromptWorkspace")

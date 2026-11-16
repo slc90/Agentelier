@@ -32,6 +32,6 @@ pub struct InputReceipt {
     pub decision: InputDecision,
 }
 pub enum RunnerEvent {
-    Progress(SessionView),
+    Progress(Box<SessionView>),
     Receipt(InputReceipt),
 }

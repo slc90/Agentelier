@@ -69,7 +69,7 @@ pub(super) fn progress(
 ) -> Result<(), RuntimeFailure> {
     match event {
         RunnerEvent::Progress(view) => {
-            let view = conversation.update(id, view)?;
+            let view = conversation.update(id, *view)?;
             emit(
                 publish,
                 id,

@@ -8,6 +8,7 @@ pub struct SessionSettings {
     pub effort: Option<String>,
     pub account_subject: String,
     pub instructions: Arc<InstructionSnapshot>,
+    pub working_directory: std::path::PathBuf,
 }
 pub enum ConversationRequest {
     Create(SessionSettings),
@@ -160,6 +161,7 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
                     effort: settings.effort,
                     account_subject: settings.account_subject,
                     instructions: settings.instructions,
+                    working_directory: settings.working_directory,
                 },
             )
         }
@@ -204,6 +206,7 @@ fn view(session: agentelier_conversation::SessionView) -> SessionView {
             effort: session.settings.effort,
             account_subject: session.settings.account_subject,
             instructions: session.settings.instructions,
+            working_directory: session.settings.working_directory,
         },
         turn: session.turn.map(|turn| Box::new(turn_view(*turn))),
         previous_turns: session.previous_turns.into_iter().map(turn_view).collect(),

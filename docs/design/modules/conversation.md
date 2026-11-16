@@ -68,3 +68,7 @@ Conversation 管理最多 8 条 FIFO 待办及暂停状态。排队时保存独�
 Runtime 在旧 JoinHandle 回收和活动历史归还后，才申请下一条并启动。非正常终态暂停队列，普通对话不会清除既有暂停。自动启动的控制身份发布到共享活动槽，使 Stop 和 Steer 总能匹配实际任务；旧操作和迟到拒绝不会释放新占用。Connection 在 Started 回执后关联预留操作，每个终态前显式交付对应最终快照，较新任务进度保留到其开始回执之后再消费。
 
 排队、移除和继续通过独立有界会话控制入口交给执行侧串行裁定；满队列拒绝，不替换旧输入。重置创建新会话并清空待办，关闭前停止接纳与自动出队，账号主体变化清除整个旧会话。
+
+## 本地工作目录快照
+
+SessionSettings 还保存 working_directory 的 PathBuf。Create 通过 Tools 的 WorkingDirectory 校验绝对路径、规范化并确认目录类型后保存；失败不替换旧会话。Reset 从旧会话复制目录再校验，Retry、Steer 与 Queue 使用活动会话设置。Bridge 显式传递候选与规范路径，UI 使用路径显示库展示，输入候选在独立 Resource 保留，切页不重新读取 cwd。路径解析值类型位于 agent/tools，解析以快照为基准，不修改全局进程目录。

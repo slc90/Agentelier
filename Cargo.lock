@@ -178,6 +178,7 @@ dependencies = [
  "bevy",
  "bevy_app_assets",
  "bevy_widgetry",
+ "bevy_widgetry_path_display",
  "serde_json",
  "tracing",
 ]

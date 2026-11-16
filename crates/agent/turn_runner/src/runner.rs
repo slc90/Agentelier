@@ -19,7 +19,7 @@ async fn publish(
 ) -> Result<(), ConversationFailure> {
     tokio::select! { biased;
         _ = cancel.cancelled() => Ok(()),
-        result = progress.send(RunnerEvent::Progress(active.view())) => result.map_err(|_| ConversationFailure::new("任务进度接收端已关闭")),
+        result = progress.send(RunnerEvent::Progress(Box::new(active.view()))) => result.map_err(|_| ConversationFailure::new("任务进度接收端已关闭")),
     }
 }
 

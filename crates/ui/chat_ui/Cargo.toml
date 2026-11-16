@@ -12,6 +12,7 @@ agentelier_llm_model_bridge = { path = "../../bridge/llm_model" }
 agentelier_conversation_bridge = { path = "../../bridge/conversation" }
 agentelier_prompts = { path = "../../agent/prompts" }
 bevy_app_assets = { path = "../assets" }
+bevy_widgetry_path_display.workspace = true
 serde_json.workspace = true
 bevy.workspace = true
 bevy_widgetry = { workspace = true, features = [
@@ -20,6 +21,7 @@ bevy_widgetry = { workspace = true, features = [
   "button",
   "scroll_area",
   "text_field",
+  "file_dialog",
   "job",
 ] }
 tracing.workspace = true
