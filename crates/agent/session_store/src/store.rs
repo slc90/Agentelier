@@ -1,4 +1,4 @@
-use agentelier_conversation::{InitialSession, SessionId, StoredImage};
+use agentelier_conversation::{InitialSession, RecordEvent, SessionId, SessionRecord, StoredImage};
 use agentelier_tools::ImagePayload;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -13,7 +13,7 @@ use tracing::{debug, error};
 pub const FORMAT: &str = "agentelier.session";
 pub const FORMAT_VERSION: u32 = 1;
 const COMMAND_CAPACITY: usize = 16;
-const INITIAL_SEQUENCE: u64 = 1;
+pub(super) const INITIAL_SEQUENCE: u64 = 1;
 
 #[derive(Serialize, Deserialize)]
 pub struct Record {
@@ -28,6 +28,7 @@ pub struct Record {
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum RecordKind {
     Created(InitialSession),
+    Event(SessionRecord),
 }
 
 pub struct Commit {
@@ -44,12 +45,42 @@ enum Command {
         oneshot::Sender<io::Result<()>>,
     ),
     ReadImage(StoredImage, oneshot::Sender<io::Result<Arc<ImagePayload>>>),
+    Append(Box<RecordEvent>, oneshot::Sender<io::Result<Commit>>),
 }
 
 #[derive(Clone)]
 pub struct SessionStoreClient(mpsc::Sender<Command>);
 
 impl SessionStoreClient {
+    pub fn try_append(
+        &self,
+        event: RecordEvent,
+    ) -> io::Result<oneshot::Receiver<io::Result<Commit>>> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .try_send(Command::Append(Box::new(event), reply))
+            .map_err(|failure| match failure {
+                mpsc::error::TrySendError::Full(_) => {
+                    io::Error::new(io::ErrorKind::WouldBlock, "会话存储命令队列已满")
+                }
+                mpsc::error::TrySendError::Closed(_) => {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "会话存储工作者已关闭")
+                }
+            })?;
+        Ok(result)
+    }
+
+    pub async fn append(&self, event: RecordEvent) -> io::Result<Commit> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::Append(Box::new(event), reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("会话记录未返回提交结果"))?
+    }
+
     pub async fn save_image(
         &self,
         session: SessionId,
@@ -96,8 +127,21 @@ impl SessionStore {
             .name("agentelier-session-store".into())
             .spawn(move || {
                 debug!("会话存储工作者已启动");
+                let mut writer = crate::journal::Writer::default();
                 while let Some(command) = commands.blocking_recv() {
                     match command {
+                        Command::Append(event, reply) => {
+                            let session = event.state().session;
+                            let result = writer.append(&root, *event);
+                            match &result {
+                                Err(failure) => error!(session_id = %session, error = %failure, "会话记录追加失败"),
+                                Ok(commit) => {
+                                    if let Some(failure) = &commit.summary_failure { error!(session_id = %session, error = %failure, "会话记录已提交，摘要更新失败"); }
+                                    debug!(session_id = %session, sequence = commit.sequence, "会话记录已同步提交");
+                                }
+                            }
+                            if reply.send(result).is_err() { debug!("记录提交已结束，等待者已离开"); }
+                        }
                         Command::SaveImage(reference, image, reply) => {
                             let result = crate::attachments::save(&root, &reference, &image);
                             if let Err(failure) = &result { error!(session_id = %reference.session, error = %failure, "会话图片附件提交失败"); }

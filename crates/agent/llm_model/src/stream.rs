@@ -15,12 +15,12 @@ pub(crate) const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct OutputText {
     pub content_index: usize,
     pub text: String,
 }
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct OutputMessage {
     pub id: String,
     pub output_index: usize,
@@ -28,7 +28,7 @@ pub struct OutputMessage {
     pub phase: Option<String>,
     pub content: Vec<OutputText>,
 }
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct FunctionCall {
     pub id: String,
     pub output_index: usize,

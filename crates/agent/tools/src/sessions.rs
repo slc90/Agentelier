@@ -12,7 +12,7 @@ const MAX_PROCESS_SESSIONS: usize = 8;
 const DEFAULT_YIELD_MS: u64 = 10_000;
 const MAX_YIELD_MS: u64 = 30_000;
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProcessCleanup {
     pub session_id: String,
     pub cleanup_confirmed: bool,

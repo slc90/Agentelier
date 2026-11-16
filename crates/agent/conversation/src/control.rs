@@ -9,13 +9,13 @@ pub struct SteerInput {
     pub operation_id: u64,
     pub text: String,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum SteerState {
     Accepted,
     Applied,
     NotApplied,
 }
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SteerView {
     pub id: u64,
     pub text: String,

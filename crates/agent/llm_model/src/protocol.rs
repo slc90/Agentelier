@@ -1,7 +1,9 @@
 use agentelier_tools::ToolPayload;
 use serde_json::Value;
+mod archive;
+pub use archive::{ArchivedPayload, ProtocolArchive};
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub enum ProtocolItemSummary {
     User,
     FunctionCall { call_id: String, name: String },

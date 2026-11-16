@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::{error::Error, fmt};
 
 pub use uuid::Uuid as SessionId;
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TurnId(pub u64);
 
 #[derive(Clone)]
@@ -27,7 +27,7 @@ pub enum ConversationRequest {
     Send { session: SessionId, input: String },
     Retry { session: SessionId, turn: TurnId },
 }
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub enum TurnStatus {
     Running,
     Completed,
@@ -35,13 +35,13 @@ pub enum TurnStatus {
     Failed(String),
     Limited,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum TaskPhase {
     RequestingModel,
     ExecutingTool,
     ReapingProcesses,
 }
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolView {
     pub request_index: u32,
     pub id: String,
@@ -54,7 +54,7 @@ pub struct ToolView {
     pub output: Option<String>,
     pub retained: bool,
 }
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct TurnView {
     pub id: TurnId,
     pub operation_id: u64,
@@ -109,10 +109,12 @@ impl fmt::Display for ConversationFailure {
 }
 impl Error for ConversationFailure {}
 
+#[derive(Clone)]
 pub(crate) struct ChatSession {
     pub(crate) view: SessionView,
     pub(crate) history: Option<ProtocolHistory>,
     tools: Arc<ToolCatalog>,
+    pub(crate) pending_results: std::collections::BTreeMap<String, agentelier_tools::ToolPayload>,
 }
 
 pub struct PreparedSession {
@@ -126,13 +128,43 @@ impl PreparedSession {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Conversation {
     pub(crate) session: Option<ChatSession>,
     pub(crate) next_turn: u64,
 }
 
 impl Conversation {
+    pub fn current(&self) -> Option<SessionView> {
+        self.session.as_ref().map(|session| session.view.clone())
+    }
+
+    pub fn archive(
+        &self,
+    ) -> Option<(
+        crate::StoredState,
+        Option<agentelier_llm_model::ProtocolArchive>,
+    )> {
+        self.session.as_ref().map(|session| {
+            (
+                crate::StoredState::from(&session.view),
+                session.history.as_ref().map(ProtocolHistory::archive),
+            )
+        })
+    }
+
+    pub fn fail_storage(&mut self, message: String) -> Option<SessionView> {
+        let session = self.session.as_mut()?;
+        session.view.execution_blocked = true;
+        session.view.queue_paused = true;
+        if let Some(turn) = &mut session.view.turn
+            && !matches!(turn.status, TurnStatus::Running)
+        {
+            turn.status = TurnStatus::Failed(message);
+        }
+        Some(session.view.clone())
+    }
+
     pub fn synchronize_account(&mut self, subject: Option<&str>) {
         if self
             .session
@@ -215,6 +247,7 @@ impl Conversation {
                 view: session,
                 history: Some(ProtocolHistory::default()),
                 tools,
+                pending_results: Default::default(),
             },
         })
     }
@@ -302,7 +335,7 @@ impl Conversation {
             view: session.view.clone(),
             tools: session.tools.clone(),
             input_retained: false,
-            results: Default::default(),
+            results: std::mem::take(&mut session.pending_results),
             history: session
                 .history
                 .take()
@@ -391,6 +424,7 @@ impl Conversation {
             .as_mut()
             .ok_or(ConversationFailure::new("任务缺少会话"))?;
         view.queue = std::mem::take(&mut session.view.queue);
+        view.execution_blocked |= session.view.execution_blocked;
         view.queue_paused = session.view.queue_paused;
         session.view = view;
         Ok(session.view.clone())
@@ -414,10 +448,12 @@ impl Conversation {
                 .queue_paused = true;
         }
         view = self.update(operation_id, view)?;
-        self.session
+        let session = self
+            .session
             .as_mut()
-            .ok_or(ConversationFailure::new("任务缺少会话"))?
-            .history = Some(active.history);
+            .ok_or(ConversationFailure::new("任务缺少会话"))?;
+        session.history = Some(active.history);
+        session.pending_results = active.results;
         Ok(view)
     }
 

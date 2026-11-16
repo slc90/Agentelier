@@ -7,7 +7,10 @@ mod control;
 mod conversation;
 mod queue;
 
-pub use archive::{InitialSession, SessionSummary, StoredImage, StoredSettings, StoredTool};
+pub use archive::{
+    InitialSession, RecordEvent, SessionRecord, SessionSummary, StoredImage, StoredSettings,
+    StoredState, StoredTool,
+};
 pub use conversation::PreparedSession;
 
 pub use conversation::{
@@ -24,4 +27,5 @@ pub use control::{
     InputDecision, InputReceipt, MAX_PENDING_STEERS, RunnerEvent, SteerInput, SteerState, SteerView,
 };
 
+pub use queue::PreparedQueue;
 pub use queue::{MAX_QUEUED_INPUTS, QueueDecision, QueueEvent, QueuedInput, SessionCommand};

@@ -149,6 +149,7 @@ pub(crate) fn receive(state: &mut ChatState, event: QueueEvent) -> Option<Pendin
             })
             .collect();
         session.queue_paused = view.queue_paused;
+        session.execution_blocked = view.execution_blocked;
     }
     tracing::info!(
         operation_id = event.id,

@@ -9,6 +9,7 @@ use agentelier_conversation::{
 use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
 mod creation;
 mod model_task;
+mod recording;
 use model_task::{
     ModelJoin, ModelTask, PROGRESS_CAPACITY, TaskRequest, complete, drain_progress, progress,
     stop_model,
@@ -80,6 +81,15 @@ impl From<ConversationFailure> for RuntimeFailure {
     }
 }
 enum Command {
+    Recorded(
+        Result<
+            (
+                recording::Pending,
+                io::Result<agentelier_session_store::Commit>,
+            ),
+            tokio::task::JoinError,
+        >,
+    ),
     Created(io::Result<agentelier_session_store::Commit>),
     Account(AccountCommand),
     Model {
@@ -173,6 +183,9 @@ impl AgentRuntime {
                     runtime.block_on(async move {
                         let store = agentelier_session_store::SessionStore::start(data_root).map_err(RuntimeFailure::Store)?;
                         let mut creating: Option<creation::Creation> = None;
+                        let mut records = recording::Records::new();
+                        let mut pending_queue = false;
+                        let mut finalizing = false;
                         let mut account = Account::new(credentials_path, owner_credentials.clone());
                         let mut delivery_failure = None;
                         let mut model: Option<ModelTask> = None;
@@ -187,6 +200,10 @@ impl AgentRuntime {
                                         None => break,
                                     },
                                     _ = runtime_shutdown.cancelled() => break,
+                                    result = records.join_next(), if !records.is_empty() => match result {
+                                        Some(result) => Command::Recorded(result),
+                                        None => return Err(RuntimeFailure::ModelState),
+                                    },
                                     result = async { match &mut creating {
                                         Some(pending) => pending.wait().await,
                                         None => std::future::pending().await,
@@ -195,7 +212,7 @@ impl AgentRuntime {
                                         Some(task) => (&mut task.handle).await,
                                         None => std::future::pending().await,
                                     }} => Command::ModelFinished(result),
-                                    command = session_incoming.recv() => match command {
+                                    command = session_incoming.recv(), if !pending_queue => match command {
                                         Some(command) => Command::Session(command),
                                         None => break,
                                     },
@@ -209,6 +226,15 @@ impl AgentRuntime {
                                     },
                                 };
                                 match command {
+                                    Command::Recorded(result) => {
+                                        let (pending, result) = result.map_err(|_| RuntimeFailure::ModelState)?;
+                                        let applied = recording::apply(pending, result, &mut conversation, &publish)?;
+                                        if applied.queue { pending_queue = false; } else { finalizing = false; }
+                                        if applied.failed && let Some(control) = owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.as_ref() { control.cancel.cancel(); }
+                                        if model.is_none() && creating.is_none() && !pending_queue && !finalizing && !runtime_shutdown.is_cancelled() {
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish)?;
+                                        }
+                                    }
                                     Command::Created(result) => {
                                         let pending = creating.take().ok_or(RuntimeFailure::ModelState)?;
                                         let id = pending.id;
@@ -220,7 +246,7 @@ impl AgentRuntime {
                                         control,
                                         request,
                                     } => {
-                                        if model.is_some() || creating.is_some() {
+                                        if model.is_some() || creating.is_some() || finalizing || pending_queue {
                                             control.finished.cancel();
                                             emit(&publish,id,AgentEventKind::ModelCompleted(Err(agentelier_llm_model::ModelFailure {kind:agentelier_llm_model::ModelFailureKind::Service,status:None,code:None,request_id:None,message:"当前任务正在执行，不能插入模型操作".into()})))?;
                                             continue;
@@ -237,45 +263,37 @@ impl AgentRuntime {
                                     Command::ModelFinished(result) => {
                                         let task =
                                             model.take().ok_or(RuntimeFailure::ModelState)?;
-                                        task.control.finished.cancel();
                                         debug!(operation_id = task.id, "模型操作已真实结束并回收");
-                                        capture_delivery(
-                                            {
-                                                drain_progress(
-                                                    &mut conversation,
-                                                    task.id,
-                                                    &mut progress_events,
-                                                    &publish,
-                                                )?;
-                                                emit(
-                                                    &publish,
-                                                    task.id,
-                                                    complete(
-                                                        &mut conversation,
-                                                        task.id,
-                                                        task.chat,
-                                                        result,
-                                                    )?,
-                                                )
-                                            },
-                                            &mut delivery_failure,
-                                        );
-                                        if delivery_failure.is_none() && !runtime_shutdown.is_cancelled() {
+                                        drain_progress(&mut conversation, task.id, &mut progress_events, &publish)?;
+                                        let event = complete(&mut conversation, task.id, task.chat, result)?;
+                                        if task.chat {
+                                            let (state, history) = conversation.archive().ok_or(RuntimeFailure::ModelState)?;
+                                            let session = state.session;
+                                            recording::submit(recording::Pending::Finished { id: task.id, session, control: task.control }, agentelier_conversation::RecordEvent::Finished { state, history }, &store, &mut records);
+                                            finalizing = true;
+                                        } else {
+                                            task.control.finished.cancel();
+                                            capture_delivery(emit(&publish, task.id, event), &mut delivery_failure);
+                                        }
+                                        if !finalizing && !pending_queue && delivery_failure.is_none() && !runtime_shutdown.is_cancelled() {
                                             model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish)?;
                                         }
                                     }
                                     Command::Session(command) => {
-                                        if creating.is_some() || (matches!(command,SessionCommand::Resume {..}) && model.is_some()) {
+                                        if creating.is_some() || finalizing || (matches!(command,SessionCommand::Resume {..}) && model.is_some()) {
                                             let id=command.id();
                                             emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Queue(agentelier_conversation::QueueEvent {
                                                 id,view:None,decision:agentelier_conversation::QueueDecision::Rejected("当前执行尚未回收，不能继续队列".into()),
                                             })))?;
                                             continue;
                                         }
-                                        let event=conversation.queue_command(command);
-                                        emit(&publish,event.id,AgentEventKind::Conversation(ConversationEvent::Queue(event)))?;
-                                        if model.is_none() && !runtime_shutdown.is_cancelled() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish)?;
+                                        match conversation.prepare_queue(command) {
+                                            Ok(pending) => {
+                                                let event = pending.record();
+                                                recording::submit(recording::Pending::Queue(pending), event, &store, &mut records);
+                                                pending_queue = true;
+                                            }
+                                            Err(event) => emit(&publish,event.id,AgentEventKind::Conversation(ConversationEvent::Queue(*event)))?,
                                         }
                                     }
                                     Command::Stream(event) => {
@@ -295,7 +313,7 @@ impl AgentRuntime {
                                         request,
                                         steers,
                                     } => {
-                                        if model.is_some() || creating.is_some() {
+                                        if model.is_some() || creating.is_some() || finalizing || pending_queue {
                                             control.finished.cancel();
                                             emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Rejected("排队任务已经开始，当前发送未接纳，草稿保留".into())))?;
                                             continue;
@@ -364,6 +382,7 @@ impl AgentRuntime {
                                                     &mut model,
                                                     &mut progress_events,
                                                     &mut conversation,
+                                                    &store,
                                                     &publish,
                                                 )
                                                 .await,
@@ -444,11 +463,18 @@ impl AgentRuntime {
                                 &mut model,
                                 &mut progress_events,
                                 &mut conversation,
+                                &store,
                                 &publish,
                             )
                             .await,
                             &mut delivery_failure,
                         );
+                        while let Some(result) = records.join_next().await {
+                            match result {
+                                Ok((pending, result)) => capture_delivery(recording::apply(pending, result, &mut conversation, &publish).map(|_| ()), &mut delivery_failure),
+                                Err(_) => { delivery_failure = delivery_failure.or(Some(RuntimeFailure::ModelState)); }
+                            }
+                        }
                         let stored = store.finish().await.map_err(RuntimeFailure::Store);
                         let pending_saved = if let Some(mut pending) = creating {
                             let saved = pending.wait().await;

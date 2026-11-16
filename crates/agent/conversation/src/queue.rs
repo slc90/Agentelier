@@ -3,7 +3,7 @@ use crate::{
 };
 
 pub const MAX_QUEUED_INPUTS: usize = 8;
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct QueuedInput {
     pub operation_id: u64,
     pub input_id: TurnId,
@@ -39,6 +39,7 @@ impl SessionCommand {
         }
     }
 }
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub enum QueueDecision {
     Enqueued,
     Removed { operation: u64 },
@@ -51,7 +52,78 @@ pub struct QueueEvent {
     pub view: Option<SessionView>,
     pub decision: QueueDecision,
 }
+
+pub struct PreparedQueue {
+    pub id: u64,
+    pub decision: QueueDecision,
+    state: crate::StoredState,
+    next_turn: u64,
+}
+
+impl PreparedQueue {
+    pub fn session(&self) -> SessionId {
+        self.state.session
+    }
+    pub fn record(&self) -> crate::RecordEvent {
+        crate::RecordEvent::QueueChanged {
+            state: self.state.clone(),
+            decision: self.decision.clone(),
+        }
+    }
+
+    pub fn commit(self, conversation: &mut Conversation) -> QueueEvent {
+        match conversation
+            .session
+            .as_mut()
+            .filter(|session| session.view.id == self.state.session)
+        {
+            Some(session) => {
+                session.view.queue = self.state.queue;
+                session.view.queue_paused = self.state.queue_paused
+                    || session.view.execution_blocked
+                    || (session.view.queue_paused
+                        && !matches!(self.decision, QueueDecision::Resumed));
+                conversation.next_turn = conversation.next_turn.max(self.next_turn);
+                QueueEvent {
+                    id: self.id,
+                    view: Some(session.view.clone()),
+                    decision: self.decision,
+                }
+            }
+            None => QueueEvent {
+                id: self.id,
+                view: None,
+                decision: QueueDecision::Rejected("保存期间会话已变化，未应用待办操作".into()),
+            },
+        }
+    }
+}
+
 impl Conversation {
+    pub fn prepare_queue(&self, command: SessionCommand) -> Result<PreparedQueue, Box<QueueEvent>> {
+        let mut candidate = self.clone();
+        let event = candidate.queue_command(command);
+        if matches!(
+            event.decision,
+            QueueDecision::Rejected(_) | QueueDecision::AlreadyStarted { .. }
+        ) {
+            return Err(Box::new(event));
+        }
+        let Some(view) = event.view else {
+            return Err(Box::new(QueueEvent {
+                id: event.id,
+                view: None,
+                decision: QueueDecision::Rejected("待办准备缺少会话".into()),
+            }));
+        };
+        Ok(PreparedQueue {
+            id: event.id,
+            decision: event.decision,
+            state: crate::StoredState::from(&view),
+            next_turn: candidate.next_turn,
+        })
+    }
+
     pub fn queue_command(&mut self, command: SessionCommand) -> QueueEvent {
         let id = command.id();
         let outcome = self.change_queue(command);

@@ -18,7 +18,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/account/` | `agentelier_account` | 账号操作与会话状态、共享凭据门控和按需续期协调 |
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录、Responses、SSE 和模型错误语义 |
 | `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的内存聊天会话、Turn 身份、展示记录与结果收敛 |
-| `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话的初始存档、不可变图片附件、单写入者、提交确认与存储收尾 |
+| `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话日志、执行事件追加、不可变图片附件、单写入者、提交确认与存储收尾 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
 | `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示 |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、正文增量和受控取消 |
@@ -179,6 +179,8 @@ Prompts 是无 Bevy、网络和线程依赖的业务库，管理来源与派生�
 Chat UI 管理提示词库、组合预览和会话核对界面，并在创建 Session 时提交解析后的完整 InstructionSnapshot。Conversation 固定快照；重置复制当前设置，重试沿用原快照。LLM Model 在每次请求中将快照转换为有序 `developer` 消息，置于已提交协议历史和本轮输入之前，避免把指令重复写入历史。Bridge 传递快照与请求指令安全投影；UI 可核对文本、来源版本、哈希、角色及顺序，不公开凭据或加密推理内容。详见[提示词管理](modules/prompts.md)。
 
 任务取消由 Runner 接收并结束当前模型等待，随后归还已有活动记录；Runtime 不在外层丢弃整个 Runner。普通网络失败和停止保留既有展示与历史语义；异常退出不能归还可信记录时，当前会话禁止继续发送或重试，用户必须重置或新建会话。
+
+任务输入、完整协议响应、工具开始与返回、封闭步骤、Steer、Queue 和终态经同一个 Session Store 工作者追加到会话日志。Runner 等待副作用前的记录确认，并在保存失败后保留实际结果、停止后续执行；Runtime 准备并确认队列变更，在真实回收及 Finished 提交后才发布终态和自动出队。磁盘记录不含账号所有权，不从 UI 摘要构造请求；当前尚未开放存档恢复界面。
 
 ## Direct 工具往返
 

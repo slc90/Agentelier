@@ -22,7 +22,7 @@ fn directory(path: &Path, parent: &Path) -> io::Result<PathBuf> {
     Ok(canonical)
 }
 
-fn attachment_directory(root: &Path, session: SessionId, create: bool) -> io::Result<PathBuf> {
+pub(super) fn session_directory(root: &Path, session: SessionId) -> io::Result<PathBuf> {
     if session.is_nil() {
         return Err(io::Error::other("附件缺少所属会话"));
     }
@@ -33,6 +33,11 @@ fn attachment_directory(root: &Path, session: SessionId, create: bool) -> io::Re
     if !journal.is_file() || journal.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Err(io::Error::other("附件所属会话缺少普通存档文件"));
     }
+    Ok(session)
+}
+
+fn attachment_directory(root: &Path, session: SessionId, create: bool) -> io::Result<PathBuf> {
+    let session = session_directory(root, session)?;
     let path = session.join("attachments");
     if create {
         match fs::create_dir(&path) {

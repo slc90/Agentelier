@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 pub const MAX_TOOL_BODY_BYTES: usize = 64 * 1024;
 const ERROR_MESSAGE_BYTES: usize = 8192;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ToolStatus {
     Receiving,
     Pending,

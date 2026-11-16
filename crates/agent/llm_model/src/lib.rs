@@ -7,7 +7,9 @@ mod protocol;
 mod stream;
 
 pub use generation::{GenerationRequest, generate};
-pub use protocol::{ProtocolHistory, ProtocolItemSummary, ProtocolOutput};
+pub use protocol::{
+    ArchivedPayload, ProtocolArchive, ProtocolHistory, ProtocolItemSummary, ProtocolOutput,
+};
 pub use stream::{FunctionCall, GenerationResult, OutputMessage, OutputText, StreamEvent};
 
 pub use model::{

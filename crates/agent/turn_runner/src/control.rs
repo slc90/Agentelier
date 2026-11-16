@@ -17,10 +17,29 @@ pub(crate) async fn accept(
     active: &mut ActiveTurn,
     input: SteerInput,
     progress: &mpsc::Sender<RunnerEvent>,
+    store: &agentelier_session_store::SessionStoreClient,
 ) -> Result<(), ConversationFailure> {
     let id = input.id;
     let decision = match active.accept_steer(input) {
-        Ok(()) => InputDecision::Accepted,
+        Ok(()) => {
+            if let Err(failure) = store
+                .append(agentelier_conversation::RecordEvent::SteerAccepted {
+                    state: active.stored_state(),
+                })
+                .await
+            {
+                receipt(
+                    progress,
+                    id,
+                    InputDecision::Rejected(format!("补充输入保存失败：{failure}")),
+                )
+                .await?;
+                return Err(ConversationFailure::new(format!(
+                    "补充输入保存失败：{failure}"
+                )));
+            }
+            InputDecision::Accepted
+        }
         Err(failure) => InputDecision::Rejected(failure.to_string()),
     };
     receipt(progress, id, decision).await
@@ -29,9 +48,10 @@ pub(crate) async fn drain(
     active: &mut ActiveTurn,
     incoming: &mut mpsc::Receiver<SteerInput>,
     progress: &mpsc::Sender<RunnerEvent>,
+    store: &agentelier_session_store::SessionStoreClient,
 ) -> Result<(), ConversationFailure> {
     while let Ok(input) = incoming.try_recv() {
-        accept(active, input, progress).await?;
+        accept(active, input, progress, store).await?;
     }
     Ok(())
 }

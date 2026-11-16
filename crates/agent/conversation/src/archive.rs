@@ -4,6 +4,100 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Clone, Serialize, Deserialize)]
+pub struct StoredState {
+    pub session: SessionId,
+    pub turn: Option<Box<crate::TurnView>>,
+    pub previous_turns: Vec<crate::TurnView>,
+    pub committed_items: Vec<crate::ProtocolItemSummary>,
+    pub execution_blocked: bool,
+    pub queue: Vec<crate::QueuedInput>,
+    pub queue_paused: bool,
+}
+
+impl From<&SessionView> for StoredState {
+    fn from(view: &SessionView) -> Self {
+        Self {
+            session: view.id,
+            turn: view.turn.clone(),
+            previous_turns: view.previous_turns.clone(),
+            committed_items: view.committed_items.clone(),
+            execution_blocked: view.execution_blocked,
+            queue: view.queue.clone(),
+            queue_paused: view.queue_paused,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RecordEvent {
+    Accepted {
+        state: StoredState,
+    },
+    Response {
+        state: StoredState,
+        output: agentelier_llm_model::ProtocolArchive,
+    },
+    ToolStarted {
+        state: StoredState,
+        call_id: String,
+    },
+    ToolReturned {
+        state: StoredState,
+        call_id: String,
+        status: agentelier_tools::ToolStatus,
+        output: agentelier_llm_model::ArchivedPayload,
+    },
+    Sealed {
+        state: StoredState,
+        history: agentelier_llm_model::ProtocolArchive,
+    },
+    SteerAccepted {
+        state: StoredState,
+    },
+    SteerApplied {
+        state: StoredState,
+        history: agentelier_llm_model::ProtocolArchive,
+    },
+    QueueChanged {
+        state: StoredState,
+        decision: crate::QueueDecision,
+    },
+    Finalized {
+        state: StoredState,
+        history: agentelier_llm_model::ProtocolArchive,
+    },
+    Finished {
+        state: StoredState,
+        history: Option<agentelier_llm_model::ProtocolArchive>,
+    },
+}
+
+impl RecordEvent {
+    pub fn state(&self) -> &StoredState {
+        match self {
+            Self::Accepted { state }
+            | Self::Response { state, .. }
+            | Self::ToolStarted { state, .. }
+            | Self::ToolReturned { state, .. }
+            | Self::Sealed { state, .. }
+            | Self::SteerAccepted { state }
+            | Self::SteerApplied { state, .. }
+            | Self::QueueChanged { state, .. }
+            | Self::Finalized { state, .. }
+            | Self::Finished { state, .. } => state,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SessionRecord {
+    pub session: SessionId,
+    pub at_ms: u64,
+    pub event: RecordEvent,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct StoredImage {
     pub session: SessionId,
     pub image: agentelier_tools::ImageDescriptor,

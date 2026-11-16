@@ -18,6 +18,13 @@ pub struct ActiveTurn {
     pub(crate) results: std::collections::BTreeMap<String, ToolPayload>,
 }
 impl ActiveTurn {
+    pub fn stored_state(&self) -> crate::StoredState {
+        crate::StoredState::from(&self.view)
+    }
+
+    pub fn archive(&self) -> agentelier_llm_model::ProtocolArchive {
+        self.history.archive()
+    }
     pub fn reaping(&mut self) -> Result<(), ConversationFailure> {
         self.view
             .turn
@@ -337,7 +344,7 @@ impl ActiveTurn {
         &mut self,
         call_id: &str,
         mut result: ToolResult,
-    ) -> Result<(), ConversationFailure> {
+    ) -> Result<(ToolStatus, ToolPayload), ConversationFailure> {
         if result.output.image().is_some()
             && self
                 .history
@@ -361,8 +368,9 @@ impl ActiveTurn {
             .ok_or(ConversationFailure::new("工具结果缺少调用记录"))?;
         tool.status = result.status;
         tool.output = Some(result.output.summary().to_owned());
-        self.results.insert(call_id.to_owned(), result.output);
-        Ok(())
+        self.results
+            .insert(call_id.to_owned(), result.output.clone());
+        Ok((result.status, result.output))
     }
 
     pub fn seal(&mut self, result: GenerationResult) -> Result<(), ConversationFailure> {

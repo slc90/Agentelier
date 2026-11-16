@@ -150,6 +150,7 @@ pub(super) async fn stop_model(
     model: &mut Option<ModelTask>,
     incoming: &mut Option<mpsc::Receiver<RunnerEvent>>,
     conversation: &mut Conversation,
+    store: &agentelier_session_store::SessionStore,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
     if let Some(task) = model.take() {
@@ -178,15 +179,31 @@ pub(super) async fn stop_model(
             progress_failure = progress_failure.or(Some(failure));
         }
         debug!(operation_id = task.id, "模型操作已真实结束并回收");
-        let delivery = emit(
-            publish,
-            task.id,
-            complete(conversation, task.id, task.chat, result)?,
-        );
+        let mut event = complete(conversation, task.id, task.chat, result)?;
+        let mut storage_failure = None;
+        if task.chat {
+            let (state, history) = conversation.archive().ok_or(RuntimeFailure::ModelState)?;
+            if let Err(failure) = store
+                .client()
+                .append(agentelier_conversation::RecordEvent::Finished { state, history })
+                .await
+            {
+                if let Some(view) =
+                    conversation.fail_storage(format!("任务已回收，但终态保存失败：{failure}"))
+                {
+                    event = AgentEventKind::Conversation(ConversationEvent::Finished(view));
+                }
+                storage_failure = Some(RuntimeFailure::Store(failure));
+            }
+        }
+        let delivery = emit(publish, task.id, event);
         if let Some(failure) = progress_failure {
             return Err(failure);
         }
         delivery?;
+        if let Some(failure) = storage_failure {
+            return Err(failure);
+        }
     }
     Ok(())
 }
