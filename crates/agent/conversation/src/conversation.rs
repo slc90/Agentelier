@@ -39,6 +39,7 @@ pub enum TurnStatus {
 pub enum TaskPhase {
     RequestingModel,
     ExecutingTool,
+    ReapingProcesses,
 }
 #[derive(Clone)]
 pub struct ToolView {
@@ -69,6 +70,7 @@ pub struct TurnView {
     pub phase: TaskPhase,
     pub steers: Vec<SteerView>,
     pub request_instructions: Vec<InstructionMessage>,
+    pub process_cleanup: Vec<agentelier_tools::ProcessCleanup>,
 }
 #[derive(Clone)]
 pub struct SessionView {
@@ -266,6 +268,7 @@ impl Conversation {
             phase: TaskPhase::RequestingModel,
             steers: Vec::new(),
             request_instructions: session.view.settings.instructions.messages(),
+            process_cleanup: Vec::new(),
         }));
         self.next_turn = id;
         let active = ActiveTurn {

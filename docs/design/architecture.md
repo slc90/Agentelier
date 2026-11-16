@@ -189,6 +189,8 @@ Conversation 保存 FIFO 待办和暂停状态。Connection 从统一操作序�
 
 ## 本地工具的工作环境
 
-chat_ui 在模型准备区保留内存目录候选并复用 Widgetry 目录选择器；Conversation 在创建时校验并固定本地工作目录，Bridge 传递 PathBuf 与安全展示。Tools 提供 WorkingDirectory 的校验和相对路径解析，已接入有界 PowerShell 命令执行；补丁和图像工具尚未接入。目录选择与账号数据目录相互独立，不改变登录环境或进程全局 cwd。
+chat_ui 在模型准备区保留内存目录候选并复用 Widgetry 目录选择器；Conversation 在创建时校验并固定本地工作目录，Bridge 传递 PathBuf 与安全展示。Tools 提供 WorkingDirectory 的校验和相对路径解析，已接入任务级持续 PowerShell 进程会话与标准输入；补丁和图像工具尚未接入。目录选择与账号数据目录相互独立，不改变登录环境或进程全局 cwd。
 
 Tools 的 process 模块拥有 PowerShell、Windows Job 与输出读取任务，output 模块负责 UTF-8 增量解码及有界开头/尾部缓冲。Runner 提供固定目录及取消令牌，进度交付失败也先请求取消并等待工具收尾，不丢弃执行 Future。process-wrap 负责挂起后入 Job、恢复及进程树终止；win32job 在恢复前登记外层观察 Job，以 active_processes 确认整个进程组结束，再调用一次 wait。这样不以根 Shell 退出或 process-wrap 的缓存状态作为子进程回收证据。两层 Job 均只服务生命周期，不设置访问隔离；源码保持 unsafe 禁令。Tokio 增加 process feature，依赖由 Workspace 统一管理。
+
+Runner 为每个用户任务独占 Tools ExecutionContext，按 UUID 管理最多 8 个 Process。process 模块负责单进程组的启动与回收，sessions 模块处理等待、输入、EOF、终止、ID 归属和统一收尾；输出读取在工具调用返回后仍持续运行。exec_command 与 write_stdin 均采用 0–30000 毫秒等待窗口，没有命令全生命周期的 15 秒终止器。Runner 的所有结果路径都先等待 context.cleanup，再归还 ActiveTurn；Runtime 继续只负责真实任务句柄回收，不接管进程细节。自动收尾记录通过 Conversation、Bridge 与 UI 安全投影，TaskPhase 增加进程回收阶段，原始工具输出不被改写。诊断工具仍保留原有期限。

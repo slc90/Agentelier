@@ -71,6 +71,12 @@ pub struct ChatTool {
     pub retained: bool,
 }
 #[derive(Clone, Reflect)]
+pub struct ChatProcessCleanup {
+    pub session_id: String,
+    pub cleanup_confirmed: bool,
+    pub output: String,
+}
+#[derive(Clone, Reflect)]
 pub struct ChatTurn {
     pub id: u64,
     pub operation_id: u64,
@@ -86,6 +92,7 @@ pub struct ChatTurn {
     pub phase: String,
     pub steers: Vec<ChatSteer>,
     pub request_instructions: String,
+    pub process_cleanup: Vec<ChatProcessCleanup>,
 }
 #[derive(Clone, Reflect)]
 pub struct ChatSession {
@@ -266,7 +273,7 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
                     Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP) }
                 }) as Box<dyn SceneList>)}
             }
-            Name("ChatMessageScroll") crate::reading::ChatReadingScroll Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }--
+            Name("ChatMessageScroll") crate::reading::ChatReadingScroll Node { width: percent(100), height: px(0), flex_basis: px(0), flex_grow: 1.0, flex_shrink: 1.0, min_height: px(0) }--
             @crate::queue::panel()--
             @WidgetryTextField {
                 @value: {draft}, @multiline: true,
@@ -812,6 +819,15 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
         },
         request_items: turn.request_items.into_iter().map(history_item).collect(),
         request_instructions: serde_json::to_string_pretty(&turn.request_instructions)?,
+        process_cleanup: turn
+            .process_cleanup
+            .into_iter()
+            .map(|record| ChatProcessCleanup {
+                session_id: record.session_id,
+                cleanup_confirmed: record.cleanup_confirmed,
+                output: record.output,
+            })
+            .collect(),
     })
 }
 fn project(session: SessionView) -> Result<ChatSession> {
@@ -1250,6 +1266,22 @@ fn summary(state: &ChatState) -> String {
 }
 fn status(state: &ChatState) -> String {
     let mut value = task_status(state);
+    if let Some(turn) = state
+        .session
+        .as_ref()
+        .and_then(|session| session.turn.as_ref())
+        && !turn.process_cleanup.is_empty()
+    {
+        let confirmed = turn
+            .process_cleanup
+            .iter()
+            .filter(|record| record.cleanup_confirmed)
+            .count();
+        value.push_str(&format!(
+            "\n进程清理：{confirmed}/{} 已回收；详情见会话与请求核对",
+            turn.process_cleanup.len()
+        ));
+    }
     if let Some(feedback) = &state.input_feedback {
         value.push('\n');
         value.push_str(feedback);
@@ -1273,6 +1305,8 @@ fn task_status(state: &ChatState) -> String {
                 "{} · 模型请求 {}",
                 if turn.phase == "tool" {
                     "正在执行工具…"
+                } else if turn.phase == "cleanup" {
+                    "正在回收进程…"
                 } else {
                     "正在请求模型…"
                 },
@@ -1398,6 +1432,12 @@ pub(crate) fn request_details(state: &ChatState) -> String {
         text.push_str(&format!("{name}: {description}\n"));
     }
     for turn in session.previous_turns.iter().chain(session.turn.iter()) {
+        for record in &turn.process_cleanup {
+            text.push_str(&format!(
+                "\n任务 {} 自动进程清理 {}：\n{}\n",
+                turn.id, record.session_id, record.output
+            ));
+        }
         text.push_str(&format!(
             "\n任务 {} / 操作 {}；模型请求序号：{}；已保留步骤：{}\n最近请求指令：\n{}\n",
             turn.id,

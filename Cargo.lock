@@ -292,6 +292,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
+ "tracing",
  "uuid",
  "win32job",
  "windows",

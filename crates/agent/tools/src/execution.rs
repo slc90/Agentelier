@@ -59,7 +59,7 @@ impl ToolResult {
 
 pub async fn execute(
     catalog: &ToolCatalog,
-    working_directory: &std::path::Path,
+    context: &mut crate::ExecutionContext,
     name: &str,
     arguments: &str,
     cancel: &CancellationToken,
@@ -77,11 +77,10 @@ pub async fn execute(
     let Some(implementation) = catalog.find(name) else {
         return ToolResult::error(ToolStatus::Failed, "unknown_tool", "未登记的工具名称");
     };
-    if let crate::catalog::Implementation::Exec = implementation {
-        return crate::process::execute(arguments, working_directory, cancel).await;
-    }
-    let crate::catalog::Implementation::Diagnostic(implementation) = implementation else {
-        return ToolResult::error(ToolStatus::Failed, "invalid_tool", "工具执行实现无效");
+    let implementation = match implementation {
+        crate::catalog::Implementation::Exec => return context.exec(arguments, cancel).await,
+        crate::catalog::Implementation::Stdin => return context.stdin(arguments, cancel).await,
+        crate::catalog::Implementation::Diagnostic(implementation) => implementation,
     };
     let result = tokio::select! { biased;
         result = tokio::time::timeout(TOOL_TIMEOUT, diagnostic::run(implementation, arguments)) => result,

@@ -79,10 +79,24 @@ fn preview(value: &str) -> String {
     }
 }
 fn summary(tool: &ChatTool) -> String {
+    let process = tool
+        .output
+        .as_deref()
+        .and_then(|output| serde_json::from_str::<serde_json::Value>(output).ok());
+    let process_state = process
+        .as_ref()
+        .and_then(|value| value.get("data"))
+        .and_then(|data| data.get("state"))
+        .and_then(|state| state.as_str());
+    let label = match (process_state, tool.status.as_str()) {
+        (Some("running"), "succeeded") => "调用成功 · 进程仍在运行",
+        (Some("running"), _) => "调用失败 · 进程仍在运行",
+        _ => status(&tool.status),
+    };
     format!(
         "工具 · {} · {} · 请求 {} / 输出 {} · {}\n参数：{}\n结果：{}",
         tool.name,
-        status(&tool.status),
+        label,
         tool.request_index,
         tool.output_index,
         if tool.retained {

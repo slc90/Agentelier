@@ -82,21 +82,54 @@ pub async fn run(
     progress: mpsc::Sender<RunnerEvent>,
     mut steers: mpsc::Receiver<SteerInput>,
 ) -> Result<ActiveTurn, ConversationFailure> {
-    let outcome = run_task(&mut active, credentials, &cancel, &progress, &mut steers).await;
+    let mut context =
+        agentelier_tools::ExecutionContext::new(active.view().settings.working_directory);
+    let outcome = run_task(
+        &mut active,
+        &mut context,
+        credentials,
+        &cancel,
+        &progress,
+        &mut steers,
+    )
+    .await;
+    let phase = active.reaping();
+    let projection = if phase.is_ok() {
+        publish(&active, &progress, &cancel).await
+    } else {
+        phase
+    };
+    let reason = match &outcome {
+        Ok(TurnStatus::Completed) => "task_completed",
+        Ok(TurnStatus::Cancelled) => "task_stopped",
+        Ok(TurnStatus::Limited) => "task_budget_exhausted",
+        _ => "task_failed",
+    };
+    let report = context.cleanup(reason).await;
+    let cleanup_failed = report.failed;
+    active.process_cleanup(report)?;
     control::close(&mut steers, &progress).await?;
-    active.finish(outcome?)?;
+    let status = match outcome.and_then(|status| projection.map(|()| status)) {
+        Ok(_) if cleanup_failed => TurnStatus::Failed("任务进程清理失败，执行已暂停".into()),
+        Ok(status) => status,
+        Err(failure) => {
+            active.block_execution();
+            TurnStatus::Failed(failure.to_string())
+        }
+    };
+    active.finish(status)?;
     Ok(active)
 }
 
 async fn run_task(
     active: &mut ActiveTurn,
+    context: &mut agentelier_tools::ExecutionContext,
     credentials: CredentialClient,
     cancel: &CancellationToken,
     progress: &mpsc::Sender<RunnerEvent>,
     steers: &mut mpsc::Receiver<SteerInput>,
 ) -> Result<TurnStatus, ConversationFailure> {
     let catalog = active.catalog();
-    let working_directory = active.view().settings.working_directory;
     let mut cleanup_failed = false;
     let mut tools_used = 0;
     for request_index in 0..MAX_MODEL_REQUESTS {
@@ -149,7 +182,7 @@ async fn run_task(
                 let outcome = {
                     let execution = agentelier_tools::execute(
                         &catalog,
-                        &working_directory,
+                        context,
                         &call.name,
                         &call.arguments,
                         &tool_cancel,

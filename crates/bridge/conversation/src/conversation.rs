@@ -76,6 +76,12 @@ pub struct InputReceipt {
     pub decision: InputDecision,
 }
 #[derive(Clone)]
+pub struct ProcessCleanup {
+    pub session_id: String,
+    pub cleanup_confirmed: bool,
+    pub output: String,
+}
+#[derive(Clone)]
 pub struct TurnView {
     pub id: u64,
     pub operation_id: u64,
@@ -91,6 +97,7 @@ pub struct TurnView {
     pub phase: String,
     pub steers: Vec<SteerView>,
     pub request_instructions: Vec<InstructionMessage>,
+    pub process_cleanup: Vec<ProcessCleanup>,
 }
 #[derive(Clone)]
 pub struct QueuedInput {
@@ -256,6 +263,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
         phase: match turn.phase {
             agentelier_conversation::TaskPhase::RequestingModel => "model",
             agentelier_conversation::TaskPhase::ExecutingTool => "tool",
+            agentelier_conversation::TaskPhase::ReapingProcesses => "cleanup",
         }
         .into(),
         tools: turn
@@ -307,6 +315,15 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
             .collect(),
         request_items: turn.request_items.into_iter().map(history_item).collect(),
         request_instructions: turn.request_instructions,
+        process_cleanup: turn
+            .process_cleanup
+            .into_iter()
+            .map(|record| ProcessCleanup {
+                session_id: record.session_id,
+                cleanup_confirmed: record.cleanup_confirmed,
+                output: record.output,
+            })
+            .collect(),
         status: match turn.status {
             agentelier_conversation::TurnStatus::Limited => TurnStatus::Limited,
             agentelier_conversation::TurnStatus::Running => TurnStatus::Running,

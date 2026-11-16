@@ -6,6 +6,7 @@ use std::collections::HashSet;
 pub(crate) enum Implementation {
     Diagnostic(crate::diagnostic::Diagnostic),
     Exec,
+    Stdin,
 }
 
 #[derive(Clone)]
@@ -22,11 +23,22 @@ impl ToolCatalog {
         let tools = vec![
             ToolDefinition {
                 name: "exec_command",
-                description: format!("Execute a PowerShell 7 command with UTF-8 pipes, no profile, and a 15 second lifetime limit. workdir null uses the fixed session directory {}; relative workdir resolves there. Runs with current user permissions, without a sandbox. Returns stdout, stderr, actual exit code and truncation. There are no persistent sessions yet.", directory.display()),
+                description: format!("Execute PowerShell 7 using UTF-8 pipes and no profile. workdir null uses fixed session directory {}; relative values resolve there. yield_time_ms null waits 10000 ms; 0..30000 is allowed. If still running, returns a task-scoped session_id for write_stdin and new output. No command lifetime limit. At most 8 unreaped sessions. All processes are reaped when this user task ends; old IDs cannot be used in a later task. Runs with current-user access, without a sandbox or PTY.", directory.display()),
                 parameters: json!({"type":"object","properties":{
-                    "cmd":{"type":"string"},"workdir":{"type":["string","null"]}
-                },"required":["cmd","workdir"],"additionalProperties":false}),
+                    "cmd":{"type":"string"},"workdir":{"type":["string","null"]},
+                    "yield_time_ms":{"type":["integer","null"],"minimum":0,"maximum":30000}
+                },"required":["cmd","workdir","yield_time_ms"],"additionalProperties":false}),
                 implementation: Implementation::Exec,
+            },
+            ToolDefinition {
+                name: "write_stdin",
+                description: "Continue a process session from this user task. Empty chars only polls for new output; nonempty chars writes exactly those UTF-8 bytes, without adding a newline. close_stdin closes input after this write (EOF). terminate kills and reaps that process group, and cannot be combined with nonempty chars or close_stdin. yield_time_ms null waits 10000 ms; range 0..30000. Output is consumed, never repeated; no automatic input retry. Nonzero exit codes are preserved. Sessions expire at task end. Pipes are not window keyboard input or a terminal.".into(),
+                parameters: json!({"type":"object","properties":{
+                    "session_id":{"type":"string"},"chars":{"type":"string"},
+                    "yield_time_ms":{"type":["integer","null"],"minimum":0,"maximum":30000},
+                    "close_stdin":{"type":"boolean"},"terminate":{"type":"boolean"}
+                },"required":["session_id","chars","yield_time_ms","close_stdin","terminate"],"additionalProperties":false}),
+                implementation: Implementation::Stdin,
             },
             ToolDefinition {
                 name: "diagnostic_calculate",

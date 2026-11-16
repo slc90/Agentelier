@@ -15,6 +15,31 @@ pub struct ActiveTurn {
     pub(crate) input_retained: bool,
 }
 impl ActiveTurn {
+    pub fn reaping(&mut self) -> Result<(), ConversationFailure> {
+        self.view
+            .turn
+            .as_mut()
+            .ok_or(ConversationFailure::new("活动任务缺少轮次"))?
+            .phase = TaskPhase::ReapingProcesses;
+        Ok(())
+    }
+
+    pub fn process_cleanup(
+        &mut self,
+        report: agentelier_tools::CleanupReport,
+    ) -> Result<(), ConversationFailure> {
+        self.view
+            .turn
+            .as_mut()
+            .ok_or(ConversationFailure::new("活动任务缺少轮次"))?
+            .process_cleanup
+            .extend(report.processes);
+        if report.failed {
+            self.block_execution();
+        }
+        Ok(())
+    }
+
     pub fn block_execution(&mut self) {
         self.view.execution_blocked = true;
     }

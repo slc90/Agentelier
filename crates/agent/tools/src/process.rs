@@ -4,19 +4,17 @@ use crate::output::Reader;
 use process_wrap::tokio::{
     ChildWrapper, CommandWrap, CommandWrapper, CreationFlags, JobObject, KillOnDrop,
 };
-use serde::Deserialize;
 use serde_json::json;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::process::{Child, Command};
+use tokio::process::{Child, ChildStdin, Command};
 use tokio_util::sync::CancellationToken;
 use win32job::{ExtendedLimitInfo, Job};
 use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 
-const COMMAND_LIFETIME: Duration = Duration::from_secs(15);
 const REAP_DEADLINE: Duration = Duration::from_secs(10);
 const PROCESS_POLL: Duration = Duration::from_millis(40);
 const RESULT_STREAM_BYTES: usize = 16 * 1024;
@@ -38,13 +36,6 @@ impl CommandWrapper for JobMonitor {
             .assign_process(handle as isize)
             .map_err(io::Error::other)
     }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ExecArguments {
-    cmd: String,
-    workdir: Option<PathBuf>,
 }
 
 pub(crate) fn arguments<T: serde::de::DeserializeOwned>(
@@ -80,16 +71,19 @@ pub(crate) struct Process {
     pub(crate) stdout: Reader,
     pub(crate) stderr: Reader,
     pub(crate) directory: PathBuf,
+    pub(crate) stdin: Option<ChildStdin>,
+    discarded_total: u64,
 }
 
 impl Process {
-    async fn start(
-        input: &ExecArguments,
+    pub(crate) async fn start(
+        cmd: &str,
+        workdir: Option<PathBuf>,
         base: &Path,
         cancel: &CancellationToken,
     ) -> Result<Self, ToolFailure> {
         let base = base.to_path_buf();
-        let candidate = input.workdir.clone();
+        let candidate = workdir;
         let setup = tokio::task::spawn_blocking(move || -> io::Result<(PathBuf, PathBuf)> {
             let directory = WorkingDirectory::validate(&base)?
                 .directory(candidate.as_deref())?
@@ -129,8 +123,8 @@ impl Process {
         );
         let mut command = CommandWrap::with_new(shell, |command| {
             command.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"])
-                .arg(format!("[Console]::InputEncoding=[Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $OutputEncoding=[Console]::OutputEncoding; {}", input.cmd))
-                .current_dir(&directory).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+                .arg(format!("[Console]::InputEncoding=[Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $OutputEncoding=[Console]::OutputEncoding; {}", cmd))
+                .current_dir(&directory).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         });
         command
             .wrap(KillOnDrop)
@@ -149,7 +143,10 @@ impl Process {
             .stderr()
             .take()
             .ok_or_else(|| ToolFailure::new("spawn_failed", "命令缺少 stderr 管道"))?;
+        let stdin = child.stdin().take();
         Ok(Self {
+            stdin,
+            discarded_total: 0,
             child,
             monitor,
             stdout: Reader::start(stdout),
@@ -158,14 +155,14 @@ impl Process {
         })
     }
 
-    fn empty(&self) -> io::Result<bool> {
+    pub(crate) fn empty(&self) -> io::Result<bool> {
         self.monitor
             .query_basic_and_io_accounting_info()
             .map(|info| info.active_processes == 0)
             .map_err(io::Error::other)
     }
 
-    async fn wait_empty(&self) -> io::Result<()> {
+    pub(crate) async fn wait_empty(&self) -> io::Result<()> {
         loop {
             if self.empty()? {
                 return Ok(());
@@ -174,7 +171,7 @@ impl Process {
         }
     }
 
-    async fn reap(&mut self, terminate: bool) -> io::Result<ExitStatus> {
+    pub(crate) async fn reap(&mut self, terminate: bool) -> io::Result<ExitStatus> {
         if terminate && !self.empty()? {
             self.child.start_kill()?;
         }
@@ -185,7 +182,7 @@ impl Process {
         self.child.wait().await
     }
 
-    async fn readers(&mut self) -> io::Result<()> {
+    pub(crate) async fn readers(&mut self) -> io::Result<()> {
         let result = tokio::time::timeout(REAP_DEADLINE, async {
             let (stdout, stderr) = tokio::join!(&mut self.stdout.task, &mut self.stderr.task);
             let stdout = stdout.map_err(io::Error::other).and_then(|result| result);
@@ -206,19 +203,22 @@ impl Process {
         }
     }
 
-    fn result(
-        &self,
+    pub(crate) fn result(
+        &mut self,
         status: ToolStatus,
         exit: Option<ExitStatus>,
         failure: Option<String>,
         cleanup_failed: bool,
+        session_id: &str,
+        input: serde_json::Value,
+        completed: bool,
     ) -> ToolResult {
         let captures = self
             .stdout
             .output
             .lock()
             .and_then(|stdout| self.stderr.output.lock().map(|stderr| (stdout, stderr)));
-        let Ok((stdout, stderr)) = captures else {
+        let Ok((mut stdout, mut stderr)) = captures else {
             let mut result =
                 ToolResult::error(ToolStatus::Failed, "output_failed", "命令输出缓冲状态损坏");
             result.cleanup_failed = cleanup_failed;
@@ -229,13 +229,18 @@ impl Process {
             let (out, out_discarded, out_replaced) = stdout.text(limit);
             let (err, err_discarded, err_replaced) = stderr.text(limit);
             let output = json!({"ok":status == ToolStatus::Succeeded,"data":{
-                "state":if cleanup_failed {"cleanup_unconfirmed"} else {"exited"},
-                "workdir":self.directory,"exit_code":exit.and_then(|code| code.code()), "cleanup_confirmed":!cleanup_failed,
+                "state":if cleanup_failed {"cleanup_unconfirmed"} else if completed {"exited"} else {"running"},
+                "process_status":if cleanup_failed {"进程回收未确认"} else if completed {"关联进程已结束并回收"} else {"进程仍在运行，请使用 write_stdin 继续操作"},
+                "session_id":session_id,"workdir":self.directory,"exit_code":exit.and_then(|code| code.code()),
+                "cleanup_confirmed":completed && !cleanup_failed,
                 "stdout":out,"stderr":err,"truncated":out_discarded + err_discarded > 0,
-                "discarded_bytes":out_discarded + err_discarded,"decoding_replaced":out_replaced || err_replaced,
-                "error":failure
+                "discarded_bytes":out_discarded + err_discarded,"discarded_bytes_total":self.discarded_total + out_discarded + err_discarded,"decoding_replaced":out_replaced || err_replaced,
+                "input":input,"error":failure
             }}).to_string();
             if output.len() <= MAX_TOOL_BODY_BYTES {
+                self.discarded_total += out_discarded + err_discarded;
+                *stdout = Default::default();
+                *stderr = Default::default();
                 return ToolResult {
                     status,
                     output,
@@ -254,81 +259,4 @@ impl Process {
             limit /= 2;
         }
     }
-}
-
-pub(crate) async fn execute(text: &str, base: &Path, cancel: &CancellationToken) -> ToolResult {
-    let input: ExecArguments = match arguments(text, &["cmd", "workdir"]) {
-        Ok(input) => input,
-        Err(error) => {
-            return ToolResult::error(
-                if error.code == "cancelled" {
-                    ToolStatus::Cancelled
-                } else {
-                    ToolStatus::Failed
-                },
-                error.code,
-                &error.to_string(),
-            );
-        }
-    };
-    if input.cmd.trim().is_empty() {
-        return ToolResult::error(ToolStatus::Failed, "invalid_arguments", "命令不能为空");
-    }
-    let mut process = match Process::start(&input, base, cancel).await {
-        Ok(process) => process,
-        Err(error) => {
-            return ToolResult::error(
-                if error.code == "cancelled" {
-                    ToolStatus::Cancelled
-                } else {
-                    ToolStatus::Failed
-                },
-                error.code,
-                &error.to_string(),
-            );
-        }
-    };
-    let outcome = tokio::select! { biased;
-        result = tokio::time::timeout(COMMAND_LIFETIME, process.wait_empty()) => match result {
-            Ok(Ok(())) => (ToolStatus::Succeeded, None),
-            Ok(Err(error)) => (ToolStatus::Failed, Some(error.to_string())),
-            Err(_) => (ToolStatus::TimedOut, Some("命令执行超过 15 秒，进程组已请求终止".into())),
-        },
-        _ = cancel.cancelled() => (ToolStatus::Cancelled, Some("命令已取消，进程组已请求终止".into())),
-    };
-    let (mut status, mut failure) = outcome;
-    if matches!(status, ToolStatus::Cancelled | ToolStatus::TimedOut)
-        && process.empty().is_ok_and(|empty| empty)
-    {
-        status = ToolStatus::Succeeded;
-        failure = None;
-    }
-    let reaped = process.reap(status != ToolStatus::Succeeded).await;
-    let readers = process.readers().await;
-    let cleanup_failed = reaped.is_err();
-    let exit = match reaped {
-        Ok(exit) => {
-            if status == ToolStatus::Succeeded && !exit.success() {
-                status = ToolStatus::Failed;
-                failure = Some("命令以非零退出码结束".into());
-            }
-            Some(exit)
-        }
-        Err(error) => {
-            status = ToolStatus::Failed;
-            failure = Some(format!("进程回收失败：{error}"));
-            None
-        }
-    };
-    if let Err(error) = readers {
-        status = ToolStatus::Failed;
-        failure = Some(format!(
-            "{}；输出收尾失败：{error}",
-            failure.unwrap_or_default()
-        ));
-    }
-    if !cleanup_failed && let Some(message) = failure.as_mut() {
-        *message = message.replace("进程组已请求终止", "关联进程组已终止并回收");
-    }
-    process.result(status, exit, failure, cleanup_failed)
 }

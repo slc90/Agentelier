@@ -24,6 +24,8 @@ struct QueuePanel;
 #[derive(Component, Clone, Default)]
 struct QueueSummary;
 #[derive(Component, Clone, Default)]
+struct QueueViewport;
+#[derive(Component, Clone, Default)]
 struct QueueList {
     items: Vec<ChatQueuedInput>,
 }
@@ -42,7 +44,7 @@ pub(crate) fn install(app: &mut App) {
 pub(crate) fn panel() -> impl Scene {
     bsn! {
         QueuePanel Name("ChatQueuePanel")
-        Node {display:Display::None, width:percent(100), min_width:px(0), flex_shrink:0.0, flex_direction:FlexDirection::Column,row_gap:px(ROW_GAP)}
+        Node {display:Display::None, width:percent(100), min_width:px(0), min_height:px(0), flex_shrink:1.0, flex_direction:FlexDirection::Column,row_gap:px(ROW_GAP)}
         Children [
             Node {column_gap:px(ROW_GAP), align_items:AlignItems::Center}
             Children [
@@ -54,7 +56,8 @@ pub(crate) fn panel() -> impl Scene {
                 QueueList::default() Name("ChatQueueList")
                 Node {width:percent(100),min_width:px(0),flex_direction:FlexDirection::Column,row_gap:px(ROW_GAP)}
             }) as Box<dyn SceneList>)}}
-            Node {width:percent(100),height:px(LIST_HEIGHT),flex_shrink:0.0}
+            QueueViewport Name("ChatQueueViewport")
+            Node {width:percent(100),height:px(LIST_HEIGHT),min_height:px(0),flex_shrink:1.0}
         ]
     }
 }
@@ -200,6 +203,14 @@ pub(crate) fn reconcile(world: &mut World) -> Result {
             Display::None
         } else {
             Display::Flex
+        };
+    }
+    let mut viewports = world.query_filtered::<&mut Node, With<QueueViewport>>();
+    for mut node in viewports.iter_mut(world) {
+        node.display = if items.is_empty() {
+            Display::None
+        } else {
+            Display::Grid
         };
     }
     let mut labels = world.query_filtered::<&mut Text, With<QueueSummary>>();
