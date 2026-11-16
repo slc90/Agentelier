@@ -8,6 +8,7 @@ const ERROR_MESSAGE_BYTES: usize = 8192;
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ToolStatus {
+    Unconfirmed,
     Receiving,
     Pending,
     Running,

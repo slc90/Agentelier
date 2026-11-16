@@ -7,7 +7,7 @@
 - [认证运行与凭据管理](design/modules/authentication.md)：账号持久化、认证工作者和凭据生命周期。
 - [账号界面投影](design/modules/account-ui.md)：账号状态与界面职责边界。
 - [模型请求](design/modules/model-request.md)：模型目录、请求协议、流式解析与取消。
-- [内存会话与协议历史](design/modules/conversation.md)：会话快照、任务执行、历史提交与进程收尾。
+- [会话与协议历史](design/modules/conversation.md)：固定快照、任务执行、历史提交、存档恢复与进程收尾。
 - [会话存储](design/modules/session-store.md)：会话日志、执行事件、图片附件、提交回执及单写入者关闭边界。
 - [提示词版本与快照](design/modules/prompts.md)：提示词版本、组合和固定指令的数据边界。
 - [Markdown 展示](design/modules/markdown.md)：正文解析、实体投影与阅读状态。

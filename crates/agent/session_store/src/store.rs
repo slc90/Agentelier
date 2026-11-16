@@ -38,6 +38,11 @@ pub struct Commit {
 }
 
 enum Command {
+    Scan(oneshot::Sender<io::Result<Vec<agentelier_conversation::ArchiveEntry>>>),
+    Load(
+        SessionId,
+        oneshot::Sender<io::Result<agentelier_conversation::RestoredSession>>,
+    ),
     Create(Box<InitialSession>, oneshot::Sender<io::Result<Commit>>),
     SaveImage(
         StoredImage,
@@ -52,6 +57,27 @@ enum Command {
 pub struct SessionStoreClient(mpsc::Sender<Command>);
 
 impl SessionStoreClient {
+    pub fn scan(
+        &self,
+    ) -> io::Result<oneshot::Receiver<io::Result<Vec<agentelier_conversation::ArchiveEntry>>>> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .try_send(Command::Scan(reply))
+            .map_err(|failure| io::Error::other(format!("无法接纳会话目录读取：{failure}")))?;
+        Ok(result)
+    }
+
+    pub fn load(
+        &self,
+        session: SessionId,
+    ) -> io::Result<oneshot::Receiver<io::Result<agentelier_conversation::RestoredSession>>> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .try_send(Command::Load(session, reply))
+            .map_err(|failure| io::Error::other(format!("无法接纳会话读取：{failure}")))?;
+        Ok(result)
+    }
+
     pub fn try_append(
         &self,
         event: RecordEvent,
@@ -130,6 +156,16 @@ impl SessionStore {
                 let mut writer = crate::journal::Writer::default();
                 while let Some(command) = commands.blocking_recv() {
                     match command {
+                        Command::Scan(reply) => {
+                            let result = crate::reader::scan(&root);
+                            if let Err(failure) = &result { error!(error = %failure, "本地会话目录读取失败"); }
+                            if reply.send(result).is_err() { debug!("会话目录读取已结束，等待者已离开"); }
+                        }
+                        Command::Load(session, reply) => {
+                            let result = crate::reader::load(&root, session, &mut writer);
+                            if let Err(failure) = &result { error!(session_id = %session, error = %failure, "本地会话读取失败"); }
+                            if reply.send(result).is_err() { debug!("会话读取已结束，等待者已离开"); }
+                        }
                         Command::Append(event, reply) => {
                             let session = event.state().session;
                             let result = writer.append(&root, *event);

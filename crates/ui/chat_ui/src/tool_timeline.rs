@@ -59,6 +59,7 @@ pub(crate) fn card(key: String, tool: ChatTool, expanded: bool) -> impl Scene {
 
 fn status(value: &str) -> &str {
     match value {
+        "unconfirmed" => "结果未确认",
         "receiving" => "接收中",
         "pending" => "待执行",
         "running" => "执行中",

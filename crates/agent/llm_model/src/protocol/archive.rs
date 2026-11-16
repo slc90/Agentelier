@@ -77,6 +77,53 @@ pub struct ProtocolArchive {
     items: Vec<ArchivedItem>,
 }
 
+impl ProtocolArchive {
+    pub fn call_ids(&self) -> impl Iterator<Item = &str> {
+        self.items.iter().filter_map(|item| match item {
+            ArchivedItem::FunctionCall { call_id, .. } => Some(call_id.as_str()),
+            _ => None,
+        })
+    }
+
+    pub fn seal_interrupted(
+        &mut self,
+        output: ProtocolArchive,
+        mut results: std::collections::BTreeMap<String, ArchivedPayload>,
+        started: &std::collections::HashSet<String>,
+        input: Option<&str>,
+    ) -> Result<(), crate::ModelFailure> {
+        let calls = output.call_ids().map(str::to_owned).collect::<Vec<_>>();
+        if calls.is_empty() {
+            return Err(crate::model::protocol(
+                "未完成的普通输出不能作为工具步骤恢复",
+            ));
+        }
+        let unique = calls.iter().collect::<std::collections::HashSet<_>>();
+        if unique.len() != calls.len()
+            || results.keys().any(|id| !calls.contains(id))
+            || started.iter().any(|id| !calls.contains(id))
+            || output.items.iter().any(|item| {
+                matches!(
+                    item,
+                    ArchivedItem::User { .. } | ArchivedItem::FunctionResult { .. }
+                )
+            })
+        {
+            return Err(crate::model::protocol("中断响应中的函数身份或结果不一致"));
+        }
+        if let Some(input) = input {
+            self.items.push(ArchivedItem::User { text: input.into() });
+        }
+        self.items.extend(output.items);
+        for call_id in calls {
+            let output = results.remove(&call_id).unwrap_or_else(|| ArchivedPayload::Text { text: serde_json::json!({"ok":false,"error":{"code":"aborted","message":if started.contains(&call_id) {"上次运行中断，执行结果未确认；不表示文件副作用已撤销"} else {"上次运行中断，此调用未执行"}}}).to_string() });
+            self.items
+                .push(ArchivedItem::FunctionResult { call_id, output });
+        }
+        Ok(())
+    }
+}
+
 fn capture(items: &[ProtocolItem]) -> ProtocolArchive {
     ProtocolArchive {
         items: items

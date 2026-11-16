@@ -31,6 +31,11 @@ impl From<&SessionView> for StoredState {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RecordEvent {
+    Recovered {
+        state: StoredState,
+        history: agentelier_llm_model::ProtocolArchive,
+        notice: String,
+    },
     Accepted {
         state: StoredState,
     },
@@ -76,7 +81,8 @@ pub enum RecordEvent {
 impl RecordEvent {
     pub fn state(&self) -> &StoredState {
         match self {
-            Self::Accepted { state }
+            Self::Recovered { state, .. }
+            | Self::Accepted { state }
             | Self::Response { state, .. }
             | Self::ToolStarted { state, .. }
             | Self::ToolReturned { state, .. }
@@ -88,6 +94,12 @@ impl RecordEvent {
             | Self::Finished { state, .. } => state,
         }
     }
+}
+
+#[derive(Clone)]
+pub struct ArchiveEntry {
+    pub summary: SessionSummary,
+    pub error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -130,7 +142,7 @@ pub struct InitialSession {
     pub settings: StoredSettings,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub session: SessionId,
     pub title: String,

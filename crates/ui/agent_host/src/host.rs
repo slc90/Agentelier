@@ -162,6 +162,9 @@ impl AgentHost {
         self.state()?.model_busy = true;
         Ok(id)
     }
+    pub fn refresh_archives(&self) -> Result {
+        self.submit(|connection| connection.refresh_archives())
+    }
     pub fn cancel_conversation(
         &self,
         session: SessionId,

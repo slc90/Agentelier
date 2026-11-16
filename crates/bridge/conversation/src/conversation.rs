@@ -13,6 +13,7 @@ pub struct SessionSettings {
     pub working_directory: std::path::PathBuf,
 }
 pub enum ConversationRequest {
+    Open { session: SessionId },
     Create(SessionSettings),
     Reset { session: SessionId },
     Send { session: SessionId, input: String },
@@ -127,6 +128,7 @@ pub struct QueueEvent {
 }
 #[derive(Clone)]
 pub struct SessionView {
+    pub notice: Option<String>,
     pub id: SessionId,
     pub settings: SessionSettings,
     pub turn: Option<Box<TurnView>>,
@@ -138,6 +140,9 @@ pub struct SessionView {
     pub queue_paused: bool,
 }
 pub enum ConversationEvent {
+    Archives(Vec<ArchiveEntry>),
+    Opened(SessionView),
+    ArchiveFailed(String),
     Created(SessionView),
     Accepted(SessionView),
     Updated(SessionView),
@@ -148,11 +153,25 @@ pub enum ConversationEvent {
     Started(SessionView),
 }
 
+#[derive(Clone)]
+pub struct ArchiveEntry {
+    pub id: SessionId,
+    pub title: String,
+    pub created_at_ms: u64,
+    pub last_activity_ms: u64,
+    pub last_sequence: u64,
+    pub error: Option<String>,
+}
+
 impl ConversationEvent {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            Self::Created(_) | Self::Finished(_) | Self::Rejected(_)
+            Self::Created(_)
+                | Self::Finished(_)
+                | Self::Rejected(_)
+                | Self::Opened(_)
+                | Self::ArchiveFailed(_)
         )
     }
     pub fn is_progress(&self) -> bool {
@@ -162,6 +181,9 @@ impl ConversationEvent {
 
 pub fn request(request: ConversationRequest) -> agentelier_conversation::ConversationRequest {
     match request {
+        ConversationRequest::Open { session } => {
+            agentelier_conversation::ConversationRequest::Open { session }
+        }
         ConversationRequest::Create(settings) => {
             agentelier_conversation::ConversationRequest::Create(
                 agentelier_conversation::SessionSettings {
@@ -192,6 +214,7 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
 
 fn view(session: agentelier_conversation::SessionView) -> SessionView {
     SessionView {
+        notice: session.notice,
         execution_blocked: session.execution_blocked,
         tool_catalog: session.tool_catalog,
         queue: session
@@ -279,6 +302,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
                 output: tool.output,
                 retained: tool.retained,
                 status: match tool.status {
+                    agentelier_conversation::ToolStatus::Unconfirmed => "unconfirmed",
                     agentelier_conversation::ToolStatus::Receiving => "receiving",
                     agentelier_conversation::ToolStatus::Pending => "pending",
                     agentelier_conversation::ToolStatus::Running => "running",
@@ -335,6 +359,27 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
 
 pub fn convert(event: agentelier_conversation::ConversationEvent) -> ConversationEvent {
     match event {
+        agentelier_conversation::ConversationEvent::Archives(entries) => {
+            ConversationEvent::Archives(
+                entries
+                    .into_iter()
+                    .map(|entry| ArchiveEntry {
+                        id: entry.summary.session,
+                        title: entry.summary.title,
+                        created_at_ms: entry.summary.created_at_ms,
+                        last_activity_ms: entry.summary.last_activity_ms,
+                        last_sequence: entry.summary.last_sequence,
+                        error: entry.error,
+                    })
+                    .collect(),
+            )
+        }
+        agentelier_conversation::ConversationEvent::Opened(session) => {
+            ConversationEvent::Opened(view(session))
+        }
+        agentelier_conversation::ConversationEvent::ArchiveFailed(reason) => {
+            ConversationEvent::ArchiveFailed(reason)
+        }
         agentelier_conversation::ConversationEvent::Started(session) => {
             ConversationEvent::Started(view(session))
         }

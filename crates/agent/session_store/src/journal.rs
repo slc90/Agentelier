@@ -1,9 +1,8 @@
-use crate::store::INITIAL_SEQUENCE;
 use crate::{Commit, FORMAT, FORMAT_VERSION, Record, RecordKind};
 use agentelier_conversation::{RecordEvent, SessionId, SessionRecord, SessionSummary};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, Write};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use tempfile::NamedTempFile;
@@ -50,56 +49,48 @@ fn update(cursor: &mut Cursor, record: &SessionRecord) {
     }
 }
 
+pub(super) fn summarize(
+    initial: &agentelier_conversation::InitialSession,
+    records: &[SessionRecord],
+    sequence: u64,
+) -> (SessionSummary, bool) {
+    let mut cursor = Cursor {
+        sequence,
+        length: 0,
+        summary: initial.summary(sequence),
+        titled: false,
+        poisoned: false,
+    };
+    for record in records {
+        update(&mut cursor, record);
+    }
+    (cursor.summary, cursor.titled)
+}
+
 fn load_cursor(directory: &Path, session: SessionId) -> io::Result<Cursor> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(directory.join("session.jsonl"))?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-        return Err(io::Error::other("会话日志不是普通文件"));
+    let parsed = crate::reader::read(directory, session)?;
+    if let Some(issue) = parsed.issue {
+        return Err(io::Error::other(issue.to_string()));
     }
-    let mut reader = BufReader::new(file);
-    let mut cursor: Option<Cursor> = None;
-    let mut line = String::new();
-    while reader.read_line(&mut line)? != 0 {
-        if !line.ends_with('\n') {
-            return Err(io::Error::other("会话末尾记录未完成，须恢复后才能继续写入"));
-        }
-        let record: Record = serde_json::from_str(&line)?;
-        if record.format != FORMAT || record.version != FORMAT_VERSION {
-            return Err(io::Error::other("会话日志格式不受支持"));
-        }
-        match (&mut cursor, record.kind) {
-            (None, RecordKind::Created(initial))
-                if record.sequence == INITIAL_SEQUENCE && initial.session == session =>
-            {
-                initial.settings.instructions.validate()?;
-                cursor = Some(Cursor {
-                    sequence: INITIAL_SEQUENCE,
-                    length: metadata.len(),
-                    summary: initial.summary(INITIAL_SEQUENCE),
-                    titled: false,
-                    poisoned: false,
-                });
-            }
-            (Some(cursor), RecordKind::Event(event))
-                if event.session == session
-                    && event.event.state().session == session
-                    && cursor.sequence.checked_add(1) == Some(record.sequence) =>
-            {
-                update(cursor, &event);
-                cursor.sequence = record.sequence;
-                cursor.summary.last_sequence = record.sequence;
-            }
-            _ => return Err(io::Error::other("会话日志身份、初始记录或序号不一致")),
-        }
-        line.clear();
-    }
-    cursor.ok_or_else(|| io::Error::other("会话日志没有初始记录"))
+    let initial = parsed
+        .initial
+        .as_ref()
+        .ok_or_else(|| io::Error::other("会话缺少初始记录"))?;
+    let (summary, titled) = summarize(initial, &parsed.records, parsed.sequence);
+    Ok(Cursor {
+        sequence: parsed.sequence,
+        length: parsed.file_length,
+        summary,
+        titled,
+        poisoned: false,
+    })
 }
 
 impl Writer {
+    pub(super) fn reset(&mut self, session: SessionId) {
+        self.0.remove(&session);
+    }
+
     pub(super) fn append(&mut self, root: &Path, event: RecordEvent) -> io::Result<Commit> {
         let session = event.state().session;
         let directory = crate::attachments::session_directory(root, session)?;
@@ -174,10 +165,16 @@ impl Writer {
 
 pub(super) fn write_summary(directory: &Path, summary: &SessionSummary) -> io::Result<()> {
     let path = directory.join("summary.json");
-    if let Ok(metadata) = fs::symlink_metadata(&path)
-        && (!metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0)
-    {
-        return Err(io::Error::other("会话摘要不是普通文件"));
+    match fs::symlink_metadata(&path) {
+        Ok(metadata)
+            if !metadata.is_file()
+                || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 =>
+        {
+            return Err(io::Error::other("会话摘要不是普通文件"));
+        }
+        Ok(_) => {}
+        Err(failure) if failure.kind() == io::ErrorKind::NotFound => {}
+        Err(failure) => return Err(failure),
     }
     let mut temporary = NamedTempFile::new_in(directory)?;
     serde_json::to_writer(temporary.as_file_mut(), summary)?;

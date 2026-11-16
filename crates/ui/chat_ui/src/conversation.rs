@@ -8,7 +8,7 @@ use agentelier_conversation_bridge::SessionId;
 use agentelier_conversation_bridge::{
     ConversationEvent, ConversationRequest, SessionSettings, SessionView, TurnStatus,
 };
-use agentelier_login_ui::{AccountState, CredentialState};
+use agentelier_login_ui::AccountState;
 use agentelier_markdown::{MarkdownSource, MarkdownView};
 use agentelier_prompts::InstructionSnapshot;
 use bevy::ecs::message::MessageCursor;
@@ -97,6 +97,7 @@ pub struct ChatTurn {
 }
 #[derive(Clone, Reflect)]
 pub struct ChatSession {
+    pub notice: Option<String>,
     pub id: SessionId,
     pub slug: String,
     pub display_name: String,
@@ -332,6 +333,9 @@ fn activate(
 }
 
 fn create_session(world: &mut World) -> Result {
+    if world.resource::<crate::ArchiveState>().loading {
+        return Ok(());
+    }
     let state = world.resource::<ChatState>();
     let model = world.resource::<ModelState>();
     let account = world.resource::<AccountState>();
@@ -396,6 +400,9 @@ fn create_session(world: &mut World) -> Result {
 }
 
 fn prepare_reset(world: &mut World) -> Result {
+    if world.resource::<crate::ArchiveState>().loading {
+        return Ok(());
+    }
     let state = world.resource::<ChatState>();
     if state.operation.is_some()
         || state.replacement.is_some()
@@ -839,6 +846,7 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
 }
 fn project(session: SessionView) -> Result<ChatSession> {
     Ok(ChatSession {
+        notice: session.notice,
         execution_blocked: session.execution_blocked,
         tool_catalog: session.tool_catalog,
         queue: session
@@ -876,35 +884,72 @@ fn project(session: SessionView) -> Result<ChatSession> {
 }
 
 fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) -> Result {
-    let account = world.resource::<AccountState>();
-    let invalid = world
-        .resource::<ChatState>()
-        .session
-        .as_ref()
-        .is_some_and(|session| {
-            account
-                .account
-                .as_ref()
-                .is_none_or(|account| account.subject != session.account_subject)
-                || matches!(
-                    account.credentials,
-                    CredentialState::SignedOut
-                        | CredentialState::NoRecord
-                        | CredentialState::HostOnly
-                )
-        });
-    let mut changed = invalid;
-    if invalid {
-        *world.resource_mut::<ChatState>() = ChatState {
-            draft: world.resource::<ChatState>().draft.clone(),
-            ..default()
-        };
-    }
+    let mut changed = false;
     let events: Vec<_> = world
         .resource_mut::<Messages<HostConversationEvent>>()
         .drain()
         .collect();
     for event in events {
+        if let ConversationEvent::Archives(entries) = event.kind {
+            crate::archives::catalog(world, entries)?;
+            changed = true;
+            continue;
+        }
+        if let ConversationEvent::Opened(view) = event.kind {
+            let id = view.id;
+            let different = world
+                .resource::<ChatState>()
+                .session
+                .as_ref()
+                .is_none_or(|session| session.id != id);
+            {
+                let mut state = world.resource_mut::<ChatState>();
+                state.session = Some(project(view)?);
+                if different {
+                    state.expanded_tools.clear();
+                    state.pending_inputs.clear();
+                    state.input_feedback = None;
+                }
+                if event.operation_id != 0 {
+                    state.operation = None;
+                    state.replacement = None;
+                    state.error = None;
+                }
+            }
+            let waiting = world.resource::<ChatState>().operation.is_some();
+            {
+                let mut state = world.resource_mut::<crate::ArchiveState>();
+                state.selected = Some(id);
+                // Account rebinding must not dismiss a failed open of another session.
+                if different || event.operation_id != 0 {
+                    state.error = None;
+                }
+                if !waiting {
+                    state.loading = false;
+                }
+            }
+            crate::archives::sync_selection(world)?;
+            changed = true;
+            continue;
+        }
+        if let ConversationEvent::ArchiveFailed(reason) = event.kind {
+            let matching = world.resource::<ChatState>().operation == Some(event.operation_id);
+            if matching {
+                world.resource_mut::<ChatState>().operation = None;
+            }
+            let waiting = world.resource::<ChatState>().operation.is_some();
+            {
+                let mut state = world.resource_mut::<crate::ArchiveState>();
+                state.error = Some(reason);
+                state.refreshing = false;
+                if !waiting {
+                    state.loading = false;
+                }
+            }
+            crate::archives::sync_selection(world)?;
+            changed = true;
+            continue;
+        }
         if let ConversationEvent::Queue(reply) = event.kind {
             let clear = crate::queue::receive(&mut world.resource_mut::<ChatState>(), reply);
             if clear.is_some() {
@@ -1003,6 +1048,9 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 "聊天操作未被接纳"
             ),
             ConversationEvent::Updated(_)
+            | ConversationEvent::Archives(_)
+            | ConversationEvent::Opened(_)
+            | ConversationEvent::ArchiveFailed(_)
             | ConversationEvent::InputReceipt(_)
             | ConversationEvent::Queue(_)
             | ConversationEvent::Started(_) => {}
@@ -1016,12 +1064,18 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 state.error = Some(reason);
             }
             ConversationEvent::Created(view) => {
-                let mut state = world.resource_mut::<ChatState>();
-                state.session = Some(project(view)?);
-                state.expanded_tools.clear();
-                state.input_feedback = None;
-                state.pending_inputs.clear();
-                state.replacement = None;
+                let selected = view.id;
+                {
+                    let mut state = world.resource_mut::<ChatState>();
+                    state.session = Some(project(view)?);
+                    state.expanded_tools.clear();
+                    state.input_feedback = None;
+                    state.pending_inputs.clear();
+                    state.replacement = None;
+                }
+                let mut archives = world.resource_mut::<crate::ArchiveState>();
+                archives.selected = Some(selected);
+                archives.loading = false;
             }
             ConversationEvent::Updated(view) | ConversationEvent::Finished(view) => {
                 world.resource_mut::<ChatState>().session = Some(project(view)?);
@@ -1039,12 +1093,22 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 world.resource_mut::<ChatState>().session = Some(project(view)?);
             }
             ConversationEvent::InputReceipt(_)
+            | ConversationEvent::Archives(_)
+            | ConversationEvent::Opened(_)
+            | ConversationEvent::ArchiveFailed(_)
             | ConversationEvent::Queue(_)
             | ConversationEvent::Started(_) => {}
         }
         if terminal {
             world.resource_mut::<ChatState>().cancelling = false;
             world.resource_mut::<ChatState>().operation = None;
+            world.resource_mut::<crate::ArchiveState>().loading = false;
+            match world.resource::<AgentHost>().refresh_archives() {
+                Ok(()) => world.resource_mut::<crate::ArchiveState>().refreshing = true,
+                Err(failure) => {
+                    world.resource_mut::<crate::ArchiveState>().error = Some(failure.to_string())
+                }
+            }
         }
     }
     if let Some(reason) = failures
@@ -1052,6 +1116,8 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         .last()
         .map(|failure| failure.reason.clone())
     {
+        world.resource_mut::<crate::ArchiveState>().loading = false;
+        world.resource_mut::<crate::ArchiveState>().refreshing = false;
         let mut state = world.resource_mut::<ChatState>();
         state.operation = None;
         state.pending_inputs.clear();
@@ -1274,6 +1340,14 @@ fn summary(state: &ChatState) -> String {
 }
 fn status(state: &ChatState) -> String {
     let mut value = task_status(state);
+    if let Some(notice) = state
+        .session
+        .as_ref()
+        .and_then(|session| session.notice.as_ref())
+    {
+        value.push('\n');
+        value.push_str(notice);
+    }
     if let Some(turn) = state
         .session
         .as_ref()

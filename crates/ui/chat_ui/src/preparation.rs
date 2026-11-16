@@ -109,6 +109,7 @@ struct ModelStatus;
 struct ModelText;
 
 pub fn install(app: &mut App) -> Result {
+    crate::archives::install(app)?;
     app.add_plugins(agentelier_markdown::MarkdownPlugin);
     crate::reading::install(app);
     reasoning::install(app)?;
@@ -179,6 +180,7 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
                     }) as Box<dyn SceneList>)}
                 }
                 Node { width: percent(100), height: px(64), flex_shrink: 0.0 }--
+                @crate::archives::panel(world)--
                 @crate::working_directory::panel(world.resource::<crate::working_directory::DirectoryState>())--
                 @crate::conversation::panel(&chat)
                 ]--

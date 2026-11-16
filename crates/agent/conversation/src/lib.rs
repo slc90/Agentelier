@@ -6,6 +6,9 @@ mod archive;
 mod control;
 mod conversation;
 mod queue;
+mod restore;
+pub use archive::ArchiveEntry;
+pub use restore::{RestoredSession, restore};
 
 pub use archive::{
     InitialSession, RecordEvent, SessionRecord, SessionSummary, StoredImage, StoredSettings,

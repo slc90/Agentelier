@@ -2,6 +2,8 @@
 compile_error!("This application supports Windows x64 only");
 
 mod active_input;
+mod archives;
+pub use archives::{ArchiveChoice, ArchiveState};
 mod conversation;
 mod preparation;
 mod prompts;

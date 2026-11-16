@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod attachments;
 mod journal;
+mod reader;
 mod store;
 
 pub use store::{

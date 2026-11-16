@@ -22,6 +22,7 @@ pub struct SessionSettings {
     pub working_directory: std::path::PathBuf,
 }
 pub enum ConversationRequest {
+    Open { session: SessionId },
     Create(SessionSettings),
     Reset { session: SessionId },
     Send { session: SessionId, input: String },
@@ -74,6 +75,7 @@ pub struct TurnView {
 }
 #[derive(Clone)]
 pub struct SessionView {
+    pub notice: Option<String>,
     pub id: SessionId,
     pub settings: SessionSettings,
     pub turn: Option<Box<TurnView>>,
@@ -85,6 +87,9 @@ pub struct SessionView {
     pub queue_paused: bool,
 }
 pub enum ConversationEvent {
+    Archives(Vec<crate::ArchiveEntry>),
+    Opened(SessionView),
+    ArchiveFailed(String),
     Created(SessionView),
     Accepted(SessionView),
     Updated(SessionView),
@@ -113,7 +118,7 @@ impl Error for ConversationFailure {}
 pub(crate) struct ChatSession {
     pub(crate) view: SessionView,
     pub(crate) history: Option<ProtocolHistory>,
-    tools: Arc<ToolCatalog>,
+    pub(crate) tools: Arc<ToolCatalog>,
     pub(crate) pending_results: std::collections::BTreeMap<String, agentelier_tools::ToolPayload>,
 }
 
@@ -165,14 +170,15 @@ impl Conversation {
         Some(session.view.clone())
     }
 
-    pub fn synchronize_account(&mut self, subject: Option<&str>) {
-        if self
-            .session
-            .as_ref()
-            .is_some_and(|session| Some(session.view.settings.account_subject.as_str()) != subject)
+    pub fn synchronize_account(&mut self, subject: Option<&str>) -> bool {
+        if let Some(session) = &mut self.session
+            && session.view.settings.account_subject.is_empty()
+            && let Some(subject) = subject
         {
-            self.session = None;
+            session.view.settings.account_subject = subject.into();
+            return true;
         }
+        false
     }
 
     pub fn prepare(
@@ -215,6 +221,7 @@ impl Conversation {
                 .map_err(|_| ConversationFailure::new("工具目录配置无效"))?,
         );
         let session = SessionView {
+            notice: None,
             id,
             settings,
             turn: None,
@@ -310,6 +317,7 @@ impl Conversation {
             .ok_or(ConversationFailure::new("会话缺少历史"))?
             .with_user(&input)
             .summary();
+        session.view.notice = None;
         if let Some(previous) = session.view.turn.take() {
             session.view.previous_turns.push(*previous);
         }
@@ -386,7 +394,9 @@ impl Conversation {
                 active.view = current.view.clone();
                 Ok((current.view.clone(), active))
             }
-            ConversationRequest::Create(_) | ConversationRequest::Reset { .. } => {
+            ConversationRequest::Create(_)
+            | ConversationRequest::Reset { .. }
+            | ConversationRequest::Open { .. } => {
                 Err(ConversationFailure::new("创建会话不是生成操作"))
             }
         }

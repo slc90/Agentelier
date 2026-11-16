@@ -8,6 +8,7 @@ use agentelier_conversation::{
 };
 use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
 mod creation;
+mod loading;
 mod model_task;
 mod recording;
 use model_task::{
@@ -81,6 +82,9 @@ impl From<ConversationFailure> for RuntimeFailure {
     }
 }
 enum Command {
+    Scan,
+    Scanned(io::Result<Vec<agentelier_conversation::ArchiveEntry>>),
+    Loaded(io::Result<agentelier_conversation::RestoredSession>),
     Recorded(
         Result<
             (
@@ -147,6 +151,7 @@ impl ModelControl {
 impl AgentRuntime {
     pub fn start(
         credentials_path: PathBuf,
+        operations: crate::OperationSequence,
         publish: impl Fn(AgentEvent) -> Result<(), DeliveryFailure> + Send + 'static,
         finished: impl Fn() -> Result<(), DeliveryFailure> + Send + 'static,
     ) -> Result<Self, RuntimeFailure> {
@@ -183,6 +188,9 @@ impl AgentRuntime {
                     runtime.block_on(async move {
                         let store = agentelier_session_store::SessionStore::start(data_root).map_err(RuntimeFailure::Store)?;
                         let mut creating: Option<creation::Creation> = None;
+                        let mut loading: Option<loading::Loading> = None;
+                        let mut catalog = Some(store.client().scan().map_err(RuntimeFailure::Store)?);
+                        let mut startup_catalog = true;
                         let mut records = recording::Records::new();
                         let mut pending_queue = false;
                         let mut finalizing = false;
@@ -200,6 +208,14 @@ impl AgentRuntime {
                                         None => break,
                                     },
                                     _ = runtime_shutdown.cancelled() => break,
+                                    result = async { match &mut catalog {
+                                        Some(reply) => reply.await.unwrap_or_else(|_| Err(io::Error::other("会话目录读取未返回结果"))),
+                                        None => std::future::pending().await,
+                                    }} => Command::Scanned(result),
+                                    result = async { match &mut loading {
+                                        Some(pending) => pending.wait().await,
+                                        None => std::future::pending().await,
+                                    }} => Command::Loaded(result),
                                     result = records.join_next(), if !records.is_empty() => match result {
                                         Some(result) => Command::Recorded(result),
                                         None => return Err(RuntimeFailure::ModelState),
@@ -226,12 +242,50 @@ impl AgentRuntime {
                                     },
                                 };
                                 match command {
+                                    Command::Scan => {
+                                        if catalog.is_none() {
+                                            match store.client().scan() {
+                                                Ok(reply) => catalog = Some(reply),
+                                                Err(failure) => emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(failure.to_string())))?,
+                                            }
+                                        }
+                                    }
+                                    Command::Scanned(result) => {
+                                        catalog = None;
+                                        match result {
+                                            Ok(entries) => {
+                                                let first = entries.first().map(|entry| entry.summary.session);
+                                                emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Archives(entries)))?;
+                                                if startup_catalog && conversation.current().is_none() && model.is_none() && creating.is_none() && loading.is_none() && !finalizing && !pending_queue && let Some(session) = first {
+                                                        match loading::Loading::start(0, None, session, &store) {
+                                                            Ok(pending) => loading = Some(pending),
+                                                            Err(failure) => emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(failure.to_string())))?,
+                                                        }
+                                                }
+                                                startup_catalog = false;
+                                            }
+                                            Err(failure) => emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(format!("无法读取本地会话目录：{failure}"))))?,
+                                        }
+                                    }
+                                    Command::Loaded(result) => {
+                                        let pending = loading.take().ok_or(RuntimeFailure::ModelState)?;
+                                        let id = pending.id;
+                                        let event = pending.complete(result, current_subject.as_deref(), &operations, &mut conversation);
+                                        let opened = matches!(&event, ConversationEvent::Opened(_));
+                                        emit(&publish, id, AgentEventKind::Conversation(event))?;
+                                        if opened && catalog.is_none() {
+                                            match store.client().scan() {
+                                                Ok(reply) => catalog = Some(reply),
+                                                Err(failure) => emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(failure.to_string())))?,
+                                            }
+                                        }
+                                    }
                                     Command::Recorded(result) => {
                                         let (pending, result) = result.map_err(|_| RuntimeFailure::ModelState)?;
                                         let applied = recording::apply(pending, result, &mut conversation, &publish)?;
                                         if applied.queue { pending_queue = false; } else { finalizing = false; }
                                         if applied.failed && let Some(control) = owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.as_ref() { control.cancel.cancel(); }
-                                        if model.is_none() && creating.is_none() && !pending_queue && !finalizing && !runtime_shutdown.is_cancelled() {
+                                        if model.is_none() && creating.is_none() && loading.is_none() && !pending_queue && !finalizing && !runtime_shutdown.is_cancelled() {
                                             model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish)?;
                                         }
                                     }
@@ -246,7 +300,7 @@ impl AgentRuntime {
                                         control,
                                         request,
                                     } => {
-                                        if model.is_some() || creating.is_some() || finalizing || pending_queue {
+                                        if model.is_some() || creating.is_some() || loading.is_some() || finalizing || pending_queue {
                                             control.finished.cancel();
                                             emit(&publish,id,AgentEventKind::ModelCompleted(Err(agentelier_llm_model::ModelFailure {kind:agentelier_llm_model::ModelFailureKind::Service,status:None,code:None,request_id:None,message:"当前任务正在执行，不能插入模型操作".into()})))?;
                                             continue;
@@ -280,7 +334,7 @@ impl AgentRuntime {
                                         }
                                     }
                                     Command::Session(command) => {
-                                        if creating.is_some() || finalizing || (matches!(command,SessionCommand::Resume {..}) && model.is_some()) {
+                                        if creating.is_some() || loading.is_some() || finalizing || (matches!(command,SessionCommand::Resume {..}) && model.is_some()) {
                                             let id=command.id();
                                             emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Queue(agentelier_conversation::QueueEvent {
                                                 id,view:None,decision:agentelier_conversation::QueueDecision::Rejected("当前执行尚未回收，不能继续队列".into()),
@@ -313,12 +367,24 @@ impl AgentRuntime {
                                         request,
                                         steers,
                                     } => {
-                                        if model.is_some() || creating.is_some() || finalizing || pending_queue {
+                                        if model.is_some() || creating.is_some() || loading.is_some() || finalizing || pending_queue {
                                             control.finished.cancel();
                                             emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Rejected("排队任务已经开始，当前发送未接纳，草稿保留".into())))?;
                                             continue;
                                         }
                                         match request {
+                                            ConversationRequest::Open { session } => {
+                                                match loading::Loading::start(id, Some(control.clone()), session, &store) {
+                                                    Ok(pending) => {
+                                                        *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control);
+                                                        loading = Some(pending);
+                                                    }
+                                                    Err(failure) => {
+                                                        control.finished.cancel();
+                                                        emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(failure.to_string())))?;
+                                                    }
+                                                }
+                                            }
                                             request @ (ConversationRequest::Create(_) | ConversationRequest::Reset { .. }) => {
                                                 match creation::Creation::start(id, control.clone(), request, &conversation, current_subject.as_deref(), &store) {
                                                     Ok(pending) => {
@@ -436,7 +502,9 @@ impl AgentRuntime {
                                             .await?;
                                         account = returned;
                                         if let Some(subject) = identity.take() {
-                                            conversation.synchronize_account(subject.as_deref());
+                                            if conversation.synchronize_account(subject.as_deref()) && let Some(view) = conversation.current() {
+                                                emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Opened(view)))?;
+                                            }
                                             current_subject = subject;
                                         }
                                         if failure.is_some()
@@ -476,6 +544,7 @@ impl AgentRuntime {
                             }
                         }
                         let stored = store.finish().await.map_err(RuntimeFailure::Store);
+                        if let Some(pending) = loading && let Some(control) = pending.control { control.finished.cancel(); }
                         let pending_saved = if let Some(mut pending) = creating {
                             let saved = pending.wait().await;
                             pending.control.finished.cancel();
@@ -551,6 +620,20 @@ impl AgentRuntime {
             control: control.clone(),
             request,
         })?;
+        Ok(())
+    }
+    pub fn refresh_archives(&self) -> Result<(), RuntimeFailure> {
+        if self.shutdown.is_cancelled() {
+            return Err(AccountFailure::Closed.into());
+        }
+        self.commands
+            .as_ref()
+            .ok_or(AccountFailure::Closed)?
+            .try_send(Command::Scan)
+            .map_err(|failure| match failure {
+                mpsc::error::TrySendError::Full(_) => AccountFailure::Busy,
+                mpsc::error::TrySendError::Closed(_) => AccountFailure::Closed,
+            })?;
         Ok(())
     }
     fn active_model(&self) -> Result<Option<ModelControl>, RuntimeFailure> {

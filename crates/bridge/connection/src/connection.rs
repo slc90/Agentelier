@@ -74,7 +74,7 @@ pub struct Connection {
     progress: Arc<Mutex<Option<BridgeEvent>>>,
     deferred: Option<BridgeEvent>,
     wake: Arc<WakeGate>,
-    next_operation: u64,
+    operations: agentelier_agent_runtime::OperationSequence,
     pending: Option<Pending>,
     stopping: bool,
     failure: Option<BridgeFailure>,
@@ -97,8 +97,10 @@ impl Connection {
         let wake = Arc::new(WakeGate(Mutex::new(Some(Box::new(notify)))));
         let delivery_wake = wake.clone();
         let finished_wake = wake.clone();
+        let operations = agentelier_agent_runtime::OperationSequence::default();
         let runtime = AgentRuntime::start(
             path,
+            operations.clone(),
             move |event| {
                 let event = BridgeEvent {
                     operation_id: event.operation_id,
@@ -139,7 +141,7 @@ impl Connection {
             progress,
             deferred: None,
             wake,
-            next_operation: 0,
+            operations,
             pending: None,
             stopping: false,
             failure: None,
@@ -163,16 +165,15 @@ impl Connection {
         {
             return Err(BridgeFailure("已有账号操作正在进行".into()));
         }
-        self.next_operation
-            .checked_add(1)
-            .ok_or_else(|| BridgeFailure("账号操作标识已耗尽".into()))
+        self.operations
+            .allocate()
+            .map_err(|failure| BridgeFailure(failure.to_string()))
     }
     pub fn restore(&mut self) -> Result<u64, BridgeFailure> {
         let id = self.allocate()?;
         self.runtime
             .restore(id)
             .map_err(|error| BridgeFailure(error.to_string()))?;
-        self.next_operation = id;
         self.pending = Some(Pending {
             id,
             phase: Phase::Restore,
@@ -188,7 +189,6 @@ impl Connection {
         self.runtime
             .request_model(id, agentelier_llm_model_bridge::request(request))
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
-        self.next_operation = id;
         self.model = Some(id);
         self.pending_requests.insert(id);
         Ok(id)
@@ -197,14 +197,37 @@ impl Connection {
         &mut self,
         request: agentelier_conversation_bridge::ConversationRequest,
     ) -> Result<u64, BridgeFailure> {
-        let id = self.allocate()?;
+        let id = if matches!(
+            request,
+            agentelier_conversation_bridge::ConversationRequest::Open { .. }
+        ) {
+            if self.stopping
+                || self.failure.is_some()
+                || self.model.is_some()
+                || self.sign_out.is_some()
+            {
+                return Err(BridgeFailure("当前执行尚未结束，不能打开另一会话".into()));
+            }
+            self.operations
+                .allocate()
+                .map_err(|failure| BridgeFailure(failure.to_string()))?
+        } else {
+            self.allocate()?
+        };
         self.runtime
             .request_conversation(id, agentelier_conversation_bridge::request(request))
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
-        self.next_operation = id;
         self.model = Some(id);
         self.pending_requests.insert(id);
         Ok(id)
+    }
+    pub fn refresh_archives(&self) -> Result<(), BridgeFailure> {
+        if self.stopping || self.failure.is_some() {
+            return Err(BridgeFailure("执行连接已停止".into()));
+        }
+        self.runtime
+            .refresh_archives()
+            .map_err(|failure| BridgeFailure(failure.to_string()))
     }
     pub fn steer_conversation(
         &mut self,
@@ -221,10 +244,9 @@ impl Connection {
             return Err(BridgeFailure("当前任务不能接纳补充输入".into()));
         }
         let id = self
-            .next_operation
-            .checked_add(1)
-            .ok_or_else(|| BridgeFailure("输入身份已耗尽".into()))?;
-        self.next_operation = id;
+            .operations
+            .allocate()
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
         self.runtime
             .steer_conversation(agentelier_conversation_bridge::steer_input(
                 id, session, turn, operation, text,
@@ -246,10 +268,9 @@ impl Connection {
             return Err(BridgeFailure("当前执行连接不能接纳队列操作".into()));
         }
         let id = self
-            .next_operation
-            .checked_add(1)
-            .ok_or_else(|| BridgeFailure("输入身份已耗尽".into()))?;
-        self.next_operation = id;
+            .operations
+            .allocate()
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
         let kind = match &action {
             agentelier_conversation_bridge::SessionAction::Enqueue { .. } => QueueRequest::Enqueue,
             agentelier_conversation_bridge::SessionAction::Remove { .. } => QueueRequest::Remove,
@@ -296,7 +317,6 @@ impl Connection {
         self.runtime
             .login(id, consent)
             .map_err(|error| BridgeFailure(error.to_string()))?;
-        self.next_operation = id;
         self.pending = Some(Pending {
             id,
             phase: Phase::Login,
@@ -448,6 +468,10 @@ impl Connection {
                             return Ok(Some(event));
                         }
                         BridgeEventKind::Conversation(kind) => {
+                            if event.operation_id == 0 && matches!(kind, agentelier_conversation_bridge::ConversationEvent::Archives(_) | agentelier_conversation_bridge::ConversationEvent::Opened(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveFailed(_)) {
+                                if let agentelier_conversation_bridge::ConversationEvent::Opened(view) = kind { self.reserved_queue.extend(view.queue.iter().map(|input| input.operation_id)); }
+                                return Ok(Some(event));
+                            }
                             if let agentelier_conversation_bridge::ConversationEvent::Queue(reply) =
                                 kind
                             {
@@ -519,6 +543,8 @@ impl Connection {
                                 kind,
                                 agentelier_conversation_bridge::ConversationEvent::Accepted(_)
                                     | agentelier_conversation_bridge::ConversationEvent::Created(_)
+                                    | agentelier_conversation_bridge::ConversationEvent::Opened(_)
+                                    | agentelier_conversation_bridge::ConversationEvent::ArchiveFailed(_)
                             ) {
                                 self.pending_requests.remove(&event.operation_id);
                             }
@@ -527,6 +553,13 @@ impl Connection {
                                 agentelier_conversation_bridge::ConversationEvent::Created(_)
                             ) {
                                 self.reserved_queue.clear();
+                            }
+                            if let agentelier_conversation_bridge::ConversationEvent::Opened(view) =
+                                kind
+                            {
+                                self.reserved_queue.clear();
+                                self.reserved_queue
+                                    .extend(view.queue.iter().map(|input| input.operation_id));
                             }
                             if let agentelier_conversation_bridge::ConversationEvent::Finished(view) =
                                 kind
@@ -612,13 +645,12 @@ impl Connection {
             return Ok(pending.id);
         }
         let id = self
-            .next_operation
-            .checked_add(1)
-            .ok_or_else(|| BridgeFailure("账号操作标识已耗尽".into()))?;
+            .operations
+            .allocate()
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
         self.runtime
             .sign_out(id)
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
-        self.next_operation = id;
         self.sign_out = Some(PendingSignOut { id, failed: false });
         self.take_progress()?;
         self.deferred = None;

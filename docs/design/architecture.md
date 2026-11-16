@@ -18,7 +18,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/account/` | `agentelier_account` | 账号操作与会话状态、共享凭据门控和按需续期协调 |
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录、Responses、SSE 和模型错误语义 |
 | `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的内存聊天会话、Turn 身份、展示记录与结果收敛 |
-| `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话日志、执行事件追加、不可变图片附件、单写入者、提交确认与存储收尾 |
+| `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话日志、恢复读取、执行事件追加、不可变图片附件、单写入者、提交确认与存储收尾 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
 | `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示 |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、正文增量和受控取消 |
@@ -180,7 +180,9 @@ Chat UI 管理提示词库、组合预览和会话核对界面，并在创建 Se
 
 任务取消由 Runner 接收并结束当前模型等待，随后归还已有活动记录；Runtime 不在外层丢弃整个 Runner。普通网络失败和停止保留既有展示与历史语义；异常退出不能归还可信记录时，当前会话禁止继续发送或重试，用户必须重置或新建会话。
 
-任务输入、完整协议响应、工具开始与返回、封闭步骤、Steer、Queue 和终态经同一个 Session Store 工作者追加到会话日志。Runner 等待副作用前的记录确认，并在保存失败后保留实际结果、停止后续执行；Runtime 准备并确认队列变更，在真实回收及 Finished 提交后才发布终态和自动出队。磁盘记录不含账号所有权，不从 UI 摘要构造请求；当前尚未开放存档恢复界面。
+任务输入、完整协议响应、工具开始与返回、封闭步骤、Steer、Queue 和终态经同一个 Session Store 工作者追加到会话日志。Runner 等待副作用前的记录确认，并在保存失败后保留实际结果、停止后续执行；Runtime 准备并确认队列变更，在真实回收及 Finished 提交后才发布终态和自动出队。磁盘记录不含账号所有权，不从 UI 摘要构造请求。启动扫描并打开最近会话，UI 的本地选择器可打开其他存档；读取不依赖认证或模型目录，不自动执行任务。
+
+Connection 创建本次运行共享的 OperationSequence；普通请求与恢复待办的重新绑定都从同一原子序列取得身份，避免新旧控制混用。过去的任务句柄、取消令牌和进程会话不恢复。Conversation 重建业务状态及独立队列，LLM Model 验证原始协议并为缺失结果生成 aborted 请求投影，Store 负责附件校验和保留原件后的尾部修复。恢复失败只影响目标会话，当前内容继续保留。
 
 ## Direct 工具往返
 
