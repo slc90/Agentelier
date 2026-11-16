@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1060" viewBox="0 0 1600 1060">
+<style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif}</style>
+<rect x="0" y="0" width="1600" height="1060" rx="0" fill="#0b1018"/>
+<text x="36" y="44" font-size="26" fill="#e5ebf5" font-weight="650" text-anchor="start">会话条目 · 基础操作</text>
+<text x="1564" y="43" font-size="16" fill="#99a8bc" font-weight="400" text-anchor="end">交互细节 / 名称与删除目标均绑定 Session ID</text>
+<rect x="28" y="82" width="1544" height="900" rx="16" fill="#151c27" stroke="#293444" stroke-width="1"/>
+<text x="62" y="132" font-size="24" fill="#e5ebf5" font-weight="600" text-anchor="start">条目操作</text>
+<rect x="60" y="158" width="390" height="57" rx="10" fill="#2a3956"/>
+<text x="81" y="195" font-size="22" fill="#e5ebf5" font-weight="400" text-anchor="start">会话与上下文管理</text>
+<text x="421" y="194" font-size="26" fill="#e5ebf5" font-weight="400" text-anchor="middle">⋯</text>
+<rect x="270" y="229" width="180" height="114" rx="10" fill="#1b2533" stroke="#42516a" stroke-width="1"/>
+<text x="295" y="271" font-size="21" fill="#e5ebf5" font-weight="400" text-anchor="start">重命名</text>
+<path d="M284 285 L436 285" stroke="#293444" stroke-width="1" fill="none"/>
+<text x="295" y="320" font-size="21" fill="#f3a5aa" font-weight="400" text-anchor="start">删除</text>
+<text x="506" y="191" font-size="21" fill="#99a8bc" font-weight="400" text-anchor="start">更多操作仅包含重命名与删除。</text>
+<text x="506" y="232" font-size="21" fill="#99a8bc" font-weight="400" text-anchor="start">操作目标不随排序变化，也不依赖标题是否重名。</text>
+<path d="M60 377 L1540 377" stroke="#293444" stroke-width="1" fill="none"/>
+<text x="62" y="431" font-size="24" fill="#e5ebf5" font-weight="600" text-anchor="start">重命名</text>
+<text x="834" y="431" font-size="24" fill="#e5ebf5" font-weight="600" text-anchor="start">删除确认</text>
+<rect x="60" y="462" width="708" height="412" rx="16" fill="#1b2533" stroke="#42516a" stroke-width="1"/>
+<text x="89" y="510" font-size="25" fill="#e5ebf5" font-weight="600" text-anchor="start">重命名会话</text>
+<text x="89" y="552" font-size="18" fill="#99a8bc" font-weight="400" text-anchor="start">名称</text>
+<rect x="88" y="572" width="651" height="66" rx="9" fill="#1c2635" stroke="#a6baff" stroke-width="1.8"/>
+<text x="108" y="615" font-size="23" fill="#e5ebf5" font-weight="400" text-anchor="start">会话与上下文管理</text>
+<text x="89" y="682" font-size="19" fill="#99a8bc" font-weight="400" text-anchor="start">只修改显示名称。</text>
+<text x="89" y="715" font-size="19" fill="#99a8bc" font-weight="400" text-anchor="start">不会移动文件，也不会改变会话排序。</text>
+<rect x="486" y="790" width="112" height="49" rx="10" fill="#1b2533" stroke="#293444" stroke-width="1"/>
+<text x="542.0" y="821.5" font-size="20" fill="#e5ebf5" font-weight="550" text-anchor="middle">取消</text>
+<rect x="615" y="790" width="124" height="49" rx="10" fill="#a8bfff"/>
+<text x="677.0" y="821.5" font-size="20" fill="#101826" font-weight="550" text-anchor="middle">保存</text>
+<rect x="802" y="462" width="738" height="412" rx="16" fill="#1b2533" stroke="#42516a" stroke-width="1"/>
+<text x="831" y="510" font-size="25" fill="#e5ebf5" font-weight="600" text-anchor="start">删除会话？</text>
+<text x="831" y="565" font-size="23" fill="#e5ebf5" font-weight="400" text-anchor="start">“会话与上下文管理”</text>
+<text x="831" y="621" font-size="21" fill="#99a8bc" font-weight="400" text-anchor="start">将删除这份会话的本地记录和附件。</text>
+<text x="831" y="660" font-size="21" fill="#99a8bc" font-weight="400" text-anchor="start">已经修改的项目文件不会被撤销。</text>
+<text x="831" y="699" font-size="21" fill="#99a8bc" font-weight="400" text-anchor="start">此操作无法在界面中恢复。</text>
+<rect x="1244" y="790" width="112" height="49" rx="10" fill="#1b2533" stroke="#293444" stroke-width="1"/>
+<text x="1300.0" y="821.5" font-size="20" fill="#e5ebf5" font-weight="550" text-anchor="middle">取消</text>
+<rect x="1373" y="790" width="138" height="49" rx="10" fill="#61343d" stroke="#85505a" stroke-width="1"/>
+<text x="1442" y="822" font-size="20" fill="#ffd7db" font-weight="550" text-anchor="middle">删除会话</text>
+<text x="62" y="933" font-size="20" fill="#99a8bc" font-weight="400" text-anchor="start">保存或删除均等待实际结果；失败显示具体原因，不先假装成功。</text>
+<text x="36" y="1024" font-size="19" fill="#99a8bc" font-weight="400" text-anchor="start">生成、工具执行、压缩和资源回收期间，不允许删除正在执行的会话。</text>
+</svg>

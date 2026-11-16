@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1060" viewBox="0 0 1600 1060">
+<style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif}</style>
+<rect x="0" y="0" width="1600" height="1060" rx="0" fill="#0b1018"/>
+<text x="36" y="44" font-size="26" fill="#e5ebf5" font-weight="650" text-anchor="start">会话侧栏</text>
+<text x="1564" y="43" font-size="16" fill="#99a8bc" font-weight="400" text-anchor="end">布局示意 / 保留现有右侧聊天区</text>
+<rect x="28" y="82" width="1544" height="900" rx="16" fill="#151c27" stroke="#293444" stroke-width="1"/>
+<rect x="29" y="83" width="291" height="898" rx="15" fill="#101722"/>
+<rect x="304" y="83" width="16" height="898" rx="0" fill="#101722"/>
+<path d="M320 82 L320 982" stroke="#293444" stroke-width="1" fill="none"/>
+<text x="52" y="130" font-size="26" fill="#e5ebf5" font-weight="650" text-anchor="start">Agentelier</text>
+<rect x="48" y="164" width="252" height="49" rx="10" fill="#1b2533" stroke="#293444" stroke-width="1"/>
+<text x="174.0" y="195.5" font-size="20" fill="#e5ebf5" font-weight="550" text-anchor="middle">＋  新建会话</text>
+<rect x="44" y="244" width="260" height="50" rx="9" fill="#2a3956"/>
+<text x="61" y="276" font-size="20" fill="#e5ebf5" font-weight="500" text-anchor="start">会话与上下文管理</text>
+<text x="283" y="275" font-size="22" fill="#e5ebf5" font-weight="400" text-anchor="middle">⋯</text>
+<text x="61" y="339" font-size="20" fill="#b9c5d6" font-weight="400" text-anchor="start">完善工具调用记录</text>
+<text x="61" y="402" font-size="20" fill="#b9c5d6" font-weight="400" text-anchor="start">调整聊天布局</text>
+<text x="61" y="465" font-size="20" fill="#b9c5d6" font-weight="400" text-anchor="start">排查构建错误</text>
+<text x="61" y="528" font-size="20" fill="#b9c5d6" font-weight="400" text-anchor="start">提示词实验</text>
+<path d="M48 911 L300 911" stroke="#293444" stroke-width="1" fill="none"/>
+<text x="58" y="951" font-size="20" fill="#99a8bc" font-weight="400" text-anchor="start">设置</text>
+<text x="350" y="131" font-size="28" fill="#e5ebf5" font-weight="600" text-anchor="start">会话与上下文管理</text>
+<text x="350" y="170" font-size="17" fill="#99a8bc" font-weight="400" text-anchor="start">当前模型 · 高推理强度    工作目录  D:\Work\demo</text>
+<rect x="1350" y="109" width="192" height="42" rx="10" fill="#1b2533" stroke="#293444" stroke-width="1"/>
+<text x="1446.0" y="137.0" font-size="18" fill="#e5ebf5" font-weight="550" text-anchor="middle">会话与请求核对</text>
+<path d="M320 198 L1572 198" stroke="#293444" stroke-width="1" fill="none"/>
+<text x="374" y="244" font-size="17" fill="#99a8bc" font-weight="550" text-anchor="start">你</text>
+<rect x="374" y="262" width="1154" height="82" rx="12" fill="#202c3e"/>
+<text x="397" y="311" font-size="22" fill="#e5ebf5" font-weight="400" text-anchor="start">继续检查会话恢复后的工具记录，先不要修改文件。</text>
+<text x="374" y="392" font-size="17" fill="#99a8bc" font-weight="550" text-anchor="start">Agentelier</text>
+<text x="374" y="431" font-size="21" fill="#e5ebf5" font-weight="400" text-anchor="start">我会先核对已有记录，再检查需要继续处理的部分。</text>
+<text x="374" y="470" font-size="21" fill="#e5ebf5" font-weight="400" text-anchor="start">已经完成的工具操作保留在历史里，不会因为打开会话而重新执行。</text>
+<rect x="374" y="514" width="1154" height="102" rx="12" fill="#1b2533" stroke="#293444" stroke-width="1"/>
+<text x="396" y="552" font-size="20" fill="#e5ebf5" font-weight="550" text-anchor="start">›  exec_command</text>
+<text x="1503" y="552" font-size="18" fill="#9ad2b5" font-weight="400" text-anchor="end">已完成</text>
+<text x="396" y="589" font-size="18" fill="#99a8bc" font-weight="400" text-anchor="start">读取项目状态 · 退出码 0 · 查看详情</text>
+<text x="374" y="676" font-size="19" fill="#99a8bc" font-weight="400" text-anchor="start">当前会话已保存，可以继续发送消息。</text>
+<rect x="374" y="790" width="1154" height="151" rx="14" fill="#1c2635" stroke="#293444" stroke-width="1"/>
+<text x="396" y="834" font-size="22" fill="#99a8bc" font-weight="400" text-anchor="start">继续输入消息…</text>
+<text x="396" y="909" font-size="15" fill="#99a8bc" font-weight="400" text-anchor="start">Shift + Enter 换行</text>
+<rect x="1407" y="879" width="97" height="42" rx="10" fill="#a8bfff"/>
+<text x="1455.5" y="907.0" font-size="18" fill="#101826" font-weight="550" text-anchor="middle">发送</text>
+<text x="374" y="965" font-size="15" fill="#99a8bc" font-weight="400" text-anchor="start">上下文占用由当前模型能力和实际请求用量确定</text>
+<text x="36" y="1024" font-size="19" fill="#99a8bc" font-weight="400" text-anchor="start">平铺列表按最后活动时间倒序排列；条目只显示标题，当前会话高亮。</text>
+</svg>
