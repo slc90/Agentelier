@@ -93,6 +93,30 @@ fn summary(tool: &ChatTool) -> String {
         (Some("running"), _) => "调用失败 · 进程仍在运行",
         _ => status(&tool.status),
     };
+    let result = if tool.name == "apply_patch" {
+        process
+            .as_ref()
+            .and_then(|value| value.get("actions"))
+            .and_then(|value| value.as_array())
+            .map(|actions| {
+                let completed = actions
+                    .iter()
+                    .filter(|action| action["status"] == "completed")
+                    .count();
+                let paths = actions
+                    .iter()
+                    .filter_map(|action| action["target"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("；");
+                format!(
+                    "{completed}/{} 个文件动作已完成 · {}",
+                    actions.len(),
+                    preview(&paths)
+                )
+            })
+    } else {
+        None
+    };
     format!(
         "工具 · {} · {} · 请求 {} / 输出 {} · {}\n参数：{}\n结果：{}",
         tool.name,
@@ -105,9 +129,8 @@ fn summary(tool: &ChatTool) -> String {
             "尚未纳入上下文"
         },
         preview(&tool.arguments),
-        tool.output
-            .as_deref()
-            .map(preview)
+        result
+            .or_else(|| tool.output.as_deref().map(preview))
             .unwrap_or_else(|| "尚无结果".into())
     )
 }

@@ -5,6 +5,7 @@ use tokio_util::sync::CancellationToken;
 
 pub const MAX_TOOL_BODY_BYTES: usize = 64 * 1024;
 const TOOL_TIMEOUT: Duration = Duration::from_secs(15);
+const ERROR_MESSAGE_BYTES: usize = 8192;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ToolStatus {
@@ -49,6 +50,11 @@ impl ToolResult {
         Self::error(ToolStatus::NotExecuted, code, message)
     }
     pub(crate) fn error(status: ToolStatus, code: &str, message: &str) -> Self {
+        let mut end = message.len().min(ERROR_MESSAGE_BYTES);
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        let message = &message[..end];
         Self {
             status,
             cleanup_failed: false,
@@ -80,6 +86,9 @@ pub async fn execute(
     let implementation = match implementation {
         crate::catalog::Implementation::Exec => return context.exec(arguments, cancel).await,
         crate::catalog::Implementation::Stdin => return context.stdin(arguments, cancel).await,
+        crate::catalog::Implementation::Patch => {
+            return crate::patch::run(arguments, context.directory.clone(), cancel).await;
+        }
         crate::catalog::Implementation::Diagnostic(implementation) => implementation,
     };
     let result = tokio::select! { biased;

@@ -290,6 +290,7 @@ dependencies = [
  "process-wrap",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",

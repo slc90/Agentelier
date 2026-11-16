@@ -80,3 +80,7 @@ SessionSettings 还保存 working_directory 的 PathBuf。Create 通过 Tools �
 Runner 创建独占 ExecutionContext 后推进任务；每次调用借用同一上下文，Steer 不重建它，Queue 的下一任务创建新的上下文。context.cleanup 覆盖正常完成、停止、模型失败、协议或交付错误及触限，先等待进程树与读取任务收敛，再关闭补充通道并发布终态。清理阶段投影为 ReapingProcesses；清理失败标记 execution_blocked 并暂停队列。
 
 ProcessCleanup 保存 session_id、cleanup_confirmed 和独立有界结果（包含尾部输出及自动清理原因）。它位于 TurnView，与普通 ToolView 分开，不修改既有 running 结果，也不伪造 function_call。Bridge 显式转换为展示记录，UI 会话状态概括结果，请求核对页保留完整清理内容。工具描述声明 ID 在任务结束后失效；本增量不增加额外 Developer 行为提示词。全部结果依然由执行侧记录，不根据 UI 文本重建历史。
+
+## 文件补丁与部分结果
+
+`apply_patch` 的结果仍通过同一 call_id 封闭到历史，状态包括成功、失败、停止或截止；结果动作日志保存已完成、失败和未开始项，不把取消解释为撤销。Runner 等待 Tools 的阻塞工作句柄再收尾，临时文件清理失败阻止继续执行。UI 的工具卡片概括完成动作数和路径，展开详情保留源/目标及辅助变化。实现契约见[文件补丁](../local-development-tools/03-file-patches.md)。
