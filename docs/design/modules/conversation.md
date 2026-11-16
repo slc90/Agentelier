@@ -91,7 +91,9 @@ ProcessCleanup 保存 session_id、cleanup_confirmed 和独立有界结果（包
 
 ActiveTurn.results 保存本批次的 ToolPayload，ToolView.output 只保存安全摘要。seal 按完成响应的调用顺序和 call_id 从真实结果表收集载荷，提交后清空本批表；协议历史共享不可变 ImagePayload，之后不再读取原始路径。普通文本仍使用字符串结果。加入图片前，已有历史、本批其他结果和候选结果按 Arc 身份去重，累计最多 16 MiB；超限保存带读取元数据的工具错误，不宣称图片从未读取，也不删除既有历史。
 
-图片历史与同批文字结果共同封闭；下一次请求的网络、能力或 32 MiB 请求预算失败仍保留既有步骤。ToolPayload 不跨 Bridge，图片字节不进入 ECS 反射或日志。重置或释放 Session 释放历史图片，不增加磁盘持久化或全局附件存储。会话还固定来自模型目录的 image_input 三态，UI 准备区变化不追溯修改已有会话。
+图片历史与同批文字结果共同封闭；下一次请求的网络、能力或 32 MiB 请求预算失败仍保留既有步骤。ToolPayload 不跨 Bridge，图片字节不进入 ECS 反射或日志。Runner 在接纳图片结果前通过 Session Store 保存会话附件并受控读回；重置或释放 Session 只释放内存图片，不删除旧存档附件，也不建立全局附件存储。会话还固定来自模型目录的 image_input 三态，UI 准备区变化不追溯修改已有会话。
+
+StoredImage 以会话 UUID、发送内容 ImageDescriptor 和原安全说明构成持久引用；描述符只有 MIME、摘要、尺寸和编码字节数，不接受任意路径。附件保存或读回失败时，工具返回 image_storage 错误并明确 read_succeeded，保留已经读取源图的事实，不将其伪装为成功的文字图片结果。任务历史的持久引用追加仍由后续记录机制承接。
 
 ## 固定四工具目录
 

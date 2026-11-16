@@ -17,5 +17,7 @@ pub use environment::WorkingDirectory;
 pub use catalog::{ToolCatalog, ToolDefinition};
 pub use execution::{MAX_TOOL_BODY_BYTES, ToolFailure, ToolResult, ToolStatus, execute};
 
-pub use payload::{ImagePayload, MAX_SESSION_IMAGE_BYTES, ToolPayload};
+pub use payload::{
+    ImageDescriptor, ImagePayload, MAX_ENCODED_IMAGE_BYTES, MAX_SESSION_IMAGE_BYTES, ToolPayload,
+};
 pub use sessions::{CleanupReport, ExecutionContext, ProcessCleanup};

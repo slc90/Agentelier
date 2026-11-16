@@ -16,8 +16,7 @@ use tokio_util::sync::CancellationToken;
 const MAX_INPUT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_PIXELS: u64 = 25_000_000;
 const MAX_BYTES_PER_PIXEL: u64 = 8;
-const MAX_EDGE: u32 = 2048;
-const MAX_ENCODED_BYTES: usize = 4 * 1024 * 1024;
+use crate::payload::{MAX_ENCODED_IMAGE_BYTES as MAX_ENCODED_BYTES, MAX_IMAGE_EDGE as MAX_EDGE};
 const JPEG_QUALITY: u8 = 85;
 const PNG_DIMENSIONS_START: usize = 16;
 

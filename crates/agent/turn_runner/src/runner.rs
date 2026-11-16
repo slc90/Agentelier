@@ -81,6 +81,7 @@ pub async fn run(
     cancel: CancellationToken,
     progress: mpsc::Sender<RunnerEvent>,
     mut steers: mpsc::Receiver<SteerInput>,
+    store: agentelier_session_store::SessionStoreClient,
 ) -> Result<ActiveTurn, ConversationFailure> {
     let mut context =
         agentelier_tools::ExecutionContext::new(active.view().settings.working_directory);
@@ -91,6 +92,7 @@ pub async fn run(
         &cancel,
         &progress,
         &mut steers,
+        &store,
     )
     .await;
     let phase = active.reaping();
@@ -128,6 +130,7 @@ async fn run_task(
     cancel: &CancellationToken,
     progress: &mpsc::Sender<RunnerEvent>,
     steers: &mut mpsc::Receiver<SteerInput>,
+    store: &agentelier_session_store::SessionStoreClient,
 ) -> Result<TurnStatus, ConversationFailure> {
     let catalog = active.catalog();
     let mut cleanup_failed = false;
@@ -222,6 +225,7 @@ async fn run_task(
                 );
                 outcome
             };
+            let outcome = persist_image(active.view().id, outcome, store).await;
             cleanup_failed |= outcome.cleanup_failed;
             active.tool_result(&call.call_id, outcome)?;
             publish(active, progress, cancel).await?;
@@ -241,4 +245,34 @@ async fn run_task(
         }
     }
     Ok(TurnStatus::Limited)
+}
+
+async fn persist_image(
+    session: agentelier_conversation::SessionId,
+    mut result: ToolResult,
+    store: &agentelier_session_store::SessionStoreClient,
+) -> ToolResult {
+    let agentelier_tools::ToolPayload::Image { summary, image } = &result.output else {
+        return result;
+    };
+    let stored = match store
+        .save_image(session, summary.clone(), image.clone())
+        .await
+    {
+        Ok(reference) => store.read_image(reference).await,
+        Err(failure) => Err(failure),
+    };
+    match stored {
+        Ok(image) => {
+            result.output = agentelier_tools::ToolPayload::Image {
+                summary: summary.clone(),
+                image,
+            }
+        }
+        Err(failure) => {
+            result.status = agentelier_tools::ToolStatus::Failed;
+            result.output = serde_json::json!({"ok":false,"error":{"code":"image_storage","message":failure.to_string()},"read_succeeded":true,"image_metadata":image.descriptor()}).to_string().into();
+        }
+    }
+    result
 }

@@ -7,7 +7,7 @@ mod control;
 mod conversation;
 mod queue;
 
-pub use archive::{InitialSession, SessionSummary, StoredSettings, StoredTool};
+pub use archive::{InitialSession, SessionSummary, StoredImage, StoredSettings, StoredTool};
 pub use conversation::PreparedSession;
 
 pub use conversation::{

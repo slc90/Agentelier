@@ -4,6 +4,13 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Clone, Serialize, Deserialize)]
+pub struct StoredImage {
+    pub session: SessionId,
+    pub image: agentelier_tools::ImageDescriptor,
+    pub summary: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct StoredSettings {
     pub slug: String,
     pub display_name: String,

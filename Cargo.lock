@@ -293,6 +293,7 @@ name = "agentelier_session_store"
 version = "0.1.0"
 dependencies = [
  "agentelier_conversation",
+ "agentelier_tools",
  "serde",
  "serde_json",
  "tempfile",
@@ -325,7 +326,9 @@ dependencies = [
  "agentelier_account",
  "agentelier_conversation",
  "agentelier_llm_model",
+ "agentelier_session_store",
  "agentelier_tools",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tracing",

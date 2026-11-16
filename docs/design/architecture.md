@@ -18,7 +18,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/account/` | `agentelier_account` | 账号操作与会话状态、共享凭据门控和按需续期协调 |
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录、Responses、SSE 和模型错误语义 |
 | `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的内存聊天会话、Turn 身份、展示记录与结果收敛 |
-| `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话的初始存档、单写入者、提交确认与存储收尾 |
+| `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话的初始存档、不可变图片附件、单写入者、提交确认与存储收尾 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
 | `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示 |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、正文增量和受控取消 |
@@ -68,6 +68,8 @@ flowchart TD
     Runner --> Model
     Runner --> Account
     Runner --> Tools["Agent · tools"]
+    Runner --> SessionStore
+    SessionStore --> Tools
     Model --> Tools
     Conversation --> Tools
     Conversation --> Model

@@ -1,8 +1,10 @@
-use agentelier_conversation::{InitialSession, SessionId};
+use agentelier_conversation::{InitialSession, SessionId, StoredImage};
+use agentelier_tools::ImagePayload;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use tempfile::NamedTempFile;
 use tokio::sync::{mpsc, oneshot};
@@ -36,6 +38,50 @@ pub struct Commit {
 
 enum Command {
     Create(Box<InitialSession>, oneshot::Sender<io::Result<Commit>>),
+    SaveImage(
+        StoredImage,
+        Arc<ImagePayload>,
+        oneshot::Sender<io::Result<()>>,
+    ),
+    ReadImage(StoredImage, oneshot::Sender<io::Result<Arc<ImagePayload>>>),
+}
+
+#[derive(Clone)]
+pub struct SessionStoreClient(mpsc::Sender<Command>);
+
+impl SessionStoreClient {
+    pub async fn save_image(
+        &self,
+        session: SessionId,
+        summary: String,
+        image: Arc<ImagePayload>,
+    ) -> io::Result<StoredImage> {
+        let reference = StoredImage {
+            session,
+            summary,
+            image: image.descriptor(),
+        };
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::SaveImage(reference.clone(), image, reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("附件写入未返回结果"))??;
+        Ok(reference)
+    }
+
+    pub async fn read_image(&self, reference: StoredImage) -> io::Result<Arc<ImagePayload>> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::ReadImage(reference, reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("附件读取未返回结果"))?
+    }
 }
 
 pub struct SessionStore {
@@ -52,6 +98,17 @@ impl SessionStore {
                 debug!("会话存储工作者已启动");
                 while let Some(command) = commands.blocking_recv() {
                     match command {
+                        Command::SaveImage(reference, image, reply) => {
+                            let result = crate::attachments::save(&root, &reference, &image);
+                            if let Err(failure) = &result { error!(session_id = %reference.session, error = %failure, "会话图片附件提交失败"); }
+                            else { debug!(session_id = %reference.session, sha256 = reference.image.digest, encoded_bytes = reference.image.encoded_bytes, "会话图片附件已提交并确认"); }
+                            if reply.send(result).is_err() { debug!("附件提交已结束，等待者已离开"); }
+                        }
+                        Command::ReadImage(reference, reply) => {
+                            let result = crate::attachments::read(&root, &reference);
+                            if let Err(failure) = &result { error!(session_id = %reference.session, error = %failure, "会话图片附件读取失败"); }
+                            if reply.send(result).is_err() { debug!("附件读取已结束，等待者已离开"); }
+                        }
                         Command::Create(initial, reply) => {
                             let result = create(&root, *initial);
                             if let Err(failure) = &result {
@@ -68,6 +125,10 @@ impl SessionStore {
                 Ok(())
             })?;
         Ok(Self { sender, thread })
+    }
+
+    pub fn client(&self) -> SessionStoreClient {
+        SessionStoreClient(self.sender.clone())
     }
 
     pub fn create(

@@ -230,6 +230,7 @@ impl AgentRuntime {
                                             id,
                                             control,
                                             owner_credentials.clone(),
+                                            store.client(),
                                             TaskRequest::Model(request),
                                         ));
                                     }
@@ -260,7 +261,7 @@ impl AgentRuntime {
                                             &mut delivery_failure,
                                         );
                                         if delivery_failure.is_none() && !runtime_shutdown.is_cancelled() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish)?;
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish)?;
                                         }
                                     }
                                     Command::Session(command) => {
@@ -274,7 +275,7 @@ impl AgentRuntime {
                                         let event=conversation.queue_command(command);
                                         emit(&publish,event.id,AgentEventKind::Conversation(ConversationEvent::Queue(event)))?;
                                         if model.is_none() && !runtime_shutdown.is_cancelled() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish)?;
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish)?;
                                         }
                                     }
                                     Command::Stream(event) => {
@@ -332,6 +333,7 @@ impl AgentRuntime {
                                                             id,
                                                             control,
                                                             owner_credentials.clone(),
+                                                            store.client(),
                                                             TaskRequest::Chat(Box::new(request), sender, steers),
                                                         ));
                                                     }

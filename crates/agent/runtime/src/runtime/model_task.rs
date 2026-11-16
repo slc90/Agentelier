@@ -32,6 +32,7 @@ impl ModelTask {
         id: u64,
         control: ModelControl,
         credentials: CredentialClient,
+        store: agentelier_session_store::SessionStoreClient,
         request: TaskRequest,
     ) -> Self {
         let cancel = control.cancel.clone();
@@ -44,9 +45,16 @@ impl ModelTask {
                     _ = cancel.cancelled() => None,
                 },
                 TaskRequest::Chat(active, progress, steers) => Some(TaskResult::Chat(
-                    agentelier_turn_runner::run(*active, credentials, cancel, progress, steers)
-                        .await
-                        .map(Box::new),
+                    agentelier_turn_runner::run(
+                        *active,
+                        credentials,
+                        cancel,
+                        progress,
+                        steers,
+                        store,
+                    )
+                    .await
+                    .map(Box::new),
                 )),
             };
             debug!(operation_id = id, chat, "模型操作执行体已结束");
@@ -189,6 +197,7 @@ pub(super) fn start_queued(
     incoming: &mut Option<mpsc::Receiver<RunnerEvent>>,
     shared: &SharedModel,
     credentials: &CredentialClient,
+    store: &agentelier_session_store::SessionStore,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
     if model.is_some() {
@@ -215,6 +224,7 @@ pub(super) fn start_queued(
         id,
         control,
         credentials.clone(),
+        store.client(),
         TaskRequest::Chat(Box::new(active), sender, steers),
     ));
     Ok(())
