@@ -49,22 +49,28 @@ pub(crate) fn project(view: ProjectContextView) -> ProjectContext {
             ProjectCollectionStatus::Loaded => CollectionStatus::Loaded,
             ProjectCollectionStatus::Failed(message) => CollectionStatus::Failed(message),
         },
-        snapshot: view.snapshot.map(|snapshot| ProjectSnapshot {
-            working_directory: display_path(&snapshot.working_directory),
-            project_root: snapshot.project_root.as_deref().map(display_path),
-            source_bytes: snapshot.source_bytes,
-            hash: snapshot.hash,
-            sources: snapshot
-                .sources
-                .into_iter()
-                .map(|source| RuleSource {
-                    path: display_path(&source.path),
-                    scope: display_path(&source.scope),
-                    text: source.text,
-                    hash: source.hash,
-                })
-                .collect(),
-        }),
+        snapshot: view.snapshot.map(project_snapshot),
+    }
+}
+
+pub(crate) fn project_snapshot(
+    snapshot: agentelier_conversation_bridge::ProjectSnapshotView,
+) -> ProjectSnapshot {
+    ProjectSnapshot {
+        working_directory: display_path(&snapshot.working_directory),
+        project_root: snapshot.project_root.as_deref().map(display_path),
+        source_bytes: snapshot.source_bytes,
+        hash: snapshot.hash,
+        sources: snapshot
+            .sources
+            .into_iter()
+            .map(|source| RuleSource {
+                path: display_path(&source.path),
+                scope: display_path(&source.scope),
+                text: source.text,
+                hash: source.hash,
+            })
+            .collect(),
     }
 }
 
@@ -154,7 +160,7 @@ fn summary(project: Option<&ProjectContext>) -> String {
     text
 }
 
-fn source_scene(source: RuleSource, index: usize) -> Box<dyn Scene> {
+pub(crate) fn source_scene(source: RuleSource, index: usize, prefix: &str) -> Box<dyn Scene> {
     let metadata = format!(
         "{}. {}\n作用目录：{}\n内容摘要：{}{}",
         index + 1,
@@ -168,7 +174,7 @@ fn source_scene(source: RuleSource, index: usize) -> Box<dyn Scene> {
         }
     );
     Box::new(bsn! {
-        Name(format!("ProjectRuleSource-{index}"))
+        Name(format!("{prefix}RuleSource-{index}"))
         Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(GAP), flex_shrink: 0.0 }
         Children [
             Text(metadata) WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter)--
@@ -176,7 +182,7 @@ fn source_scene(source: RuleSource, index: usize) -> Box<dyn Scene> {
                 @value: {source.text}, @multiline: true,
                 @auto_size: {Some(AutoSize { min_rows: MIN_BODY_ROWS, max_rows: MAX_BODY_ROWS })},
             }
-            Name(format!("ProjectRuleBody-{index}")) Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }
+            Name(format!("{prefix}RuleBody-{index}")) Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }
         ]
     })
 }
@@ -245,7 +251,7 @@ fn synchronize(world: &mut World) -> Result {
             && let Some(snapshot) = &context.snapshot
         {
             for (index, source) in snapshot.sources.iter().enumerate() {
-                let scene = source_scene(source.clone(), index);
+                let scene = source_scene(source.clone(), index, "Project");
                 world
                     .commands()
                     .spawn_scene_with_error_handler(bsn! { ChildOf(root) @scene });

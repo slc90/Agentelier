@@ -45,6 +45,10 @@ pub struct GenerationResult {
     pub response_id: Option<String>,
 }
 pub enum StreamEvent {
+    Sending,
+    ResponseReceived {
+        status: u16,
+    },
     Compacting,
     Usage {
         response_id: Option<String>,

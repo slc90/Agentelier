@@ -89,6 +89,8 @@ pub struct ProcessCleanup {
 }
 #[derive(Clone)]
 pub struct RequestView {
+    pub sending_started: bool,
+    pub response_status: Option<u16>,
     pub request: u32,
     pub window: u64,
     pub publication: Option<u64>,
@@ -154,6 +156,7 @@ pub struct ContextView {
 }
 #[derive(Clone)]
 pub struct SessionView {
+    pub project_publications: Arc<Vec<ProjectPublicationView>>,
     pub project_context: Box<ProjectContextView>,
     pub context: Box<ContextView>,
     pub notice: Option<String>,
@@ -192,6 +195,15 @@ pub struct ProjectSnapshotView {
 pub struct ProjectContextView {
     pub status: ProjectCollectionStatus,
     pub snapshot: Option<ProjectSnapshotView>,
+}
+
+#[derive(Clone)]
+pub struct ProjectPublicationView {
+    pub id: u64,
+    pub window: u64,
+    pub kind: String,
+    pub snapshot: ProjectSnapshotView,
+    pub rendered: Option<String>,
 }
 
 fn project_context(state: agentelier_conversation::ProjectContextState) -> ProjectContextView {
@@ -314,6 +326,45 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
 
 fn view(session: agentelier_conversation::SessionView) -> SessionView {
     SessionView {
+        project_publications: Arc::new(
+            session
+                .project_publications
+                .iter()
+                .map(|publication| {
+                    use agentelier_conversation::PublicationKind;
+                    ProjectPublicationView {
+                        id: publication.id,
+                        window: publication.window,
+                        kind: match publication.kind {
+                            PublicationKind::Initial => "首次发布",
+                            PublicationKind::Replacement => "完整替换",
+                            PublicationKind::Removal => "清除",
+                            PublicationKind::Republished => "压缩后重新发布",
+                            PublicationKind::RepublishedRemoval => "压缩后重新发布清除状态",
+                        }
+                        .into(),
+                        snapshot: ProjectSnapshotView {
+                            working_directory: publication.snapshot.working_directory.clone(),
+                            project_root: publication.snapshot.project_root.clone(),
+                            source_bytes: publication.snapshot.source_bytes,
+                            hash: publication.snapshot.hash.clone(),
+                            sources: publication
+                                .snapshot
+                                .sources
+                                .iter()
+                                .map(|source| ProjectRuleSource {
+                                    path: source.path.clone(),
+                                    scope: source.scope.clone(),
+                                    text: source.text.clone(),
+                                    hash: source.hash.clone(),
+                                })
+                                .collect(),
+                        },
+                        rendered: publication.item.as_ref().map(|item| item.text.clone()),
+                    }
+                })
+                .collect(),
+        ),
         project_context: Box::new(project_context(*session.project_context)),
         context: Box::new(ContextView {
             window: session.context.window,
@@ -395,6 +446,8 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
             .requests
             .into_iter()
             .map(|fact| RequestView {
+                sending_started: fact.sending_started,
+                response_status: fact.response_status,
                 request: fact.request,
                 window: fact.window,
                 publication: fact.publication,

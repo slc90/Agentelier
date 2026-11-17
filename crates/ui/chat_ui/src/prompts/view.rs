@@ -169,6 +169,7 @@ pub(super) fn render(world: &mut World) -> Result {
                 Box::new(bsn! {
                     Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(GAP), flex_shrink: 0.0 }
                     Children [
+                        @crate::request_inspection::panel()--
                         @crate::project_context::panel(state)--
                         @readonly(value, "PromptSessionSnapshot")
                     ]

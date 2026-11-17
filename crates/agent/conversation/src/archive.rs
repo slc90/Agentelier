@@ -48,6 +48,9 @@ pub enum RecordEvent {
     RequestPrepared {
         state: StoredState,
     },
+    RequestProgress {
+        state: StoredState,
+    },
     Compacted {
         state: StoredState,
         checkpoint: Box<crate::CompactionCheckpoint>,
@@ -107,6 +110,7 @@ impl RecordEvent {
         match self {
             Self::ProjectPublished { state, .. }
             | Self::RequestPrepared { state }
+            | Self::RequestProgress { state }
             | Self::Compacted { state, .. }
             | Self::QueueSuspended { state }
             | Self::Recovered { state, .. }

@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod active;
 mod project_context;
+pub use agentelier_llm_model::PublicationKind;
 pub use project_context::{PreparedRequestFact, ProjectCandidate, ProjectContextState};
 mod archive;
 mod control;

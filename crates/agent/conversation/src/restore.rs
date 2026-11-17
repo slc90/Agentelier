@@ -134,7 +134,8 @@ pub fn restore(
                 publications.push(Arc::new(*publication));
                 merge(&mut state, incoming);
             }
-            RecordEvent::RequestPrepared { state: incoming } => {
+            RecordEvent::RequestPrepared { state: incoming }
+            | RecordEvent::RequestProgress { state: incoming } => {
                 let turn = incoming
                     .turn
                     .as_ref()

@@ -81,6 +81,8 @@ pub struct ChatProcessCleanup {
 }
 #[derive(Clone, Reflect)]
 pub struct ChatRequest {
+    pub sending_started: bool,
+    pub response_status: Option<u16>,
     pub request: u32,
     pub window: u64,
     pub publication: Option<u64>,
@@ -110,6 +112,7 @@ pub struct ChatTurn {
 }
 #[derive(Clone, Reflect)]
 pub struct ChatSession {
+    pub project_publications: Vec<crate::request_inspection::ChatPublication>,
     pub project_context: crate::project_context::ProjectContext,
     pub notice: Option<String>,
     pub id: SessionId,
@@ -147,6 +150,8 @@ pub struct ChatReplacement {
 #[derive(Resource, Clone, Reflect, Default)]
 #[reflect(Resource)]
 pub struct ChatState {
+    pub selected_request: Option<(u64, u32)>,
+    pub inspection_sources_expanded: bool,
     pub project_rules_expanded: bool,
     pub session: Option<ChatSession>,
     pub operation: Option<u64>,
@@ -239,6 +244,7 @@ struct ChatRow {
 
 pub(crate) fn install(app: &mut App) {
     crate::project_context::install(app);
+    crate::request_inspection::install(app);
     crate::tool_timeline::install(app);
     crate::queue::install(app);
     app.init_resource::<SessionUiStates>()
@@ -319,6 +325,8 @@ pub(crate) fn create_button() -> impl Scene {
 
 #[derive(Default)]
 struct SessionUiState {
+    selected_request: Option<(u64, u32)>,
+    inspection_sources_expanded: bool,
     project_rules_expanded: bool,
     draft: String,
     revision: u64,
@@ -338,6 +346,8 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
         let saved = {
             let mut state = world.resource_mut::<ChatState>();
             let saved = SessionUiState {
+                selected_request: state.selected_request.take(),
+                inspection_sources_expanded: std::mem::take(&mut state.inspection_sources_expanded),
                 project_rules_expanded: std::mem::take(&mut state.project_rules_expanded),
                 draft: std::mem::take(&mut state.draft),
                 revision: state.draft_revision,
@@ -367,6 +377,8 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
         state.draft_revision = restored.revision;
         state.expanded_tools = restored.expanded_tools;
         state.project_rules_expanded = restored.project_rules_expanded;
+        state.selected_request = restored.selected_request;
+        state.inspection_sources_expanded = restored.inspection_sources_expanded;
         crate::reading::switch(world, previous, next.id);
     }
     world.resource_mut::<ChatState>().session = Some(next);
@@ -864,6 +876,8 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
             .requests
             .into_iter()
             .map(|fact| ChatRequest {
+                sending_started: fact.sending_started,
+                response_status: fact.response_status,
                 request: fact.request,
                 window: fact.window,
                 publication: fact.publication,
@@ -979,6 +993,17 @@ fn project(session: SessionView) -> Result<ChatSession> {
         session.context.covered_items.unwrap_or(0)
     );
     Ok(ChatSession {
+        project_publications: session
+            .project_publications
+            .iter()
+            .map(|publication| crate::request_inspection::ChatPublication {
+                id: publication.id,
+                window: publication.window,
+                kind: publication.kind.clone(),
+                snapshot: crate::project_context::project_snapshot(publication.snapshot.clone()),
+                rendered: publication.rendered.clone(),
+            })
+            .collect(),
         project_context: crate::project_context::project(*session.project_context),
         context,
         context_details,

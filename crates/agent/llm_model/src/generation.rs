@@ -157,6 +157,10 @@ pub async fn generate(
         identity.validate(&current).map_err(|failure| {
             ModelFailure::new(ModelFailureKind::Authentication, failure.to_string())
         })?;
+        progress
+            .send(StreamEvent::Sending)
+            .await
+            .map_err(|_| crate::model::protocol("模型进度接收端已关闭"))?;
         let response = tokio::time::timeout(
             STREAM_IDLE_TIMEOUT,
             client
@@ -170,6 +174,12 @@ pub async fn generate(
         .await
         .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "等待模型响应超时"))?
         .map_err(network)?;
+        progress
+            .send(StreamEvent::ResponseReceived {
+                status: response.status().as_u16(),
+            })
+            .await
+            .map_err(|_| crate::model::protocol("模型进度接收端已关闭"))?;
         let outcome = if response.status().is_success() {
             let status = response.status().as_u16();
             let id = request_id(&response);

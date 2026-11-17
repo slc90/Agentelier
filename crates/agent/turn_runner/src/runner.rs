@@ -74,8 +74,12 @@ async fn request_once(
                 }
                 event = events.recv() => {
                     if let Some(event) = event {
+                        let request_progress = matches!(event, agentelier_llm_model::StreamEvent::Sending | agentelier_llm_model::StreamEvent::ResponseReceived { .. });
                         if let Err(failure) = active.update(event) {
                             break Some(Err(protocol_failure(failure)));
+                        }
+                        if request_progress {
+                            record(store, RecordEvent::RequestProgress { state: active.stored_state() }).await?;
                         }
                         publish(active, progress, cancel).await?;
                     }
@@ -84,8 +88,22 @@ async fn request_once(
         }
     };
     while let Ok(event) = events.try_recv() {
+        let request_progress = matches!(
+            event,
+            agentelier_llm_model::StreamEvent::Sending
+                | agentelier_llm_model::StreamEvent::ResponseReceived { .. }
+        );
         if let Err(failure) = active.update(event) {
             return Ok(Some(Err(protocol_failure(failure))));
+        }
+        if request_progress {
+            record(
+                store,
+                RecordEvent::RequestProgress {
+                    state: active.stored_state(),
+                },
+            )
+            .await?;
         }
     }
     Ok(outcome)

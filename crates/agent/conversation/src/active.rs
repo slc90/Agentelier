@@ -128,6 +128,17 @@ impl ActiveTurn {
             .as_mut()
             .ok_or(ConversationFailure::new("活动任务缺少轮次"))?;
         match event {
+            StreamEvent::Sending | StreamEvent::ResponseReceived { .. } => {
+                let fact = turn
+                    .requests
+                    .last_mut()
+                    .filter(|fact| fact.request == turn.request_index)
+                    .ok_or_else(|| ConversationFailure::new("发送进度缺少准备记录"))?;
+                fact.sending_started = true;
+                if let StreamEvent::ResponseReceived { status } = event {
+                    fact.response_status = Some(status);
+                }
+            }
             StreamEvent::Compacting => turn.phase = TaskPhase::CompactingContext,
             StreamEvent::Usage { response_id, usage } => {
                 self.view.context.latest = Some(crate::UsageFact {
