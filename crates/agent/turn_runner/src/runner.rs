@@ -46,9 +46,24 @@ async fn request_once(
 ) -> Result<Option<Result<GenerationResult, ModelFailure>>, ConversationFailure> {
     let (sender, mut events) = mpsc::channel(MODEL_PROGRESS_CAPACITY);
     let request = active.request()?;
+    let prepared = match agentelier_llm_model::prepare(request) {
+        Ok(prepared) => prepared,
+        Err(failure) => return Ok(Some(Err(failure))),
+    };
+    active.request_prepared(prepared.projection().clone())?;
+    record(
+        store,
+        RecordEvent::RequestPrepared {
+            state: active.stored_state(),
+        },
+    )
+    .await?;
+    if cancel.is_cancelled() {
+        return Ok(None);
+    }
     publish(active, progress, cancel).await?;
     let outcome = {
-        let generation = agentelier_llm_model::generate(credentials, request, identity, sender);
+        let generation = agentelier_llm_model::generate(credentials, prepared, identity, sender);
         tokio::pin!(generation);
         loop {
             tokio::select! { biased;
@@ -193,7 +208,7 @@ async fn run_task(
     }
     match collected {
         Ok(snapshot) => {
-            tracing::debug!(sources = snapshot.sources.len(), source_bytes = snapshot.source_bytes, hash = %snapshot.hash, "项目规则采集完成，尚未注入请求");
+            tracing::debug!(sources = snapshot.sources.len(), source_bytes = snapshot.source_bytes, hash = %snapshot.hash, "项目规则采集完成");
             active.project_context(Ok(snapshot));
         }
         Err(agentelier_project_context::ProjectContextFailure::Cancelled) => {
@@ -228,6 +243,16 @@ async fn run_task(
         control::drain(active, steers, progress, store).await?;
         if cancel.is_cancelled() {
             return Ok(TurnStatus::Cancelled);
+        }
+        if let Some(candidate) = active.project_candidate()? {
+            let changes_history = candidate.changes_history();
+            let event = candidate.event(active);
+            active.committing_checkpoint();
+            let sequence = record(store, event).await?;
+            active.install_project(candidate);
+            if changes_history {
+                active.recorded(sequence);
+            }
         }
         let applied = active.apply_steers()?;
         if !applied.is_empty() {

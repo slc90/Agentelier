@@ -52,6 +52,7 @@ pub enum ChatTurnStatus {
 }
 #[derive(Clone, Reflect)]
 pub enum ChatHistoryItem {
+    Project { publication: u64 },
     Compaction,
     User,
     FunctionCall { call_id: String, name: String },
@@ -79,7 +80,18 @@ pub struct ChatProcessCleanup {
     pub output: String,
 }
 #[derive(Clone, Reflect)]
+pub struct ChatRequest {
+    pub request: u32,
+    pub window: u64,
+    pub publication: Option<u64>,
+    pub items: Vec<ChatHistoryItem>,
+    pub base_hashes: Vec<String>,
+    pub payload_hash: String,
+    pub payload_bytes: usize,
+}
+#[derive(Clone, Reflect)]
 pub struct ChatTurn {
+    pub requests: Vec<ChatRequest>,
     pub id: u64,
     pub operation_id: u64,
     pub input_id: u64,
@@ -828,6 +840,9 @@ fn process_input(world: &mut World) -> Result {
 fn history_item(item: agentelier_conversation_bridge::HistoryItem) -> ChatHistoryItem {
     match item {
         agentelier_conversation_bridge::HistoryItem::Compaction => ChatHistoryItem::Compaction,
+        agentelier_conversation_bridge::HistoryItem::Project { publication } => {
+            ChatHistoryItem::Project { publication }
+        }
         agentelier_conversation_bridge::HistoryItem::User => ChatHistoryItem::User,
         agentelier_conversation_bridge::HistoryItem::FunctionCall { call_id, name } => {
             ChatHistoryItem::FunctionCall { call_id, name }
@@ -845,6 +860,19 @@ fn history_item(item: agentelier_conversation_bridge::HistoryItem) -> ChatHistor
 }
 fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTurn> {
     Ok(ChatTurn {
+        requests: turn
+            .requests
+            .into_iter()
+            .map(|fact| ChatRequest {
+                request: fact.request,
+                window: fact.window,
+                publication: fact.publication,
+                items: fact.items.into_iter().map(history_item).collect(),
+                base_hashes: fact.base_hashes,
+                payload_hash: fact.payload_hash,
+                payload_bytes: fact.payload_bytes,
+            })
+            .collect(),
         steers: turn
             .steers
             .into_iter()
@@ -1712,6 +1740,16 @@ pub(crate) fn request_details(state: &ChatState) -> String {
             turn.committed_steps,
             turn.request_instructions
         ));
+        for request in &turn.requests {
+            text.push_str(&format!(
+                "\n已准备请求 {} · 窗口 {} · 项目发布 {:?} · {} 字节 · SHA-256 {}\n",
+                request.request,
+                request.window,
+                request.publication,
+                request.payload_bytes,
+                request.payload_hash
+            ));
+        }
         for tool in &turn.tools {
             text.push_str(&format!(
                 "\n请求 {} / 输出 {} / {} / {}\n工具 {}；{}；已保留 {}\n参数{}：{}\n结果：{}\n",

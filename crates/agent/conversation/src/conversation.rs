@@ -60,6 +60,8 @@ pub struct ToolView {
 }
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct TurnView {
+    #[serde(default)]
+    pub requests: Vec<crate::PreparedRequestFact>,
     pub id: TurnId,
     pub operation_id: u64,
     pub input_id: TurnId,
@@ -78,6 +80,7 @@ pub struct TurnView {
 }
 #[derive(Clone)]
 pub struct SessionView {
+    pub project_publications: Arc<Vec<Arc<agentelier_llm_model::ProjectPublication>>>,
     pub project_context: Box<crate::ProjectContextState>,
     pub context: Box<crate::ContextState>,
     pub notice: Option<String>,
@@ -242,6 +245,7 @@ impl Conversation {
                 .map_err(|_| ConversationFailure::new("工具目录配置无效"))?,
         );
         let mut session = SessionView {
+            project_publications: Arc::default(),
             project_context: Default::default(),
             context: Box::default(),
             notice: None,
@@ -351,6 +355,7 @@ impl Conversation {
             session.view.previous_turns.push(*previous);
         }
         session.view.turn = Some(Box::new(TurnView {
+            requests: Vec::new(),
             id: TurnId(id),
             input_id: TurnId(id),
             is_retry: false,

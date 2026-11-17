@@ -50,6 +50,9 @@ impl ArchivedPayload {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ArchivedItem {
+    Project {
+        item: crate::ProjectItem,
+    },
     Compaction {
         item: crate::CompactionItem,
     },
@@ -110,7 +113,7 @@ impl ProtocolArchive {
                         return Err(crate::model::protocol("压缩历史工具结果不匹配"));
                     }
                 }
-                ArchivedItem::User { .. } if !pending.is_empty() => {
+                ArchivedItem::User { .. } | ArchivedItem::Project { .. } if !pending.is_empty() => {
                     return Err(crate::model::protocol("压缩历史用户输入插入未封闭调用"));
                 }
                 _ => {}
@@ -149,7 +152,9 @@ impl ProtocolArchive {
             || output.items.iter().any(|item| {
                 matches!(
                     item,
-                    ArchivedItem::User { .. } | ArchivedItem::FunctionResult { .. }
+                    ArchivedItem::User { .. }
+                        | ArchivedItem::Project { .. }
+                        | ArchivedItem::FunctionResult { .. }
                 )
             })
         {
@@ -173,6 +178,7 @@ fn capture(items: &[ProtocolItem]) -> ProtocolArchive {
         items: items
             .iter()
             .map(|item| match item {
+                ProtocolItem::Project(item) => ArchivedItem::Project { item: item.clone() },
                 ProtocolItem::User(text) => ArchivedItem::User { text: text.clone() },
                 ProtocolItem::Compaction(item) => ArchivedItem::Compaction { item: item.clone() },
                 ProtocolItem::FunctionCall { raw, call_id, name } => ArchivedItem::FunctionCall {
@@ -210,6 +216,12 @@ impl ProtocolHistory {
         let mut pending = std::collections::VecDeque::new();
         for item in archive.items {
             let item = match item {
+                ArchivedItem::Project { item } => {
+                    if !pending.is_empty() || item.publication == 0 || item.text.is_empty() {
+                        return Err(crate::model::protocol("项目协议项身份或边界无效"));
+                    }
+                    ProtocolItem::Project(item)
+                }
                 ArchivedItem::Compaction { item } => ProtocolItem::Compaction(item),
                 ArchivedItem::User { text } => {
                     if !pending.is_empty() {

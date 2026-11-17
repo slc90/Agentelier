@@ -7,16 +7,30 @@ pub use estimate::text_tokens as estimated_text_tokens;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub enum ProtocolItemSummary {
+    Project {
+        publication: u64,
+        snapshot_hash: String,
+    },
     Compaction,
     User,
-    FunctionCall { call_id: String, name: String },
-    FunctionResult { call_id: String },
-    Assistant { phase: Option<String> },
-    Reasoning { encrypted: bool },
+    FunctionCall {
+        call_id: String,
+        name: String,
+    },
+    FunctionResult {
+        call_id: String,
+    },
+    Assistant {
+        phase: Option<String>,
+    },
+    Reasoning {
+        encrypted: bool,
+    },
 }
 
 #[derive(Clone)]
 pub(crate) enum ProtocolItem {
+    Project(crate::ProjectItem),
     Compaction(crate::CompactionItem),
     User(String),
     FunctionCall {
@@ -58,6 +72,27 @@ impl ProtocolOutput {
 pub struct ProtocolHistory(Vec<ProtocolItem>);
 
 impl ProtocolHistory {
+    pub fn with_project(&self, item: crate::ProjectItem) -> Self {
+        let mut history = self.clone();
+        history.0.push(ProtocolItem::Project(item));
+        history
+    }
+
+    pub fn validate_projects(
+        &self,
+        publications: &[std::sync::Arc<crate::ProjectPublication>],
+    ) -> Result<(), crate::ModelFailure> {
+        for item in &self.0 {
+            if let ProtocolItem::Project(item) = item
+                && !publications.iter().any(|publication| {
+                    publication.id == item.publication && publication.item.as_ref() == Some(item)
+                })
+            {
+                return Err(crate::model::protocol("项目协议项缺少一致的来源发布"));
+            }
+        }
+        Ok(())
+    }
     pub fn compacted(&self) -> Self {
         let mut pending = std::collections::HashSet::new();
         let mut boundary = 0;
@@ -120,6 +155,10 @@ impl ProtocolHistory {
         self.0
             .iter()
             .map(|item| match item {
+                ProtocolItem::Project(item) => ProtocolItemSummary::Project {
+                    publication: item.publication,
+                    snapshot_hash: item.snapshot_hash.clone(),
+                },
                 ProtocolItem::User(_) => ProtocolItemSummary::User,
                 ProtocolItem::Compaction(_) => ProtocolItemSummary::Compaction,
                 ProtocolItem::FunctionCall { call_id, name, .. } => {
@@ -161,6 +200,7 @@ impl ProtocolHistory {
         self.0
             .into_iter()
             .map(|item| match item {
+                ProtocolItem::Project(item) => serde_json::json!({"role":"user","content":item.text}),
                 ProtocolItem::Compaction(item) => item.0,
                 ProtocolItem::User(input) => serde_json::json!({"role": "user", "content": input}),
                 ProtocolItem::Assistant { raw, .. } | ProtocolItem::Reasoning { raw, .. } | ProtocolItem::FunctionCall {raw, ..} => raw,

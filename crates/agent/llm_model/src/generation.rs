@@ -40,23 +40,33 @@ pub struct GenerationRequest {
     pub tools: Arc<agentelier_tools::ToolCatalog>,
 }
 
-pub async fn generate(
-    credentials: CredentialClient,
-    generation: GenerationRequest,
-    identity: &ExecutionIdentity,
-    progress: Sender<StreamEvent>,
-) -> Result<GenerationResult, ModelFailure> {
-    let client = Client::builder()
-        .https_only(true)
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(CONNECT_TIMEOUT)
-        .read_timeout(STREAM_IDLE_TIMEOUT)
-        .build()
-        .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "无法建立安全模型客户端"))?;
-    let mut current = acquire(&credentials).await?;
-    identity.validate(&current).map_err(|failure| {
-        ModelFailure::new(ModelFailureKind::Authentication, failure.to_string())
-    })?;
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct RequestProjection {
+    pub items: Vec<crate::ProtocolItemSummary>,
+    pub base_hashes: Vec<String>,
+    pub payload_hash: String,
+    pub payload_bytes: usize,
+}
+
+pub struct PreparedGeneration {
+    body: Vec<u8>,
+    projection: RequestProjection,
+}
+
+impl PreparedGeneration {
+    pub fn projection(&self) -> &RequestProjection {
+        &self.projection
+    }
+}
+
+pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, ModelFailure> {
+    let items = generation.context.summary();
+    let base_hashes = generation
+        .instructions
+        .messages()
+        .iter()
+        .map(|message| message.hash.clone())
+        .collect();
     generation
         .instructions
         .validate()
@@ -107,11 +117,39 @@ pub async fn generate(
             }
         }
     }
+    use sha2::{Digest, Sha256};
+    let projection = RequestProjection {
+        items,
+        base_hashes,
+        payload_hash: format!("{:x}", Sha256::digest(&body.0)),
+        payload_bytes: body.0.len(),
+    };
+    Ok(PreparedGeneration {
+        body: body.0,
+        projection,
+    })
+}
+
+pub async fn generate(
+    credentials: CredentialClient,
+    generation: PreparedGeneration,
+    identity: &ExecutionIdentity,
+    progress: Sender<StreamEvent>,
+) -> Result<GenerationResult, ModelFailure> {
+    let client = Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(STREAM_IDLE_TIMEOUT)
+        .build()
+        .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "无法建立安全模型客户端"))?;
+    let mut current = acquire(&credentials).await?;
+    identity.validate(&current).map_err(|failure| {
+        ModelFailure::new(ModelFailureKind::Authentication, failure.to_string())
+    })?;
     tracing::debug!(
-        compact_threshold = generation.compact_threshold,
-        model = generation.slug,
-        effort = generation.effort,
-        request_bytes = body.0.len(),
+        request_bytes = generation.body.len(),
+        payload_hash = generation.projection.payload_hash,
         "开始流式模型请求"
     );
     let mut request = AuthenticatedRequest::new(&current);
@@ -126,7 +164,7 @@ pub async fn generate(
                 .bearer_auth(current.access_token())
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body.0.clone())
+                .body(generation.body.clone())
                 .send(),
         )
         .await

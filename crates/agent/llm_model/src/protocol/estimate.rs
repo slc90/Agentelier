@@ -13,6 +13,7 @@ pub fn text_tokens(text: &str) -> u64 {
 
 fn item_tokens(item: &ProtocolItem) -> u64 {
     match item {
+        ProtocolItem::Project(item) => text_tokens(&item.text).saturating_add(text_tokens("user")),
         ProtocolItem::User(text) => text_tokens(text),
         ProtocolItem::Compaction(item) => (item
             .0

@@ -30,6 +30,7 @@ pub enum TurnStatus {
 }
 #[derive(Clone)]
 pub enum HistoryItem {
+    Project { publication: u64 },
     Compaction,
     User,
     FunctionCall { call_id: String, name: String },
@@ -87,7 +88,19 @@ pub struct ProcessCleanup {
     pub output: String,
 }
 #[derive(Clone)]
+pub struct RequestView {
+    pub request: u32,
+    pub window: u64,
+    pub publication: Option<u64>,
+    pub items: Vec<HistoryItem>,
+    pub base_hashes: Vec<String>,
+    pub payload_hash: String,
+    pub payload_bytes: usize,
+}
+
+#[derive(Clone)]
 pub struct TurnView {
+    pub requests: Vec<RequestView>,
     pub id: u64,
     pub operation_id: u64,
     pub input_id: u64,
@@ -358,6 +371,9 @@ fn view(session: agentelier_conversation::SessionView) -> SessionView {
 fn history_item(item: agentelier_conversation::ProtocolItemSummary) -> HistoryItem {
     match item {
         agentelier_conversation::ProtocolItemSummary::Compaction => HistoryItem::Compaction,
+        agentelier_conversation::ProtocolItemSummary::Project { publication, .. } => {
+            HistoryItem::Project { publication }
+        }
         agentelier_conversation::ProtocolItemSummary::User => HistoryItem::User,
         agentelier_conversation::ProtocolItemSummary::FunctionCall { call_id, name } => {
             HistoryItem::FunctionCall { call_id, name }
@@ -375,6 +391,24 @@ fn history_item(item: agentelier_conversation::ProtocolItemSummary) -> HistoryIt
 }
 fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
     TurnView {
+        requests: turn
+            .requests
+            .into_iter()
+            .map(|fact| RequestView {
+                request: fact.request,
+                window: fact.window,
+                publication: fact.publication,
+                items: fact
+                    .projection
+                    .items
+                    .into_iter()
+                    .map(history_item)
+                    .collect(),
+                base_hashes: fact.projection.base_hashes,
+                payload_hash: fact.projection.payload_hash,
+                payload_bytes: fact.projection.payload_bytes,
+            })
+            .collect(),
         steers: turn
             .steers
             .into_iter()

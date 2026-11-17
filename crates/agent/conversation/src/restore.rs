@@ -14,6 +14,7 @@ pub struct RestoredSession {
     pub state: StoredState,
     initial: InitialSession,
     history: ProtocolHistory,
+    publications: Vec<Arc<agentelier_llm_model::ProjectPublication>>,
     tools: Arc<ToolCatalog>,
     next_turn: u64,
     notice: Option<String>,
@@ -96,6 +97,7 @@ pub fn restore(
         queue: Vec::new(),
         queue_paused: false,
     };
+    let mut publications = Vec::<Arc<agentelier_llm_model::ProjectPublication>>::new();
     let mut history = ProtocolArchive::default();
     let mut pending: Option<PendingResponse> = None;
     let mut retained_input = false;
@@ -108,6 +110,55 @@ pub fn restore(
         }
         next_turn = next_turn.max(maximum(record.event.state()));
         match record.event {
+            RecordEvent::ProjectPublished {
+                state: incoming,
+                publication,
+                history: published,
+            } => {
+                publication
+                    .validate()
+                    .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+                if pending.is_some()
+                    || publication.id != publications.len() as u64 + 1
+                    || publication.window != state.context.window
+                    || publication.snapshot.working_directory != initial.settings.working_directory
+                    || published.is_some() != publication.item.is_some()
+                {
+                    return Err(ConversationFailure::new("项目发布身份或历史边界不一致"));
+                }
+                if let Some(published) = published {
+                    history = published;
+                    covered_sequence = record.sequence;
+                }
+                publications.push(Arc::new(*publication));
+                merge(&mut state, incoming);
+            }
+            RecordEvent::RequestPrepared { state: incoming } => {
+                let turn = incoming
+                    .turn
+                    .as_ref()
+                    .ok_or_else(|| ConversationFailure::new("准备记录缺少任务"))?;
+                let fact = turn
+                    .requests
+                    .last()
+                    .ok_or_else(|| ConversationFailure::new("准备记录缺少请求材料"))?;
+                if pending.is_some()
+                    || fact.request != turn.request_index
+                    || fact.window != incoming.context.window
+                    || fact.publication != publications.last().map(|publication| publication.id)
+                    || fact.projection.base_hashes
+                        != initial
+                            .settings
+                            .instructions
+                            .messages()
+                            .iter()
+                            .map(|message| message.hash.clone())
+                            .collect::<Vec<_>>()
+                {
+                    return Err(ConversationFailure::new("请求准备身份或材料引用不一致"));
+                }
+                merge(&mut state, incoming);
+            }
             RecordEvent::Compacted {
                 state: incoming,
                 checkpoint,
@@ -384,6 +435,9 @@ pub fn restore(
         Ok(image)
     })
     .map_err(|failure| ConversationFailure::new(format!("无法恢复模型历史：{failure}")))?;
+    history
+        .validate_projects(&publications)
+        .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
     if history.image_bytes_with(std::iter::empty()) > MAX_SESSION_IMAGE_BYTES {
         return Err(ConversationFailure::new("恢复的工作上下文超过会话图片预算"));
     }
@@ -421,6 +475,7 @@ pub fn restore(
         state,
         initial,
         history,
+        publications,
         tools,
         next_turn,
         notice: (!notices.is_empty()).then(|| notices.join("\n")),
@@ -440,7 +495,13 @@ impl Conversation {
         }
         let settings = restored.initial.settings;
         let view = SessionView {
-            project_context: Default::default(),
+            project_context: Box::new(restored.publications.last().map_or(
+                crate::ProjectContextState::NotCollected,
+                |publication| {
+                    crate::ProjectContextState::Loaded(Arc::new(publication.snapshot.clone()))
+                },
+            )),
+            project_publications: Arc::new(restored.publications),
             context: restored.state.context,
             id: restored.state.session,
             notice: restored.notice,

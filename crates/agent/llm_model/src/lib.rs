@@ -7,10 +7,12 @@ mod context;
 mod generation;
 pub use context::{ContextLimits, ResponseUsage};
 mod model;
+mod project;
 mod protocol;
+pub use project::{ProjectItem, ProjectPublication};
 mod stream;
 
-pub use generation::{GenerationRequest, generate};
+pub use generation::{GenerationRequest, PreparedGeneration, RequestProjection, generate, prepare};
 pub use protocol::{
     ArchivedPayload, ProtocolArchive, ProtocolHistory, ProtocolItemSummary, ProtocolOutput,
 };

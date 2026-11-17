@@ -1,5 +1,35 @@
+use agentelier_llm_model::{ProjectPublication, ProtocolHistory, RequestProjection};
 use agentelier_project_context::ProjectSnapshot;
 use std::sync::Arc;
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct PreparedRequestFact {
+    pub request: u32,
+    pub window: u64,
+    pub publication: Option<u64>,
+    pub projection: RequestProjection,
+}
+
+pub struct ProjectCandidate {
+    publication: ProjectPublication,
+    history: ProtocolHistory,
+}
+
+impl ProjectCandidate {
+    pub fn changes_history(&self) -> bool {
+        self.publication.item.is_some()
+    }
+
+    pub fn event(&self, active: &crate::ActiveTurn) -> crate::RecordEvent {
+        let mut state = active.stored_state();
+        state.committed_items = self.history.summary();
+        crate::RecordEvent::ProjectPublished {
+            state,
+            publication: Box::new(self.publication.clone()),
+            history: self.changes_history().then(|| self.history.archive()),
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 pub enum ProjectContextState {
@@ -13,6 +43,59 @@ pub enum ProjectContextState {
 }
 
 impl crate::ActiveTurn {
+    pub fn project_candidate(
+        &self,
+    ) -> Result<Option<ProjectCandidate>, crate::ConversationFailure> {
+        if !self.view.project_publications.is_empty() {
+            return Ok(None);
+        }
+        let ProjectContextState::Loaded(snapshot) = self.view.project_context.as_ref() else {
+            return Err(crate::ConversationFailure::new("请求缺少成功的项目采集"));
+        };
+        let publication =
+            ProjectPublication::initial(1, self.view.context.window, snapshot.as_ref().clone());
+        publication
+            .validate()
+            .map_err(|failure| crate::ConversationFailure::new(failure.to_string()))?;
+        let history = match &publication.item {
+            Some(item) => self.history.with_project(item.clone()),
+            None => self.history.clone(),
+        };
+        Ok(Some(ProjectCandidate {
+            publication,
+            history,
+        }))
+    }
+
+    pub fn install_project(&mut self, candidate: ProjectCandidate) {
+        self.history = candidate.history;
+        Arc::make_mut(&mut self.view.project_publications).push(Arc::new(candidate.publication));
+        self.view.committed_items = self.history.summary();
+        self.history_confirmed = true;
+    }
+
+    pub fn request_prepared(
+        &mut self,
+        projection: RequestProjection,
+    ) -> Result<(), crate::ConversationFailure> {
+        let turn = self
+            .view
+            .turn
+            .as_mut()
+            .ok_or_else(|| crate::ConversationFailure::new("请求记录缺少任务"))?;
+        turn.requests.push(PreparedRequestFact {
+            request: turn.request_index,
+            window: self.view.context.window,
+            publication: self
+                .view
+                .project_publications
+                .last()
+                .map(|publication| publication.id),
+            projection,
+        });
+        Ok(())
+    }
+
     pub fn project_context(&mut self, result: Result<ProjectSnapshot, String>) {
         *self.view.project_context = match result {
             Ok(snapshot) => ProjectContextState::Loaded(Arc::new(snapshot)),

@@ -118,7 +118,7 @@ fn summary(project: Option<&ProjectContext>) -> String {
         return "项目规则：尚未创建会话".into();
     };
     let mut text = match &project.status {
-        CollectionStatus::NotCollected => "项目规则：尚未采集；任务首次请求前读取".into(),
+        CollectionStatus::NotCollected => "项目规则：尚未采集；请求准备前读取".into(),
         CollectionStatus::Loaded => {
             if project.snapshot.as_ref().is_some_and(|snapshot| {
                 snapshot
@@ -126,9 +126,9 @@ fn summary(project: Option<&ProjectContext>) -> String {
                     .iter()
                     .any(|source| !source.text.trim().is_empty())
             }) {
-                "项目规则：最近采集成功；尚未加入模型请求".into()
+                "项目规则：最近采集成功；请求材料以已保存的准备记录为准".into()
             } else {
-                "项目规则：采集成功，当前规则为空；尚未加入模型请求".into()
+                "项目规则：采集成功，当前规则为空，不产生空规则消息".into()
             }
         }
         CollectionStatus::Failed(message) => {

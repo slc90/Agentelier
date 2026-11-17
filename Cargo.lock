@@ -210,12 +210,14 @@ name = "agentelier_llm_model"
 version = "0.1.0"
 dependencies = [
  "agentelier_account",
+ "agentelier_project_context",
  "agentelier_prompts",
  "agentelier_tools",
  "base64",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tracing",
 ]
@@ -282,6 +284,7 @@ dependencies = [
 name = "agentelier_project_context"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "sha2 0.10.9",
  "tokio-util",
 ]

@@ -34,6 +34,14 @@ impl From<&SessionView> for StoredState {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RecordEvent {
+    ProjectPublished {
+        state: StoredState,
+        publication: Box<agentelier_llm_model::ProjectPublication>,
+        history: Option<agentelier_llm_model::ProtocolArchive>,
+    },
+    RequestPrepared {
+        state: StoredState,
+    },
     Compacted {
         state: StoredState,
         checkpoint: Box<crate::CompactionCheckpoint>,
@@ -91,7 +99,9 @@ pub enum RecordEvent {
 impl RecordEvent {
     pub fn state(&self) -> &StoredState {
         match self {
-            Self::Compacted { state, .. }
+            Self::ProjectPublished { state, .. }
+            | Self::RequestPrepared { state }
+            | Self::Compacted { state, .. }
             | Self::QueueSuspended { state }
             | Self::Recovered { state, .. }
             | Self::Accepted { state }

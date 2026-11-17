@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agentelier_project_context = { path = "../project_context" }
+sha2.workspace = true
 agentelier_tools = { path = "../tools" }
 agentelier_account = { path = "../account" }
 agentelier_prompts = { path = "../prompts" }
