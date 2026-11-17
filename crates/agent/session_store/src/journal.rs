@@ -76,12 +76,12 @@ fn load_cursor(directory: &Path, session: SessionId) -> io::Result<Cursor> {
         .initial
         .as_ref()
         .ok_or_else(|| io::Error::other("会话缺少初始记录"))?;
-    let (summary, titled) = summarize(initial, &parsed.records, parsed.sequence);
+    let (_, titled) = summarize(initial, &parsed.records, parsed.sequence);
     Ok(Cursor {
         sequence: parsed.sequence,
         length: parsed.file_length,
-        summary,
-        titled,
+        summary: parsed.summary,
+        titled: titled || parsed.manual_title.is_some(),
         poisoned: false,
     })
 }
@@ -93,6 +93,49 @@ impl Writer {
 
     pub(super) fn append(&mut self, root: &Path, event: RecordEvent) -> io::Result<Commit> {
         let session = event.state().session;
+        let at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(io::Error::other)?
+            .as_millis()
+            .try_into()
+            .map_err(io::Error::other)?;
+        self.append_kind(
+            root,
+            session,
+            RecordKind::Event(SessionRecord {
+                session,
+                at_ms,
+                event,
+            }),
+        )
+    }
+
+    pub(super) fn rename(
+        &mut self,
+        root: &Path,
+        session: SessionId,
+        title: String,
+    ) -> io::Result<crate::RenameCommit> {
+        let title = agentelier_conversation::session_title(&title).map_err(io::Error::other)?;
+        let commit = self.append_kind(root, session, RecordKind::Renamed { session, title })?;
+        let summary = self
+            .0
+            .get(&session)
+            .ok_or_else(|| io::Error::other("名称提交后缺少会话摘要"))?
+            .summary
+            .clone();
+        Ok(crate::RenameCommit {
+            summary,
+            summary_failure: commit.summary_failure,
+        })
+    }
+
+    fn append_kind(
+        &mut self,
+        root: &Path,
+        session: SessionId,
+        kind: RecordKind,
+    ) -> io::Result<Commit> {
         let directory = crate::attachments::session_directory(root, session)?;
         if let std::collections::hash_map::Entry::Vacant(entry) = self.0.entry(session) {
             entry.insert(load_cursor(&directory, session)?);
@@ -108,21 +151,14 @@ impl Writer {
             .sequence
             .checked_add(1)
             .ok_or_else(|| io::Error::other("会话记录序号已耗尽"))?;
-        let at_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(io::Error::other)?
-            .as_millis()
-            .try_into()
-            .map_err(io::Error::other)?;
+        if cursor.summary.deleted {
+            return Err(io::Error::other("会话已删除"));
+        }
         let record = Record {
             format: FORMAT.into(),
             version: FORMAT_VERSION,
             sequence,
-            kind: RecordKind::Event(SessionRecord {
-                session,
-                at_ms,
-                event,
-            }),
+            kind,
         };
         let mut bytes = serde_json::to_vec(&record)?;
         bytes.push(b'\n');
@@ -152,8 +188,13 @@ impl Writer {
             .checked_add(bytes.len() as u64)
             .ok_or_else(|| io::Error::other("会话记录长度超出范围"))?;
         cursor.summary.last_sequence = sequence;
-        if let RecordKind::Event(event) = record.kind {
-            update(cursor, &event);
+        match record.kind {
+            RecordKind::Event(event) => update(cursor, &event),
+            RecordKind::Renamed { title, .. } => {
+                cursor.summary.title = title;
+                cursor.titled = true;
+            }
+            RecordKind::Created(_) => return Err(io::Error::other("追加路径不能创建初始记录")),
         }
         Ok(Commit {
             session,

@@ -67,6 +67,7 @@ pub(crate) fn install(app: &mut App) -> Result {
     }
     app.register_widgetry_list_view::<ArchiveChoice>()
         .map_err(|failure| failure.into_bevy_error())?;
+    crate::session_actions::install(app);
     app.init_resource::<ArchiveState>()
         .register_type::<ArchiveState>()
         .add_systems(Startup, initialize)
@@ -93,19 +94,24 @@ pub(crate) fn panel(world: &World) -> impl Scene {
                 @item_height: ROW_HEIGHT,
                 @selection_mode: WidgetryListSelectionMode::Single,
                 @renderer: {WidgetryListViewRenderer::new(|choice: &ArchiveChoice| {
+                    let session = choice.id;
                     let full = match &choice.error { Some(error) => format!("{}\n{}", choice.title, error), None => choice.title.clone() };
                     let mut preview = choice.title.chars().take(TITLE_PREVIEW_CHARACTERS).collect::<String>();
                     if choice.title.chars().count() > TITLE_PREVIEW_CHARACTERS { preview.push('…'); }
                     bsn_list! {
                         @WidgetryTooltip { @content: {TooltipContentFactory::new(move || { let title = full.clone(); bsn_list! { Text(title) WidgetryText } })} }
                         Node { width: percent(100), min_width: px(0), overflow: Overflow::clip() }
-                        Children [Text(preview) WidgetryText TextLayout::no_wrap()]
+                        Children [
+                            Text(preview) WidgetryText TextLayout::no_wrap() Node { flex_grow: 1.0, min_width: px(0), overflow: Overflow::clip() }--
+                            @crate::session_actions::more(session)
+                        ]
                     }
                 })},
             }
             Name("LocalSessionSelector") ArchiveSelector Node { width: percent(100), height: px(0), flex_basis: px(0), min_height: px(0), flex_grow: 1.0 } on(select)--
             @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text("刷新本地会话") WidgetryText }) as Box<dyn SceneList>)} }
             Name("RefreshSessionArchives") Node { height: px(CONTROL_HEIGHT) } on(refresh)--
+            @crate::session_actions::panel()--
             Text("") WidgetryText ArchiveStatus Name("SessionArchiveStatus")
             TextLayout::linebreak(bevy::text::LineBreak::AnyCharacter)
         ]
@@ -176,7 +182,7 @@ fn refresh(_: On<Activate>, host: Res<AgentHost>, mut state: ResMut<ArchiveState
 }
 
 pub(crate) fn catalog(world: &mut World, entries: Vec<ArchiveEntry>) -> Result {
-    let choices = entries
+    let mut choices = entries
         .into_iter()
         .map(|entry| ArchiveChoice {
             id: entry.id,
@@ -187,6 +193,22 @@ pub(crate) fn catalog(world: &mut World, entries: Vec<ArchiveEntry>) -> Result {
             error: entry.error,
         })
         .collect::<Vec<_>>();
+    for entry in &mut choices {
+        if let Some(current) = world
+            .resource::<ArchiveState>()
+            .entries
+            .iter()
+            .find(|current| current.id == entry.id && current.last_sequence > entry.last_sequence)
+        {
+            *entry = current.clone();
+        }
+    }
+    choices.sort_by(|left, right| {
+        right
+            .last_activity_ms
+            .cmp(&left.last_activity_ms)
+            .then_with(|| left.id.as_bytes().cmp(right.id.as_bytes()))
+    });
     let source = world.resource::<ArchiveSource>().0;
     let mut model = world
         .get_mut::<WidgetryListModel<ArchiveChoice>>(source)
@@ -258,7 +280,7 @@ fn update(
     mut texts: Query<&mut Text, With<ArchiveStatus>>,
     mut commands: Commands,
 ) {
-    let disabled = state.loading || activity.model_busy || chat.replacement.is_some();
+    let disabled = state.loading || chat.replacement.is_some();
     for (entity, current) in &mut selectors {
         if disabled && !current {
             commands.entity(entity).insert(InteractionDisabled);
@@ -282,4 +304,38 @@ fn update(
     for mut text in &mut texts {
         text.set_if_neq(Text::new(status.clone()));
     }
+}
+
+pub(crate) fn rename_entry(world: &mut World, entry: ArchiveEntry) -> Result {
+    let choice = ArchiveChoice {
+        id: entry.id,
+        title: entry.title,
+        created_at_ms: entry.created_at_ms,
+        last_activity_ms: entry.last_activity_ms,
+        last_sequence: entry.last_sequence,
+        error: entry.error,
+    };
+    let source = world.resource::<ArchiveSource>().0;
+    let mut model = world
+        .get_mut::<WidgetryListModel<ArchiveChoice>>(source)
+        .ok_or_else(|| io::Error::other("会话数据源不存在"))?;
+    if let Some(index) = (0..model.len()).find(|&index| {
+        model.get(index).is_some_and(|entry| {
+            entry.id == choice.id && entry.last_sequence <= choice.last_sequence
+        })
+    }) && let Some(value) = model
+        .get_mut(index)
+        .map_err(|failure| failure.into_bevy_error())?
+    {
+        *value = choice.clone();
+    }
+    if let Some(value) = world
+        .resource_mut::<ArchiveState>()
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id == choice.id && entry.last_sequence <= choice.last_sequence)
+    {
+        *value = choice;
+    }
+    Ok(())
 }

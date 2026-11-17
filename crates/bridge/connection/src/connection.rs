@@ -82,6 +82,7 @@ pub struct Connection {
     sign_out: Option<PendingSignOut>,
     model: Option<u64>,
     controls: HashMap<u64, u64>,
+    renaming: HashMap<u64, SessionId>,
     queue_controls: HashMap<u64, QueueRequest>,
     reserved_queue: HashSet<u64>,
     pending_requests: HashSet<u64>,
@@ -149,6 +150,7 @@ impl Connection {
             sign_out: None,
             model: None,
             controls: HashMap::new(),
+            renaming: HashMap::new(),
             queue_controls: HashMap::new(),
             reserved_queue: HashSet::new(),
             pending_requests: HashSet::new(),
@@ -256,6 +258,28 @@ impl Connection {
         Ok(id)
     }
 
+    pub fn rename_session(
+        &mut self,
+        session: SessionId,
+        title: String,
+    ) -> Result<u64, BridgeFailure> {
+        if self.stopping
+            || self.failure.is_some()
+            || self.sign_out.is_some()
+            || !self.renaming.is_empty()
+        {
+            return Err(BridgeFailure("当前不能接纳名称操作".into()));
+        }
+        let id = self
+            .operations
+            .allocate()
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.runtime
+            .rename_session(id, session, title)
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.renaming.insert(id, session);
+        Ok(id)
+    }
     pub fn request_session(
         &mut self,
         action: agentelier_conversation_bridge::SessionAction,
@@ -436,6 +460,17 @@ impl Connection {
                                 self.session_activity = SessionActivity::Idle;
                             }
                             _ => {}
+                        }
+                        return Ok(Some(event));
+                    }
+                    if let BridgeEventKind::Conversation(
+                        agentelier_conversation_bridge::ConversationEvent::Renamed {
+                            session, ..
+                        },
+                    ) = &event.kind
+                    {
+                        if self.renaming.remove(&event.operation_id) != Some(*session) {
+                            return self.protocol_failure();
                         }
                         return Ok(Some(event));
                     }

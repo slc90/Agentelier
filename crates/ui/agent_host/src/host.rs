@@ -162,6 +162,9 @@ impl AgentHost {
         self.state()?.model_busy = true;
         Ok(id)
     }
+    pub fn rename_session(&self, session: SessionId, title: String) -> Result<u64> {
+        self.submit(|connection| connection.rename_session(session, title))
+    }
     pub fn refresh_archives(&self) -> Result {
         self.submit(|connection| connection.refresh_archives())
     }

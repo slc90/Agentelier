@@ -32,3 +32,6 @@ pub use control::{
 
 pub use queue::PreparedQueue;
 pub use queue::{MAX_QUEUED_INPUTS, QueueDecision, QueueEvent, QueuedInput, SessionCommand};
+
+mod metadata;
+pub use metadata::session_title;

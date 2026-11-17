@@ -140,6 +140,10 @@ pub struct SessionView {
     pub queue_paused: bool,
 }
 pub enum ConversationEvent {
+    Renamed {
+        session: SessionId,
+        result: Result<ArchiveEntry, String>,
+    },
     Archives(Vec<ArchiveEntry>),
     Opened(SessionView),
     ArchiveFailed(String),
@@ -359,6 +363,22 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
 
 pub fn convert(event: agentelier_conversation::ConversationEvent) -> ConversationEvent {
     match event {
+        agentelier_conversation::ConversationEvent::Renamed { session, result } => {
+            ConversationEvent::Renamed {
+                session,
+                result: result.map(|entry| {
+                    let summary = entry.summary;
+                    ArchiveEntry {
+                        id: summary.session,
+                        title: summary.title,
+                        created_at_ms: summary.created_at_ms,
+                        last_activity_ms: summary.last_activity_ms,
+                        last_sequence: summary.last_sequence,
+                        error: entry.error,
+                    }
+                }),
+            }
+        }
         agentelier_conversation::ConversationEvent::Archives(entries) => {
             ConversationEvent::Archives(
                 entries

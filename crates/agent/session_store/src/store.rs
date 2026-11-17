@@ -28,6 +28,7 @@ pub struct Record {
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum RecordKind {
     Created(InitialSession),
+    Renamed { session: SessionId, title: String },
     Event(SessionRecord),
 }
 
@@ -37,7 +38,13 @@ pub struct Commit {
     pub summary_failure: Option<io::Error>,
 }
 
+pub struct RenameCommit {
+    pub summary: agentelier_conversation::SessionSummary,
+    pub summary_failure: Option<io::Error>,
+}
+
 enum Command {
+    Rename(SessionId, String, oneshot::Sender<io::Result<RenameCommit>>),
     Scan(oneshot::Sender<io::Result<Vec<agentelier_conversation::ArchiveEntry>>>),
     Load(
         SessionId,
@@ -57,6 +64,17 @@ enum Command {
 pub struct SessionStoreClient(mpsc::Sender<Command>);
 
 impl SessionStoreClient {
+    pub fn rename(
+        &self,
+        session: SessionId,
+        title: String,
+    ) -> io::Result<oneshot::Receiver<io::Result<RenameCommit>>> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .try_send(Command::Rename(session, title, reply))
+            .map_err(|failure| io::Error::other(format!("无法接纳会话重命名：{failure}")))?;
+        Ok(result)
+    }
     pub fn scan(
         &self,
     ) -> io::Result<oneshot::Receiver<io::Result<Vec<agentelier_conversation::ArchiveEntry>>>> {
@@ -156,6 +174,7 @@ impl SessionStore {
                 let mut writer = crate::journal::Writer::default();
                 while let Some(command) = commands.blocking_recv() {
                     match command {
+                        Command::Rename(session, title, reply) => { let _closed = reply.send(writer.rename(&root, session, title)); }
                         Command::Scan(reply) => {
                             let result = crate::reader::scan(&root);
                             if let Err(failure) = &result { error!(error = %failure, "本地会话目录读取失败"); }

@@ -87,6 +87,10 @@ pub struct SessionView {
     pub queue_paused: bool,
 }
 pub enum ConversationEvent {
+    Renamed {
+        session: SessionId,
+        result: Result<crate::ArchiveEntry, String>,
+    },
     Archives(Vec<crate::ArchiveEntry>),
     Opened(SessionView),
     ArchiveFailed(String),

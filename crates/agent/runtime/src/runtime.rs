@@ -11,6 +11,7 @@ mod creation;
 mod loading;
 mod model_task;
 mod recording;
+mod renaming;
 use model_task::{
     ModelJoin, ModelTask, PROGRESS_CAPACITY, TaskRequest, complete, drain_progress, progress,
     stop_model,
@@ -82,6 +83,12 @@ impl From<ConversationFailure> for RuntimeFailure {
     }
 }
 enum Command {
+    Rename {
+        id: u64,
+        session: SessionId,
+        title: String,
+    },
+    Renamed(io::Result<agentelier_session_store::RenameCommit>),
     Scan,
     Scanned(io::Result<Vec<agentelier_conversation::ArchiveEntry>>),
     Loaded(io::Result<agentelier_conversation::RestoredSession>),
@@ -193,6 +200,7 @@ impl AgentRuntime {
                         let mut startup_catalog = true;
                         let mut records = recording::Records::new();
                         let mut pending_queue = false;
+                        let mut renaming: Option<renaming::Renaming> = None;
                         let mut finalizing = false;
                         let mut account = Account::new(credentials_path, owner_credentials.clone());
                         let mut delivery_failure = None;
@@ -216,6 +224,7 @@ impl AgentRuntime {
                                         Some(pending) => pending.wait().await,
                                         None => std::future::pending().await,
                                     }} => Command::Loaded(result),
+                                    result = async { match &mut renaming { Some(pending) => pending.wait().await, None => std::future::pending().await } } => Command::Renamed(result),
                                     result = records.join_next(), if !records.is_empty() => match result {
                                         Some(result) => Command::Recorded(result),
                                         None => return Err(RuntimeFailure::ModelState),
@@ -242,6 +251,19 @@ impl AgentRuntime {
                                     },
                                 };
                                 match command {
+                                    Command::Rename { id, session, title } => {
+                                        match if renaming.is_some() { Err(io::Error::other("已有名称操作正在保存")) } else { renaming::Renaming::start(id, session, title, &store) } {
+                                            Ok(pending) => renaming = Some(pending),
+                                            Err(failure) => emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Renamed { session, result: Err(failure.to_string()) }))?,
+                                        }
+                                    }
+                                    Command::Renamed(result) => {
+                                        let pending = renaming.take().ok_or(RuntimeFailure::ModelState)?;
+                                        let id = pending.id;
+                                        emit(&publish, id, AgentEventKind::Conversation(pending.complete(result)))?;
+                                        if catalog.is_none() { match store.client().scan() { Ok(reply) => catalog = Some(reply), Err(failure) => emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(failure.to_string())))? } }
+                                    }
+
                                     Command::Scan => {
                                         if catalog.is_none() {
                                             match store.client().scan() {
@@ -456,6 +478,7 @@ impl AgentRuntime {
                                             );
                                             while let Ok(queued) = incoming.try_recv() {
                                                 match queued {
+                                                    Command::Rename { id, session, .. } => emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Renamed { session, result: Err("账号操作开始前尚未接纳名称写入，请重新提交".into()) }))?,
                                                     Command::Account(command) => {
                                                         command.reject_for_sign_out()
                                                     }
@@ -543,6 +566,7 @@ impl AgentRuntime {
                                 Err(_) => { delivery_failure = delivery_failure.or(Some(RuntimeFailure::ModelState)); }
                             }
                         }
+                        if let Some(mut pending) = renaming { let result = pending.wait().await; let id = pending.id; capture_delivery(emit(&publish, id, AgentEventKind::Conversation(pending.complete(result))), &mut delivery_failure); }
                         let stored = store.finish().await.map_err(RuntimeFailure::Store);
                         if let Some(pending) = loading && let Some(control) = pending.control { control.finished.cancel(); }
                         let pending_saved = if let Some(mut pending) = creating {
@@ -620,6 +644,25 @@ impl AgentRuntime {
             control: control.clone(),
             request,
         })?;
+        Ok(())
+    }
+    pub fn rename_session(
+        &self,
+        id: u64,
+        session: SessionId,
+        title: String,
+    ) -> Result<(), RuntimeFailure> {
+        if self.shutdown.is_cancelled() {
+            return Err(AccountFailure::Closed.into());
+        }
+        self.commands
+            .as_ref()
+            .ok_or(AccountFailure::Closed)?
+            .try_send(Command::Rename { id, session, title })
+            .map_err(|failure| match failure {
+                mpsc::error::TrySendError::Full(_) => AccountFailure::Busy,
+                mpsc::error::TrySendError::Closed(_) => AccountFailure::Closed,
+            })?;
         Ok(())
     }
     pub fn refresh_archives(&self) -> Result<(), RuntimeFailure> {

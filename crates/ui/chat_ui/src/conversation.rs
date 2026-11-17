@@ -947,6 +947,10 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         .drain()
         .collect();
     for event in events {
+        if let ConversationEvent::Renamed { session, result } = event.kind {
+            crate::session_actions::complete(world, event.operation_id, session, result)?;
+            continue;
+        }
         if let ConversationEvent::Archives(entries) = event.kind {
             crate::archives::catalog(world, entries)?;
             changed = true;
@@ -1134,6 +1138,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             | ConversationEvent::ArchiveFailed(_)
             | ConversationEvent::InputReceipt(_)
             | ConversationEvent::Queue(_)
+            | ConversationEvent::Renamed { .. }
             | ConversationEvent::Started(_) => {}
         }
         match event.kind {
@@ -1172,6 +1177,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             | ConversationEvent::Opened(_)
             | ConversationEvent::ArchiveFailed(_)
             | ConversationEvent::Queue(_)
+            | ConversationEvent::Renamed { .. }
             | ConversationEvent::Started(_) => {}
         }
         if terminal {
@@ -1194,6 +1200,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
     {
         world.resource_mut::<crate::ArchiveState>().loading = false;
         world.resource_mut::<crate::ArchiveState>().refreshing = false;
+        crate::session_actions::failed(world, &reason);
         let mut state = world.resource_mut::<ChatState>();
         state.operation = None;
         state.pending_inputs.clear();

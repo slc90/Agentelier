@@ -32,7 +32,8 @@ impl std::fmt::Display for Issue {
 pub(super) struct Parsed {
     pub(super) initial: Option<InitialSession>,
     pub(super) records: Vec<SessionRecord>,
-    summary: SessionSummary,
+    pub(super) summary: SessionSummary,
+    pub(super) manual_title: Option<String>,
     pub(super) sequence: u64,
     pub(super) file_length: u64,
     valid_length: u64,
@@ -65,6 +66,7 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
         initial: None,
         records: Vec::new(),
         summary: placeholder(session),
+        manual_title: None,
         sequence: 0,
         file_length: metadata.len(),
         valid_length: 0,
@@ -110,6 +112,17 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
                     initial.settings.instructions.validate()?;
                     parsed.initial = Some(initial);
                 }
+                RecordKind::Renamed {
+                    session: target,
+                    title,
+                } if parsed.initial.is_some() && target == session => {
+                    let normalized =
+                        agentelier_conversation::session_title(&title).map_err(io::Error::other)?;
+                    if normalized != title {
+                        return Err(io::Error::other("存档名称不是有效单行标题"));
+                    }
+                    parsed.manual_title = Some(title);
+                }
                 RecordKind::Event(event)
                     if parsed.initial.is_some()
                         && event.session == session
@@ -139,6 +152,9 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
     parsed.prefix_digest = digest.finalize().into();
     if let Some(initial) = &parsed.initial {
         parsed.summary = crate::journal::summarize(initial, &parsed.records, parsed.sequence).0;
+        if let Some(title) = &parsed.manual_title {
+            parsed.summary.title = title.clone();
+        }
     } else if parsed.issue.is_none() {
         parsed.issue = Some(Issue::Corrupt {
             offset: 0,

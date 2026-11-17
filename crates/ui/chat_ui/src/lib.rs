@@ -18,3 +18,5 @@ pub use conversation::{
 };
 pub use preparation::{ChatUiHost, ModelChoice, ModelPhase, ModelState, install};
 pub use reasoning::ReasoningSetting;
+
+mod session_actions;

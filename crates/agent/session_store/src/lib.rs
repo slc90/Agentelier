@@ -7,5 +7,6 @@ mod reader;
 mod store;
 
 pub use store::{
-    Commit, FORMAT, FORMAT_VERSION, Record, RecordKind, SessionStore, SessionStoreClient,
+    Commit, FORMAT, FORMAT_VERSION, Record, RecordKind, RenameCommit, SessionStore,
+    SessionStoreClient,
 };
