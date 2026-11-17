@@ -21,6 +21,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话日志、恢复读取、执行事件追加、独立名称与删除元数据、受控会话清理、不可变图片附件、单写入者、提交确认与存储收尾 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
 | `crates/agent/project_context/` | `agentelier_project_context` | 会话适用的项目规则发现、有界 UTF-8 读取、来源快照与确定性表示 |
+| `crates/agent/skills/` | `agentelier_skills` | 本地 Skills 来源发现、有界元数据解析、任务目录快照与来源诊断 |
 | `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示 |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、封闭边界自动压缩与检查点提交、正文增量和受控取消 |
 | `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型任务取消/回收及执行收尾 |
@@ -66,6 +67,8 @@ flowchart TD
     SessionStore --> Conversation
     Runtime --> Runner["Agent · turn_runner"]
     Runner --> Conversation
+    Runner --> Skills["Agent · skills"]
+    Conversation --> Skills
     Runner --> ProjectContext["Agent · project_context"]
     Runner --> Model
     Runner --> Account
@@ -217,3 +220,7 @@ Runner 为每个用户任务独占 Tools ExecutionContext，按 UUID 管理最�
 补丁由 Tools 的 patch 模块按解析、准备与文件提交拆分。全补丁完成精确匹配、路径冲突和资源预算校验后才写入；已有 UTF-8 BOM 与统一行尾保留。单文件通过同目录临时文件替换，跨文件不回滚，动作日志区分目标写入、源删除、目录创建及临时文件清理。blocking 模块始终等待工作线程，Stop 和 15 秒期限仅停止后续动作，当前提交取得真实结果后才返回。工具详情保存有界动作报告，卡片概括文件完成数量；凭据与完整文件内容不进入日志。
 
 图片读取、解码、方向校正、等比缩放和编码由 Tools 的 image 模块在可等待的阻塞工作中完成。ToolPayload 区分 Text 与共享不可变 ImagePayload；ActiveTurn 的结果表保存真实载荷，ToolView、Bridge 和 UI 只保留文字摘要，封闭步骤不再从展示字符串重建协议。ProtocolHistory 按共享对象身份计算 16 MiB 会话图片预算，重置时随历史释放。LLM Model 将图片结果转换为 input_text/input_image 内容数组、正确 MIME 的 data URL 与 high 细节，并在发送前以有界序列化确认完整请求不超过 32 MiB。目录中可选 input_modalities 经 Bridge/UI 固定为会话的图片能力三态，未知允许真实请求验证，明确不支持则返回工具能力错误。
+
+## Skills 目录
+
+Runner 在每个实际启动的任务（含 Queue 与 Retry）开始时，通过可取消并等待回收的阻塞工作调用 Skills，取得固定工作目录适用的目录快照。Conversation 的 TurnView 保存目录与来源诊断，并随既有任务状态写入存档；固定 Prompt、项目规则和工具执行均不因此改变。目录当前只供运行侧核对，尚未注入模型或解析显式选择。详见 [Skills 当前实现与目标机制](skills/README.md)。

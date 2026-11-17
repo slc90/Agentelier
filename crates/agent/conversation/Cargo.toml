@@ -12,6 +12,7 @@ agentelier_tools = { path = "../tools" }
 agentelier_llm_model = { path = "../llm_model" }
 agentelier_prompts = { path = "../prompts" }
 agentelier_project_context = { path = "../project_context" }
+agentelier_skills = { path = "../skills" }
 
 [lints]
 workspace = true

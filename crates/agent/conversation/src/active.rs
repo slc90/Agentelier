@@ -20,6 +20,17 @@ pub struct ActiveTurn {
     pub(crate) results: std::collections::BTreeMap<String, ToolPayload>,
 }
 impl ActiveTurn {
+    pub fn skills(
+        &mut self,
+        catalog: agentelier_skills::Catalog,
+    ) -> Result<(), ConversationFailure> {
+        self.view
+            .turn
+            .as_mut()
+            .ok_or_else(|| ConversationFailure::new("Skills 目录缺少活动任务"))?
+            .skills = Some(Box::new(catalog));
+        Ok(())
+    }
     pub fn model_context(
         &mut self,
         model: agentelier_llm_model::ModelInfo,

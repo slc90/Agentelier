@@ -2,7 +2,7 @@
 
 Agentelier 需要让模型复用已经写好的工作方法，而不是把每种任务的操作规范长期放进基础提示词。Skills 提供了这个边界：一个 Skill 是带有名称和使用范围说明的指令目录，可同时附带参考资料、模板与执行脚本；Agent 根据当前任务决定是否读取和使用它。
 
-**本页描述待接入的目标机制。** 当前工程已具备固定提示词、动态项目规则、工具执行和任务存档，但没有完整的 Skills 发现与调用链。本设计以 Agent Skills 的文件约定为兼容目标，以 Codex 的宿主 Skills 机制为行为参考；不定义 Agentelier 专有的 Skill 格式，不引入另一套执行引擎。
+**当前已实现来源发现与任务目录快照，后文调用与创建部分仍为目标机制。** `agentelier_skills` 从项目路径链、用户 `.agents/skills` 与可执行文件旁 `skills/.system` 扫描，Runner 每任务发现，TurnView 保存可核对的目录和诊断。扫描只读 frontmatter 与可选元数据，不加载正文或执行脚本；无效可选元数据保留主技能，但限制为显式选择。单文件上限 256 KiB，frontmatter 与扩展元数据各 64 KiB，合计采集预算 4 MiB，扫描最多 2048 个目录项与 6 层深度。取消后等待阻塞工作结束。当前尚未接入模型匹配、显式调用和创建器。本设计以 Agent Skills 的文件约定为兼容目标，以 Codex 的宿主 Skills 机制为行为参考；不定义 Agentelier 专有的 Skill 格式，不引入另一套执行引擎。
 
 ```mermaid
 flowchart TD

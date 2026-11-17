@@ -8,6 +8,7 @@ edition.workspace = true
 agentelier_session_store = { path = "../session_store" }
 agentelier_tools = { path = "../tools" }
 agentelier_project_context = { path = "../project_context" }
+agentelier_skills = { path = "../skills" }
 agentelier_conversation = { path = "../conversation" }
 agentelier_llm_model = { path = "../llm_model" }
 agentelier_account = { path = "../account" }

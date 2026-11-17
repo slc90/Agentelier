@@ -211,6 +211,33 @@ async fn run_task(
     if cancel.is_cancelled() {
         return Ok(TurnStatus::Cancelled);
     }
+    let directory = active.view().settings.working_directory;
+    let loading_cancel = cancel.clone();
+    let discovered = tokio::task::spawn_blocking(move || {
+        let roots = agentelier_skills::standard_roots(&directory, &loading_cancel)?;
+        agentelier_skills::discover(roots, &loading_cancel)
+    })
+    .await
+    .map_err(|failure| ConversationFailure::new(format!("Skills 发现工作者异常结束：{failure}")))?;
+    if cancel.is_cancelled() {
+        return Ok(TurnStatus::Cancelled);
+    }
+    match discovered {
+        Ok(catalog) => {
+            tracing::debug!(
+                skills = catalog.skills.len(),
+                diagnostics = catalog.diagnostics.len(),
+                roots = catalog.roots.len(),
+                "任务 Skills 目录发现完成"
+            );
+            for diagnostic in &catalog.diagnostics {
+                tracing::warn!(path = %diagnostic.path.display(), error = diagnostic.message, "Skills 来源不可用或受限");
+            }
+            active.skills(catalog)?;
+            publish(active, progress, cancel).await?;
+        }
+        Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())),
+    }
     let identity = tokio::select! { biased;
         _ = cancel.cancelled() => return Ok(TurnStatus::Cancelled),
         result = credentials.execution() => match result { Ok(identity) => identity, Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())) },
