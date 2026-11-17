@@ -1,7 +1,9 @@
 #[cfg(not(all(target_os = "windows", target_pointer_width = "64")))]
 compile_error!("This application supports Windows x64 only");
 
+mod context;
 mod generation;
+pub use context::{ContextLimits, ResponseUsage};
 mod model;
 mod protocol;
 mod stream;
@@ -14,4 +16,7 @@ pub use stream::{FunctionCall, GenerationResult, OutputMessage, OutputText, Stre
 
 pub use model::{
     ModelFailure, ModelFailureKind, ModelInfo, ModelReply, ModelRequest, ModelResult, execute,
+    task_model,
 };
+
+pub use protocol::estimated_text_tokens;

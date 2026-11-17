@@ -91,6 +91,8 @@ async fn request_once(
 }
 fn protocol_failure(failure: ConversationFailure) -> ModelFailure {
     ModelFailure {
+        usage: None,
+        response_id: None,
         kind: ModelFailureKind::Protocol,
         message: failure.to_string(),
         status: None,
@@ -183,6 +185,14 @@ async fn run_task(
         _ = cancel.cancelled() => return Ok(TurnStatus::Cancelled),
         result = credentials.execution() => match result { Ok(identity) => identity, Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())) },
     };
+    let slug = active.view().settings.slug;
+    let model = tokio::select! { biased;
+        _ = cancel.cancelled() => return Ok(TurnStatus::Cancelled),
+        result = agentelier_llm_model::task_model(credentials.clone(), &identity, &slug) => match result { Ok(model) => model, Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())) },
+    };
+    if let Err(failure) = active.model_context(model) {
+        return Ok(TurnStatus::Failed(failure.to_string()));
+    }
     let catalog = active.catalog();
     let mut cleanup_failed = false;
     let mut tools_used = 0;

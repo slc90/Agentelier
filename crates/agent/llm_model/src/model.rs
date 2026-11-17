@@ -20,6 +20,7 @@ pub struct ModelInfo {
     pub supported_reasoning_levels: Vec<String>,
     pub default_reasoning_level: Option<String>,
     pub image_input: Option<bool>,
+    pub context_limits: crate::ContextLimits,
 }
 
 pub enum ModelRequest {
@@ -59,6 +60,8 @@ pub struct ModelFailure {
     pub code: Option<String>,
     pub request_id: Option<String>,
     pub message: String,
+    pub usage: Option<Box<crate::ResponseUsage>>,
+    pub response_id: Option<String>,
 }
 impl ModelFailure {
     pub(super) fn new(kind: ModelFailureKind, message: impl Into<String>) -> Self {
@@ -68,6 +71,8 @@ impl ModelFailure {
             code: None,
             request_id: None,
             message: message.into(),
+            usage: None,
+            response_id: None,
         }
     }
     fn authentication(failure: impl fmt::Display) -> Self {
@@ -157,11 +162,21 @@ pub async fn execute(
                 .map(|items| items.iter().any(|item| item.as_str() == Some("image")));
             result.push(ModelInfo {
                 image_input,
+                context_limits: crate::ContextLimits::parse(model)?,
                 slug,
                 display_name,
                 supported_reasoning_levels,
                 default_reasoning_level,
             });
+        }
+        for model in &result {
+            tracing::debug!(
+                model = model.slug,
+                context_window = model.context_limits.window,
+                effective_window = model.context_limits.effective,
+                auto_compact_limit = model.context_limits.automatic,
+                "已读取模型上下文能力"
+            );
         }
         tracing::debug!(model_count = result.len(), "已读取当前账号模型目录");
         return Ok(ModelResult::Catalog(result));
@@ -401,7 +416,7 @@ pub(super) fn service_failure(
         .filter(|error| !error.is_null())
         .unwrap_or(value);
     let code = error.get("code").and_then(Value::as_str).map(diagnostic);
-    let message = error
+    let mut message = error
         .get("message")
         .and_then(Value::as_str)
         .or_else(|| value.get("detail").and_then(Value::as_str))
@@ -412,7 +427,20 @@ pub(super) fn service_failure(
                 .map(|detail| diagnostic(&detail.to_string()))
         })
         .unwrap_or_else(|| fallback.to_owned());
+    let usage = match crate::ResponseUsage::parse(value) {
+        Ok(usage) => usage,
+        Err(failure) => {
+            message.push_str(&format!("；响应 usage 无效：{failure}"));
+            None
+        }
+    };
     ModelFailure {
+        usage: usage.map(Box::new),
+        response_id: value
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned),
         kind: classify(status, code.as_deref()),
         status,
         code,
@@ -444,4 +472,30 @@ pub(super) async fn http_failure(response: Response) -> ModelFailure {
             failure
         }
     }
+}
+
+pub async fn task_model(
+    credentials: CredentialClient,
+    identity: &agentelier_account::ExecutionIdentity,
+    slug: &str,
+) -> Result<ModelInfo, ModelFailure> {
+    identity
+        .validate(&acquire(&credentials).await?)
+        .map_err(ModelFailure::authentication)?;
+    let result = execute(credentials.clone(), ModelRequest::Catalog).await?;
+    identity
+        .validate(&acquire(&credentials).await?)
+        .map_err(ModelFailure::authentication)?;
+    let ModelResult::Catalog(models) = result else {
+        return Err(protocol("模型能力请求返回了非目录结果"));
+    };
+    models
+        .into_iter()
+        .find(|model| model.slug == slug)
+        .ok_or_else(|| {
+            ModelFailure::new(
+                ModelFailureKind::Permission,
+                format!("当前账号模型目录不包含会话固定模型：{slug}"),
+            )
+        })
 }

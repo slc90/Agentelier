@@ -7,3 +7,5 @@ pub use model::{
     ModelEventKind, ModelFailure, ModelFailureKind, ModelInfo, ModelReply, ModelRequest,
     ModelResult, convert, request,
 };
+
+pub use model::ContextLimits;

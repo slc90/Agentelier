@@ -136,7 +136,17 @@ pub async fn generate(
                 .await
                 .map_err(|failure| with_response(failure, status, id))
         } else {
-            Err(http_failure(response).await)
+            let failure = http_failure(response).await;
+            if let Some(usage) = failure.usage.clone() {
+                progress
+                    .send(StreamEvent::Usage {
+                        response_id: failure.response_id.clone(),
+                        usage: *usage,
+                    })
+                    .await
+                    .map_err(|_| crate::model::protocol("模型用量接收端已关闭"))?;
+            }
+            Err(failure)
         };
         match outcome {
             Ok(result) => {

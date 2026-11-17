@@ -40,8 +40,14 @@ pub struct GenerationResult {
     pub calls: Vec<FunctionCall>,
     pub messages: Vec<OutputMessage>,
     pub output: ProtocolOutput,
+    pub usage: Option<crate::ResponseUsage>,
+    pub response_id: Option<String>,
 }
 pub enum StreamEvent {
+    Usage {
+        response_id: Option<String>,
+        usage: crate::ResponseUsage,
+    },
     FunctionCall(FunctionCall),
     Item(OutputMessage),
     Part {
@@ -206,6 +212,12 @@ fn completed(
         calls,
         messages,
         output: ProtocolOutput(protocol_items),
+        usage: crate::ResponseUsage::parse(response)?,
+        response_id: response
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned),
     })
 }
 async fn publish(
@@ -333,6 +345,26 @@ pub(crate) async fn consume(
                 serde_json::from_str(&data).map_err(|_| protocol("模型事件不是有效 JSON"))?;
             let kind = field(&event, "type")?;
             deadline = Instant::now() + STREAM_IDLE_TIMEOUT;
+            if matches!(
+                kind,
+                "response.completed" | "response.failed" | "response.incomplete" | "error"
+            ) {
+                let response = event.get("response").unwrap_or(&event);
+                if let Some(usage) = crate::ResponseUsage::parse(response)? {
+                    publish(
+                        progress,
+                        StreamEvent::Usage {
+                            response_id: response
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .filter(|id| !id.is_empty())
+                                .map(str::to_owned),
+                            usage,
+                        },
+                    )
+                    .await?;
+                }
+            }
             match kind {
                 "response.completed" => {
                     return completed(

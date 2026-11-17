@@ -109,6 +109,8 @@ pub(super) fn drain_progress(
 
 fn task_failure() -> ModelFailure {
     ModelFailure {
+        usage: None,
+        response_id: None,
         kind: ModelFailureKind::Service,
         status: None,
         code: None,

@@ -16,8 +16,8 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、账号界面，Bevy/Bridge 衔接及浏览器/剪贴板交互 |
 | `crates/agent/login/` | `agentelier_login` | 数据环境、OAuth、Token、身份校验、认证文件与受保护原子提交 |
 | `crates/agent/account/` | `agentelier_account` | 账号操作与会话状态、共享凭据门控和按需续期协调 |
-| `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录、Responses、SSE 和模型错误语义 |
-| `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的内存聊天会话、Turn 身份、展示记录与结果收敛 |
+| `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录与窗口能力、Responses/SSE、响应使用量和模型错误语义 |
+| `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的聊天会话、Turn 身份、工作窗口计量、展示记录与结果收敛 |
 | `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话日志、恢复读取、执行事件追加、独立名称与删除元数据、受控会话清理、不可变图片附件、单写入者、提交确认与存储收尾 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
 | `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示 |

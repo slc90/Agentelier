@@ -28,6 +28,21 @@ pub struct ModelChoice {
     pub supported_reasoning_levels: Vec<String>,
     pub default_reasoning_level: Option<String>,
     pub image_input: Option<bool>,
+    pub context_window: Option<u64>,
+    pub effective_window: Option<u64>,
+    pub auto_compact_limit: Option<u64>,
+    pub comp_hash: Option<String>,
+}
+
+impl ModelChoice {
+    pub(crate) fn context_limits(&self) -> Box<agentelier_conversation_bridge::ContextLimits> {
+        Box::new(agentelier_conversation_bridge::ContextLimits {
+            window: self.context_window,
+            effective: self.effective_window,
+            automatic: self.auto_compact_limit,
+            comp_hash: self.comp_hash.clone(),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Default, Reflect, PartialEq, Eq)]
@@ -346,6 +361,10 @@ pub(crate) fn receive(world: &mut World, mut failures: Local<MessageCursor<HostF
                         supported_reasoning_levels: model.supported_reasoning_levels,
                         default_reasoning_level: model.default_reasoning_level,
                         image_input: model.image_input,
+                        context_window: model.context_limits.window,
+                        effective_window: model.context_limits.effective,
+                        auto_compact_limit: model.context_limits.automatic,
+                        comp_hash: model.context_limits.comp_hash,
                     })
                     .collect();
                 state.catalog_loaded = true;

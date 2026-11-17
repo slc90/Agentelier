@@ -63,3 +63,11 @@ LLM Model 以 ModelRequest::Catalog 读取全部可显示模型，以 Verify 携
 Turn Runner 首次请求前通过 CredentialClient 获取 ExecutionIdentity，捕获凭据版本的账号标识与本次认证生命周期的失效令牌。GenerationRequest 只包含模型、推理、指令、历史和工具设置，不含会话创建者。生成发送前与认证恢复后都核对任务身份；同主体正常 Token 续期可更换凭据版本，退出失效令牌或其他账号凭据不能用于旧任务。身份不实现 Debug/Reflect，也不持久化 Token。
 
 新任务重新获取当前账号，保留原 Session UUID、固定设置与协议历史。服务拒绝旧不透明协议项或该模型权限时返回真实失败，不裁剪历史或替换模型。跨账号服务接受旧载荷的实际结果仍需授权切换账号后验证。
+
+## 模型窗口能力与响应使用量
+
+目录解析 context_window、max_context_window、effective_context_window_percent、auto_compact_token_limit 和实际提供的 comp_hash。优先 context_window，缺失再用 max；有效比例默认 95%，自动阈值为显式值与完整窗口 90% 的较小值。只有阈值时保留未知容量；非法、零值或矛盾字段形成真实协议错误，不按 slug 猜测窗口。每个任务用当前账号重读固定 slug 的目录，核对推理能力；缺窗口和阈值时在普通请求前失败，保留输入与历史。
+
+完成与失败流事件保存实际 response usage，含输入、输出、总数、缓存输入、reasoning 输出及原始 usage；HTTP 失败中提供的合法用量也交给任务。缺失保持未知，畸形细项或不一致总数明确失败。服务端使用量与完整请求 32 MiB 字节限制、图片编码预算分别处理，缓存输入不从窗口计量中减去。
+
+ProtocolHistory 按内容估算新增项，不累计 transport ID 或外层 JSON/Base64 转义成本。文字采用粗略字节启发式，图片与加密 reasoning 使用各自的近似规则；这些值始终标为估算，不宣称 tokenizer 精度或解密后的原文。规则依据 [Codex 模型能力](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs)与 [ContextManager](https://github.com/openai/codex/blob/main/codex-rs/core/src/context_manager/history.rs)。

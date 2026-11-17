@@ -1,3 +1,4 @@
+pub use agentelier_llm_model::ContextLimits;
 use std::fmt;
 
 #[derive(Clone)]
@@ -7,6 +8,7 @@ pub struct ModelInfo {
     pub supported_reasoning_levels: Vec<String>,
     pub default_reasoning_level: Option<String>,
     pub image_input: Option<bool>,
+    pub context_limits: ContextLimits,
 }
 
 pub enum ModelRequest {
@@ -98,6 +100,7 @@ pub fn convert(
                                 supported_reasoning_levels: model.supported_reasoning_levels,
                                 default_reasoning_level: model.default_reasoning_level,
                                 image_input: model.image_input,
+                                context_limits: model.context_limits,
                             })
                             .collect(),
                     ),

@@ -1,4 +1,4 @@
-pub use agentelier_conversation::SessionId;
+pub use agentelier_conversation::{ContextLimits, SessionId};
 use agentelier_prompts::{InstructionMessage, InstructionSnapshot};
 use std::sync::Arc;
 
@@ -8,6 +8,7 @@ pub struct SessionSettings {
     pub display_name: String,
     pub effort: Option<String>,
     pub image_input: Option<bool>,
+    pub context_limits: Box<ContextLimits>,
     pub instructions: Arc<InstructionSnapshot>,
     pub working_directory: std::path::PathBuf,
 }
@@ -127,7 +128,19 @@ pub struct QueueEvent {
     pub decision: QueueDecision,
 }
 #[derive(Clone)]
+pub struct ContextView {
+    pub window: u64,
+    pub limits: ContextLimits,
+    pub tokens: u64,
+    pub estimated_tokens: u64,
+    pub server_anchor: bool,
+    pub threshold_reached: bool,
+    pub latest_usage: Option<(u64, u64, u64)>,
+    pub covered_items: Option<usize>,
+}
+#[derive(Clone)]
 pub struct SessionView {
+    pub context: Box<ContextView>,
     pub notice: Option<String>,
     pub id: SessionId,
     pub settings: SessionSettings,
@@ -205,6 +218,7 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
                     display_name: settings.display_name,
                     effort: settings.effort,
                     image_input: settings.image_input,
+                    context_limits: settings.context_limits,
                     instructions: settings.instructions,
                     working_directory: settings.working_directory,
                 },
@@ -227,6 +241,26 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
 
 fn view(session: agentelier_conversation::SessionView) -> SessionView {
     SessionView {
+        context: Box::new(ContextView {
+            window: session.context.window,
+            tokens: session.context.tokens,
+            estimated_tokens: session.context.estimated_tokens,
+            server_anchor: session.context.anchor.is_some(),
+            threshold_reached: session.context.limits.reached(session.context.tokens),
+            latest_usage: session.context.latest.as_ref().map(|fact| {
+                (
+                    fact.usage.input_tokens,
+                    fact.usage.output_tokens,
+                    fact.usage.total_tokens,
+                )
+            }),
+            covered_items: session
+                .context
+                .anchor
+                .as_ref()
+                .map(|anchor| anchor.covered_items),
+            limits: session.context.limits,
+        }),
         notice: session.notice,
         execution_blocked: session.execution_blocked,
         tool_catalog: session.tool_catalog,
@@ -246,6 +280,7 @@ fn view(session: agentelier_conversation::SessionView) -> SessionView {
             display_name: session.settings.display_name,
             effort: session.settings.effort,
             image_input: session.settings.image_input,
+            context_limits: session.settings.context_limits,
             instructions: session.settings.instructions,
             working_directory: session.settings.working_directory,
         },

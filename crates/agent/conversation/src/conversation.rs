@@ -17,6 +17,7 @@ pub struct SessionSettings {
     pub display_name: String,
     pub effort: Option<String>,
     pub image_input: Option<bool>,
+    pub context_limits: Box<agentelier_llm_model::ContextLimits>,
     pub instructions: Arc<InstructionSnapshot>,
     pub working_directory: std::path::PathBuf,
 }
@@ -75,6 +76,7 @@ pub struct TurnView {
 }
 #[derive(Clone)]
 pub struct SessionView {
+    pub context: Box<crate::ContextState>,
     pub notice: Option<String>,
     pub id: SessionId,
     pub settings: SessionSettings,
@@ -236,7 +238,8 @@ impl Conversation {
             ToolCatalog::standard(&settings.working_directory, settings.image_input)
                 .map_err(|_| ConversationFailure::new("工具目录配置无效"))?,
         );
-        let session = SessionView {
+        let mut session = SessionView {
+            context: Box::default(),
             notice: None,
             id,
             settings,
@@ -252,6 +255,12 @@ impl Conversation {
                 .map(|tool| (tool.name.to_owned(), tool.description.to_owned()))
                 .collect(),
         };
+        session.context.limits = session.settings.context_limits.as_ref().clone();
+        session.context.refresh(
+            &ProtocolHistory::default(),
+            &session.settings.instructions,
+            &tools,
+        )?;
         let initial = crate::InitialSession::from_view(
             &session,
             tools

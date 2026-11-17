@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct StoredState {
+    #[serde(default)]
+    pub context: Box<crate::ContextState>,
     pub session: SessionId,
     pub turn: Option<Box<crate::TurnView>>,
     pub previous_turns: Vec<crate::TurnView>,
@@ -17,6 +19,7 @@ pub struct StoredState {
 impl From<&SessionView> for StoredState {
     fn from(view: &SessionView) -> Self {
         Self {
+            context: view.context.clone(),
             session: view.id,
             turn: view.turn.clone(),
             previous_turns: view.previous_turns.clone(),
@@ -122,6 +125,8 @@ pub struct StoredImage {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct StoredSettings {
+    #[serde(default)]
+    pub context_limits: Box<agentelier_llm_model::ContextLimits>,
     pub slug: String,
     pub display_name: String,
     pub effort: Option<String>,
@@ -172,6 +177,7 @@ impl InitialSession {
             title: "新会话".into(),
             created_at_ms,
             settings: StoredSettings {
+                context_limits: view.settings.context_limits.clone(),
                 slug: view.settings.slug.clone(),
                 display_name: view.settings.display_name.clone(),
                 effort: view.settings.effort.clone(),

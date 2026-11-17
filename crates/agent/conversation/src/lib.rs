@@ -35,3 +35,8 @@ pub use queue::{MAX_QUEUED_INPUTS, QueueDecision, QueueEvent, QueuedInput, Sessi
 
 mod metadata;
 pub use metadata::session_title;
+
+mod context;
+pub use context::{ContextState, UsageAnchor, UsageFact};
+
+pub use agentelier_llm_model::ContextLimits;

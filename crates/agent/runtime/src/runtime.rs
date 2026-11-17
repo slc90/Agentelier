@@ -93,7 +93,7 @@ enum Command {
     Scan,
     Scanned(io::Result<agentelier_session_store::ArchiveCatalog>),
     Deleted(io::Result<agentelier_session_store::DeleteCommit>),
-    Loaded(io::Result<agentelier_conversation::RestoredSession>),
+    Loaded(Box<io::Result<agentelier_conversation::RestoredSession>>),
     Recorded(
         Result<
             (
@@ -227,7 +227,7 @@ impl AgentRuntime {
                                     result = async { match &mut loading {
                                         Some(pending) => pending.wait().await,
                                         None => std::future::pending().await,
-                                    }} => Command::Loaded(result),
+                                    }} => Command::Loaded(Box::new(result)),
                                     result = async { match &mut renaming { Some(pending) => pending.wait().await, None => std::future::pending().await } } => Command::Renamed(result),
                                     result = async { match &mut deleting { Some(pending) => pending.wait().await, None => std::future::pending().await } } => Command::Deleted(result),
                                     result = records.join_next(), if !records.is_empty() => match result {
@@ -304,7 +304,7 @@ impl AgentRuntime {
                                     Command::Loaded(result) => {
                                         let pending = loading.take().ok_or(RuntimeFailure::ModelState)?;
                                         let id = pending.id;
-                                        let event = pending.complete(result, &operations, &mut conversation);
+                                        let event = pending.complete(*result, &operations, &mut conversation);
                                         let opened = matches!(&event, ConversationEvent::Opened(_));
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
                                         if opened && catalog.is_none() {
@@ -336,7 +336,7 @@ impl AgentRuntime {
                                     } => {
                                         if model.is_some() || creating.is_some() || loading.is_some() || deleting.is_some() || suspending != 0 || finalizing || pending_queue {
                                             control.finished.cancel();
-                                            emit(&publish,id,AgentEventKind::ModelCompleted(Err(agentelier_llm_model::ModelFailure {kind:agentelier_llm_model::ModelFailureKind::Service,status:None,code:None,request_id:None,message:"当前任务正在执行，不能插入模型操作".into()})))?;
+                                            emit(&publish,id,AgentEventKind::ModelCompleted(Err(agentelier_llm_model::ModelFailure {usage:None,response_id:None,kind:agentelier_llm_model::ModelFailureKind::Service,status:None,code:None,request_id:None,message:"当前任务正在执行，不能插入模型操作".into()})))?;
                                             continue;
                                         }
                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?=Some(control.clone());

@@ -103,6 +103,10 @@ pub struct ChatSession {
     pub display_name: String,
     pub effort: Option<String>,
     pub image_input: Option<bool>,
+    #[reflect(ignore)]
+    pub context_limits: Box<agentelier_conversation_bridge::ContextLimits>,
+    pub context: String,
+    pub context_details: String,
     pub working_directory: String,
     pub instruction_snapshot: String,
     pub turn: Option<ChatTurn>,
@@ -120,6 +124,8 @@ pub struct ChatReplacement {
     pub display_name: String,
     pub effort: Option<String>,
     pub image_input: Option<bool>,
+    #[reflect(ignore)]
+    pub context_limits: Box<agentelier_conversation_bridge::ContextLimits>,
     pub working_directory: String,
     #[reflect(ignore)]
     pub instructions: Arc<InstructionSnapshot>,
@@ -427,6 +433,7 @@ fn create_session(world: &mut World) -> Result {
         display_name: choice.display_name.clone(),
         effort: model.reasoning.effort(),
         image_input: choice.image_input,
+        context_limits: choice.context_limits(),
         instructions: Arc::new(crate::prompts::snapshot(world)?),
         working_directory: world
             .resource::<crate::working_directory::DirectoryState>()
@@ -441,6 +448,7 @@ fn create_session(world: &mut World) -> Result {
             display_name: settings.display_name,
             effort: settings.effort,
             image_input: settings.image_input,
+            context_limits: settings.context_limits,
             instructions: settings.instructions,
             working_directory: settings.working_directory.to_string_lossy().into_owned(),
         });
@@ -484,6 +492,7 @@ fn prepare_reset(world: &mut World) -> Result {
         display_name: session.display_name.clone(),
         effort: session.effort.clone(),
         image_input: session.image_input,
+        context_limits: session.context_limits.clone(),
         instructions: Arc::new(serde_json::from_str(&session.instruction_snapshot)?),
         working_directory: session.working_directory.clone(),
     };
@@ -511,6 +520,7 @@ fn confirm_replacement(world: &mut World) -> Result {
             display_name: pending.display_name,
             effort: pending.effort,
             image_input: pending.image_input,
+            context_limits: pending.context_limits,
             instructions: pending.instructions,
             working_directory: pending.working_directory.into(),
         }),
@@ -901,7 +911,41 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
     })
 }
 fn project(session: SessionView) -> Result<ChatSession> {
+    let limits = &session.context.limits;
+    let basis = if session.context.server_anchor {
+        if session.context.estimated_tokens == 0 {
+            "最近服务端用量"
+        } else {
+            "最近服务端用量 + 新增项估算"
+        }
+    } else {
+        "内容粗略估算"
+    };
+    let context = format!(
+        "上下文 {} tokens · 有效上限 {} · 自动阈值 {} · {}",
+        session.context.tokens,
+        limits
+            .effective
+            .map_or_else(|| "未知".into(), |value| value.to_string()),
+        limits
+            .automatic
+            .map_or_else(|| "未知".into(), |value| value.to_string()),
+        basis
+    );
+    let usage = session.context.latest_usage.map_or_else(
+        || "尚无服务端用量".into(),
+        |(input, output, total)| format!("最近请求用量：输入 {input}，输出 {output}，总计 {total}"),
+    );
+    let context_details = format!(
+        "工作窗口 {}；已估算新增 {} tokens；服务端覆盖 {} 项\n{usage}",
+        session.context.window,
+        session.context.estimated_tokens,
+        session.context.covered_items.unwrap_or(0)
+    );
     Ok(ChatSession {
+        context,
+        context_details,
+        context_limits: session.settings.context_limits.clone(),
         notice: session.notice,
         execution_blocked: session.execution_blocked,
         tool_catalog: session.tool_catalog,
@@ -1448,6 +1492,10 @@ fn summary(state: &ChatState) -> String {
 }
 fn status(state: &ChatState) -> String {
     let mut value = task_status(state);
+    if let Some(session) = &state.session {
+        value.push('\n');
+        value.push_str(&session.context);
+    }
     if let Some(notice) = state
         .session
         .as_ref()
@@ -1629,6 +1677,10 @@ pub(crate) fn request_details(state: &ChatState) -> String {
         session.working_directory,
         session.instruction_snapshot
     );
+    text.push_str(&format!(
+        "{}\n{}\n",
+        session.context, session.context_details
+    ));
     for (name, description) in &session.tool_catalog {
         text.push_str(&format!("{name}: {description}\n"));
     }

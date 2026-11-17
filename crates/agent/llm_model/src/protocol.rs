@@ -1,7 +1,9 @@
 use agentelier_tools::ToolPayload;
 use serde_json::Value;
 mod archive;
+mod estimate;
 pub use archive::{ArchivedPayload, ProtocolArchive};
+pub use estimate::text_tokens as estimated_text_tokens;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub enum ProtocolItemSummary {

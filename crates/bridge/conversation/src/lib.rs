@@ -16,3 +16,5 @@ pub use conversation::{QueueDecision, QueueEvent, QueuedInput, SessionAction, se
 
 pub use conversation::ArchiveEntry;
 pub use conversation::SessionId;
+
+pub use conversation::{ContextLimits, ContextView};

@@ -48,6 +48,8 @@ struct PendingResponse {
 
 fn model_failure(message: impl ToString) -> ModelFailure {
     ModelFailure {
+        usage: None,
+        response_id: None,
         kind: ModelFailureKind::Protocol,
         status: None,
         code: None,
@@ -85,6 +87,7 @@ pub fn restore(
         .validate()
         .map_err(|failure| ConversationFailure::new(format!("存档指令无效：{failure}")))?;
     let mut state = StoredState {
+        context: Box::default(),
         session: initial.session,
         turn: None,
         previous_turns: Vec::new(),
@@ -373,6 +376,9 @@ pub fn restore(
     {
         notices.push(format!("原工作目录不可用，工具执行会拒绝该路径：{failure}"));
     }
+    state
+        .context
+        .refresh(&history, &initial.settings.instructions, &tools)?;
     Ok(RestoredSession {
         state,
         initial,
@@ -396,9 +402,11 @@ impl Conversation {
         }
         let settings = restored.initial.settings;
         let view = SessionView {
+            context: restored.state.context,
             id: restored.state.session,
             notice: restored.notice,
             settings: SessionSettings {
+                context_limits: settings.context_limits,
                 slug: settings.slug,
                 display_name: settings.display_name,
                 effort: settings.effort,

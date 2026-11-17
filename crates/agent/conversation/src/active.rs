@@ -18,6 +18,32 @@ pub struct ActiveTurn {
     pub(crate) results: std::collections::BTreeMap<String, ToolPayload>,
 }
 impl ActiveTurn {
+    pub fn model_context(
+        &mut self,
+        model: agentelier_llm_model::ModelInfo,
+    ) -> Result<(), ConversationFailure> {
+        if model.slug != self.view.settings.slug {
+            return Err(ConversationFailure::new("上下文能力不属于会话模型"));
+        }
+        if self.view.context.limits.comp_hash != model.context_limits.comp_hash {
+            self.view.context.anchor = None;
+        }
+        self.view.context.limits = model.context_limits;
+        if !self.view.context.limits.available() {
+            return Err(ConversationFailure::new(
+                "当前模型目录未提供上下文窗口或自动阈值，无法确定请求预算",
+            ));
+        }
+        if let Some(effort) = &self.view.settings.effort
+            && !model.supported_reasoning_levels.is_empty()
+            && !model.supported_reasoning_levels.contains(effort)
+        {
+            return Err(ConversationFailure::new(
+                "当前账号模型不支持会话固定的推理设置",
+            ));
+        }
+        Ok(())
+    }
     pub fn stored_state(&self) -> crate::StoredState {
         crate::StoredState::from(&self.view)
     }
@@ -75,6 +101,9 @@ impl ActiveTurn {
             self.history.clone()
         };
         turn.request_items = context.summary();
+        self.view
+            .context
+            .refresh(&context, &self.view.settings.instructions, &self.tools)?;
         Ok(GenerationRequest {
             slug: self.view.settings.slug.clone(),
             effort: self.view.settings.effort.clone(),
@@ -91,6 +120,16 @@ impl ActiveTurn {
             .as_mut()
             .ok_or(ConversationFailure::new("活动任务缺少轮次"))?;
         match event {
+            StreamEvent::Usage { response_id, usage } => {
+                self.view.context.latest = Some(crate::UsageFact {
+                    window: self.view.context.window,
+                    turn: turn.id.0,
+                    request: turn.request_index,
+                    response_id,
+                    usage,
+                });
+            }
+
             StreamEvent::FunctionCall(call) => {
                 Self::upsert_tool(turn, call, ToolStatus::Receiving)?;
             }
@@ -390,6 +429,18 @@ impl ActiveTurn {
                 Ok((call.call_id.clone(), output))
             })
             .collect::<Result<Vec<_>, ConversationFailure>>()?;
+        let coverage = turn
+            .request_items
+            .len()
+            .checked_add(result.output.len())
+            .ok_or_else(|| ConversationFailure::new("上下文用量覆盖位置超出范围"))?;
+        let usage = result.usage.map(|usage| crate::UsageFact {
+            window: self.view.context.window,
+            turn: turn.id.0,
+            request: turn.request_index,
+            response_id: result.response_id,
+            usage,
+        });
         self.history
             .seal(
                 (!self.input_retained).then_some(turn.input.as_str()),
@@ -406,6 +457,18 @@ impl ActiveTurn {
             }
         }
         self.view.committed_items = self.history.summary();
+        if let Some(fact) = usage {
+            self.view.context.latest = Some(fact.clone());
+            if fact.usage.total_tokens > 0 {
+                self.view.context.anchor = Some(crate::UsageAnchor {
+                    fact,
+                    covered_items: coverage,
+                });
+            }
+        }
+        self.view
+            .context
+            .refresh(&self.history, &self.view.settings.instructions, &self.tools)?;
         Ok(())
     }
 
@@ -431,6 +494,9 @@ impl ActiveTurn {
             }
         }
         turn.status = status;
+        self.view
+            .context
+            .refresh(&self.history, &self.view.settings.instructions, &self.tools)?;
         Ok(())
     }
 }
