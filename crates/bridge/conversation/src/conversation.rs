@@ -332,6 +332,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
         request_index: turn.request_index,
         committed_steps: turn.committed_steps,
         phase: match turn.phase {
+            agentelier_conversation::TaskPhase::CompactingContext => "compaction",
             agentelier_conversation::TaskPhase::RequestingModel => "model",
             agentelier_conversation::TaskPhase::ExecutingTool => "tool",
             agentelier_conversation::TaskPhase::ReapingProcesses => "cleanup",

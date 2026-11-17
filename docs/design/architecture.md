@@ -17,11 +17,11 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/login/` | `agentelier_login` | 数据环境、OAuth、Token、身份校验、认证文件与受保护原子提交 |
 | `crates/agent/account/` | `agentelier_account` | 账号操作与会话状态、共享凭据门控和按需续期协调 |
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录与窗口能力、Responses/SSE、响应使用量和模型错误语义 |
-| `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的聊天会话、Turn 身份、工作窗口计量、展示记录与结果收敛 |
+| `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的聊天会话、Turn 身份、工作窗口计量、压缩检查点及恢复、展示记录与结果收敛 |
 | `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话日志、恢复读取、执行事件追加、独立名称与删除元数据、受控会话清理、不可变图片附件、单写入者、提交确认与存储收尾 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
 | `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示 |
-| `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、正文增量和受控取消 |
+| `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、封闭边界自动压缩与检查点提交、正文增量和受控取消 |
 | `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型任务取消/回收及执行收尾 |
 | `crates/bridge/account/` | `agentelier_account_bridge` | 账号摘要、凭据安全投影、授权地址及账号事件转换 |
 | `crates/bridge/llm_model/` | `agentelier_llm_model_bridge` | 模型结果、错误分类、取消和完成状态转换 |

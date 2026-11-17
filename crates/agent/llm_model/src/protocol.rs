@@ -58,6 +58,39 @@ impl ProtocolOutput {
 pub struct ProtocolHistory(Vec<ProtocolItem>);
 
 impl ProtocolHistory {
+    /// Remote V2 retains newest applicable user text within the Codex 64,000 token budget,
+    /// restores its original order, then appends the opaque summary. Tool details stay archived.
+    pub fn compacted(&self, item: crate::CompactionItem) -> Self {
+        const RETAINED_TOKENS: u64 = 64_000;
+        let mut remaining = RETAINED_TOKENS;
+        let mut retained = Vec::new();
+        for entry in self.0.iter().rev() {
+            if remaining == 0 {
+                break;
+            }
+            let ProtocolItem::User(text) = entry else {
+                continue;
+            };
+            let charge = estimated_text_tokens(text).max(1);
+            if charge <= remaining {
+                retained.push(ProtocolItem::User(text.clone()));
+                remaining -= charge;
+            } else {
+                let max_bytes = (remaining * estimate::TEXT_BYTES_PER_TOKEN) as usize;
+                let mut end = max_bytes.min(text.len());
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                if end > 0 {
+                    retained.push(ProtocolItem::User(text[..end].to_owned()));
+                }
+                remaining = 0;
+            }
+        }
+        retained.reverse();
+        retained.push(ProtocolItem::Compaction(item));
+        Self(retained)
+    }
     pub fn with_user(&self, input: &str) -> Self {
         let mut history = self.clone();
         history.0.push(ProtocolItem::User(input.to_owned()));

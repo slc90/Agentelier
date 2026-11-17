@@ -11,6 +11,8 @@ use agentelier_tools::{
 use std::sync::Arc;
 
 pub struct ActiveTurn {
+    pub(crate) source_sequence: Option<u64>,
+    pub(crate) history_confirmed: bool,
     pub(crate) view: SessionView,
     pub(crate) history: ProtocolHistory,
     pub(crate) tools: Arc<ToolCatalog>,

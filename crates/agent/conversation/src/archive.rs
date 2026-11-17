@@ -34,6 +34,10 @@ impl From<&SessionView> for StoredState {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RecordEvent {
+    Compacted {
+        state: StoredState,
+        checkpoint: Box<crate::CompactionCheckpoint>,
+    },
     QueueSuspended {
         state: StoredState,
     },
@@ -87,7 +91,8 @@ pub enum RecordEvent {
 impl RecordEvent {
     pub fn state(&self) -> &StoredState {
         match self {
-            Self::QueueSuspended { state }
+            Self::Compacted { state, .. }
+            | Self::QueueSuspended { state }
             | Self::Recovered { state, .. }
             | Self::Accepted { state }
             | Self::Response { state, .. }
@@ -111,6 +116,8 @@ pub struct ArchiveEntry {
 
 #[derive(Serialize, Deserialize)]
 pub struct SessionRecord {
+    #[serde(skip)]
+    pub sequence: u64,
     pub session: SessionId,
     pub at_ms: u64,
     pub event: RecordEvent,

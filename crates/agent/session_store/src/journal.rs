@@ -103,6 +103,7 @@ impl Writer {
             root,
             session,
             RecordKind::Event(SessionRecord {
+                sequence: 0,
                 session,
                 at_ms,
                 event,

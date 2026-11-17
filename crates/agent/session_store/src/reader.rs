@@ -133,11 +133,12 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
                     }
                     parsed.manual_title = Some(title);
                 }
-                RecordKind::Event(event)
+                RecordKind::Event(mut event)
                     if parsed.initial.is_some()
                         && event.session == session
                         && event.event.state().session == session =>
                 {
+                    event.sequence = record.sequence;
                     parsed.records.push(event)
                 }
                 _ => return Err(io::Error::other("会话初始记录、事件身份或顺序不一致")),
@@ -351,6 +352,7 @@ fn repair(
         version: FORMAT_VERSION,
         sequence,
         kind: RecordKind::Event(SessionRecord {
+            sequence,
             session,
             at_ms,
             event,

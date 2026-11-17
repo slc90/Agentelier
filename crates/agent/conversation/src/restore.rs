@@ -99,6 +99,7 @@ pub fn restore(
     let mut history = ProtocolArchive::default();
     let mut pending: Option<PendingResponse> = None;
     let mut retained_input = false;
+    let mut covered_sequence = 1;
     let mut next_turn = 0;
     let mut notices = Vec::new();
     for record in records {
@@ -107,6 +108,32 @@ pub fn restore(
         }
         next_turn = next_turn.max(maximum(record.event.state()));
         match record.event {
+            RecordEvent::Compacted {
+                state: incoming,
+                checkpoint,
+            } => {
+                checkpoint.validate(&incoming)?;
+                if pending.is_some()
+                    || checkpoint.source_window != state.context.window
+                    || checkpoint.source_sequence != covered_sequence
+                    || checkpoint.source_sequence >= record.sequence
+                    || checkpoint.covered_items != history.len()
+                    || checkpoint.input_retained != retained_input
+                    || checkpoint.model != initial.settings.slug
+                    || state
+                        .turn
+                        .as_ref()
+                        .is_none_or(|turn| turn.id != checkpoint.turn)
+                {
+                    return Err(ConversationFailure::new(
+                        "检查点未覆盖当前封闭历史或活动任务",
+                    ));
+                }
+                history = checkpoint.history;
+                retained_input = checkpoint.input_retained;
+                covered_sequence = record.sequence;
+                merge(&mut state, incoming);
+            }
             RecordEvent::Accepted { state: incoming } => {
                 notices.clear();
                 if pending.is_some() {
@@ -114,6 +141,7 @@ pub fn restore(
                 }
                 state = incoming;
                 retained_input = false;
+                covered_sequence = record.sequence;
             }
             RecordEvent::Response {
                 state: incoming,
@@ -179,6 +207,7 @@ pub fn restore(
                 }
                 history = complete;
                 retained_input = true;
+                covered_sequence = record.sequence;
                 merge(&mut state, incoming);
             }
             RecordEvent::SteerAccepted { state: incoming } => merge(&mut state, incoming),
@@ -191,6 +220,7 @@ pub fn restore(
                 }
                 history = applied;
                 retained_input = true;
+                covered_sequence = record.sequence;
                 merge(&mut state, incoming);
             }
             RecordEvent::QueueSuspended { .. } => state.queue_paused = true,
@@ -211,11 +241,15 @@ pub fn restore(
                 merge(&mut state, incoming);
             }
             RecordEvent::Finished {
-                state: incoming,
+                state: mut incoming,
                 history: finished,
             } => {
                 if let Some(finished) = finished {
                     history = finished;
+                } else {
+                    // An unconfirmed writer acknowledgement must not overwrite a durable replacement.
+                    incoming.context = state.context.clone();
+                    incoming.committed_items = state.committed_items.clone();
                 }
                 state.queue_paused |= incoming.queue_paused;
                 merge(&mut state, incoming);
@@ -226,6 +260,7 @@ pub fn restore(
                 notice,
             } => {
                 state = incoming;
+                covered_sequence = record.sequence;
                 history = recovered;
                 pending = None;
                 retained_input = state

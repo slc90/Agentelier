@@ -1543,7 +1543,9 @@ fn task_status(state: &ChatState) -> String {
         return match &turn.status {
             ChatTurnStatus::Running => format!(
                 "{} · 模型请求 {}",
-                if turn.phase == "tool" {
+                if turn.phase == "compaction" {
+                    "正在自动压缩上下文"
+                } else if turn.phase == "tool" {
                     "正在执行工具…"
                 } else if turn.phase == "cleanup" {
                     "正在回收进程…"

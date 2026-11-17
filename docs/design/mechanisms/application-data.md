@@ -51,7 +51,7 @@ flowchart TD
 | 运行日志 | 可执行文件旁的 `logs/` | 统一启动、目录选择、运行与收尾日志 |
 | 账号凭据 | 所选目录的 `auth.json` | Agent/Tokio 调用 login 恢复账号，浏览器授权在同一位置安全创建主机记录及原子提交会话 |
 | 目录占用 | 所选目录的 `.agentelier.lock` | 仅用于句柄生命周期内的独占锁 |
-| 会话存档 | 所选目录的 `sessions/<uuid>/session.jsonl`、`summary.json` 与 `attachments/` | Session Store 单写入者提交初始设置、执行记录、摘要与图片附件；不含账号所有权或凭据 |
+| 会话存档 | 所选目录的 `sessions/<uuid>/session.jsonl`、`summary.json` 与 `attachments/` | Session Store 单写入者提交初始设置、执行记录、完整压缩检查点、摘要与图片附件；检查点不删除旧时间线或附件，不含账号所有权或凭据 |
 
 新选择与已有设置合并序列化，在配置目录内创建唯一临时文件、完整写入并同步后替换 `config.ron`。`data_directory` 序列化时将扩展盘符路径写为普通 `C:\...`，将扩展 UNC 路径写为普通 `\\server\share\...`；内存中继续保留原始 PathBuf，加载仍接受已有的带前缀配置。初始配置使用不覆盖已有文件的提交方式。只有保存成功才记住新路径并进入主界面。
 

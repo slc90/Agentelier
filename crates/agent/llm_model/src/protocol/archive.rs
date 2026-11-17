@@ -81,6 +81,25 @@ pub struct ProtocolArchive {
 }
 
 impl ProtocolArchive {
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+    pub fn validate_compaction(&self) -> Result<(), crate::ModelFailure> {
+        if !matches!(self.items.last(), Some(ArchivedItem::Compaction { .. }))
+            || self.items[..self.items.len().saturating_sub(1)]
+                .iter()
+                .any(|item| !matches!(item, ArchivedItem::User { .. }))
+        {
+            return Err(crate::model::protocol(
+                "压缩替换历史必须是有序用户消息与唯一末尾压缩项",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn call_ids(&self) -> impl Iterator<Item = &str> {
         self.items.iter().filter_map(|item| match item {
             ArchivedItem::FunctionCall { call_id, .. } => Some(call_id.as_str()),

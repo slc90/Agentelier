@@ -39,6 +39,7 @@ pub enum TurnStatus {
 }
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum TaskPhase {
+    CompactingContext,
     RequestingModel,
     ExecutingTool,
     ReapingProcesses,
@@ -365,6 +366,8 @@ impl Conversation {
         }));
         self.next_turn = id;
         let active = ActiveTurn {
+            source_sequence: None,
+            history_confirmed: true,
             view: session.view.clone(),
             tools: session.tools.clone(),
             input_retained: false,

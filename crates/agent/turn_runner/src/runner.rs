@@ -10,11 +10,11 @@ use agentelier_tools::ToolResult;
 async fn record(
     store: &agentelier_session_store::SessionStoreClient,
     event: RecordEvent,
-) -> Result<(), ConversationFailure> {
+) -> Result<u64, ConversationFailure> {
     store
         .append(event)
         .await
-        .map(|_| ())
+        .map(|commit| commit.sequence)
         .map_err(|failure| ConversationFailure::new(format!("会话记录保存失败：{failure}")))
 }
 use tokio::sync::mpsc;
@@ -45,21 +45,7 @@ async fn request_once(
     store: &agentelier_session_store::SessionStoreClient,
 ) -> Result<Option<Result<GenerationResult, ModelFailure>>, ConversationFailure> {
     let (sender, mut events) = mpsc::channel(MODEL_PROGRESS_CAPACITY);
-    let applied = active.apply_steers()?;
     let request = active.request()?;
-    if !applied.is_empty() {
-        record(
-            store,
-            RecordEvent::SteerApplied {
-                state: active.stored_state(),
-                history: active.archive(),
-            },
-        )
-        .await?;
-    }
-    for id in applied {
-        control::receipt(progress, id, InputDecision::Applied).await?;
-    }
     publish(active, progress, cancel).await?;
     let outcome = {
         let generation = agentelier_llm_model::generate(credentials, request, identity, sender);
@@ -118,6 +104,9 @@ pub async fn run(
         },
     )
     .await;
+    if let Ok(sequence) = admitted {
+        active.recorded(sequence);
+    }
     let outcome = if admitted.is_ok() {
         run_task(
             &mut active,
@@ -130,7 +119,7 @@ pub async fn run(
         )
         .await
     } else {
-        admitted.map(|()| TurnStatus::Cancelled)
+        admitted.map(|_| TurnStatus::Cancelled)
     };
     let phase = active.reaping();
     let projection = if phase.is_ok() {
@@ -157,6 +146,11 @@ pub async fn run(
         }
     };
     active.finish(status)?;
+    if !active.history_confirmed() {
+        return Err(ConversationFailure::new(
+            "压缩检查点的提交结果未确认，请从存档重新加载后继续",
+        ));
+    }
     if let Err(failure) = record(
         &store,
         RecordEvent::Finalized {
@@ -196,11 +190,84 @@ async fn run_task(
     let catalog = active.catalog();
     let mut cleanup_failed = false;
     let mut tools_used = 0;
-    for request_index in 0..MAX_MODEL_REQUESTS {
+    let mut requests_used = 0;
+    let mut compacted_before_request = false;
+    while requests_used < MAX_MODEL_REQUESTS {
         control::drain(active, steers, progress, store).await?;
         if cancel.is_cancelled() {
             return Ok(TurnStatus::Cancelled);
         }
+        let applied = active.apply_steers()?;
+        if !applied.is_empty() {
+            let sequence = record(
+                store,
+                RecordEvent::SteerApplied {
+                    state: active.stored_state(),
+                    history: active.archive(),
+                },
+            )
+            .await?;
+            active.recorded(sequence);
+        }
+        for id in applied {
+            control::receipt(progress, id, InputDecision::Applied).await?;
+        }
+        if active.context_reached()? {
+            if compacted_before_request {
+                return Ok(TurnStatus::Failed(
+                    "压缩后的新增输入仍超出上下文预算，保留材料并停止".into(),
+                ));
+            }
+            if MAX_MODEL_REQUESTS.saturating_sub(requests_used) < 2 {
+                return Ok(TurnStatus::Limited);
+            }
+            requests_used += 1;
+            match compact_once(
+                active,
+                credentials.clone(),
+                &identity,
+                cancel,
+                progress,
+                steers,
+                store,
+            )
+            .await?
+            {
+                Some(Ok(result)) => {
+                    if cancel.is_cancelled() {
+                        return Ok(TurnStatus::Cancelled);
+                    }
+                    let candidate = match active.compaction_candidate(result) {
+                        Ok(candidate) => candidate,
+                        Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())),
+                    };
+                    let event = candidate.event(active);
+                    if cancel.is_cancelled() {
+                        return Ok(TurnStatus::Cancelled);
+                    }
+                    active.committing_checkpoint();
+                    let sequence = record(store, event).await?;
+                    active.install_compaction(candidate)?;
+                    active.recorded(sequence);
+                    tracing::info!(
+                        session = %active.view().id,
+                        window = active.view().context.window,
+                        sequence,
+                        "自动压缩检查点已提交并安装"
+                    );
+                    publish(active, progress, cancel).await?;
+                    if cancel.is_cancelled() {
+                        return Ok(TurnStatus::Cancelled);
+                    }
+                    compacted_before_request = true;
+                    continue;
+                }
+                Some(Err(failure)) => return Ok(TurnStatus::Failed(failure.to_string())),
+                None => return Ok(TurnStatus::Cancelled),
+            }
+        }
+        requests_used += 1;
+        compacted_before_request = false;
         let result = match request_once(
             active,
             credentials.clone(),
@@ -231,7 +298,7 @@ async fn run_task(
         control::drain(active, steers, progress, store).await?;
         if result.calls.is_empty() {
             active.seal(result)?;
-            record(
+            let sequence = record(
                 store,
                 RecordEvent::Sealed {
                     state: active.stored_state(),
@@ -239,6 +306,7 @@ async fn run_task(
                 },
             )
             .await?;
+            active.recorded(sequence);
             if active.has_pending_steer() {
                 continue;
             }
@@ -269,7 +337,7 @@ async fn run_task(
                 publish(active, progress, cancel).await?;
                 let started = std::time::Instant::now();
                 tracing::debug!(
-                    request_index = request_index + 1,
+                    request_index = requests_used,
                     call_id = call.call_id,
                     tool = call.name,
                     "工具执行开始"
@@ -304,7 +372,7 @@ async fn run_task(
                     return Err(failure);
                 }
                 tracing::debug!(
-                    request_index = request_index + 1,
+                    request_index = requests_used,
                     call_id = call.call_id,
                     tool = call.name,
                     elapsed_ms = started.elapsed().as_millis(),
@@ -340,7 +408,7 @@ async fn run_task(
             publish(active, progress, cancel).await?;
         }
         active.seal(result)?;
-        record(
+        let sequence = record(
             store,
             RecordEvent::Sealed {
                 state: active.stored_state(),
@@ -348,6 +416,7 @@ async fn run_task(
             },
         )
         .await?;
+        active.recorded(sequence);
         if cleanup_failed {
             active.block_execution();
             return Ok(TurnStatus::Failed(
@@ -391,4 +460,49 @@ async fn persist_image(
         }
     }
     (result, None)
+}
+
+async fn compact_once(
+    active: &mut ActiveTurn,
+    credentials: CredentialClient,
+    identity: &ExecutionIdentity,
+    cancel: &CancellationToken,
+    progress: &mpsc::Sender<RunnerEvent>,
+    steers: &mut mpsc::Receiver<SteerInput>,
+    store: &agentelier_session_store::SessionStoreClient,
+) -> Result<Option<Result<agentelier_llm_model::CompactionResult, ModelFailure>>, ConversationFailure>
+{
+    let request = match active.compaction_request() {
+        Ok(request) => request,
+        Err(failure) => return Ok(Some(Err(protocol_failure(failure)))),
+    };
+    tracing::info!(
+        session = %active.view().id,
+        window = active.view().context.window,
+        request_index = active.view().turn.as_ref().map(|turn| turn.request_index),
+        tokens = active.view().context.tokens,
+        "上下文达到预算，开始自动压缩"
+    );
+    let (sender, mut events) = mpsc::channel(MODEL_PROGRESS_CAPACITY);
+    publish(active, progress, cancel).await?;
+    let outcome = {
+        let generation = agentelier_llm_model::compact(credentials, request, identity, sender);
+        tokio::pin!(generation);
+        loop {
+            tokio::select! { biased;
+                _ = cancel.cancelled() => break None,
+                result = &mut generation => break Some(result),
+                input = steers.recv(), if !steers.is_closed() => {
+                    if let Some(input) = input {control::accept(active,input,progress,store).await?;publish(active,progress,cancel).await?;}
+                }
+                event = events.recv() => {
+                    if let Some(event) = event { active.update(event)?;publish(active,progress,cancel).await?; }
+                }
+            }
+        }
+    };
+    while let Ok(event) = events.try_recv() {
+        active.update(event)?;
+    }
+    Ok(outcome)
 }

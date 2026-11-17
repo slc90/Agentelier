@@ -3,7 +3,7 @@ use crate::ModelFailure;
 use crate::model::protocol;
 use agentelier_tools::ToolPayload;
 
-const TEXT_BYTES_PER_TOKEN: u64 = 4;
+pub(super) const TEXT_BYTES_PER_TOKEN: u64 = 4;
 const RESIZED_IMAGE_ESTIMATE_BYTES: u64 = 7373;
 const REASONING_ENVELOPE_ESTIMATE_BYTES: u64 = 650;
 

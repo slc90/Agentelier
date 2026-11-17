@@ -40,3 +40,6 @@ mod context;
 pub use context::{ContextState, UsageAnchor, UsageFact};
 
 pub use agentelier_llm_model::ContextLimits;
+
+mod compaction;
+pub use compaction::{CompactionCandidate, CompactionCheckpoint};

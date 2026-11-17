@@ -19,19 +19,19 @@ flowchart LR
 
 ProtocolHistory 按原顺序保存类型化的用户输入、助手原始协议项和不透明 reasoning 项。助手输出保留 ID、角色、内容及 phase，不把公开 commentary 和 final_answer 合并成失去阶段信息的假消息。该历史不实现 Debug 或 Reflect，不作为业务日志内容。
 
-请求以 store=false 重放客户端完整历史，客户端不裁剪输入；显式请求 reasoning.encrypted_content。完成响应缺少该字段时，只能从相同 ID 的 output_item.done 取完整不透明内容；没有可续接内容则明确失败。不会提取或伪造隐藏推理。协议依据：[无状态推理续接](https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses)、[流事件](https://developers.openai.com/api/reference/resources/responses/streaming-events)。
+请求以 store=false 重放当前工作窗口的完整 typed 历史；显式请求 reasoning.encrypted_content。完成响应缺少该字段时，只能从相同 ID 的 output_item.done 取完整不透明内容；没有可续接内容则明确失败。不会提取或伪造隐藏推理。协议依据：[无状态推理续接](https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-without-stored-responses)、[流事件](https://developers.openai.com/api/reference/resources/responses/streaming-events)。
 
 Bridge 与 UI 只取得消息正文和安全顺序摘要：User、Assistant 的公开 phase，以及 Reasoning 是否含加密内容。Turn 记录其请求项摘要，Session 记录已提交项摘要，以便观察上下文是否重复或串接；摘要不参与请求构造。
 
 ## 设置与生命周期
 
-每轮请求从同一 Session 捕获设置及历史快照。准备区变化只影响下次创建。SessionSettings 不保存账号归属，任务在首次请求前取得当前账号的 ExecutionIdentity，后续普通请求和工具反馈共用该身份；账号变化不清除历史，新的任务再取得当前账号。上下文超限保留原记录并显示实际失败，不压缩、裁剪或自动重试。
+每轮请求从同一 Session 捕获设置及历史快照。准备区变化只影响下次创建。SessionSettings 不保存账号归属，任务在首次请求前取得当前账号的 ExecutionIdentity，后续普通请求、自动压缩和工具反馈共用该身份；账号变化不清除历史，新的任务再取得当前账号。达到窗口预算时在封闭边界自动尝试 Remote V2；失败保留原记录并结束任务，不用文本总结或裁剪历史重试。
 
 SessionSettings 还持有已解析的完整 InstructionSnapshot，创建时核对版本内容哈希及基础槽位。每轮请求克隆该快照，TurnView 另保留其有序请求指令消息。指令不提交进 ProtocolHistory，LLM Model 在历史前单独注入；多轮不会累计重复指令。重置复制当前会话设置，重试也不重新解析准备区。类型及材料保存关系见[提示词管理](prompts.md)。
 
 当前只有一个活动内存 Session；初始设置、执行过程和图片附件可以从本地存档恢复，不提供分支回滚。工具任务最多 32 次请求及 64 次调用，同一响应可提出多项调用，按输出顺序串行执行。生成与展示的传递、关闭与回收关系见[总体架构](../architecture.md#内存聊天与流式投影)。
 
-当前订阅接口拒绝显式 truncation 参数，因此不发送该字段。客户端始终提供完整的已提交历史；服务上下文超限路径尚未在真实运行中触发，不把未验证的服务端行为视为保证。
+当前订阅接口拒绝显式 truncation 参数，因此不发送该字段。客户端提供当前窗口的完整已提交历史；服务上下文超限路径尚未在真实运行中触发，不把未验证的服务端行为视为保证。
 
 ## 取消控制
 
@@ -133,4 +133,16 @@ ContextState 保存工作窗口号、最近目录能力、最近响应用量及�
 
 请求前包含新输入的完整工作上下文用于判断阈值，Queue 尚未启动的文字不进入计量。存档保存可解释的窗口与覆盖项数；恢复完成 typed 历史后重新计算新增范围，拒绝不属于当前窗口或超出有效前缀的锚点。模型兼容标识变化时重新估算，不沿用不匹配的旧锚点。
 
-Bridge 仅投影容量、有效窗口、自动阈值、占用、来源和数字用量，不发布原始协议或 usage JSON。现有状态区显示服务端依据与估算，未知容量保持未知；请求核对区保存窗口与覆盖边界。此时只提供预算判断，尚未执行自动压缩。
+Bridge 仅投影容量、有效窗口、自动阈值、占用、来源和数字用量，不发布原始协议或 usage JSON。现有状态区显示服务端依据与估算，未知容量保持未知；请求核对区保存窗口与覆盖边界。
+
+## 自动压缩与持久检查点
+
+Runner 在每次普通请求前检查包含当前输入和已应用 Steer 的完整上下文；工具批次全部封闭后才能进入压缩。CompactingContext 仍属于原任务，消耗同一份 32 次模型请求预算，不重置 64 次工具额度。状态区显示“正在自动压缩上下文”，继续使用原 Stop、Steer、Queue 入口和会话替换限制，没有手动压缩入口。
+
+候选历史保留预算内最近的用户文字，恢复原顺序后追加唯一合法 compaction 项；固定指令仍只在请求前注入一次。尚未进入历史的原输入由 input_retained 覆盖标记区分，安装后只追加一次。压缩等待时接纳的 Steer 只持久记录 Accepted，下一普通请求边界再按原顺序应用；Queue 有独立恢复路径，不以最后日志序号冒充协议覆盖位置。
+
+完整 Compacted 记录保存 replacement history、Session/Turn/请求身份、原窗口与新窗口、封闭历史的记录序号和项数、原输入覆盖标记、模型、实际 comp_hash、响应兼容字段及用量。单写入者提交确认之后，核对活动身份和原覆盖边界，再同时安装历史与新窗口。新窗口清除旧锚点，按 replacement history 重新估算；压缩请求的服务用量仍关联原窗口，不冒充新窗口的前缀计量。
+
+提交前取消保留旧窗口；提交开始后不中断落盘等待，成功后先安装新窗口，再处理 Stop。提交结果无法确认或安装不一致时不归还可继续执行的旧历史，阻止发送并要求重新加载存档。恢复校验检查点的窗口、记录覆盖及任务身份，使用最近完整替换历史和其后记录；残缺记录仍走原有效前缀恢复，公开时间线始终保留压缩前后的展示与工具记录。只加载最终活跃窗口引用的附件，磁盘附件不因压缩而删除。
+
+压缩后仍超预算、没有缩小、无可压缩历史或模型预算不足时结束原任务；下一普通请求之前最多安装一次检查点，新增 Steer 不能造成无限压缩。失败、停止和触限沿原收尾流程暂停 Queue。当前服务拒绝 compaction_trigger，因此成功密文、检查点提交与重启续接仍缺少真实服务验证，限制见[已知问题](../../known_issues.md)。
