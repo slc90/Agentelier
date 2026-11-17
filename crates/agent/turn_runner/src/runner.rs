@@ -221,8 +221,7 @@ async fn run_task(
         .clone();
     let loading_cancel = cancel.clone();
     let discovered = tokio::task::spawn_blocking(move || {
-        let roots = agentelier_skills::standard_roots(&directory, &loading_cancel)?;
-        let catalog = agentelier_skills::discover(roots, &loading_cancel)?;
+        let catalog = agentelier_skills::discover_standard(&directory, &loading_cancel)?;
         let selected = agentelier_skills::select(&catalog, &input, &loading_cancel)?;
         Ok::<_, agentelier_skills::Failure>((catalog, selected))
     })

@@ -8,6 +8,9 @@ use tokio_util::sync::CancellationToken;
 
 pub fn standard_roots(directory: &Path, cancel: &CancellationToken) -> Result<Vec<Root>, Failure> {
     check(cancel)?;
+    if !directory.is_absolute() {
+        return Err(Failure("Skills 会话工作目录必须是绝对路径".into()));
+    }
     let directory = directory
         .canonicalize()
         .map_err(|e| Failure(e.to_string()))?;
@@ -19,13 +22,28 @@ pub fn standard_roots(directory: &Path, cancel: &CancellationToken) -> Result<Ve
     for scope in directory.ancestors() {
         check(cancel)?;
         chain.push(scope.to_owned());
-        match fs::metadata(scope.join(".git")) {
+        let marker_path = scope.join(".git");
+        let marker = fs::symlink_metadata(&marker_path).and_then(|metadata| {
+            if metadata.is_symlink() {
+                fs::metadata(&marker_path)
+            } else {
+                Ok(metadata)
+            }
+        });
+        match marker {
             Ok(marker) if marker.is_dir() || marker.is_file() => {
                 found_boundary = true;
                 break;
             }
             Ok(_) => return Err(Failure("Skills 项目 Git 边界无效".into())),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if fs::symlink_metadata(&marker_path).is_ok() {
+                    return Err(Failure(format!(
+                        "Skills 项目边界链接失效：{}",
+                        marker_path.display()
+                    )));
+                }
+            }
             Err(e) => return Err(Failure(format!("Skills 项目边界读取失败：{e}"))),
         }
     }
@@ -46,12 +64,8 @@ pub fn standard_roots(directory: &Path, cancel: &CancellationToken) -> Result<Ve
         path: PathBuf::from(profile).join(".agents/skills"),
         source: Source::User,
     });
-    let executable = std::env::current_exe().map_err(|e| Failure(e.to_string()))?;
-    let parent = executable
-        .parent()
-        .ok_or_else(|| Failure("应用路径缺少父目录".into()))?;
     roots.push(Root {
-        path: parent.join("skills/.system"),
+        path: crate::builtin::root()?,
         source: Source::Builtin,
     });
     Ok(roots)

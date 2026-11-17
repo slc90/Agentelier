@@ -30,3 +30,7 @@ flowchart TD
 2. [让普通任务根据目录按需读取并使用 Skill](02-implicit-skill-use.md)
 3. [让 `$name` 在本任务显式选择并固定 Skill](03-explicit-skill-invocation.md)
 4. [通过内置 `skill-creator` 创建和更新 Skills](04-skill-creator-self-authoring.md)
+
+## 实施状态
+
+四个增量均已实现：01 本地发现（`5a96790`）、02 普通任务按需使用（`b5d2abc`）、03 显式任务快照（`46cda49`）及 04 内置创建器。当前行为与边界以 [Skills 设计](../../docs/design/skills/README.md) 和实际源码为准。

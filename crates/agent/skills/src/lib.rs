@@ -1,12 +1,14 @@
 #[cfg(not(all(target_os = "windows", target_pointer_width = "64")))]
 compile_error!("This application supports Windows x64 only");
 
+mod builtin;
 mod context;
 mod discovery;
 mod parser;
 mod selection;
 pub use selection::{SelectedSkill, mentions, select};
 
+pub use builtin::discover_standard;
 pub use discovery::{discover, standard_roots};
 pub use parser::parse;
 use serde::{Deserialize, Serialize};

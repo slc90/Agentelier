@@ -11,7 +11,7 @@
 - [会话存储](design/modules/session-store.md)：会话日志、执行事件、图片附件、提交回执及单写入者关闭边界。
 - [提示词版本与快照](design/modules/prompts.md)：提示词版本、组合和固定指令的数据边界。
 - [项目上下文](design/modules/project-context.md)：项目规则发现、有界采集、可恢复失败与来源核对。
-- [Skills](design/skills/README.md)：当前来源发现、任务目录快照及后续调用机制的明确边界。
+- [Skills](design/skills/README.md)：来源发现、任务目录快照、隐式/显式调用与内置创建器的边界。
 - [Markdown 展示](design/modules/markdown.md)：正文解析、实体投影与阅读状态。
 - [Direct 工具调用](design/tool_call.md)：工具协议、执行循环、运行中补充与队列。
 - [已知问题](known_issues.md)：已确认但尚未解决的上游限制及影响。
