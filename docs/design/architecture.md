@@ -75,6 +75,7 @@ flowchart TD
     Runner --> Tools["Agent · tools"]
     Runner --> SessionStore
     SessionStore --> Tools
+    Model --> Skills
     Model --> ProjectContext
     Model --> Tools
     Conversation --> Tools
@@ -223,4 +224,4 @@ Runner 为每个用户任务独占 Tools ExecutionContext，按 UUID 管理最�
 
 ## Skills 目录
 
-Runner 在每个实际启动的任务（含 Queue 与 Retry）开始时，通过可取消并等待回收的阻塞工作调用 Skills，取得固定工作目录适用的目录快照。Conversation 的 TurnView 保存目录与来源诊断，并随既有任务状态写入存档；固定 Prompt、项目规则和工具执行均不因此改变。目录筛选允许隐式调用的条目后，在每个模型请求中以独立 developer 材料提供一次，模型通过原工具按需读取正文与引用。目录不写入协议历史，实际角色、位置、文本和摘要随冻结请求事实保存；它参与上下文估算。显式 `$name` 选择尚未接入。详见 [Skills 当前实现与目标机制](skills/README.md)。
+Runner 在每个实际启动的任务（含 Queue 与 Retry）开始时，通过可取消并等待回收的阻塞工作调用 Skills，取得固定工作目录适用的目录快照。Conversation 的 TurnView 保存目录与来源诊断，并随既有任务状态写入存档；固定 Prompt、项目规则和工具执行均不因此改变。目录筛选允许隐式调用的条目后，在每个模型请求中以独立 developer 材料提供一次，模型通过原工具按需读取正文与引用。目录不写入协议历史，实际角色、位置、文本和摘要随冻结请求事实保存；它参与上下文估算。任务启动前解析 `$name`，唯一有效的选中技能保存完整正文与摘要，并以独立 user 材料在每次请求中重用。Steer 不能更换任务技能，Queue 和 Retry 在各自启动时重新发现与选择。详见 [Skills 当前实现与目标机制](skills/README.md)。

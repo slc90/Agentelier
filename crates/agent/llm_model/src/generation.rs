@@ -32,6 +32,7 @@ impl std::io::Write for RequestBytes {
 }
 
 pub struct GenerationRequest {
+    pub selected_skills: Vec<agentelier_skills::SelectedSkill>,
     pub skill_catalog: Option<String>,
     pub slug: String,
     pub compact_threshold: u64,
@@ -58,6 +59,8 @@ pub struct PreparedGeneration {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SkillMaterial {
+    #[serde(default)]
+    pub path: Option<std::path::PathBuf>,
     pub role: String,
     pub input_index: usize,
     pub text: String,
@@ -67,9 +70,26 @@ pub struct SkillMaterial {
 impl RequestProjection {
     pub fn validate_skill_materials(&self) -> Result<(), ModelFailure> {
         use sha2::{Digest, Sha256};
+        let selected_start = self
+            .skill_materials
+            .get(1)
+            .map_or(self.base_hashes.len() + 1, |material| material.input_index);
+        if selected_start != self.base_hashes.len() + 1
+            && selected_start != self.base_hashes.len() + 1 + self.items.len()
+        {
+            return Err(crate::model::protocol(
+                "选中 Skills 请求材料未处于完整历史边界",
+            ));
+        }
         for (index, material) in self.skill_materials.iter().enumerate() {
-            if material.input_index != self.base_hashes.len() + index
+            let expected_index = if index == 0 {
+                self.base_hashes.len()
+            } else {
+                selected_start + index - 1
+            };
+            if material.input_index != expected_index
                 || material.role != if index == 0 { "developer" } else { "user" }
+                || (index == 0) != material.path.is_none()
                 || material.hash != format!("{:x}", Sha256::digest(material.text.as_bytes()))
             {
                 return Err(crate::model::protocol(
@@ -88,6 +108,9 @@ impl PreparedGeneration {
 }
 
 pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, ModelFailure> {
+    if generation.skill_catalog.is_none() && !generation.selected_skills.is_empty() {
+        return Err(crate::model::protocol("显式 Skill 缺少任务目录"));
+    }
     let items = generation.context.summary();
     let base_hashes = generation
         .instructions
@@ -109,6 +132,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     if let Some(catalog) = generation.skill_catalog {
         use sha2::{Digest, Sha256};
         skill_materials.push(SkillMaterial {
+            path: None,
             role: "developer".into(),
             input_index: input.len(),
             hash: format!("{:x}", Sha256::digest(catalog.as_bytes())),
@@ -117,6 +141,21 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         input.push(serde_json::json!({"role":"developer", "content":catalog}));
     }
     input.extend(generation.context.into_input());
+    for skill in generation.selected_skills {
+        skill
+            .validate()
+            .map_err(|failure| crate::model::protocol(&failure.to_string()))?;
+        let text = skill.render();
+        use sha2::{Digest, Sha256};
+        skill_materials.push(SkillMaterial {
+            path: Some(skill.skill.path),
+            role: "user".into(),
+            input_index: input.len(),
+            hash: format!("{:x}", Sha256::digest(text.as_bytes())),
+            text: text.clone(),
+        });
+        input.push(serde_json::json!({"role":"user", "content":text}));
+    }
     let mut payload = serde_json::json!({
         "model": generation.slug,
         "context_management": [{"type":"compaction", "compact_threshold":generation.compact_threshold}],

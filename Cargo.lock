@@ -213,6 +213,7 @@ dependencies = [
  "agentelier_account",
  "agentelier_project_context",
  "agentelier_prompts",
+ "agentelier_skills",
  "agentelier_tools",
  "base64",
  "reqwest",
@@ -322,6 +323,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "tokio-util",
 ]
 

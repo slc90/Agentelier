@@ -4,6 +4,8 @@ compile_error!("This application supports Windows x64 only");
 mod context;
 mod discovery;
 mod parser;
+mod selection;
+pub use selection::{SelectedSkill, mentions, select};
 
 pub use discovery::{discover, standard_roots};
 pub use parser::parse;

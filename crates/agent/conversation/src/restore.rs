@@ -147,6 +147,29 @@ pub fn restore(
                 fact.projection
                     .validate_skill_materials()
                     .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+                for selected in &turn.selected_skills {
+                    selected
+                        .validate()
+                        .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+                }
+                let selected_materials: Vec<_> = fact
+                    .projection
+                    .skill_materials
+                    .iter()
+                    .filter(|material| material.path.is_some())
+                    .collect();
+                if selected_materials.len() != turn.selected_skills.len()
+                    || selected_materials.iter().zip(&turn.selected_skills).any(
+                        |(material, selected)| {
+                            material.path.as_ref() != Some(&selected.skill.path)
+                                || material.text != selected.render()
+                        },
+                    )
+                {
+                    return Err(ConversationFailure::new(
+                        "请求选中 Skills 与任务正文快照不一致",
+                    ));
+                }
                 if pending.is_some()
                     || fact.request != turn.request_index
                     || fact.window != incoming.context.window

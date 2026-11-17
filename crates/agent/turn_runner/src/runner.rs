@@ -212,10 +212,19 @@ async fn run_task(
         return Ok(TurnStatus::Cancelled);
     }
     let directory = active.view().settings.working_directory;
+    let input = active
+        .view()
+        .turn
+        .as_ref()
+        .ok_or_else(|| ConversationFailure::new("Skills 选择缺少任务输入"))?
+        .input
+        .clone();
     let loading_cancel = cancel.clone();
     let discovered = tokio::task::spawn_blocking(move || {
         let roots = agentelier_skills::standard_roots(&directory, &loading_cancel)?;
-        agentelier_skills::discover(roots, &loading_cancel)
+        let catalog = agentelier_skills::discover(roots, &loading_cancel)?;
+        let selected = agentelier_skills::select(&catalog, &input, &loading_cancel)?;
+        Ok::<_, agentelier_skills::Failure>((catalog, selected))
     })
     .await
     .map_err(|failure| ConversationFailure::new(format!("Skills 发现工作者异常结束：{failure}")))?;
@@ -223,7 +232,7 @@ async fn run_task(
         return Ok(TurnStatus::Cancelled);
     }
     match discovered {
-        Ok(catalog) => {
+        Ok((catalog, selected)) => {
             tracing::debug!(
                 skills = catalog.skills.len(),
                 diagnostics = catalog.diagnostics.len(),
@@ -233,7 +242,7 @@ async fn run_task(
             for diagnostic in &catalog.diagnostics {
                 tracing::warn!(path = %diagnostic.path.display(), error = diagnostic.message, "Skills 来源不可用或受限");
             }
-            if let Err(failure) = active.skills(catalog) {
+            if let Err(failure) = active.skills(catalog, selected) {
                 return Ok(TurnStatus::Failed(failure.to_string()));
             }
             publish(active, progress, cancel).await?;

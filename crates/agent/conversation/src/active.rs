@@ -23,6 +23,7 @@ impl ActiveTurn {
     pub fn skills(
         &mut self,
         catalog: agentelier_skills::Catalog,
+        selected: Vec<agentelier_skills::SelectedSkill>,
     ) -> Result<(), ConversationFailure> {
         let rendered = catalog
             .render()
@@ -30,6 +31,22 @@ impl ActiveTurn {
         self.view.context.task_material_tokens =
             agentelier_llm_model::estimated_text_tokens(&rendered)
                 .saturating_add(agentelier_llm_model::estimated_text_tokens("developer"));
+        for skill in &selected {
+            skill
+                .validate()
+                .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+            self.view.context.task_material_tokens = self
+                .view
+                .context
+                .task_material_tokens
+                .saturating_add(agentelier_llm_model::estimated_text_tokens(&skill.render()))
+                .saturating_add(agentelier_llm_model::estimated_text_tokens("user"));
+        }
+        self.view
+            .turn
+            .as_mut()
+            .ok_or_else(|| ConversationFailure::new("选中 Skills 缺少任务"))?
+            .selected_skills = selected;
         self.view
             .turn
             .as_mut()
@@ -124,6 +141,7 @@ impl ActiveTurn {
             .context
             .refresh(&context, &self.view.settings.instructions, &self.tools)?;
         Ok(GenerationRequest {
+            selected_skills: turn.selected_skills.clone(),
             skill_catalog: turn
                 .skills
                 .as_ref()
@@ -252,6 +270,11 @@ impl ActiveTurn {
     }
 
     pub fn accept_steer(&mut self, input: SteerInput) -> Result<(), ConversationFailure> {
+        if !agentelier_skills::mentions(&input.text).is_empty() {
+            return Err(ConversationFailure::new(
+                "运行中不能通过补充输入选择 Skill，请排队或开始新任务",
+            ));
+        }
         let turn = self
             .view
             .turn

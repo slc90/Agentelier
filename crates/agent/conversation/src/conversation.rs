@@ -61,6 +61,8 @@ pub struct ToolView {
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct TurnView {
     #[serde(default)]
+    pub selected_skills: Vec<agentelier_skills::SelectedSkill>,
+    #[serde(default)]
     pub skills: Option<Box<agentelier_skills::Catalog>>,
     #[serde(default)]
     pub requests: Vec<crate::PreparedRequestFact>,
@@ -357,6 +359,7 @@ impl Conversation {
             session.view.previous_turns.push(*previous);
         }
         session.view.turn = Some(Box::new(TurnView {
+            selected_skills: Vec::new(),
             skills: None,
             requests: Vec::new(),
             id: TurnId(id),
