@@ -144,6 +144,9 @@ pub fn restore(
                     .requests
                     .last()
                     .ok_or_else(|| ConversationFailure::new("准备记录缺少请求材料"))?;
+                fact.projection
+                    .validate_skill_materials()
+                    .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
                 if pending.is_some()
                     || fact.request != turn.request_index
                     || fact.window != incoming.context.window

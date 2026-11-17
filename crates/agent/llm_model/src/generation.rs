@@ -32,6 +32,7 @@ impl std::io::Write for RequestBytes {
 }
 
 pub struct GenerationRequest {
+    pub skill_catalog: Option<String>,
     pub slug: String,
     pub compact_threshold: u64,
     pub effort: Option<String>,
@@ -42,6 +43,8 @@ pub struct GenerationRequest {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct RequestProjection {
+    #[serde(default)]
+    pub skill_materials: Vec<SkillMaterial>,
     pub items: Vec<crate::ProtocolItemSummary>,
     pub base_hashes: Vec<String>,
     pub payload_hash: String,
@@ -51,6 +54,31 @@ pub struct RequestProjection {
 pub struct PreparedGeneration {
     body: Vec<u8>,
     projection: RequestProjection,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct SkillMaterial {
+    pub role: String,
+    pub input_index: usize,
+    pub text: String,
+    pub hash: String,
+}
+
+impl RequestProjection {
+    pub fn validate_skill_materials(&self) -> Result<(), ModelFailure> {
+        use sha2::{Digest, Sha256};
+        for (index, material) in self.skill_materials.iter().enumerate() {
+            if material.input_index != self.base_hashes.len() + index
+                || material.role != if index == 0 { "developer" } else { "user" }
+                || material.hash != format!("{:x}", Sha256::digest(material.text.as_bytes()))
+            {
+                return Err(crate::model::protocol(
+                    "Skills 请求材料角色、顺序或摘要无效",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl PreparedGeneration {
@@ -77,6 +105,17 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         .into_iter()
         .map(|message| serde_json::json!({"role": message.role, "content": message.text}))
         .collect();
+    let mut skill_materials = Vec::new();
+    if let Some(catalog) = generation.skill_catalog {
+        use sha2::{Digest, Sha256};
+        skill_materials.push(SkillMaterial {
+            role: "developer".into(),
+            input_index: input.len(),
+            hash: format!("{:x}", Sha256::digest(catalog.as_bytes())),
+            text: catalog.clone(),
+        });
+        input.push(serde_json::json!({"role":"developer", "content":catalog}));
+    }
     input.extend(generation.context.into_input());
     let mut payload = serde_json::json!({
         "model": generation.slug,
@@ -119,6 +158,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     }
     use sha2::{Digest, Sha256};
     let projection = RequestProjection {
+        skill_materials,
         items,
         base_hashes,
         payload_hash: format!("{:x}", Sha256::digest(&body.0)),

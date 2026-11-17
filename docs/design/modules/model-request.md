@@ -87,3 +87,7 @@ SSE 允许 compaction 与助手、reasoning、function_call 混排，支持一�
 模型层 prepare 是唯一请求构造入口，输出私有冻结字节和 RequestProjection（基础摘要、有序协议类型、载荷大小与 SHA-256）。generate 仅消费 PreparedGeneration，认证恢复使用同一字节。类型化项目项序列化为 user，基础保持 developer，完整请求保留 32 MiB 有界序列化。
 
 generate 在进入 HTTP 发送阶段和取得响应头时分别发布 Sending 与 ResponseReceived；响应状态包含非成功 HTTP 状态。Runner 将这些事实保存到对应已准备请求，不用流文本或最终回答推断是否发送。认证内部重发仍使用同一请求身份与字节，展示最近一次实际 HTTP 状态；不表示模型已完成或遵守规则。
+
+## Skills 调度材料
+
+普通任务的 Skills 目录由 Runner 取得，Conversation 按当前 Turn 提供给 GenerationRequest。模型层不读取磁盘：固定 developer 指令之后、原始协议历史之前，每次请求只加入一份允许隐式调用的技能摘要。目录和原始工具结果分开保存，RequestProjection 记录其角色、input 索引、文本和摘要；有界序列化、请求准备持久确认及认证冻结字节重发沿用原有边界。Skill 目录不注册新 Tool，也不自动执行脚本或建立 MCP 连接。

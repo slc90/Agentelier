@@ -24,6 +24,12 @@ impl ActiveTurn {
         &mut self,
         catalog: agentelier_skills::Catalog,
     ) -> Result<(), ConversationFailure> {
+        let rendered = catalog
+            .render()
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+        self.view.context.task_material_tokens =
+            agentelier_llm_model::estimated_text_tokens(&rendered)
+                .saturating_add(agentelier_llm_model::estimated_text_tokens("developer"));
         self.view
             .turn
             .as_mut()
@@ -118,6 +124,12 @@ impl ActiveTurn {
             .context
             .refresh(&context, &self.view.settings.instructions, &self.tools)?;
         Ok(GenerationRequest {
+            skill_catalog: turn
+                .skills
+                .as_ref()
+                .map(|catalog| catalog.render())
+                .transpose()
+                .map_err(|failure| ConversationFailure::new(failure.to_string()))?,
             slug: self.view.settings.slug.clone(),
             compact_threshold: self
                 .view
@@ -498,6 +510,7 @@ impl ActiveTurn {
             self.view.context.latest = Some(fact.clone());
             if !compacted && fact.usage.total_tokens > 0 {
                 self.view.context.anchor = Some(crate::UsageAnchor {
+                    task_material_tokens: self.view.context.task_material_tokens,
                     fact,
                     covered_items: coverage,
                 });

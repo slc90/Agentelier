@@ -158,3 +158,7 @@ ActiveTurn 独占项目发布与原始历史；ProjectPublished 确认后才安�
 成功压缩检查点保存覆盖的项目发布身份，确认安装后 ContextState.window 与最后发布的 window 不同，表示新窗口尚待明确发布。下一请求采集并只追加一份当前规则或清除通知；来源材料在工作历史之外保存，裁剪不删除旧请求材料。
 
 每次 PreparedRequestFact 另外保存明确的开始发送与最近 HTTP 响应事实，进度及排空事件走同一保存路径。Bridge 显式投影发布身份、窗口、类型、来源和最终包装文字，并将最近采集状态独立传递；不公开原始协议载荷、认证头或推理／压缩密文。
+
+## 每任务 Skills 目录
+
+TurnView 保存任务开始时发现的 Skills 目录，Queue 实际启动与 Retry 各自重新发现，工具临时 workdir 不改变作用域。每次请求使用同一目录的允许隐式条目，Skill 本文与资源通过原工具访问，其结果进入正常封闭历史。目录仅作为请求调度材料保存，未追加到 ProtocolHistory，不改变固定 InstructionSnapshot。ContextState 及 UsageAnchor 记录任务材料估算，跨任务更新时在服务端锚点上调整差值，不重复计入已锚定目录。

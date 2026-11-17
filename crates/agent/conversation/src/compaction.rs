@@ -72,6 +72,7 @@ impl ActiveTurn {
             .ok_or_else(|| ConversationFailure::new("工作窗口序号已耗尽"))?;
         let history = self.history.compacted();
         let mut context = Box::new(ContextState {
+            task_material_tokens: self.view.context.task_material_tokens,
             window,
             limits: self.view.context.limits.clone(),
             ..Default::default()

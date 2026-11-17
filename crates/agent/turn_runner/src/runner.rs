@@ -233,7 +233,9 @@ async fn run_task(
             for diagnostic in &catalog.diagnostics {
                 tracing::warn!(path = %diagnostic.path.display(), error = diagnostic.message, "Skills 来源不可用或受限");
             }
-            active.skills(catalog)?;
+            if let Err(failure) = active.skills(catalog) {
+                return Ok(TurnStatus::Failed(failure.to_string()));
+            }
             publish(active, progress, cancel).await?;
         }
         Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())),

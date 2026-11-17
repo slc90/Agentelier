@@ -14,11 +14,15 @@ pub struct UsageFact {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct UsageAnchor {
+    #[serde(default)]
+    pub task_material_tokens: u64,
     pub fact: UsageFact,
     pub covered_items: usize,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct ContextState {
+    #[serde(default)]
+    pub task_material_tokens: u64,
     pub window: u64,
     pub limits: ContextLimits,
     pub latest: Option<UsageFact>,
@@ -37,7 +41,15 @@ impl ContextState {
             if anchor.fact.window != self.window || anchor.covered_items > history.len() {
                 return Err(ConversationFailure::new("上下文计量锚点与工作窗口不匹配"));
             }
-            (anchor.fact.usage.total_tokens, anchor.covered_items)
+            (
+                anchor
+                    .fact
+                    .usage
+                    .total_tokens
+                    .saturating_sub(anchor.task_material_tokens)
+                    .saturating_add(self.task_material_tokens),
+                anchor.covered_items,
+            )
         } else {
             let mut fixed = instructions
                 .messages()
@@ -55,7 +67,7 @@ impl ContextState {
                     .saturating_add(estimated_text_tokens(&tool.description))
                     .saturating_add(estimated_text_tokens(&parameters));
             }
-            (fixed, 0)
+            (fixed.saturating_add(self.task_material_tokens), 0)
         };
         let tail = history
             .estimated_tokens_since(boundary)
