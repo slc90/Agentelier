@@ -30,6 +30,7 @@ pub enum TurnStatus {
 }
 #[derive(Clone)]
 pub enum HistoryItem {
+    Compaction,
     User,
     FunctionCall { call_id: String, name: String },
     FunctionResult { call_id: String },
@@ -296,6 +297,7 @@ fn view(session: agentelier_conversation::SessionView) -> SessionView {
 
 fn history_item(item: agentelier_conversation::ProtocolItemSummary) -> HistoryItem {
     match item {
+        agentelier_conversation::ProtocolItemSummary::Compaction => HistoryItem::Compaction,
         agentelier_conversation::ProtocolItemSummary::User => HistoryItem::User,
         agentelier_conversation::ProtocolItemSummary::FunctionCall { call_id, name } => {
             HistoryItem::FunctionCall { call_id, name }

@@ -52,6 +52,7 @@ pub enum ChatTurnStatus {
 }
 #[derive(Clone, Reflect)]
 pub enum ChatHistoryItem {
+    Compaction,
     User,
     FunctionCall { call_id: String, name: String },
     FunctionResult { call_id: String },
@@ -820,6 +821,7 @@ fn process_input(world: &mut World) -> Result {
 
 fn history_item(item: agentelier_conversation_bridge::HistoryItem) -> ChatHistoryItem {
     match item {
+        agentelier_conversation_bridge::HistoryItem::Compaction => ChatHistoryItem::Compaction,
         agentelier_conversation_bridge::HistoryItem::User => ChatHistoryItem::User,
         agentelier_conversation_bridge::HistoryItem::FunctionCall { call_id, name } => {
             ChatHistoryItem::FunctionCall { call_id, name }

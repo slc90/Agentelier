@@ -1,9 +1,10 @@
+use crate::compaction::{RequestPurpose, StreamResult};
 use crate::model::{
     ModelFailure, ModelFailureKind, acquire, http_failure, network, recover, request_id,
     with_response,
 };
 use crate::protocol::ProtocolHistory;
-use crate::stream::{GenerationResult, STREAM_IDLE_TIMEOUT, StreamEvent, consume};
+use crate::stream::{GenerationResult, STREAM_IDLE_TIMEOUT, StreamEvent, consume_for};
 use agentelier_account::{AuthenticatedRequest, CredentialClient, ExecutionIdentity};
 use agentelier_prompts::InstructionSnapshot;
 use reqwest::Client;
@@ -45,6 +46,45 @@ pub async fn generate(
     identity: &ExecutionIdentity,
     progress: Sender<StreamEvent>,
 ) -> Result<GenerationResult, ModelFailure> {
+    match execute_request(
+        credentials,
+        generation,
+        identity,
+        progress,
+        RequestPurpose::Generation,
+    )
+    .await?
+    {
+        StreamResult::Generation(result) => Ok(result),
+        StreamResult::Compaction(_) => Err(crate::model::protocol("普通请求返回了压缩结果")),
+    }
+}
+pub async fn compact(
+    credentials: CredentialClient,
+    generation: GenerationRequest,
+    identity: &ExecutionIdentity,
+    progress: Sender<StreamEvent>,
+) -> Result<crate::CompactionResult, ModelFailure> {
+    match execute_request(
+        credentials,
+        generation,
+        identity,
+        progress,
+        RequestPurpose::Compaction,
+    )
+    .await?
+    {
+        StreamResult::Compaction(result) => Ok(result),
+        StreamResult::Generation(_) => Err(crate::model::protocol("压缩请求返回了普通结果")),
+    }
+}
+async fn execute_request(
+    credentials: CredentialClient,
+    generation: GenerationRequest,
+    identity: &ExecutionIdentity,
+    progress: Sender<StreamEvent>,
+    purpose: RequestPurpose,
+) -> Result<StreamResult, ModelFailure> {
     let client = Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
@@ -67,6 +107,9 @@ pub async fn generate(
         .map(|message| serde_json::json!({"role": message.role, "content": message.text}))
         .collect();
     input.extend(generation.context.into_input());
+    if purpose == RequestPurpose::Compaction {
+        input.push(serde_json::json!({"type":"compaction_trigger"}));
+    }
     let mut payload = serde_json::json!({
         "model": generation.slug,
         "input": input,
@@ -106,6 +149,11 @@ pub async fn generate(
         }
     }
     tracing::debug!(
+        purpose = if purpose == RequestPurpose::Compaction {
+            "compaction"
+        } else {
+            "generation"
+        },
         model = generation.slug,
         effort = generation.effort,
         request_bytes = body.0.len(),
@@ -132,7 +180,7 @@ pub async fn generate(
         let outcome = if response.status().is_success() {
             let status = response.status().as_u16();
             let id = request_id(&response);
-            consume(response, &mut request, Some(&progress), true)
+            consume_for(response, &mut request, Some(&progress), true, purpose)
                 .await
                 .map_err(|failure| with_response(failure, status, id))
         } else {
@@ -150,7 +198,8 @@ pub async fn generate(
         };
         match outcome {
             Ok(result) => {
-                if !result.output.is_replayable() {
+                if matches!(&result, StreamResult::Generation(result) if !result.output.is_replayable())
+                {
                     return Err(ModelFailure::new(
                         ModelFailureKind::Protocol,
                         "完成响应缺少无状态续接所需的加密推理项",

@@ -1,3 +1,4 @@
+use crate::compaction::{RequestPurpose, StreamResult};
 use crate::model::{
     ModelFailure, ModelFailureKind, diagnostic, http_failure, network, protocol, request_id,
     service_failure,
@@ -284,11 +285,31 @@ impl Sse {
 }
 
 pub(crate) async fn consume(
-    mut response: Response,
+    response: Response,
     request: &mut AuthenticatedRequest,
     progress: Option<&Sender<StreamEvent>>,
     idle_timeout: bool,
 ) -> Result<GenerationResult, ModelFailure> {
+    match consume_for(
+        response,
+        request,
+        progress,
+        idle_timeout,
+        RequestPurpose::Generation,
+    )
+    .await?
+    {
+        StreamResult::Generation(result) => Ok(result),
+        StreamResult::Compaction(_) => Err(protocol("连接验证返回了压缩结果")),
+    }
+}
+pub(crate) async fn consume_for(
+    mut response: Response,
+    request: &mut AuthenticatedRequest,
+    progress: Option<&Sender<StreamEvent>>,
+    idle_timeout: bool,
+    purpose: RequestPurpose,
+) -> Result<StreamResult, ModelFailure> {
     let id = request_id(&response);
     let content_type = response
         .headers()
@@ -365,6 +386,44 @@ pub(crate) async fn consume(
                     .await?;
                 }
             }
+            if purpose == RequestPurpose::Compaction {
+                match kind {
+                    "response.completed" => {
+                        return completed_compaction(
+                            event
+                                .get("response")
+                                .ok_or_else(|| protocol("压缩完成事件缺少响应"))?,
+                            &observed,
+                        )
+                        .map(StreamResult::Compaction);
+                    }
+                    "response.output_item.added" | "response.output_item.done" => {
+                        request.mark_output_started();
+                        let item = event
+                            .get("item")
+                            .ok_or_else(|| protocol("压缩输出事件缺少 item"))?;
+                        field(item, "type")?;
+                        let index = index(&event, "output_index")?;
+                        if let Some(previous) = observed.get(&index)
+                            && (previous.get("id") != item.get("id")
+                                || previous.get("type") != item.get("type"))
+                        {
+                            return Err(protocol("压缩输出项身份冲突"));
+                        }
+                        observed.insert(index, item.clone());
+                        continue;
+                    }
+                    "response.failed" | "response.incomplete" | "error" => {}
+                    _ => {
+                        if kind.starts_with("response.output_")
+                            || kind.starts_with("response.function_call_")
+                        {
+                            request.mark_output_started();
+                        }
+                        continue;
+                    }
+                }
+            }
             match kind {
                 "response.completed" => {
                     return completed(
@@ -373,7 +432,8 @@ pub(crate) async fn consume(
                             .ok_or_else(|| protocol("完成事件缺少响应对象"))?,
                         &completed_reasoning,
                         &observed,
-                    );
+                    )
+                    .map(StreamResult::Generation);
                 }
                 "response.failed" => {
                     return Err(service_failure(
@@ -511,4 +571,52 @@ pub(crate) async fn consume(
     );
     failure.request_id = id;
     Err(failure)
+}
+
+fn completed_compaction(
+    response: &Value,
+    observed: &HashMap<usize, Value>,
+) -> Result<crate::CompactionResult, ModelFailure> {
+    if field(response, "status")? != "completed" {
+        return Err(protocol("压缩完成状态不一致"));
+    }
+    let response_id = field(response, "id")?;
+    if response_id.is_empty() {
+        return Err(protocol("压缩响应缺少身份"));
+    }
+    let output = response
+        .get("output")
+        .and_then(Value::as_array)
+        .ok_or_else(|| protocol("压缩响应缺少输出数组"))?;
+    for (index, previous) in observed {
+        if output.get(*index).is_none_or(|item| {
+            item.get("id") != previous.get("id") || item.get("type") != previous.get("type")
+        }) {
+            return Err(protocol("压缩完成输出与流身份不一致"));
+        }
+    }
+    let mut items = output
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("compaction"));
+    let raw = items
+        .next()
+        .ok_or_else(|| protocol("Remote V2 未返回压缩项"))?;
+    if items.next().is_some() {
+        return Err(protocol("Remote V2 返回多个压缩项"));
+    }
+    let item = crate::CompactionItem::parse(raw.clone())?;
+    let compatibility = ["comp_hash", "model", "context_management"]
+        .into_iter()
+        .filter_map(|key| {
+            response
+                .get(key)
+                .map(|value| (key.to_owned(), value.clone()))
+        })
+        .collect::<serde_json::Map<_, _>>();
+    Ok(crate::CompactionResult {
+        item,
+        response_id: response_id.to_owned(),
+        usage: crate::ResponseUsage::parse(response)?,
+        compatibility: Value::Object(compatibility),
+    })
 }

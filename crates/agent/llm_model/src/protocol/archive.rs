@@ -50,6 +50,9 @@ impl ArchivedPayload {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ArchivedItem {
+    Compaction {
+        item: crate::CompactionItem,
+    },
     User {
         text: String,
     },
@@ -105,7 +108,9 @@ impl ProtocolArchive {
             || output.items.iter().any(|item| {
                 matches!(
                     item,
-                    ArchivedItem::User { .. } | ArchivedItem::FunctionResult { .. }
+                    ArchivedItem::User { .. }
+                        | ArchivedItem::FunctionResult { .. }
+                        | ArchivedItem::Compaction { .. }
                 )
             })
         {
@@ -130,6 +135,7 @@ fn capture(items: &[ProtocolItem]) -> ProtocolArchive {
             .iter()
             .map(|item| match item {
                 ProtocolItem::User(text) => ArchivedItem::User { text: text.clone() },
+                ProtocolItem::Compaction(item) => ArchivedItem::Compaction { item: item.clone() },
                 ProtocolItem::FunctionCall { raw, call_id, name } => ArchivedItem::FunctionCall {
                     raw: raw.clone(),
                     call_id: call_id.clone(),
@@ -165,6 +171,12 @@ impl ProtocolHistory {
         let mut pending = std::collections::VecDeque::new();
         for item in archive.items {
             let item = match item {
+                ArchivedItem::Compaction { item } => {
+                    if !pending.is_empty() {
+                        return Err(crate::model::protocol("压缩项插入未封闭调用"));
+                    }
+                    ProtocolItem::Compaction(item)
+                }
                 ArchivedItem::User { text } => {
                     if !pending.is_empty() {
                         return Err(crate::model::protocol("历史用户消息插入未封闭调用"));

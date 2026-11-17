@@ -71,3 +71,11 @@ Turn Runner 首次请求前通过 CredentialClient 获取 ExecutionIdentity，�
 完成与失败流事件保存实际 response usage，含输入、输出、总数、缓存输入、reasoning 输出及原始 usage；HTTP 失败中提供的合法用量也交给任务。缺失保持未知，畸形细项或不一致总数明确失败。服务端使用量与完整请求 32 MiB 字节限制、图片编码预算分别处理，缓存输入不从窗口计量中减去。
 
 ProtocolHistory 按内容估算新增项，不累计 transport ID 或外层 JSON/Base64 转义成本。文字采用粗略字节启发式，图片与加密 reasoning 使用各自的近似规则；这些值始终标为估算，不宣称 tokenizer 精度或解密后的原文。规则依据 [Codex 模型能力](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs)与 [ContextManager](https://github.com/openai/codex/blob/main/codex-rs/core/src/context_manager/history.rs)。
+
+## Remote Compaction V2 协议
+
+`compact` 接受与生成相同的固定指令、工具和 typed 工作历史，在输入末尾追加 `compaction_trigger`。它复用当前任务 ExecutionIdentity、CredentialClient 和现有 Responses 地址、HTTP/SSE、401 恢复及全部字节和空闲边界，不调用 `/responses/compact`，也不切换订阅后端。
+
+压缩分支仅在 response.completed 状态、响应身份及流输出身份一致、恰好一个非空 encrypted_content 的 compaction 项通过时交付 CompactionResult。结果保留原协议项、response ID、usage 及实际返回的兼容字段；可受控编码恢复，安全 HistoryItem 只报告 Compaction 存在。它不要求普通 reasoning 项，不发布正文或调用 Tools，压缩控制项不进入存档历史。提前断流、缺失、重复或畸形输出都失败。
+
+当前认证链路的实际请求已返回 HTTP 400 `subscription_sharing_unsupported_capability`；这是服务能力拒绝，不能视为成功压缩。失败保留原历史，不使用本地摘要 fallback。协议参考 [Codex Remote V2 attempt](https://github.com/openai/codex/blob/main/codex-rs/core/src/compact_remote_v2_attempt.rs)。

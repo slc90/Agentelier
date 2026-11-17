@@ -7,6 +7,7 @@ pub use estimate::text_tokens as estimated_text_tokens;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub enum ProtocolItemSummary {
+    Compaction,
     User,
     FunctionCall { call_id: String, name: String },
     FunctionResult { call_id: String },
@@ -16,6 +17,7 @@ pub enum ProtocolItemSummary {
 
 #[derive(Clone)]
 pub(crate) enum ProtocolItem {
+    Compaction(crate::CompactionItem),
     User(String),
     FunctionCall {
         raw: Value,
@@ -101,6 +103,7 @@ impl ProtocolHistory {
             .iter()
             .map(|item| match item {
                 ProtocolItem::User(_) => ProtocolItemSummary::User,
+                ProtocolItem::Compaction(_) => ProtocolItemSummary::Compaction,
                 ProtocolItem::FunctionCall { call_id, name, .. } => {
                     ProtocolItemSummary::FunctionCall {
                         call_id: call_id.clone(),
@@ -140,6 +143,7 @@ impl ProtocolHistory {
         self.0
             .into_iter()
             .map(|item| match item {
+                ProtocolItem::Compaction(item) => item.0,
                 ProtocolItem::User(input) => serde_json::json!({"role": "user", "content": input}),
                 ProtocolItem::Assistant { raw, .. } | ProtocolItem::Reasoning { raw, .. } | ProtocolItem::FunctionCall {raw, ..} => raw,
                 ProtocolItem::FunctionResult {call_id, output} => {

@@ -14,6 +14,13 @@ pub fn text_tokens(text: &str) -> u64 {
 fn item_tokens(item: &ProtocolItem) -> u64 {
     match item {
         ProtocolItem::User(text) => text_tokens(text),
+        ProtocolItem::Compaction(item) => (item
+            .0
+            .get("encrypted_content")
+            .and_then(serde_json::Value::as_str)
+            .map_or(0, str::len) as u64)
+            .div_ceil(3)
+            .div_ceil(TEXT_BYTES_PER_TOKEN),
         ProtocolItem::Assistant { raw, .. } => raw
             .get("content")
             .and_then(serde_json::Value::as_array)
