@@ -33,7 +33,7 @@ impl ActiveTurn {
         self.view.context.limits = model.context_limits;
         if !self.view.context.limits.available() {
             return Err(ConversationFailure::new(
-                "当前模型目录未提供上下文窗口或自动阈值，无法确定请求预算",
+                "当前模型目录未提供有效的服务端压缩阈值，无法启动请求",
             ));
         }
         if let Some(effort) = &self.view.settings.effort
@@ -108,6 +108,12 @@ impl ActiveTurn {
             .refresh(&context, &self.view.settings.instructions, &self.tools)?;
         Ok(GenerationRequest {
             slug: self.view.settings.slug.clone(),
+            compact_threshold: self
+                .view
+                .context
+                .limits
+                .compact_threshold()
+                .ok_or_else(|| ConversationFailure::new("模型缺少有效的服务端压缩阈值"))?,
             effort: self.view.settings.effort.clone(),
             context,
             tools: self.tools.clone(),
@@ -122,6 +128,7 @@ impl ActiveTurn {
             .as_mut()
             .ok_or(ConversationFailure::new("活动任务缺少轮次"))?;
         match event {
+            StreamEvent::Compacting => turn.phase = TaskPhase::CompactingContext,
             StreamEvent::Usage { response_id, usage } => {
                 self.view.context.latest = Some(crate::UsageFact {
                     window: self.view.context.window,
@@ -136,6 +143,7 @@ impl ActiveTurn {
                 Self::upsert_tool(turn, call, ToolStatus::Receiving)?;
             }
             StreamEvent::Item(mut message) => {
+                turn.phase = TaskPhase::RequestingModel;
                 message.request_index = turn.request_index;
                 if let Some(existing) = turn.messages.iter_mut().find(|existing| {
                     existing.output_index == message.output_index
@@ -351,6 +359,7 @@ impl ActiveTurn {
         }) {
             return Err(ConversationFailure::new("任务重复使用已有 call_id"));
         }
+        turn.phase = TaskPhase::RequestingModel;
         turn.messages
             .retain(|message| message.request_index != turn.request_index);
         turn.messages
@@ -459,9 +468,13 @@ impl ActiveTurn {
             }
         }
         self.view.committed_items = self.history.summary();
+        let compacted = result.compaction.is_some();
+        if compacted {
+            self.view.context.anchor = None;
+        }
         if let Some(fact) = usage {
             self.view.context.latest = Some(fact.clone());
-            if fact.usage.total_tokens > 0 {
+            if !compacted && fact.usage.total_tokens > 0 {
                 self.view.context.anchor = Some(crate::UsageAnchor {
                     fact,
                     covered_items: coverage,

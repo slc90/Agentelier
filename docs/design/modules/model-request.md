@@ -72,12 +72,12 @@ Turn Runner 首次请求前通过 CredentialClient 获取 ExecutionIdentity，�
 
 ProtocolHistory 按内容估算新增项，不累计 transport ID 或外层 JSON/Base64 转义成本。文字采用粗略字节启发式，图片与加密 reasoning 使用各自的近似规则；这些值始终标为估算，不宣称 tokenizer 精度或解密后的原文。规则依据 [Codex 模型能力](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs)与 [ContextManager](https://github.com/openai/codex/blob/main/codex-rs/core/src/context_manager/history.rs)。
 
-## Remote Compaction V2 协议
+## 服务端 Inline 压缩
 
-`compact` 接受与生成相同的固定指令、工具和 typed 工作历史，在输入末尾追加 `compaction_trigger`。它复用当前任务 ExecutionIdentity、CredentialClient 和现有 Responses 地址、HTTP/SSE、401 恢复及全部字节和空闲边界，不调用 `/responses/compact`，也不切换订阅后端。
+聊天请求携带 `context_management=[{type: "compaction", compact_threshold: ...}]`。阈值取实际模型自动阈值与有效窗口的较小值，缺失自动阈值时使用有效窗口；低于服务要求的 1,000 token 或能力未知时拒绝启动。当前 API 地址、认证所有者、固定任务身份和请求设置不变，没有独立压缩请求、显式触发项或文本摘要备用路径。
 
-压缩分支仅在 response.completed 状态、响应身份及流输出身份一致、恰好一个非空 encrypted_content 的 compaction 项通过时交付 CompactionResult。结果保留原协议项、response ID、usage 及实际返回的兼容字段；可受控编码恢复，安全 HistoryItem 只报告 Compaction 存在。它不要求普通 reasoning 项，不发布正文或调用 Tools，压缩控制项不进入存档历史。提前断流、缺失、重复或畸形输出都失败。
+SSE 允许 compaction 与助手、reasoning、function_call 混排，支持一份完整响应包含多个压缩项。每个压缩项验证非空 encrypted_content 及可选身份，并保留原始字段；最终 response.completed 的有序 output 是权威结果，流增量仍只用于展示和身份核对。压缩输出只投影阶段，不将密文显示或写入日志。生成失败、提前断流或无效项不会安装候选历史。
 
-当前认证链路的实际请求已返回 HTTP 400 `subscription_sharing_unsupported_capability`；这是服务能力拒绝，不能视为成功压缩。失败保留原历史，不使用本地摘要 fallback。协议参考 [Codex Remote V2 attempt](https://github.com/openai/codex/blob/main/codex-rs/core/src/compact_remote_v2_attempt.rs)。
+完整响应先存档再执行工具。响应全部工具结果封闭后，Conversation 为有压缩项的响应准备检查点，Runner 等待同一存储写入者确认后安装。工作历史从最新安全 compaction 边界起保留后续原始顺序；若某压缩项前还有未封闭工具调用，则保留更早的调用前缀，避免结果成为孤项。原始响应、助手正文、工具事实与附件仍完整存档。固定指令和工具声明仍随每次请求提供，不写入工作历史重复累积。
 
-候选 replacement history 按 [Codex Remote V2 保留规则](https://github.com/openai/codex/blob/main/codex-rs/core/src/compact_remote_v2.rs)适配当前协议项：从新到旧选择用户文字，使用 64,000 token 的文字估算预算，边界文字按 UTF-8 字符边界截取，再恢复原顺序并追加新的 compaction 项。旧助手、reasoning、函数调用和工具结果不重放到新窗口；当前图片仅来自工具结果，因此不单独保留在 replacement history 中，原附件仍在磁盘。原始存档和工具输出不变，固定指令不进入替换历史，compaction_trigger 只用于该次网络请求。
+发生压缩的响应 usage 保留为该次完整请求的用量事实，不作新窗口占用锚点。检查点清除旧锚点并估算当前活跃材料，后续无压缩响应可重新提供服务端锚点。压缩项的密文长度启发式仍只是估算，不等于解密后的 token 数。协议依据见 [Responses server-side compaction](https://developers.openai.com/api/docs/guides/compaction)。

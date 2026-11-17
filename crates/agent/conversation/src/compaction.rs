@@ -1,8 +1,7 @@
 use crate::{
     ActiveTurn, ContextState, ConversationFailure, RecordEvent, SessionId, StoredState, TurnId,
-    UsageFact,
 };
-use agentelier_llm_model::{CompactionResult, GenerationRequest, ProtocolArchive, ProtocolHistory};
+use agentelier_llm_model::{CompactionMetadata, ProtocolArchive, ProtocolHistory};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -47,53 +46,9 @@ impl ActiveTurn {
     pub fn committing_checkpoint(&mut self) {
         self.history_confirmed = false;
     }
-    pub fn context_reached(&mut self) -> Result<bool, ConversationFailure> {
-        let history = self.next_context()?;
-        self.view
-            .context
-            .refresh(&history, &self.view.settings.instructions, &self.tools)?;
-        Ok(self.view.context.limits.reached(self.view.context.tokens))
-    }
-    fn next_context(&self) -> Result<ProtocolHistory, ConversationFailure> {
-        let turn = self
-            .view
-            .turn
-            .as_ref()
-            .ok_or_else(|| ConversationFailure::new("上下文缺少活动任务"))?;
-        Ok(if self.input_retained {
-            self.history.clone()
-        } else {
-            self.history.with_user(&turn.input)
-        })
-    }
-    pub fn compaction_request(&mut self) -> Result<GenerationRequest, ConversationFailure> {
-        if !self.results.is_empty() || self.history.is_empty() {
-            return Err(ConversationFailure::new(
-                "当前输入超出上下文预算，缺少可压缩的封闭历史",
-            ));
-        }
-        let turn = self
-            .view
-            .turn
-            .as_mut()
-            .ok_or_else(|| ConversationFailure::new("压缩缺少活动任务"))?;
-        turn.request_index = turn
-            .request_index
-            .checked_add(1)
-            .ok_or_else(|| ConversationFailure::new("模型请求序号已耗尽"))?;
-        turn.phase = crate::TaskPhase::CompactingContext;
-        turn.request_items = self.history.summary();
-        Ok(GenerationRequest {
-            slug: self.view.settings.slug.clone(),
-            effort: self.view.settings.effort.clone(),
-            context: self.history.clone(),
-            instructions: self.view.settings.instructions.clone(),
-            tools: self.tools.clone(),
-        })
-    }
     pub fn compaction_candidate(
-        &self,
-        result: CompactionResult,
+        &mut self,
+        result: CompactionMetadata,
     ) -> Result<CompactionCandidate, ConversationFailure> {
         let source_sequence = self
             .source_sequence
@@ -101,41 +56,25 @@ impl ActiveTurn {
         let turn = self
             .view
             .turn
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| ConversationFailure::new("压缩缺少活动任务"))?;
-        if !self.results.is_empty() || !matches!(turn.phase, crate::TaskPhase::CompactingContext) {
+        if !self.results.is_empty() || !self.input_retained {
             return Err(ConversationFailure::new("压缩不处于有效封闭边界"));
         }
+        turn.phase = crate::TaskPhase::CompactingContext;
         let window = self
             .view
             .context
             .window
             .checked_add(1)
             .ok_or_else(|| ConversationFailure::new("工作窗口序号已耗尽"))?;
-        let history = self.history.compacted(result.item);
+        let history = self.history.compacted();
         let mut context = Box::new(ContextState {
             window,
             limits: self.view.context.limits.clone(),
             ..Default::default()
         });
-        context.latest = result.usage.map(|usage| UsageFact {
-            window: self.view.context.window,
-            turn: turn.id.0,
-            request: turn.request_index,
-            response_id: Some(result.response_id.clone()),
-            usage,
-        });
-        let next = if self.input_retained {
-            history.clone()
-        } else {
-            history.with_user(&turn.input)
-        };
-        context.refresh(&next, &self.view.settings.instructions, &self.tools)?;
-        if context.limits.reached(context.tokens) || context.tokens >= self.view.context.tokens {
-            return Err(ConversationFailure::new(
-                "压缩后仍无法容纳下一请求，保留原窗口并停止本次任务",
-            ));
-        }
+        context.latest = self.view.context.latest.clone();
         context.refresh(&history, &self.view.settings.instructions, &self.tools)?;
         let checkpoint = CompactionCheckpoint {
             session: self.view.id,

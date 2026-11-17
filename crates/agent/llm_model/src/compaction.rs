@@ -1,9 +1,9 @@
+use crate::ModelFailure;
 use crate::model::protocol;
-use crate::{ModelFailure, ResponseUsage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Opaque Remote V2 output. Its original protocol fields are retained without logging or projection.
+// Opaque protocol content must remain unchanged across persistence and replay.
 #[derive(Clone, Serialize)]
 #[serde(transparent)]
 pub struct CompactionItem(pub(crate) Value);
@@ -18,7 +18,7 @@ impl CompactionItem {
                 .get("id")
                 .is_some_and(|id| !id.is_null() && id.as_str().is_none_or(str::is_empty))
         {
-            return Err(protocol("Remote V2 压缩项结构或不透明内容无效"));
+            return Err(protocol("压缩项结构或不透明内容无效"));
         }
         Ok(Self(raw))
     }
@@ -28,18 +28,8 @@ impl<'de> Deserialize<'de> for CompactionItem {
         Self::parse(Value::deserialize(deserializer)?).map_err(serde::de::Error::custom)
     }
 }
-pub struct CompactionResult {
-    pub item: CompactionItem,
+#[derive(Clone)]
+pub struct CompactionMetadata {
     pub response_id: String,
-    pub usage: Option<ResponseUsage>,
     pub compatibility: Value,
-}
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RequestPurpose {
-    Generation,
-    Compaction,
-}
-pub(crate) enum StreamResult {
-    Generation(crate::GenerationResult),
-    Compaction(CompactionResult),
 }

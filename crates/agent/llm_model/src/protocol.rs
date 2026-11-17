@@ -58,38 +58,23 @@ impl ProtocolOutput {
 pub struct ProtocolHistory(Vec<ProtocolItem>);
 
 impl ProtocolHistory {
-    /// Remote V2 retains newest applicable user text within the Codex 64,000 token budget,
-    /// restores its original order, then appends the opaque summary. Tool details stay archived.
-    pub fn compacted(&self, item: crate::CompactionItem) -> Self {
-        const RETAINED_TOKENS: u64 = 64_000;
-        let mut remaining = RETAINED_TOKENS;
-        let mut retained = Vec::new();
-        for entry in self.0.iter().rev() {
-            if remaining == 0 {
-                break;
-            }
-            let ProtocolItem::User(text) = entry else {
-                continue;
-            };
-            let charge = estimated_text_tokens(text).max(1);
-            if charge <= remaining {
-                retained.push(ProtocolItem::User(text.clone()));
-                remaining -= charge;
-            } else {
-                let max_bytes = (remaining * estimate::TEXT_BYTES_PER_TOKEN) as usize;
-                let mut end = max_bytes.min(text.len());
-                while !text.is_char_boundary(end) {
-                    end -= 1;
+    pub fn compacted(&self) -> Self {
+        let mut pending = std::collections::HashSet::new();
+        let mut boundary = 0;
+        // A cut must not leave tool results without their original calls.
+        for (index, item) in self.0.iter().enumerate() {
+            match item {
+                ProtocolItem::FunctionCall { call_id, .. } => {
+                    pending.insert(call_id);
                 }
-                if end > 0 {
-                    retained.push(ProtocolItem::User(text[..end].to_owned()));
+                ProtocolItem::FunctionResult { call_id, .. } => {
+                    pending.remove(call_id);
                 }
-                remaining = 0;
+                ProtocolItem::Compaction(_) if pending.is_empty() => boundary = index,
+                _ => {}
             }
         }
-        retained.reverse();
-        retained.push(ProtocolItem::Compaction(item));
-        Self(retained)
+        Self(self.0[boundary..].to_vec())
     }
     pub fn with_user(&self, input: &str) -> Self {
         let mut history = self.clone();

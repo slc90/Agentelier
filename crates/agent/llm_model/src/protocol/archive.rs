@@ -87,15 +87,37 @@ impl ProtocolArchive {
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
+    pub fn has_compaction(&self) -> bool {
+        self.items
+            .iter()
+            .any(|item| matches!(item, ArchivedItem::Compaction { .. }))
+    }
     pub fn validate_compaction(&self) -> Result<(), crate::ModelFailure> {
-        if !matches!(self.items.last(), Some(ArchivedItem::Compaction { .. }))
-            || self.items[..self.items.len().saturating_sub(1)]
-                .iter()
-                .any(|item| !matches!(item, ArchivedItem::User { .. }))
-        {
-            return Err(crate::model::protocol(
-                "压缩替换历史必须是有序用户消息与唯一末尾压缩项",
-            ));
+        if !self.has_compaction() {
+            return Err(crate::model::protocol("压缩替换历史缺少压缩项"));
+        }
+        let mut pending = std::collections::VecDeque::new();
+        for item in &self.items {
+            match item {
+                ArchivedItem::FunctionCall { call_id, .. } => {
+                    if pending.contains(&call_id) {
+                        return Err(crate::model::protocol("压缩历史调用身份重复"));
+                    }
+                    pending.push_back(call_id);
+                }
+                ArchivedItem::FunctionResult { call_id, .. } => {
+                    if pending.pop_front() != Some(call_id) {
+                        return Err(crate::model::protocol("压缩历史工具结果不匹配"));
+                    }
+                }
+                ArchivedItem::User { .. } if !pending.is_empty() => {
+                    return Err(crate::model::protocol("压缩历史用户输入插入未封闭调用"));
+                }
+                _ => {}
+            }
+        }
+        if !pending.is_empty() {
+            return Err(crate::model::protocol("压缩历史工具调用未封闭"));
         }
         Ok(())
     }
@@ -127,9 +149,7 @@ impl ProtocolArchive {
             || output.items.iter().any(|item| {
                 matches!(
                     item,
-                    ArchivedItem::User { .. }
-                        | ArchivedItem::FunctionResult { .. }
-                        | ArchivedItem::Compaction { .. }
+                    ArchivedItem::User { .. } | ArchivedItem::FunctionResult { .. }
                 )
             })
         {
@@ -190,12 +210,7 @@ impl ProtocolHistory {
         let mut pending = std::collections::VecDeque::new();
         for item in archive.items {
             let item = match item {
-                ArchivedItem::Compaction { item } => {
-                    if !pending.is_empty() {
-                        return Err(crate::model::protocol("压缩项插入未封闭调用"));
-                    }
-                    ProtocolItem::Compaction(item)
-                }
+                ArchivedItem::Compaction { item } => ProtocolItem::Compaction(item),
                 ArchivedItem::User { text } => {
                     if !pending.is_empty() {
                         return Err(crate::model::protocol("历史用户消息插入未封闭调用"));

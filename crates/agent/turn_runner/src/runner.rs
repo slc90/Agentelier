@@ -191,7 +191,6 @@ async fn run_task(
     let mut cleanup_failed = false;
     let mut tools_used = 0;
     let mut requests_used = 0;
-    let mut compacted_before_request = false;
     while requests_used < MAX_MODEL_REQUESTS {
         control::drain(active, steers, progress, store).await?;
         if cancel.is_cancelled() {
@@ -212,62 +211,7 @@ async fn run_task(
         for id in applied {
             control::receipt(progress, id, InputDecision::Applied).await?;
         }
-        if active.context_reached()? {
-            if compacted_before_request {
-                return Ok(TurnStatus::Failed(
-                    "压缩后的新增输入仍超出上下文预算，保留材料并停止".into(),
-                ));
-            }
-            if MAX_MODEL_REQUESTS.saturating_sub(requests_used) < 2 {
-                return Ok(TurnStatus::Limited);
-            }
-            requests_used += 1;
-            match compact_once(
-                active,
-                credentials.clone(),
-                &identity,
-                cancel,
-                progress,
-                steers,
-                store,
-            )
-            .await?
-            {
-                Some(Ok(result)) => {
-                    if cancel.is_cancelled() {
-                        return Ok(TurnStatus::Cancelled);
-                    }
-                    let candidate = match active.compaction_candidate(result) {
-                        Ok(candidate) => candidate,
-                        Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())),
-                    };
-                    let event = candidate.event(active);
-                    if cancel.is_cancelled() {
-                        return Ok(TurnStatus::Cancelled);
-                    }
-                    active.committing_checkpoint();
-                    let sequence = record(store, event).await?;
-                    active.install_compaction(candidate)?;
-                    active.recorded(sequence);
-                    tracing::info!(
-                        session = %active.view().id,
-                        window = active.view().context.window,
-                        sequence,
-                        "自动压缩检查点已提交并安装"
-                    );
-                    publish(active, progress, cancel).await?;
-                    if cancel.is_cancelled() {
-                        return Ok(TurnStatus::Cancelled);
-                    }
-                    compacted_before_request = true;
-                    continue;
-                }
-                Some(Err(failure)) => return Ok(TurnStatus::Failed(failure.to_string())),
-                None => return Ok(TurnStatus::Cancelled),
-            }
-        }
         requests_used += 1;
-        compacted_before_request = false;
         let result = match request_once(
             active,
             credentials.clone(),
@@ -297,16 +241,10 @@ async fn run_task(
         publish(active, progress, cancel).await?;
         control::drain(active, steers, progress, store).await?;
         if result.calls.is_empty() {
-            active.seal(result)?;
-            let sequence = record(
-                store,
-                RecordEvent::Sealed {
-                    state: active.stored_state(),
-                    history: active.archive(),
-                },
-            )
-            .await?;
-            active.recorded(sequence);
+            seal_response(active, result, progress, cancel, store).await?;
+            if cancel.is_cancelled() {
+                return Ok(TurnStatus::Cancelled);
+            }
             if active.has_pending_steer() {
                 continue;
             }
@@ -407,16 +345,7 @@ async fn run_task(
             .await?;
             publish(active, progress, cancel).await?;
         }
-        active.seal(result)?;
-        let sequence = record(
-            store,
-            RecordEvent::Sealed {
-                state: active.stored_state(),
-                history: active.archive(),
-            },
-        )
-        .await?;
-        active.recorded(sequence);
+        seal_response(active, result, progress, cancel, store).await?;
         if cleanup_failed {
             active.block_execution();
             return Ok(TurnStatus::Failed(
@@ -462,47 +391,39 @@ async fn persist_image(
     (result, None)
 }
 
-async fn compact_once(
+async fn seal_response(
     active: &mut ActiveTurn,
-    credentials: CredentialClient,
-    identity: &ExecutionIdentity,
-    cancel: &CancellationToken,
+    result: GenerationResult,
     progress: &mpsc::Sender<RunnerEvent>,
-    steers: &mut mpsc::Receiver<SteerInput>,
+    cancel: &CancellationToken,
     store: &agentelier_session_store::SessionStoreClient,
-) -> Result<Option<Result<agentelier_llm_model::CompactionResult, ModelFailure>>, ConversationFailure>
-{
-    let request = match active.compaction_request() {
-        Ok(request) => request,
-        Err(failure) => return Ok(Some(Err(protocol_failure(failure)))),
-    };
-    tracing::info!(
-        session = %active.view().id,
-        window = active.view().context.window,
-        request_index = active.view().turn.as_ref().map(|turn| turn.request_index),
-        tokens = active.view().context.tokens,
-        "上下文达到预算，开始自动压缩"
-    );
-    let (sender, mut events) = mpsc::channel(MODEL_PROGRESS_CAPACITY);
-    publish(active, progress, cancel).await?;
-    let outcome = {
-        let generation = agentelier_llm_model::compact(credentials, request, identity, sender);
-        tokio::pin!(generation);
-        loop {
-            tokio::select! { biased;
-                _ = cancel.cancelled() => break None,
-                result = &mut generation => break Some(result),
-                input = steers.recv(), if !steers.is_closed() => {
-                    if let Some(input) = input {control::accept(active,input,progress,store).await?;publish(active,progress,cancel).await?;}
-                }
-                event = events.recv() => {
-                    if let Some(event) = event { active.update(event)?;publish(active,progress,cancel).await?; }
-                }
-            }
+) -> Result<(), ConversationFailure> {
+    let compaction = result.compaction.clone();
+    active.seal(result)?;
+    let sequence = record(
+        store,
+        RecordEvent::Sealed {
+            state: active.stored_state(),
+            history: active.archive(),
+        },
+    )
+    .await?;
+    active.recorded(sequence);
+    if let Some(metadata) = compaction {
+        if cancel.is_cancelled() {
+            return Ok(());
         }
-    };
-    while let Ok(event) = events.try_recv() {
-        active.update(event)?;
+        let candidate = active.compaction_candidate(metadata)?;
+        publish(active, progress, cancel).await?;
+        let event = candidate.event(active);
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        active.committing_checkpoint();
+        let sequence = record(store, event).await?;
+        active.install_compaction(candidate)?;
+        active.recorded(sequence);
+        tracing::info!(session = %active.view().id, window = active.view().context.window, sequence, "服务端压缩检查点已提交并安装");
     }
-    Ok(outcome)
+    publish(active, progress, cancel).await
 }

@@ -74,7 +74,17 @@ impl ContextLimits {
         })
     }
     pub fn available(&self) -> bool {
-        self.window.is_some() || self.automatic.is_some()
+        self.compact_threshold().is_some()
+    }
+    pub fn compact_threshold(&self) -> Option<u64> {
+        const MIN_COMPACT_THRESHOLD: u64 = 1_000;
+        self.automatic
+            .or(self.effective)
+            .map(|limit| {
+                self.effective
+                    .map_or(limit, |effective| limit.min(effective))
+            })
+            .filter(|limit| *limit >= MIN_COMPACT_THRESHOLD)
     }
     pub fn reached(&self, tokens: u64) -> bool {
         self.effective.is_some_and(|limit| tokens >= limit)

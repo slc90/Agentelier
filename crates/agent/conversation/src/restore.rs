@@ -285,6 +285,9 @@ pub fn restore(
             .as_mut()
             .ok_or_else(|| ConversationFailure::new("中断响应缺少任务"))?;
         if !calls.is_empty() {
+            if response.output.has_compaction() {
+                state.context.anchor = None;
+            }
             for call_id in &calls {
                 let tool = turn
                     .tools

@@ -2,7 +2,7 @@
 compile_error!("This application supports Windows x64 only");
 
 mod compaction;
-pub use compaction::{CompactionItem, CompactionResult};
+pub use compaction::{CompactionItem, CompactionMetadata};
 mod context;
 mod generation;
 pub use context::{ContextLimits, ResponseUsage};
@@ -10,7 +10,7 @@ mod model;
 mod protocol;
 mod stream;
 
-pub use generation::{GenerationRequest, compact, generate};
+pub use generation::{GenerationRequest, generate};
 pub use protocol::{
     ArchivedPayload, ProtocolArchive, ProtocolHistory, ProtocolItemSummary, ProtocolOutput,
 };
