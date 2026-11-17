@@ -73,7 +73,7 @@ Runtime 在旧 JoinHandle 回收和活动历史归还后，才申请下一条并
 
 ## 本地工作目录快照
 
-SessionView 还持有独立的项目采集状态。每个任务首次请求前由 Runner 采集并交给 ActiveTurn，读取失败作为可修复任务失败返回，模型请求序号保持零、原输入不进入成功历史，也不永久阻断后续重试。首次来源快照通过项目发布事件保存，项目协议项独立于普通用户输入；重开会话恢复保存的材料，不读取当前规则文件。来源、取消和只读展示契约见[项目上下文](project-context.md)。
+SessionView 还持有独立的项目采集状态。每个逻辑请求前由 Runner 重新发现采集并交给 ActiveTurn，读取失败作为可修复任务失败返回，不增加本次模型请求序号，原本尚未保留的输入不进入成功历史，也不永久阻断后续重试。首次来源快照通过项目发布事件保存，项目协议项独立于普通用户输入；重开会话恢复保存的材料，不读取当前规则文件。来源、取消和只读展示契约见[项目上下文](project-context.md)。
 
 SessionSettings 还保存 working_directory 的 PathBuf。Create 通过 Tools 的 WorkingDirectory 校验绝对路径、规范化并确认目录类型后保存；失败不替换旧会话。Reset 从旧会话复制目录再校验，Retry、Steer 与 Queue 使用活动会话设置。Bridge 显式传递候选与规范路径，UI 使用路径显示库展示，输入候选在独立 Resource 保留，切页不重新读取 cwd。路径解析值类型位于 agent/tools，解析以快照为基准，不修改全局进程目录。
 
@@ -152,3 +152,5 @@ Compacted 保存 replacement history、Session/Turn/请求身份、原窗口与�
 ## 项目指令请求记录
 
 ActiveTurn 独占项目发布与原始历史；ProjectPublished 确认后才安装候选，项目项不算封闭步骤、不保留待发送用户输入。Turn 保存每次请求的窗口、项目引用及模型 prepare 的安全投影。自动项目类型与普通 User 区分，Retry 继续依据 committed_steps 与 Steer 判断。
+
+项目变更依据最后确认发布的确定性正文比较。完整替换与清除只撤销自动项目来源，旧项留在原位置；A→B→A 每次改变均追加。文件读取失败作为普通可修复终态归还历史，旧材料保留核对，失败文本保存但不把旧材料当作当前磁盘规则。Queue 在执行时采集，Stop 等待阻塞工作真实结束。

@@ -193,36 +193,6 @@ async fn run_task(
     if cancel.is_cancelled() {
         return Ok(TurnStatus::Cancelled);
     }
-    let directory = active.view().settings.working_directory;
-    let loading_cancel = cancel.clone();
-    // Join the worker even after Stop so no file operation outlives its owning task.
-    let collected = tokio::task::spawn_blocking(move || {
-        agentelier_project_context::collect(&directory, &loading_cancel)
-    })
-    .await
-    .map_err(|failure| {
-        ConversationFailure::new(format!("项目规则采集工作者异常结束：{failure}"))
-    })?;
-    if cancel.is_cancelled() {
-        return Ok(TurnStatus::Cancelled);
-    }
-    match collected {
-        Ok(snapshot) => {
-            tracing::debug!(sources = snapshot.sources.len(), source_bytes = snapshot.source_bytes, hash = %snapshot.hash, "项目规则采集完成");
-            active.project_context(Ok(snapshot));
-        }
-        Err(agentelier_project_context::ProjectContextFailure::Cancelled) => {
-            return Ok(TurnStatus::Cancelled);
-        }
-        Err(failure) => {
-            tracing::error!(error = %failure, "项目规则采集失败，本次模型请求未启动");
-            let message = failure.to_string();
-            active.project_context(Err(message.clone()));
-            publish(active, progress, cancel).await?;
-            return Ok(TurnStatus::Failed(message));
-        }
-    }
-    publish(active, progress, cancel).await?;
     let identity = tokio::select! { biased;
         _ = cancel.cancelled() => return Ok(TurnStatus::Cancelled),
         result = credentials.execution() => match result { Ok(identity) => identity, Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())) },
@@ -243,6 +213,9 @@ async fn run_task(
         control::drain(active, steers, progress, store).await?;
         if cancel.is_cancelled() {
             return Ok(TurnStatus::Cancelled);
+        }
+        if let Some(status) = collect_project(active, cancel, progress).await? {
+            return Ok(status);
         }
         if let Some(candidate) = active.project_candidate()? {
             let changes_history = candidate.changes_history();
@@ -484,4 +457,44 @@ async fn seal_response(
         tracing::info!(session = %active.view().id, window = active.view().context.window, sequence, "服务端压缩检查点已提交并安装");
     }
     publish(active, progress, cancel).await
+}
+
+async fn collect_project(
+    active: &mut ActiveTurn,
+    cancel: &CancellationToken,
+    progress: &mpsc::Sender<RunnerEvent>,
+) -> Result<Option<TurnStatus>, ConversationFailure> {
+    active.loading_project();
+    publish(active, progress, cancel).await?;
+    let directory = active.view().settings.working_directory;
+    let loading_cancel = cancel.clone();
+    // Join the worker even after Stop so no file operation outlives its owning task.
+    let collected = tokio::task::spawn_blocking(move || {
+        agentelier_project_context::collect(&directory, &loading_cancel)
+    })
+    .await
+    .map_err(|failure| {
+        ConversationFailure::new(format!("项目规则采集工作者异常结束：{failure}"))
+    })?;
+    if cancel.is_cancelled() {
+        return Ok(Some(TurnStatus::Cancelled));
+    }
+    match collected {
+        Ok(snapshot) => {
+            tracing::debug!(sources = snapshot.sources.len(), source_bytes = snapshot.source_bytes, hash = %snapshot.hash, "项目规则采集完成");
+            active.project_context(Ok(snapshot));
+        }
+        Err(agentelier_project_context::ProjectContextFailure::Cancelled) => {
+            return Ok(Some(TurnStatus::Cancelled));
+        }
+        Err(failure) => {
+            tracing::error!(error = %failure, "项目规则采集失败，本次模型请求未启动");
+            let message = failure.to_string();
+            active.project_context(Err(message.clone()));
+            publish(active, progress, cancel).await?;
+            return Ok(Some(TurnStatus::Failed(message)));
+        }
+    }
+    publish(active, progress, cancel).await?;
+    Ok(None)
 }

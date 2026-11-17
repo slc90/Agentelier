@@ -46,14 +46,39 @@ impl crate::ActiveTurn {
     pub fn project_candidate(
         &self,
     ) -> Result<Option<ProjectCandidate>, crate::ConversationFailure> {
-        if !self.view.project_publications.is_empty() {
-            return Ok(None);
-        }
         let ProjectContextState::Loaded(snapshot) = self.view.project_context.as_ref() else {
             return Err(crate::ConversationFailure::new("请求缺少成功的项目采集"));
         };
-        let publication =
-            ProjectPublication::initial(1, self.view.context.window, snapshot.as_ref().clone());
+        let previous = self.view.project_publications.last();
+        if previous.is_some_and(|previous| previous.snapshot.hash == snapshot.hash) {
+            return Ok(None);
+        }
+        let id = previous
+            .map_or(Some(1), |previous| previous.id.checked_add(1))
+            .ok_or_else(|| crate::ConversationFailure::new("项目发布身份已耗尽"))?;
+        let kind = if !snapshot.has_rules() {
+            agentelier_llm_model::PublicationKind::Removal
+        } else if self
+            .view
+            .project_publications
+            .iter()
+            .any(|publication| publication.snapshot.has_rules())
+        {
+            agentelier_llm_model::PublicationKind::Replacement
+        } else {
+            agentelier_llm_model::PublicationKind::Initial
+        };
+        let kind = if previous.is_none() {
+            agentelier_llm_model::PublicationKind::Initial
+        } else {
+            kind
+        };
+        let publication = ProjectPublication::new(
+            id,
+            self.view.context.window,
+            snapshot.as_ref().clone(),
+            kind,
+        );
         publication
             .validate()
             .map_err(|failure| crate::ConversationFailure::new(failure.to_string()))?;
@@ -94,6 +119,12 @@ impl crate::ActiveTurn {
             projection,
         });
         Ok(())
+    }
+
+    pub fn loading_project(&mut self) {
+        if let Some(turn) = &mut self.view.turn {
+            turn.phase = crate::TaskPhase::LoadingProjectContext;
+        }
     }
 
     pub fn project_context(&mut self, result: Result<ProjectSnapshot, String>) {

@@ -88,6 +88,7 @@ pub fn restore(
         .validate()
         .map_err(|failure| ConversationFailure::new(format!("存档指令无效：{failure}")))?;
     let mut state = StoredState {
+        project_error: None,
         context: Box::default(),
         session: initial.session,
         turn: None,
@@ -495,12 +496,21 @@ impl Conversation {
         }
         let settings = restored.initial.settings;
         let view = SessionView {
-            project_context: Box::new(restored.publications.last().map_or(
-                crate::ProjectContextState::NotCollected,
-                |publication| {
-                    crate::ProjectContextState::Loaded(Arc::new(publication.snapshot.clone()))
+            project_context: Box::new(match restored.state.project_error {
+                Some(message) => crate::ProjectContextState::Failed {
+                    message,
+                    last_success: restored
+                        .publications
+                        .last()
+                        .map(|publication| Arc::new(publication.snapshot.clone())),
                 },
-            )),
+                None => restored.publications.last().map_or(
+                    crate::ProjectContextState::NotCollected,
+                    |publication| {
+                        crate::ProjectContextState::Loaded(Arc::new(publication.snapshot.clone()))
+                    },
+                ),
+            }),
             project_publications: Arc::new(restored.publications),
             context: restored.state.context,
             id: restored.state.session,

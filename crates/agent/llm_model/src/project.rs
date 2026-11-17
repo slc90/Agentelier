@@ -10,20 +10,40 @@ pub struct ProjectItem {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ProjectPublication {
+    #[serde(default)]
+    pub kind: PublicationKind,
     pub id: u64,
     pub window: u64,
     pub snapshot: ProjectSnapshot,
     pub item: Option<ProjectItem>,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PublicationKind {
+    #[default]
+    Initial,
+    Replacement,
+    Removal,
+}
+
 impl ProjectPublication {
     pub fn initial(id: u64, window: u64, snapshot: ProjectSnapshot) -> Self {
-        let item = snapshot.has_rules().then(|| ProjectItem {
+        Self::new(id, window, snapshot, PublicationKind::Initial)
+    }
+
+    pub fn new(id: u64, window: u64, snapshot: ProjectSnapshot, kind: PublicationKind) -> Self {
+        let text = match kind {
+            PublicationKind::Initial => snapshot.rendered.clone(),
+            PublicationKind::Replacement => format!("The following complete project instructions replace all previously automatically published project instructions. User instructions and tool-provided material are unchanged.\n\n{}", snapshot.rendered),
+            PublicationKind::Removal => "All previously automatically published project instructions are withdrawn. No automatic project rules currently apply. User instructions and tool-provided material are unchanged.".into(),
+        };
+        let item = (!text.is_empty()).then(|| ProjectItem {
             publication: id,
             snapshot_hash: snapshot.hash.clone(),
-            text: snapshot.rendered.clone(),
+            text,
         });
         Self {
+            kind,
             id,
             window,
             snapshot,
@@ -35,8 +55,12 @@ impl ProjectPublication {
         self.snapshot
             .validate()
             .map_err(|message| crate::model::protocol(&message))?;
-        let expected = Self::initial(self.id, self.window, self.snapshot.clone());
-        if self.id == 0 || expected.item != self.item {
+        let expected = Self::new(self.id, self.window, self.snapshot.clone(), self.kind);
+        if self.id == 0
+            || expected.item != self.item
+            || (self.kind == PublicationKind::Removal && self.snapshot.has_rules())
+            || (self.kind == PublicationKind::Replacement && !self.snapshot.has_rules())
+        {
             return Err(crate::model::protocol("项目发布身份或正文不一致"));
         }
         Ok(())

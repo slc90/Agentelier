@@ -6,6 +6,8 @@ use std::path::PathBuf;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct StoredState {
     #[serde(default)]
+    pub project_error: Option<String>,
+    #[serde(default)]
     pub context: Box<crate::ContextState>,
     pub session: SessionId,
     pub turn: Option<Box<crate::TurnView>>,
@@ -19,6 +21,10 @@ pub struct StoredState {
 impl From<&SessionView> for StoredState {
     fn from(view: &SessionView) -> Self {
         Self {
+            project_error: match view.project_context.as_ref() {
+                crate::ProjectContextState::Failed { message, .. } => Some(message.clone()),
+                _ => None,
+            },
             context: view.context.clone(),
             session: view.id,
             turn: view.turn.clone(),

@@ -178,7 +178,7 @@ Markdown 的原文、解析块和原生布局由独立 UI crate 管理，不依�
 
 ## 提示词库与固定指令
 
-项目文件发现独立于固定提示词库：Runner 在每个任务首次请求准备时调用 Project Context，在可等待回收的阻塞工作中采集；ActiveTurn 独占最近结果，Bridge 将来源及状态转成只读投影，Chat UI 在现有会话核对入口展示。项目正文首次发布为独立的 user 协议项，经持久确认后进入冻结请求；基础保持 developer。完整来源和逐请求安全投影随会话存档保存。读取失败阻止本任务请求，可修复后重试；详见[项目上下文](modules/project-context.md)。
+项目文件发现独立于固定提示词库：Runner 在每个逻辑模型请求准备时调用 Project Context，在可等待回收的阻塞工作中采集；ActiveTurn 独占最近结果，Bridge 将来源及状态转成只读投影，Chat UI 在现有会话核对入口展示。项目正文首次发布为独立的 user 协议项，经持久确认后进入冻结请求；基础保持 developer。完整来源和逐请求安全投影随会话存档保存。读取失败阻止本任务请求，可修复后重试；详见[项目上下文](modules/project-context.md)。
 
 Prompts 是无 Bevy、网络和线程依赖的业务库，管理来源与派生版本、基础覆盖及有序补充配置、预设解析和完整快照。应用内置来源数据由 Assets 提供，Chat UI 在启动数据目录就绪后，通过 Widgetry JobManager 加载该目录的 `prompts.json`；保存和 UTF-8 导入同样使用辅助 Job，并等待真实终态后更新 UI。来源版本与旧版本不被编辑覆盖，文件原子替换不接触账号凭据。
 

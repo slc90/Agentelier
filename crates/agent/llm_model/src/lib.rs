@@ -9,7 +9,7 @@ pub use context::{ContextLimits, ResponseUsage};
 mod model;
 mod project;
 mod protocol;
-pub use project::{ProjectItem, ProjectPublication};
+pub use project::{ProjectItem, ProjectPublication, PublicationKind};
 mod stream;
 
 pub use generation::{GenerationRequest, PreparedGeneration, RequestProjection, generate, prepare};
