@@ -2082,6 +2082,7 @@ dependencies = [
  "bevy_widgetry_scroll_area",
  "bevy_widgetry_text_field",
  "bevy_widgetry_theme",
+ "bevy_widgetry_tooltip",
  "bevy_widgetry_ui_scale",
  "bevy_widgetry_window",
 ]

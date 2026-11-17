@@ -8,7 +8,7 @@ use bevy_widgetry::text::WidgetryText;
 const BOTTOM_TOLERANCE: f32 = 3.0;
 #[derive(Component, Clone, Default)]
 pub(crate) struct ChatReadingScroll;
-#[derive(Resource, Reflect)]
+#[derive(Resource, Reflect, Clone)]
 #[reflect(Resource)]
 struct ChatReading {
     following: bool,
@@ -29,7 +29,8 @@ impl Default for ChatReading {
     }
 }
 pub(crate) fn install(app: &mut App) {
-    app.init_resource::<ChatReading>()
+    app.init_resource::<ReadingStates>()
+        .init_resource::<ChatReading>()
         .register_type::<ChatReading>()
         .add_systems(PostUpdate, observe.before(UiSystems::Content))
         .add_systems(
@@ -39,6 +40,29 @@ pub(crate) fn install(app: &mut App) {
                 .before(UiSystems::PostLayout),
         );
 }
+#[derive(Resource, Default)]
+struct ReadingStates(
+    std::collections::HashMap<agentelier_conversation_bridge::SessionId, ChatReading>,
+);
+
+pub(crate) fn switch(
+    world: &mut World,
+    previous: Option<agentelier_conversation_bridge::SessionId>,
+    next: agentelier_conversation_bridge::SessionId,
+) {
+    let old = world.resource::<ChatReading>().clone();
+    let mut restored = {
+        let mut states = world.resource_mut::<ReadingStates>();
+        if let Some(previous) = previous {
+            states.0.insert(previous, old);
+        }
+        states.0.remove(&next).unwrap_or_default()
+    };
+    restored.viewport = None;
+    restored.restore = true;
+    *world.resource_mut::<ChatReading>() = restored;
+}
+
 pub(crate) fn bottom_button() -> impl Scene {
     bsn! { @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text("回到底部") WidgetryText }) as Box<dyn SceneList>)} } Name("ChatBackToBottom") on(bottom) Node { height: px(40), flex_shrink: 0.0 } }
 }
@@ -58,6 +82,9 @@ fn observe(
             if reading.viewport != Some(entity) {
                 reading.viewport = Some(entity);
                 reading.restore = true;
+                continue;
+            }
+            if reading.restore {
                 continue;
             }
             if (position.0.y - reading.position).abs() > BOTTOM_TOLERANCE {

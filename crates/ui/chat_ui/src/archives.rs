@@ -3,18 +3,24 @@ use agentelier_agent_host::{AgentHost, HostActivity};
 use agentelier_conversation_bridge::{ArchiveEntry, ConversationRequest, SessionId};
 use bevy::prelude::*;
 use bevy::ui::{InteractionDisabled, UiSystems};
-use bevy::ui_widgets::{Activate, ValueChange};
+use bevy::ui_widgets::Activate;
 use bevy_widgetry::button::WidgetryButton;
-use bevy_widgetry::combo_box::{WidgetryComboBox, WidgetryComboBoxAppExt, WidgetryComboBoxContent};
-use bevy_widgetry::list_view::{WidgetryListItemId, WidgetryListModel, WidgetryListViewRenderer};
+use bevy_widgetry::list_view::{
+    WidgetryListModel, WidgetryListSelectionChanged, WidgetryListSelectionMode, WidgetryListView,
+    WidgetryListViewAppExt, WidgetryListViewRenderer,
+};
 use bevy_widgetry::text::WidgetryText;
+use bevy_widgetry::tooltip::{TooltipContentFactory, WidgetryTooltip, WidgetryTooltipPlugin};
 use std::io;
 
-const SELECTOR_WIDTH: f32 = 360.0;
+const SIDEBAR_WIDTH: f32 = 240.0;
+const SIDEBAR_MIN_WIDTH: f32 = 168.0;
+const ROW_HEIGHT: f32 = 44.0;
+const TITLE_PREVIEW_CHARACTERS: usize = 18;
 const CONTROL_HEIGHT: f32 = 40.0;
 const CONTROL_GAP: f32 = 12.0;
 
-#[derive(Clone, Reflect)]
+#[derive(Clone, Reflect, PartialEq)]
 pub struct ArchiveChoice {
     pub id: SessionId,
     pub title: String,
@@ -32,6 +38,7 @@ pub struct ArchiveState {
     pub loading: bool,
     pub refreshing: bool,
     pub error: Option<String>,
+    pub opening: Option<(u64, SessionId)>,
 }
 
 impl Default for ArchiveState {
@@ -42,6 +49,7 @@ impl Default for ArchiveState {
             loading: true,
             refreshing: true,
             error: None,
+            opening: None,
         }
     }
 }
@@ -54,7 +62,10 @@ struct ArchiveSelector;
 struct ArchiveStatus;
 
 pub(crate) fn install(app: &mut App) -> Result {
-    app.register_widgetry_combo_box::<ArchiveChoice>()
+    if !app.is_plugin_added::<WidgetryTooltipPlugin>() {
+        app.add_plugins(WidgetryTooltipPlugin);
+    }
+    app.register_widgetry_list_view::<ArchiveChoice>()
         .map_err(|failure| failure.into_bevy_error())?;
     app.init_resource::<ArchiveState>()
         .register_type::<ArchiveState>()
@@ -73,34 +84,46 @@ fn initialize(mut commands: Commands) {
 pub(crate) fn panel(world: &World) -> impl Scene {
     let source = world.resource::<ArchiveSource>().0;
     bsn! {
-        Name("LocalSessionArchives") Node { width: percent(100), column_gap: px(CONTROL_GAP), row_gap: px(CONTROL_GAP), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, flex_shrink: 0.0 }
+        Name("LocalSessionArchives") Node { width: px(SIDEBAR_WIDTH), min_width: px(SIDEBAR_MIN_WIDTH), max_width: percent(30), height: percent(100), flex_direction: FlexDirection::Column, row_gap: px(CONTROL_GAP), flex_shrink: 0.0 }
         Children [
-            Text("本地会话") WidgetryText--
-            @WidgetryComboBox::<ArchiveChoice> {
+            Text("Agentelier") WidgetryText--
+            @crate::conversation::create_button()--
+            @WidgetryListView::<ArchiveChoice> {
                 @source: source,
-                @placeholder: {WidgetryComboBoxContent::new(|| bsn_list! { Text("打开已保存的会话") WidgetryText })},
-                @renderer: {WidgetryListViewRenderer::new(|choice: &ArchiveChoice| { let title = choice.title.clone(); bsn_list! { Text(title) WidgetryText } })},
+                @item_height: ROW_HEIGHT,
+                @selection_mode: WidgetryListSelectionMode::Single,
+                @renderer: {WidgetryListViewRenderer::new(|choice: &ArchiveChoice| {
+                    let full = match &choice.error { Some(error) => format!("{}\n{}", choice.title, error), None => choice.title.clone() };
+                    let mut preview = choice.title.chars().take(TITLE_PREVIEW_CHARACTERS).collect::<String>();
+                    if choice.title.chars().count() > TITLE_PREVIEW_CHARACTERS { preview.push('…'); }
+                    bsn_list! {
+                        @WidgetryTooltip { @content: {TooltipContentFactory::new(move || { let title = full.clone(); bsn_list! { Text(title) WidgetryText } })} }
+                        Node { width: percent(100), min_width: px(0), overflow: Overflow::clip() }
+                        Children [Text(preview) WidgetryText TextLayout::no_wrap()]
+                    }
+                })},
             }
-            Name("LocalSessionSelector") ArchiveSelector Node { width: px(SELECTOR_WIDTH), flex_shrink: 0.0 } on(select)--
+            Name("LocalSessionSelector") ArchiveSelector Node { width: percent(100), height: px(0), flex_basis: px(0), min_height: px(0), flex_grow: 1.0 } on(select)--
             @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text("刷新本地会话") WidgetryText }) as Box<dyn SceneList>)} }
             Name("RefreshSessionArchives") Node { height: px(CONTROL_HEIGHT) } on(refresh)--
             Text("") WidgetryText ArchiveStatus Name("SessionArchiveStatus")
+            TextLayout::linebreak(bevy::text::LineBreak::AnyCharacter)
         ]
     }
 }
 
 fn select(
-    event: On<ValueChange<Option<WidgetryListItemId>>>,
+    event: On<WidgetryListSelectionChanged>,
     selectors: Query<(), With<ArchiveSelector>>,
     source: Res<ArchiveSource>,
     models: Query<&WidgetryListModel<ArchiveChoice>>,
     archives: Res<ArchiveState>,
     mut commands: Commands,
 ) -> Result {
-    if !selectors.contains(event.source) || archives.loading {
+    if !selectors.contains(event.source) {
         return Ok(());
     }
-    let Some(id) = event.value else {
+    let Some(id) = event.selected.iter().next().copied() else {
         return Ok(());
     };
     let choice = models
@@ -112,10 +135,13 @@ fn select(
     }
     let session = choice.id;
     commands.queue(move |world: &mut World| -> Result {
+        sync_selection(world)?;
         if world.resource::<ChatState>().operation.is_some()
             || world.resource::<ArchiveState>().loading
             || world.resource::<AgentHost>().model_busy()?
         {
+            world.resource_mut::<ArchiveState>().error =
+                Some("当前任务结束并回收后可切换，请等待或停止当前任务".into());
             return Ok(());
         }
         match world
@@ -128,6 +154,7 @@ fn select(
                 chat.error = None;
                 let mut archives = world.resource_mut::<ArchiveState>();
                 archives.loading = true;
+                archives.opening = Some((id, session));
                 archives.error = None;
                 tracing::info!(operation_id = id, session_id = %session, "开始打开本地会话");
             }
@@ -164,11 +191,31 @@ pub(crate) fn catalog(world: &mut World, entries: Vec<ArchiveEntry>) -> Result {
     let mut model = world
         .get_mut::<WidgetryListModel<ArchiveChoice>>(source)
         .ok_or_else(|| io::Error::other("本地会话选择数据源不存在"))?;
-    model.clear();
-    for choice in &choices {
-        model
-            .push(choice.clone())
-            .map_err(|failure| failure.into_bevy_error())?;
+    for index in (0..model.len()).rev() {
+        if model
+            .get(index)
+            .is_some_and(|old| !choices.iter().any(|entry| entry.id == old.id))
+        {
+            model.remove(index);
+        }
+    }
+    for (index, choice) in choices.iter().enumerate() {
+        if let Some(previous) =
+            (0..model.len()).find(|&old| model.get(old).is_some_and(|entry| entry.id == choice.id))
+        {
+            model.move_item(previous, index);
+            if model.get(index) != Some(choice)
+                && let Some(value) = model
+                    .get_mut(index)
+                    .map_err(|failure| failure.into_bevy_error())?
+            {
+                *value = choice.clone();
+            }
+        } else {
+            model
+                .insert(index, choice.clone())
+                .map_err(|failure| failure.into_bevy_error())?;
+        }
     }
     let mut state = world.resource_mut::<ArchiveState>();
     if choices.is_empty() {
@@ -182,9 +229,6 @@ pub(crate) fn catalog(world: &mut World, entries: Vec<ArchiveEntry>) -> Result {
 
 pub(crate) fn sync_selection(world: &mut World) -> Result {
     let state = world.resource::<ArchiveState>();
-    if state.loading {
-        return Ok(());
-    }
     let index = state
         .selected
         .and_then(|selected| state.entries.iter().position(|entry| entry.id == selected));
@@ -192,7 +236,15 @@ pub(crate) fn sync_selection(world: &mut World) -> Result {
         let mut query = world.query_filtered::<Entity, With<ArchiveSelector>>();
         let entities = query.iter(world).collect::<Vec<_>>();
         for entity in entities {
-            WidgetryComboBox::<ArchiveChoice>::select_index(&mut world.commands(), entity, index);
+            WidgetryListView::<ArchiveChoice>::select_index(&mut world.commands(), entity, index);
+        }
+    } else {
+        let entities = world
+            .query_filtered::<Entity, With<ArchiveSelector>>()
+            .iter(world)
+            .collect::<Vec<_>>();
+        for entity in entities {
+            WidgetryListView::<ArchiveChoice>::clear_selection(&mut world.commands(), entity);
         }
     }
     Ok(())
@@ -216,6 +268,8 @@ fn update(
     }
     let status = if let Some(error) = &state.error {
         error.clone()
+    } else if activity.model_busy && !state.loading {
+        "当前任务结束并回收后可切换".into()
     } else if state.loading {
         "正在打开本地会话…".into()
     } else if state.refreshing {

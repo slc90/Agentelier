@@ -43,7 +43,7 @@ Turn 的 input_id 将同一输入的多次尝试归组，id 与 operation_id 每
 
 ## 空白会话
 
-Create 接受准备区快照；Reset 核对当前 Session 身份并从执行侧复制其设置。运行中的 Turn 拒绝替换；空闲时准备新的 UUID 身份与初始快照，Session Store 确认权威初始记录落盘后才替换当前 Session，并将展示与 ProtocolHistory 置空。写入失败保留原会话和草稿，Reset 不删除旧存档。UI 在提交替换前持有待确认设置，用户确认后才发请求；取消确认不改变原记录，输入草稿不随记录清空。
+Create 接受准备区快照；Reset 核对当前 Session 身份并从执行侧复制其设置。运行中的 Turn 拒绝替换；空闲时准备新的 UUID 身份与初始快照，Session Store 确认权威初始记录落盘后才替换当前 Session，并将展示与 ProtocolHistory 置空。写入失败保留原会话和草稿，Reset 不删除旧存档。UI 在提交替换前持有待确认设置，用户确认后才发请求；取消确认不改变原记录，原会话草稿随 Session ID 暂存在本次运行中，新会话使用独立空草稿。
 
 持久初始设置包含模型 slug、显示名称、推理设置、图片能力、完整指令版本与内容哈希、固定工作目录及工具名称、描述、参数契约，不记录账号主体或凭据。内存中的账号一致性检查仍保留。存储的序号、提交与收尾见[会话存储](session-store.md)。
 
@@ -55,7 +55,7 @@ Create 接受准备区快照；Reset 核对当前 Session 身份并从执行侧�
 
 会话固定工具目录；每个任务记录模型请求序号、工具输出项 ID、call_id、参数和结果，以及提交步数。完整响应先校验所有调用身份，再执行；工具成功、普通错误、超时、取消或未执行均通过匹配 call_id 的 function_call_output 封闭。原输入仅在首次提交点写入；未完成响应不进入协议历史。已有提交点的任务只能通过新消息继续，避免原样重试重复执行。具体协议遵循 [Responses function calling](https://developers.openai.com/api/docs/guides/function-calling)。
 
-工具时间线由 chat_ui 内部 tool_timeline 模块构造，卡片持有展示数据及展开状态，详情通过 WidgetryReadOnlyTextField 的公开 API 更新。正文与工具按 Session/Turn/请求序号/输出项身份复用行实体，并按协议输出顺序排列；UI 不据此重建协议历史。卡片展开选择保存于持久 ChatState，切页回来恢复；创建新会话时清理旧选择。
+工具时间线由 chat_ui 内部 tool_timeline 模块构造，卡片持有展示数据及展开状态，详情通过 WidgetryReadOnlyTextField 的公开 API 更新。正文与工具按 Session/Turn/请求序号/输出项身份复用行实体，并按协议输出顺序排列；UI 不据此重建协议历史。卡片展开选择保存于持久 ChatState，切页回来恢复；切换或新建时保存原 Session 的选择，回到原会话后恢复。
 
 ## 活动输入的接纳与应用
 
@@ -114,3 +114,11 @@ QueueChanged 独立重建队列；滞后的 Runner 或收尾快照不能覆盖�
 ## 固定四工具目录
 
 新会话的只读目录仅有 exec_command、write_stdin、apply_patch、view_image；旧计算/等待工具及专属 receipt 已退役，不提供别名。工具声明、执行查找和安全目录展示仍由同一 ToolCatalog 提供，不热替换已有会话。Steer 的 InputReceipt 是业务输入回执，与已移除的诊断 receipt 无关，继续保留。
+
+## 侧栏选择与会话内阅读状态
+
+Chat UI 左侧固定显示有限高度的单选 ListView，后端摘要决定活动排序，UUID 对应稳定模型项；刷新只增删、更新和移动相应项，不因重排重新分配身份。标题显示省略文本，悬停显示完整名称及条目读取错误。打开、阅读和刷新不会更新活动时间。
+
+打开请求保存 operation 与目标 UUID，回执匹配后才一起安装正文、设置、选中项和标题；失败保留当前聊天及输入框。加载期间不清空旧投影，任务执行和回收期间禁止替换，当前聊天 Stop、Steer 与阅读仍可用。串行执行侧在启动队列后拒绝切换；恢复后的待办保持暂停，切换不启动旧队列。
+
+草稿文字、修订、工具展开选择以及阅读位置和跟随底部状态按 Session ID 保存在本次运行中。切换成功通过 TextField 公开接口恢复目标草稿，不重建输入框；新会话使用空草稿。草稿不跨重启保存。列表不持有协议历史或附件载荷。

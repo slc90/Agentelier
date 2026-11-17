@@ -147,8 +147,11 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
         let chat = world.resource::<crate::conversation::ChatState>().clone();
         let scene: Box<dyn Scene> = Box::new(bsn! {
             Name("ModelPreparation") ChildOf(host)
-            Node { width: percent(100), height: percent(100), min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(PANEL_GAP) }
+            Node { width: percent(100), height: percent(100), min_height: px(0), column_gap: px(PANEL_GAP) }
             Children [
+                @crate::archives::panel(world)--
+                Node { flex_grow: 1.0, min_width: px(0), height: percent(100), flex_direction: FlexDirection::Column, row_gap: px(PANEL_GAP) }
+                Children [
                 Node { column_gap: px(PANEL_GAP), flex_wrap: FlexWrap::Wrap, row_gap: px(PANEL_GAP) }
                 Children [
                     @action_button("刷新模型目录", "RefreshModelCatalog", ModelAction::Refresh)--
@@ -180,12 +183,12 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
                     }) as Box<dyn SceneList>)}
                 }
                 Node { width: percent(100), height: px(64), flex_shrink: 0.0 }--
-                @crate::archives::panel(world)--
                 @crate::working_directory::panel(world.resource::<crate::working_directory::DirectoryState>())--
                 @crate::conversation::panel(&chat)
                 ]--
                 crate::prompts::PromptWorkspace Name("PromptWorkspace")
                 Node { display: Display::None, width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column }
+                ]
             ]
         });
         world.commands().spawn_scene_with_error_handler(scene);

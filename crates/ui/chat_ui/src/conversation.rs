@@ -225,7 +225,8 @@ struct ChatRow {
 pub(crate) fn install(app: &mut App) {
     crate::tool_timeline::install(app);
     crate::queue::install(app);
-    app.init_resource::<ChatState>()
+    app.init_resource::<SessionUiStates>()
+        .init_resource::<ChatState>()
         .init_resource::<InputIntents>()
         .register_type::<ChatState>()
         .add_observer(mount_messages)
@@ -260,13 +261,12 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
         Children [
             Node { column_gap: px(CONTENT_GAP), align_items: AlignItems::Center, flex_shrink: 0.0 }
             Children [
-                @button("新建会话", "CreateChatSession", ChatAction::Create)--
                 @button("重置当前会话", "ResetChatSession", ChatAction::Reset)--
                 Text(summary) WidgetryText SessionSummary Name("ChatSessionSummary")
             ]--
             Node { column_gap: px(CONTENT_GAP), flex_shrink: 0.0, display: Display::None } ReplacementPrompt
             Children [
-                Text("确认后将创建空白会话，当前聊天记录和待办将从界面移除；已有存档与输入草稿保留。") WidgetryText--
+                Text("确认后创建空白会话；原会话的记录、待办和草稿保留。") WidgetryText--
                 @button("确认新建", "ConfirmChatReplacement", ChatAction::ConfirmReplacement)--
                 @button("保留当前会话", "KeepChatSession", ChatAction::KeepSession)
             ]--
@@ -295,6 +295,63 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
             ]
         ]
     }
+}
+
+pub(crate) fn create_button() -> impl Scene {
+    button("新建会话", "CreateChatSession", ChatAction::Create)
+}
+
+#[derive(Default)]
+struct SessionUiState {
+    draft: String,
+    revision: u64,
+    expanded_tools: Vec<String>,
+}
+#[derive(Resource, Default)]
+struct SessionUiStates(std::collections::HashMap<SessionId, SessionUiState>);
+
+fn switch_view(world: &mut World, view: SessionView) -> Result {
+    let next = project(view)?;
+    let previous = world
+        .resource::<ChatState>()
+        .session
+        .as_ref()
+        .map(|session| session.id);
+    if previous != Some(next.id) {
+        let saved = {
+            let mut state = world.resource_mut::<ChatState>();
+            let saved = SessionUiState {
+                draft: std::mem::take(&mut state.draft),
+                revision: state.draft_revision,
+                expanded_tools: std::mem::take(&mut state.expanded_tools),
+            };
+            state.pending_inputs.clear();
+            state.input_feedback = None;
+            saved
+        };
+        let restored = {
+            let mut states = world.resource_mut::<SessionUiStates>();
+            if let Some(previous) = previous {
+                states.0.insert(previous, saved);
+            }
+            states.0.remove(&next.id).unwrap_or_default()
+        };
+        let roots = world
+            .query_filtered::<Entity, With<Composer>>()
+            .iter(world)
+            .collect::<Vec<_>>();
+        for root in roots {
+            WidgetryTextFieldHeadless::set_text_in_world(world, root, &restored.draft)
+                .map_err(|failure| failure.into_bevy_error())?;
+        }
+        let mut state = world.resource_mut::<ChatState>();
+        state.draft = restored.draft;
+        state.draft_revision = restored.revision;
+        state.expanded_tools = restored.expanded_tools;
+        crate::reading::switch(world, previous, next.id);
+    }
+    world.resource_mut::<ChatState>().session = Some(next);
+    Ok(())
 }
 
 fn button(label: &'static str, name: &'static str, action: ChatAction) -> impl Scene {
@@ -902,19 +959,29 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 .session
                 .as_ref()
                 .is_none_or(|session| session.id != id);
+            let opening = world.resource::<crate::ArchiveState>().opening;
+            if event.operation_id != 0 && opening != Some((event.operation_id, id)) {
+                continue;
+            }
+            if event.operation_id == 0
+                && !different
+                && world.resource::<ChatState>().operation.is_some()
             {
+                continue;
+            }
+            if event.operation_id == 0
+                && different
+                && world.resource::<ChatState>().session.is_some()
+            {
+                continue;
+            }
+            switch_view(world, view)?;
+            if event.operation_id != 0 {
                 let mut state = world.resource_mut::<ChatState>();
-                state.session = Some(project(view)?);
-                if different {
-                    state.expanded_tools.clear();
-                    state.pending_inputs.clear();
-                    state.input_feedback = None;
-                }
-                if event.operation_id != 0 {
-                    state.operation = None;
-                    state.replacement = None;
-                    state.error = None;
-                }
+                state.operation = None;
+                state.replacement = None;
+                state.error = None;
+                world.resource_mut::<crate::ArchiveState>().opening = None;
             }
             let waiting = world.resource::<ChatState>().operation.is_some();
             {
@@ -934,6 +1001,12 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         }
         if let ConversationEvent::ArchiveFailed(reason) = event.kind {
             let matching = world.resource::<ChatState>().operation == Some(event.operation_id);
+            if event.operation_id != 0 && !matching {
+                continue;
+            }
+            if matching {
+                world.resource_mut::<crate::ArchiveState>().opening = None;
+            }
             if matching {
                 world.resource_mut::<ChatState>().operation = None;
             }
@@ -959,6 +1032,14 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             continue;
         }
         if let ConversationEvent::Started(view) = event.kind {
+            if world
+                .resource::<ChatState>()
+                .session
+                .as_ref()
+                .is_none_or(|session| session.id != view.id)
+            {
+                continue;
+            }
             let mut state = world.resource_mut::<ChatState>();
             state.session = Some(project(view)?);
             state.operation = Some(event.operation_id);
@@ -1065,14 +1146,8 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             }
             ConversationEvent::Created(view) => {
                 let selected = view.id;
-                {
-                    let mut state = world.resource_mut::<ChatState>();
-                    state.session = Some(project(view)?);
-                    state.expanded_tools.clear();
-                    state.input_feedback = None;
-                    state.pending_inputs.clear();
-                    state.replacement = None;
-                }
+                switch_view(world, view)?;
+                world.resource_mut::<ChatState>().replacement = None;
                 let mut archives = world.resource_mut::<crate::ArchiveState>();
                 archives.selected = Some(selected);
                 archives.loading = false;
@@ -1103,6 +1178,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             world.resource_mut::<ChatState>().cancelling = false;
             world.resource_mut::<ChatState>().operation = None;
             world.resource_mut::<crate::ArchiveState>().loading = false;
+            world.resource_mut::<crate::ArchiveState>().opening = None;
             match world.resource::<AgentHost>().refresh_archives() {
                 Ok(()) => world.resource_mut::<crate::ArchiveState>().refreshing = true,
                 Err(failure) => {
@@ -1419,6 +1495,7 @@ fn update(
     state: Res<ChatState>,
     model: Res<ModelState>,
     account: Res<AccountState>,
+    archives: Res<crate::ArchiveState>,
     activity: Res<HostActivity>,
     buttons: Query<(Entity, &ChatAction)>,
     mut texts: Query<(
@@ -1430,7 +1507,11 @@ fn update(
     mut prompts: Query<&mut Node, With<ReplacementPrompt>>,
     mut commands: Commands,
 ) {
-    if !state.is_changed() && !model.is_changed() && !account.is_changed() && !activity.is_changed()
+    if !state.is_changed()
+        && !model.is_changed()
+        && !account.is_changed()
+        && !activity.is_changed()
+        && !archives.is_changed()
     {
         return;
     }
@@ -1491,7 +1572,13 @@ fn update(
             }));
         }
         if is_summary {
-            text.set_if_neq(Text::new(summary(&state)));
+            let title = state
+                .session
+                .as_ref()
+                .and_then(|session| archives.entries.iter().find(|entry| entry.id == session.id))
+                .map(|entry| entry.title.as_str())
+                .unwrap_or("新会话");
+            text.set_if_neq(Text::new(format!("{title} · {}", summary(&state))));
         } else if is_status {
             text.set_if_neq(Text::new(status(&state)));
         }
