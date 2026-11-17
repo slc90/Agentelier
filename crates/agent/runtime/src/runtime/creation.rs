@@ -20,7 +20,6 @@ impl Creation {
         control: ModelControl,
         request: ConversationRequest,
         conversation: &Conversation,
-        subject: Option<&str>,
         store: &SessionStore,
     ) -> Result<Self, ConversationFailure> {
         let prepared = match request {
@@ -28,9 +27,6 @@ impl Creation {
             ConversationRequest::Reset { session } => conversation.prepare_reset(session)?,
             _ => return Err(ConversationFailure::new("存档创建收到非创建请求")),
         };
-        if Some(prepared.account_subject()) != subject {
-            return Err(ConversationFailure::new("当前账号与会话设置不一致"));
-        }
         let reply = store
             .create(prepared.initial.clone())
             .map_err(|failure| ConversationFailure::new(format!("无法创建会话存档：{failure}")))?;
@@ -52,7 +48,6 @@ impl Creation {
     pub(super) fn complete(
         self,
         result: io::Result<Commit>,
-        subject: Option<&str>,
         conversation: &mut Conversation,
     ) -> ConversationEvent {
         self.control.finished.cancel();
@@ -67,11 +62,6 @@ impl Creation {
         }
         if let Some(failure) = commit.summary_failure {
             error!(session_id = %commit.session, error = %failure, "会话初始记录已保存，摘要更新失败，可从记录重建");
-        }
-        if Some(self.prepared.account_subject()) != subject {
-            return ConversationEvent::Rejected(
-                "存档已保存，但当前账号已变化，未替换当前会话".into(),
-            );
         }
         let view = conversation.install(self.prepared);
         info!(operation_id = self.id, session_id = %view.id, sequence = commit.sequence, "会话初始存档已提交并打开");

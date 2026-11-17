@@ -190,6 +190,7 @@ pub fn restore(
                 retained_input = true;
                 merge(&mut state, incoming);
             }
+            RecordEvent::QueueSuspended { .. } => state.queue_paused = true,
             RecordEvent::QueueChanged {
                 state: incoming,
                 decision,
@@ -384,11 +385,7 @@ pub fn restore(
 }
 
 impl Conversation {
-    pub fn install_restored(
-        &mut self,
-        mut restored: RestoredSession,
-        subject: Option<&str>,
-    ) -> SessionView {
+    pub fn install_restored(&mut self, mut restored: RestoredSession) -> SessionView {
         for turn in restored
             .state
             .previous_turns
@@ -406,7 +403,6 @@ impl Conversation {
                 display_name: settings.display_name,
                 effort: settings.effort,
                 image_input: settings.image_input,
-                account_subject: subject.unwrap_or_default().into(),
                 instructions: Arc::new(settings.instructions),
                 working_directory: settings.working_directory,
             },

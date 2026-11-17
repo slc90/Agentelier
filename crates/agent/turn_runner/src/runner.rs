@@ -1,5 +1,5 @@
 use crate::control;
-use agentelier_account::CredentialClient;
+use agentelier_account::{CredentialClient, ExecutionIdentity};
 use agentelier_conversation::RecordEvent;
 use agentelier_conversation::{
     ActiveTurn, ConversationFailure, InputDecision, RunnerEvent, SteerInput, TurnStatus,
@@ -38,6 +38,7 @@ async fn publish(
 async fn request_once(
     active: &mut ActiveTurn,
     credentials: CredentialClient,
+    identity: &ExecutionIdentity,
     cancel: &CancellationToken,
     progress: &mpsc::Sender<RunnerEvent>,
     steers: &mut mpsc::Receiver<SteerInput>,
@@ -61,7 +62,7 @@ async fn request_once(
     }
     publish(active, progress, cancel).await?;
     let outcome = {
-        let generation = agentelier_llm_model::generate(credentials, request, sender);
+        let generation = agentelier_llm_model::generate(credentials, request, identity, sender);
         tokio::pin!(generation);
         loop {
             tokio::select! { biased;
@@ -178,6 +179,10 @@ async fn run_task(
     steers: &mut mpsc::Receiver<SteerInput>,
     store: &agentelier_session_store::SessionStoreClient,
 ) -> Result<TurnStatus, ConversationFailure> {
+    let identity = tokio::select! { biased;
+        _ = cancel.cancelled() => return Ok(TurnStatus::Cancelled),
+        result = credentials.execution() => match result { Ok(identity) => identity, Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())) },
+    };
     let catalog = active.catalog();
     let mut cleanup_failed = false;
     let mut tools_used = 0;
@@ -186,13 +191,21 @@ async fn run_task(
         if cancel.is_cancelled() {
             return Ok(TurnStatus::Cancelled);
         }
-        let result =
-            match request_once(active, credentials.clone(), cancel, progress, steers, store).await?
-            {
-                Some(Ok(result)) => result,
-                Some(Err(failure)) => return Ok(TurnStatus::Failed(failure.to_string())),
-                None => return Ok(TurnStatus::Cancelled),
-            };
+        let result = match request_once(
+            active,
+            credentials.clone(),
+            &identity,
+            cancel,
+            progress,
+            steers,
+            store,
+        )
+        .await?
+        {
+            Some(Ok(result)) => result,
+            Some(Err(failure)) => return Ok(TurnStatus::Failed(failure.to_string())),
+            None => return Ok(TurnStatus::Cancelled),
+        };
         if let Err(failure) = active.accept_response(&result) {
             return Ok(TurnStatus::Failed(failure.to_string()));
         }

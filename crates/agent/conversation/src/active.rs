@@ -80,7 +80,6 @@ impl ActiveTurn {
             effort: self.view.settings.effort.clone(),
             context,
             tools: self.tools.clone(),
-            account_subject: self.view.settings.account_subject.clone(),
             instructions: self.view.settings.instructions.clone(),
         })
     }

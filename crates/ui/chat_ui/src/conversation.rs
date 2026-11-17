@@ -103,7 +103,6 @@ pub struct ChatSession {
     pub display_name: String,
     pub effort: Option<String>,
     pub image_input: Option<bool>,
-    pub account_subject: String,
     pub working_directory: String,
     pub instruction_snapshot: String,
     pub turn: Option<ChatTurn>,
@@ -121,7 +120,6 @@ pub struct ChatReplacement {
     pub display_name: String,
     pub effort: Option<String>,
     pub image_input: Option<bool>,
-    pub account_subject: String,
     pub working_directory: String,
     #[reflect(ignore)]
     pub instructions: Arc<InstructionSnapshot>,
@@ -158,10 +156,6 @@ impl ChatState {
                         .turn
                         .as_ref()
                         .is_none_or(|turn| !matches!(turn.status, ChatTurnStatus::Running))
-                    && account
-                        .account
-                        .as_ref()
-                        .is_some_and(|account| account.subject == session.account_subject)
             })
     }
     fn can_steer(&self, account: &AccountState) -> bool {
@@ -428,18 +422,11 @@ fn create_session(world: &mut World) -> Result {
     let choice = model
         .selected_model()
         .ok_or_else(|| io::Error::other("聊天准备区缺少所选模型"))?;
-    let subject = account
-        .account
-        .as_ref()
-        .ok_or_else(|| io::Error::other("创建会话缺少当前账号"))?
-        .subject
-        .clone();
     let settings = SessionSettings {
         slug: choice.slug.clone(),
         display_name: choice.display_name.clone(),
         effort: model.reasoning.effort(),
         image_input: choice.image_input,
-        account_subject: subject,
         instructions: Arc::new(crate::prompts::snapshot(world)?),
         working_directory: world
             .resource::<crate::working_directory::DirectoryState>()
@@ -454,7 +441,6 @@ fn create_session(world: &mut World) -> Result {
             display_name: settings.display_name,
             effort: settings.effort,
             image_input: settings.image_input,
-            account_subject: settings.account_subject,
             instructions: settings.instructions,
             working_directory: settings.working_directory.to_string_lossy().into_owned(),
         });
@@ -498,7 +484,6 @@ fn prepare_reset(world: &mut World) -> Result {
         display_name: session.display_name.clone(),
         effort: session.effort.clone(),
         image_input: session.image_input,
-        account_subject: session.account_subject.clone(),
         instructions: Arc::new(serde_json::from_str(&session.instruction_snapshot)?),
         working_directory: session.working_directory.clone(),
     };
@@ -514,11 +499,8 @@ fn confirm_replacement(world: &mut World) -> Result {
         return Ok(());
     };
     let account = world.resource::<AccountState>();
-    if !world.resource::<ModelState>().can_request(account)
-        || account
-            .account
-            .as_ref()
-            .is_none_or(|account| account.subject != pending.account_subject)
+    if account.runtime_failed
+        || (pending.reset_session.is_none() && !world.resource::<ModelState>().can_request(account))
     {
         return Ok(());
     }
@@ -529,7 +511,6 @@ fn confirm_replacement(world: &mut World) -> Result {
             display_name: pending.display_name,
             effort: pending.effort,
             image_input: pending.image_input,
-            account_subject: pending.account_subject,
             instructions: pending.instructions,
             working_directory: pending.working_directory.into(),
         }),
@@ -561,10 +542,6 @@ fn can_retry(
         && model.can_request(account)
         && state.session.as_ref().is_some_and(|session| {
             !session.execution_blocked
-                && account
-                    .account
-                    .as_ref()
-                    .is_some_and(|account| account.subject == session.account_subject)
                 && session.turn.as_ref().is_some_and(|turn| {
                     turn.committed_steps == 0
                         && !turn
@@ -943,7 +920,6 @@ fn project(session: SessionView) -> Result<ChatSession> {
         display_name: session.settings.display_name,
         effort: session.settings.effort,
         image_input: session.settings.image_input,
-        account_subject: session.settings.account_subject,
         working_directory: bevy_widgetry_path_display::display_path(
             &session.settings.working_directory,
         ),
@@ -1591,7 +1567,7 @@ fn update(
                     && state.replacement.is_none()
                     && state.operation.is_none()
                     && !activity.model_busy
-                    && model.can_request(&account)
+                    && !account.runtime_failed
             }
             ChatAction::ConfirmReplacement | ChatAction::KeepSession => {
                 state.replacement.is_some() && state.operation.is_none() && !activity.model_busy

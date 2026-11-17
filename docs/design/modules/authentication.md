@@ -99,3 +99,5 @@ Runtime 在独立线程驱动 Tokio，Account 串行协调账号操作，Login �
 `agentelier_agent_runtime` 拥有 Tokio、混合命令队列、独立退出队列、模型任务及线程收尾。Account 的交付失败返回 Runtime，由 Runtime 在完成必要提交后报告；退出时先回收模型，再进入 Account 的撤销和清理。Account Bridge 负责非敏感账号投影，Connection 负责操作关联和唤醒，UI 只持有展示状态。
 
 公共 UI 连接由 `agentelier_agent_host` 持有，登录 UI 不再持有或读取 Connection。AgentHost 接收一次后台事件后，分别分发账号、模型业务消息和运行失败通知；login_ui 只管理账号展示、私有授权地址及浏览器辅助任务。整体退出通过共享宿主确认执行结束，再收尾辅助任务和应用资源。
+
+本地聊天存档独立于认证会话。退出与主体变化仍先取消并回收旧执行体，随后暂停并保存待办；不会清空聊天 Session、时间线、指令或工作历史。后续任务通过当前 CredentialClient 取得新的执行身份，不按创建账号过滤本地记录。认证文件中的会话清理只指凭据，不指聊天存档。

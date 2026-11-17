@@ -32,6 +32,23 @@ pub struct CredentialClient {
     shutdown: CancellationToken,
 }
 
+#[derive(Clone)]
+pub struct ExecutionIdentity {
+    version: CredentialVersion,
+    invalidated: CancellationToken,
+}
+impl ExecutionIdentity {
+    pub fn validate(&self, credentials: &UsableCredentials) -> Result<(), SessionFailure> {
+        if self.invalidated.is_cancelled() || !self.version.same_account(credentials.version()) {
+            return Err(SessionFailure::new(
+                SessionFailureKind::Identity,
+                "本次任务的账号会话已结束，请使用当前账号开始新任务",
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub struct CredentialRequest {
     result: watch::Receiver<Option<Outcome>>,
     invalidated: CancellationToken,
@@ -83,6 +100,19 @@ impl CredentialClient {
             })),
             shutdown,
         }
+    }
+    pub async fn execution(&self) -> Result<ExecutionIdentity, SessionFailure> {
+        let request = self.request().map_err(|failure| {
+            SessionFailure::new(SessionFailureKind::Runtime, failure.to_string())
+        })?;
+        let invalidated = request.invalidated.clone();
+        let credentials = request.wait().await?;
+        let identity = ExecutionIdentity {
+            version: credentials.version().clone(),
+            invalidated,
+        };
+        identity.validate(&credentials)?;
+        Ok(identity)
     }
     pub fn request(&self) -> Result<CredentialRequest, AccountFailure> {
         self.submit(CredentialIntent::Acquire)

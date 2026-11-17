@@ -35,7 +35,6 @@ impl Loading {
     pub(super) fn complete(
         self,
         result: io::Result<RestoredSession>,
-        subject: Option<&str>,
         operations: &crate::OperationSequence,
         conversation: &mut Conversation,
     ) -> ConversationEvent {
@@ -53,7 +52,7 @@ impl Loading {
         });
         match result {
             Ok(restored) => {
-                let view = conversation.install_restored(restored, subject);
+                let view = conversation.install_restored(restored);
                 tracing::info!(session_id = %view.id, "本地会话已打开，未启动模型或待办");
                 ConversationEvent::Opened(view)
             }

@@ -31,6 +31,9 @@ impl From<&SessionView> for StoredState {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RecordEvent {
+    QueueSuspended {
+        state: StoredState,
+    },
     Recovered {
         state: StoredState,
         history: agentelier_llm_model::ProtocolArchive,
@@ -81,7 +84,8 @@ pub enum RecordEvent {
 impl RecordEvent {
     pub fn state(&self) -> &StoredState {
         match self {
-            Self::Recovered { state, .. }
+            Self::QueueSuspended { state }
+            | Self::Recovered { state, .. }
             | Self::Accepted { state }
             | Self::Response { state, .. }
             | Self::ToolStarted { state, .. }

@@ -8,7 +8,7 @@ pub use agentelier_login::{
     AuthenticatedRequest, CredentialState, RemoteRevocation, RestoredAccount, SessionActivity,
     SessionFailure, SessionFailureKind, SignOutStage, UsableCredentials,
 };
-pub use credentials::{CredentialClient, CredentialIntent, CredentialRequest};
+pub use credentials::{CredentialClient, CredentialIntent, CredentialRequest, ExecutionIdentity};
 pub use operations::{
     Account, AccountCommand, AccountEvent, AccountEventKind, AccountFailure, DeliveryFailure,
     OperationFailure,

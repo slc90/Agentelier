@@ -58,6 +58,7 @@ pub struct PreparedQueue {
     pub decision: QueueDecision,
     state: crate::StoredState,
     next_turn: u64,
+    pause_revision: u64,
 }
 
 impl PreparedQueue {
@@ -72,6 +73,7 @@ impl PreparedQueue {
     }
 
     pub fn commit(self, conversation: &mut Conversation) -> QueueEvent {
+        let pause_revision = conversation.queue_pause_revision;
         match conversation
             .session
             .as_mut()
@@ -82,7 +84,8 @@ impl PreparedQueue {
                 session.view.queue_paused = self.state.queue_paused
                     || session.view.execution_blocked
                     || (session.view.queue_paused
-                        && !matches!(self.decision, QueueDecision::Resumed));
+                        && (!matches!(self.decision, QueueDecision::Resumed)
+                            || self.pause_revision != pause_revision));
                 conversation.next_turn = conversation.next_turn.max(self.next_turn);
                 QueueEvent {
                     id: self.id,
@@ -121,6 +124,7 @@ impl Conversation {
             decision: event.decision,
             state: crate::StoredState::from(&view),
             next_turn: candidate.next_turn,
+            pause_revision: self.queue_pause_revision,
         })
     }
 

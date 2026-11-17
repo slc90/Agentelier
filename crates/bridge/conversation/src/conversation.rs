@@ -8,7 +8,6 @@ pub struct SessionSettings {
     pub display_name: String,
     pub effort: Option<String>,
     pub image_input: Option<bool>,
-    pub account_subject: String,
     pub instructions: Arc<InstructionSnapshot>,
     pub working_directory: std::path::PathBuf,
 }
@@ -206,7 +205,6 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
                     display_name: settings.display_name,
                     effort: settings.effort,
                     image_input: settings.image_input,
-                    account_subject: settings.account_subject,
                     instructions: settings.instructions,
                     working_directory: settings.working_directory,
                 },
@@ -248,7 +246,6 @@ fn view(session: agentelier_conversation::SessionView) -> SessionView {
             display_name: session.settings.display_name,
             effort: session.settings.effort,
             image_input: session.settings.image_input,
-            account_subject: session.settings.account_subject,
             instructions: session.settings.instructions,
             working_directory: session.settings.working_directory,
         },

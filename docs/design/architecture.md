@@ -160,7 +160,7 @@ flowchart LR
 
 ## 内存聊天与流式投影
 
-Conversation 固定 Session 的模型、推理设置和账号身份，分配独立 Session/Turn 身份并管理稳定会话；开始任务时签出 ActiveTurn 和协议历史，由 Turn Runner 独占推进，Conversation 只保留占用身份和展示快照。Runtime 拥有业务对象及唯一网络任务、取消和 JoinHandle，回收后归还记录。聊天请求通过同一 CredentialClient 获取凭据并核对账号主体，不重新读取认证文件。当前支持一个内存 Session 的连续多轮交流，空闲时可确认新建或重置为全新身份与空历史。成功输入与完整协议输出由该 Session 原子提交，失败和取消只保留展示记录。
+Conversation 固定 Session 的模型与推理设置，分配独立 Session/Turn 身份并管理稳定会话；开始任务时签出 ActiveTurn 和协议历史，由 Turn Runner 独占推进，Conversation 只保留占用身份和展示快照。Runtime 拥有业务对象及唯一网络任务、取消和 JoinHandle，回收后归还记录。Runner 每任务通过同一 CredentialClient 捕获当前执行身份，模型请求核对该任务的账号与认证生命周期，不重新读取认证文件，也不按创建账号限制会话。账号变化保留本地记录并持久暂停队列。当前支持一个内存 Session 的连续多轮交流，空闲时可确认新建或重置为全新身份与空历史。成功输入与完整协议输出由该 Session 原子提交，失败和取消只保留展示记录。
 
 LLM Model 解析 Responses 输出项、内容段、公开 phase 和文本增量；只有 response.completed 及可接受完整输出才成功。聊天无总生成时长限制，合法 SSE 活动维持 120 秒空闲期限；连接验证仍保留原总超时。聊天启用固定 Direct function tools；LLM Model 只解析调用和映射结果，Runner 在完整响应和身份检查后执行。普通拒绝正文正常展示。任务 join 后才释放操作占用，失败/取消保留已经显示的部分回复。
 

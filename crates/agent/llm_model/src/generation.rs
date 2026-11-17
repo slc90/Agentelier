@@ -4,7 +4,7 @@ use crate::model::{
 };
 use crate::protocol::ProtocolHistory;
 use crate::stream::{GenerationResult, STREAM_IDLE_TIMEOUT, StreamEvent, consume};
-use agentelier_account::{AuthenticatedRequest, CredentialClient};
+use agentelier_account::{AuthenticatedRequest, CredentialClient, ExecutionIdentity};
 use agentelier_prompts::InstructionSnapshot;
 use reqwest::Client;
 use std::sync::Arc;
@@ -36,13 +36,13 @@ pub struct GenerationRequest {
     pub effort: Option<String>,
     pub context: ProtocolHistory,
     pub instructions: Arc<InstructionSnapshot>,
-    pub account_subject: String,
     pub tools: Arc<agentelier_tools::ToolCatalog>,
 }
 
 pub async fn generate(
     credentials: CredentialClient,
     generation: GenerationRequest,
+    identity: &ExecutionIdentity,
     progress: Sender<StreamEvent>,
 ) -> Result<GenerationResult, ModelFailure> {
     let client = Client::builder()
@@ -53,12 +53,9 @@ pub async fn generate(
         .build()
         .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "无法建立安全模型客户端"))?;
     let mut current = acquire(&credentials).await?;
-    if current.version().subject() != generation.account_subject {
-        return Err(ModelFailure::new(
-            ModelFailureKind::Authentication,
-            "账号身份已变化，请创建新聊天会话",
-        ));
-    }
+    identity.validate(&current).map_err(|failure| {
+        ModelFailure::new(ModelFailureKind::Authentication, failure.to_string())
+    })?;
     generation
         .instructions
         .validate()
@@ -116,6 +113,9 @@ pub async fn generate(
     );
     let mut request = AuthenticatedRequest::new(&current);
     loop {
+        identity.validate(&current).map_err(|failure| {
+            ModelFailure::new(ModelFailureKind::Authentication, failure.to_string())
+        })?;
         let response = tokio::time::timeout(
             STREAM_IDLE_TIMEOUT,
             client

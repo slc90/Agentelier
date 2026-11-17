@@ -17,7 +17,6 @@ pub struct SessionSettings {
     pub display_name: String,
     pub effort: Option<String>,
     pub image_input: Option<bool>,
-    pub account_subject: String,
     pub instructions: Arc<InstructionSnapshot>,
     pub working_directory: std::path::PathBuf,
 }
@@ -138,16 +137,11 @@ pub struct PreparedSession {
     pub initial: crate::InitialSession,
 }
 
-impl PreparedSession {
-    pub fn account_subject(&self) -> &str {
-        &self.session.view.settings.account_subject
-    }
-}
-
 #[derive(Clone, Default)]
 pub struct Conversation {
     pub(crate) session: Option<ChatSession>,
     pub(crate) next_turn: u64,
+    pub(crate) queue_pause_revision: u64,
 }
 
 impl Conversation {
@@ -183,6 +177,7 @@ impl Conversation {
         let session = self.session.as_mut()?;
         session.view.execution_blocked = true;
         session.view.queue_paused = true;
+        session.view.notice = Some(message.clone());
         if let Some(turn) = &mut session.view.turn
             && !matches!(turn.status, TurnStatus::Running)
         {
@@ -191,15 +186,18 @@ impl Conversation {
         Some(session.view.clone())
     }
 
-    pub fn synchronize_account(&mut self, subject: Option<&str>) -> bool {
-        if let Some(session) = &mut self.session
-            && session.view.settings.account_subject.is_empty()
-            && let Some(subject) = subject
-        {
-            session.view.settings.account_subject = subject.into();
-            return true;
-        }
-        false
+    pub fn suspend_queue(&mut self) -> Result<Option<crate::RecordEvent>, ConversationFailure> {
+        let Some(session) = &mut self.session else {
+            return Ok(None);
+        };
+        self.queue_pause_revision = self
+            .queue_pause_revision
+            .checked_add(1)
+            .ok_or_else(|| ConversationFailure::new("队列暂停修订已耗尽"))?;
+        session.view.queue_paused = true;
+        Ok(Some(crate::RecordEvent::QueueSuspended {
+            state: crate::StoredState::from(&session.view),
+        }))
     }
 
     pub fn prepare(
@@ -215,15 +213,12 @@ impl Conversation {
             return Err(ConversationFailure::new("生成尚未结束，不能替换会话"));
         }
         if settings.slug.trim().is_empty()
-            || settings.account_subject.is_empty()
             || settings
                 .effort
                 .as_ref()
                 .is_some_and(|effort| effort.trim().is_empty())
         {
-            return Err(ConversationFailure::new(
-                "会话设置缺少有效模型、推理选项或账号身份",
-            ));
+            return Err(ConversationFailure::new("会话设置缺少有效模型或推理选项"));
         }
         let id = SessionId::new_v4();
         settings

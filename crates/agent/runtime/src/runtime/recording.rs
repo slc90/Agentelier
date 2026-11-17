@@ -9,6 +9,9 @@ use std::io;
 use tokio::task::JoinSet;
 
 pub(super) enum Pending {
+    Suspended {
+        session: SessionId,
+    },
     Queue(PreparedQueue),
     Finished {
         id: u64,
@@ -19,8 +22,14 @@ pub(super) enum Pending {
 
 pub(super) type Records = JoinSet<(Pending, io::Result<Commit>)>;
 
+pub(super) enum AppliedKind {
+    Queue,
+    Suspended,
+    Finished,
+}
+
 pub(super) struct Applied {
-    pub(super) queue: bool,
+    pub(super) kind: AppliedKind,
     pub(super) failed: bool,
 }
 
@@ -50,7 +59,7 @@ pub(super) fn apply(
 ) -> Result<Applied, RuntimeFailure> {
     let expected = match &pending {
         Pending::Queue(queue) => queue.session(),
-        Pending::Finished { session, .. } => *session,
+        Pending::Finished { session, .. } | Pending::Suspended { session } => *session,
     };
     let result = result.and_then(|commit| {
         if commit.session == expected {
@@ -61,6 +70,28 @@ pub(super) fn apply(
     });
     let failed = result.is_err();
     match pending {
+        Pending::Suspended { .. } => {
+            if conversation
+                .current()
+                .is_some_and(|view| view.id == expected)
+            {
+                if let Err(failure) = result {
+                    conversation.fail_storage(format!("账号变化后的队列暂停保存失败：{failure}"));
+                }
+                if let Some(view) = conversation.current() {
+                    emit(
+                        publish,
+                        0,
+                        AgentEventKind::Conversation(ConversationEvent::Opened(view)),
+                    )?;
+                }
+            }
+            Ok(Applied {
+                kind: AppliedKind::Suspended,
+                failed,
+            })
+        }
+
         Pending::Queue(queue) => {
             let event = match result {
                 Ok(_) => queue.commit(conversation),
@@ -85,7 +116,7 @@ pub(super) fn apply(
                 AgentEventKind::Conversation(ConversationEvent::Queue(event)),
             )?;
             Ok(Applied {
-                queue: true,
+                kind: AppliedKind::Queue,
                 failed,
             })
         }
@@ -109,7 +140,7 @@ pub(super) fn apply(
             };
             emit(publish, id, AgentEventKind::Conversation(event))?;
             Ok(Applied {
-                queue: false,
+                kind: AppliedKind::Finished,
                 failed,
             })
         }
