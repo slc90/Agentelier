@@ -50,7 +50,9 @@ impl crate::ActiveTurn {
             return Err(crate::ConversationFailure::new("请求缺少成功的项目采集"));
         };
         let previous = self.view.project_publications.last();
-        if previous.is_some_and(|previous| previous.snapshot.hash == snapshot.hash) {
+        if previous.is_some_and(|previous| {
+            previous.snapshot.hash == snapshot.hash && previous.window == self.view.context.window
+        }) {
             return Ok(None);
         }
         let id = previous
@@ -68,7 +70,20 @@ impl crate::ActiveTurn {
         } else {
             agentelier_llm_model::PublicationKind::Initial
         };
-        let kind = if previous.is_none() {
+        let kind = if previous.is_some_and(|previous| previous.window != self.view.context.window) {
+            if snapshot.has_rules() {
+                agentelier_llm_model::PublicationKind::Republished
+            } else if self
+                .view
+                .project_publications
+                .iter()
+                .any(|publication| publication.snapshot.has_rules())
+            {
+                agentelier_llm_model::PublicationKind::RepublishedRemoval
+            } else {
+                agentelier_llm_model::PublicationKind::Initial
+            }
+        } else if previous.is_none() {
             agentelier_llm_model::PublicationKind::Initial
         } else {
             kind

@@ -24,6 +24,8 @@ pub enum PublicationKind {
     Initial,
     Replacement,
     Removal,
+    Republished,
+    RepublishedRemoval,
 }
 
 impl ProjectPublication {
@@ -34,8 +36,8 @@ impl ProjectPublication {
     pub fn new(id: u64, window: u64, snapshot: ProjectSnapshot, kind: PublicationKind) -> Self {
         let text = match kind {
             PublicationKind::Initial => snapshot.rendered.clone(),
-            PublicationKind::Replacement => format!("The following complete project instructions replace all previously automatically published project instructions. User instructions and tool-provided material are unchanged.\n\n{}", snapshot.rendered),
-            PublicationKind::Removal => "All previously automatically published project instructions are withdrawn. No automatic project rules currently apply. User instructions and tool-provided material are unchanged.".into(),
+            PublicationKind::Replacement | PublicationKind::Republished => format!("The following complete project instructions replace all previously automatically published project instructions. User instructions and tool-provided material are unchanged.\n\n{}", snapshot.rendered),
+            PublicationKind::Removal | PublicationKind::RepublishedRemoval => "All previously automatically published project instructions are withdrawn. No automatic project rules currently apply. User instructions and tool-provided material are unchanged.".into(),
         };
         let item = (!text.is_empty()).then(|| ProjectItem {
             publication: id,
@@ -58,8 +60,14 @@ impl ProjectPublication {
         let expected = Self::new(self.id, self.window, self.snapshot.clone(), self.kind);
         if self.id == 0
             || expected.item != self.item
-            || (self.kind == PublicationKind::Removal && self.snapshot.has_rules())
-            || (self.kind == PublicationKind::Replacement && !self.snapshot.has_rules())
+            || (matches!(
+                self.kind,
+                PublicationKind::Removal | PublicationKind::RepublishedRemoval
+            ) && self.snapshot.has_rules())
+            || (matches!(
+                self.kind,
+                PublicationKind::Replacement | PublicationKind::Republished
+            ) && !self.snapshot.has_rules())
         {
             return Err(crate::model::protocol("项目发布身份或正文不一致"));
         }

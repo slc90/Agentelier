@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CompactionCheckpoint {
+    #[serde(default)]
+    pub(crate) project_publication: Option<u64>,
     pub(crate) session: SessionId,
     pub(crate) turn: TurnId,
     pub(crate) request: u32,
@@ -77,6 +79,11 @@ impl ActiveTurn {
         context.latest = self.view.context.latest.clone();
         context.refresh(&history, &self.view.settings.instructions, &self.tools)?;
         let checkpoint = CompactionCheckpoint {
+            project_publication: self
+                .view
+                .project_publications
+                .last()
+                .map(|publication| publication.id),
             session: self.view.id,
             turn: turn.id,
             request: turn.request_index,
@@ -107,7 +114,13 @@ impl ActiveTurn {
             .as_ref()
             .ok_or_else(|| ConversationFailure::new("压缩安装缺少任务"))?;
         let checkpoint = &candidate.checkpoint;
-        if checkpoint.session != self.view.id
+        if checkpoint.project_publication
+            != self
+                .view
+                .project_publications
+                .last()
+                .map(|publication| publication.id)
+            || checkpoint.session != self.view.id
             || checkpoint.turn != current.id
             || checkpoint.request != current.request_index
             || checkpoint.source_window != self.view.context.window

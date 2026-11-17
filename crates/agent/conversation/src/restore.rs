@@ -166,6 +166,11 @@ pub fn restore(
             } => {
                 checkpoint.validate(&incoming)?;
                 if pending.is_some()
+                    || checkpoint.project_publication
+                        != publications.last().map(|publication| publication.id)
+                    || publications
+                        .last()
+                        .is_some_and(|publication| publication.window > checkpoint.source_window)
                     || checkpoint.source_window != state.context.window
                     || checkpoint.source_sequence != covered_sequence
                     || checkpoint.source_sequence >= record.sequence
