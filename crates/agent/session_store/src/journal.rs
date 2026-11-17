@@ -110,6 +110,9 @@ impl Writer {
         )
     }
 
+    pub(super) fn delete(&mut self, root: &Path, session: SessionId) -> io::Result<Commit> {
+        self.append_kind(root, session, RecordKind::Deleted { session })
+    }
     pub(super) fn rename(
         &mut self,
         root: &Path,
@@ -194,6 +197,7 @@ impl Writer {
                 cursor.summary.title = title;
                 cursor.titled = true;
             }
+            RecordKind::Deleted { .. } => cursor.summary.deleted = true,
             RecordKind::Created(_) => return Err(io::Error::other("追加路径不能创建初始记录")),
         }
         Ok(Commit {

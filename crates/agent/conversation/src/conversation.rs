@@ -23,6 +23,7 @@ pub struct SessionSettings {
 }
 pub enum ConversationRequest {
     Open { session: SessionId },
+    Delete { session: SessionId },
     Create(SessionSettings),
     Reset { session: SessionId },
     Send { session: SessionId, input: String },
@@ -87,6 +88,12 @@ pub struct SessionView {
     pub queue_paused: bool,
 }
 pub enum ConversationEvent {
+    ArchiveCleanup(Vec<String>),
+    Deleted {
+        session: SessionId,
+        cleanup_error: Option<String>,
+        was_open: bool,
+    },
     Renamed {
         session: SessionId,
         result: Result<crate::ArchiveEntry, String>,
@@ -144,6 +151,16 @@ pub struct Conversation {
 }
 
 impl Conversation {
+    pub fn remove(&mut self, id: SessionId) {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.view.id == id)
+        {
+            self.session = None;
+            self.next_turn = 0;
+        }
+    }
     pub fn current(&self) -> Option<SessionView> {
         self.session.as_ref().map(|session| session.view.clone())
     }
@@ -400,6 +417,7 @@ impl Conversation {
             }
             ConversationRequest::Create(_)
             | ConversationRequest::Reset { .. }
+            | ConversationRequest::Delete { .. }
             | ConversationRequest::Open { .. } => {
                 Err(ConversationFailure::new("创建会话不是生成操作"))
             }

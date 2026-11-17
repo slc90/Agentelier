@@ -29,6 +29,7 @@ pub struct Record {
 pub enum RecordKind {
     Created(InitialSession),
     Renamed { session: SessionId, title: String },
+    Deleted { session: SessionId },
     Event(SessionRecord),
 }
 
@@ -38,14 +39,24 @@ pub struct Commit {
     pub summary_failure: Option<io::Error>,
 }
 
+pub struct ArchiveCatalog {
+    pub entries: Vec<agentelier_conversation::ArchiveEntry>,
+    pub cleanup_errors: Vec<String>,
+}
+pub struct DeleteCommit {
+    pub session: SessionId,
+    pub cleanup_error: Option<io::Error>,
+}
+
 pub struct RenameCommit {
     pub summary: agentelier_conversation::SessionSummary,
     pub summary_failure: Option<io::Error>,
 }
 
 enum Command {
+    Delete(SessionId, oneshot::Sender<io::Result<DeleteCommit>>),
     Rename(SessionId, String, oneshot::Sender<io::Result<RenameCommit>>),
-    Scan(oneshot::Sender<io::Result<Vec<agentelier_conversation::ArchiveEntry>>>),
+    Scan(oneshot::Sender<io::Result<ArchiveCatalog>>),
     Load(
         SessionId,
         oneshot::Sender<io::Result<agentelier_conversation::RestoredSession>>,
@@ -64,6 +75,16 @@ enum Command {
 pub struct SessionStoreClient(mpsc::Sender<Command>);
 
 impl SessionStoreClient {
+    pub fn delete(
+        &self,
+        session: SessionId,
+    ) -> io::Result<oneshot::Receiver<io::Result<DeleteCommit>>> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .try_send(Command::Delete(session, reply))
+            .map_err(|failure| io::Error::other(format!("无法接纳会话删除：{failure}")))?;
+        Ok(result)
+    }
     pub fn rename(
         &self,
         session: SessionId,
@@ -75,9 +96,7 @@ impl SessionStoreClient {
             .map_err(|failure| io::Error::other(format!("无法接纳会话重命名：{failure}")))?;
         Ok(result)
     }
-    pub fn scan(
-        &self,
-    ) -> io::Result<oneshot::Receiver<io::Result<Vec<agentelier_conversation::ArchiveEntry>>>> {
+    pub fn scan(&self) -> io::Result<oneshot::Receiver<io::Result<ArchiveCatalog>>> {
         let (reply, result) = oneshot::channel();
         self.0
             .try_send(Command::Scan(reply))
@@ -174,6 +193,7 @@ impl SessionStore {
                 let mut writer = crate::journal::Writer::default();
                 while let Some(command) = commands.blocking_recv() {
                     match command {
+                        Command::Delete(session, reply) => { let _closed = reply.send(crate::deletion::delete(&root, session, &mut writer)); }
                         Command::Rename(session, title, reply) => { let _closed = reply.send(writer.rename(&root, session, title)); }
                         Command::Scan(reply) => {
                             let result = crate::reader::scan(&root);

@@ -123,3 +123,14 @@ fn follow(
     reading.maximum = maximum;
     reading.restore = false;
 }
+
+pub(crate) fn forget(
+    world: &mut World,
+    session: agentelier_conversation_bridge::SessionId,
+    current: bool,
+) {
+    world.resource_mut::<ReadingStates>().0.remove(&session);
+    if current {
+        *world.resource_mut::<ChatReading>() = default();
+    }
+}

@@ -14,6 +14,7 @@ pub struct SessionSettings {
 }
 pub enum ConversationRequest {
     Open { session: SessionId },
+    Delete { session: SessionId },
     Create(SessionSettings),
     Reset { session: SessionId },
     Send { session: SessionId, input: String },
@@ -140,6 +141,12 @@ pub struct SessionView {
     pub queue_paused: bool,
 }
 pub enum ConversationEvent {
+    ArchiveCleanup(Vec<String>),
+    Deleted {
+        session: SessionId,
+        cleanup_error: Option<String>,
+        was_open: bool,
+    },
     Renamed {
         session: SessionId,
         result: Result<ArchiveEntry, String>,
@@ -171,7 +178,8 @@ impl ConversationEvent {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            Self::Created(_)
+            Self::Deleted { .. }
+                | Self::Created(_)
                 | Self::Finished(_)
                 | Self::Rejected(_)
                 | Self::Opened(_)
@@ -185,6 +193,9 @@ impl ConversationEvent {
 
 pub fn request(request: ConversationRequest) -> agentelier_conversation::ConversationRequest {
     match request {
+        ConversationRequest::Delete { session } => {
+            agentelier_conversation::ConversationRequest::Delete { session }
+        }
         ConversationRequest::Open { session } => {
             agentelier_conversation::ConversationRequest::Open { session }
         }
@@ -363,6 +374,18 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
 
 pub fn convert(event: agentelier_conversation::ConversationEvent) -> ConversationEvent {
     match event {
+        agentelier_conversation::ConversationEvent::ArchiveCleanup(errors) => {
+            ConversationEvent::ArchiveCleanup(errors)
+        }
+        agentelier_conversation::ConversationEvent::Deleted {
+            session,
+            cleanup_error,
+            was_open,
+        } => ConversationEvent::Deleted {
+            session,
+            cleanup_error,
+            was_open,
+        },
         agentelier_conversation::ConversationEvent::Renamed { session, result } => {
             ConversationEvent::Renamed {
                 session,

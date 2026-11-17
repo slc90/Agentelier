@@ -8,6 +8,7 @@ use agentelier_conversation::{
 };
 use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
 mod creation;
+mod deleting;
 mod loading;
 mod model_task;
 mod recording;
@@ -90,7 +91,8 @@ enum Command {
     },
     Renamed(io::Result<agentelier_session_store::RenameCommit>),
     Scan,
-    Scanned(io::Result<Vec<agentelier_conversation::ArchiveEntry>>),
+    Scanned(io::Result<agentelier_session_store::ArchiveCatalog>),
+    Deleted(io::Result<agentelier_session_store::DeleteCommit>),
     Loaded(io::Result<agentelier_conversation::RestoredSession>),
     Recorded(
         Result<
@@ -200,6 +202,7 @@ impl AgentRuntime {
                         let mut startup_catalog = true;
                         let mut records = recording::Records::new();
                         let mut pending_queue = false;
+                        let mut deleting: Option<deleting::Deleting> = None;
                         let mut renaming: Option<renaming::Renaming> = None;
                         let mut finalizing = false;
                         let mut account = Account::new(credentials_path, owner_credentials.clone());
@@ -225,6 +228,7 @@ impl AgentRuntime {
                                         None => std::future::pending().await,
                                     }} => Command::Loaded(result),
                                     result = async { match &mut renaming { Some(pending) => pending.wait().await, None => std::future::pending().await } } => Command::Renamed(result),
+                                    result = async { match &mut deleting { Some(pending) => pending.wait().await, None => std::future::pending().await } } => Command::Deleted(result),
                                     result = records.join_next(), if !records.is_empty() => match result {
                                         Some(result) => Command::Recorded(result),
                                         None => return Err(RuntimeFailure::ModelState),
@@ -252,7 +256,7 @@ impl AgentRuntime {
                                 };
                                 match command {
                                     Command::Rename { id, session, title } => {
-                                        match if renaming.is_some() { Err(io::Error::other("已有名称操作正在保存")) } else { renaming::Renaming::start(id, session, title, &store) } {
+                                        match if renaming.is_some() || deleting.is_some() { Err(io::Error::other("已有会话管理操作正在保存")) } else { renaming::Renaming::start(id, session, title, &store) } {
                                             Ok(pending) => renaming = Some(pending),
                                             Err(failure) => emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Renamed { session, result: Err(failure.to_string()) }))?,
                                         }
@@ -264,6 +268,11 @@ impl AgentRuntime {
                                         if catalog.is_none() { match store.client().scan() { Ok(reply) => catalog = Some(reply), Err(failure) => emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(failure.to_string())))? } }
                                     }
 
+                                    Command::Deleted(result) => {
+                                        let pending = deleting.take().ok_or(RuntimeFailure::ModelState)?;
+                                        let id = pending.id;
+                                        emit(&publish, id, AgentEventKind::Conversation(pending.complete(result, &mut conversation)))?;
+                                    }
                                     Command::Scan => {
                                         if catalog.is_none() {
                                             match store.client().scan() {
@@ -275,15 +284,17 @@ impl AgentRuntime {
                                     Command::Scanned(result) => {
                                         catalog = None;
                                         match result {
-                                            Ok(entries) => {
+                                            Ok(catalog) => {
+                                                let entries = catalog.entries;
                                                 let first = entries.first().map(|entry| entry.summary.session);
                                                 emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Archives(entries)))?;
-                                                if startup_catalog && conversation.current().is_none() && model.is_none() && creating.is_none() && loading.is_none() && !finalizing && !pending_queue && let Some(session) = first {
+                                                if startup_catalog && conversation.current().is_none() && model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && !finalizing && !pending_queue && let Some(session) = first {
                                                         match loading::Loading::start(0, None, session, &store) {
                                                             Ok(pending) => loading = Some(pending),
                                                             Err(failure) => emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(failure.to_string())))?,
                                                         }
                                                 }
+                                                emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::ArchiveCleanup(catalog.cleanup_errors)))?;
                                                 startup_catalog = false;
                                             }
                                             Err(failure) => emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(format!("无法读取本地会话目录：{failure}"))))?,
@@ -307,7 +318,7 @@ impl AgentRuntime {
                                         let applied = recording::apply(pending, result, &mut conversation, &publish)?;
                                         if applied.queue { pending_queue = false; } else { finalizing = false; }
                                         if applied.failed && let Some(control) = owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.as_ref() { control.cancel.cancel(); }
-                                        if model.is_none() && creating.is_none() && loading.is_none() && !pending_queue && !finalizing && !runtime_shutdown.is_cancelled() {
+                                        if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && !pending_queue && !finalizing && !runtime_shutdown.is_cancelled() {
                                             model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish)?;
                                         }
                                     }
@@ -322,7 +333,7 @@ impl AgentRuntime {
                                         control,
                                         request,
                                     } => {
-                                        if model.is_some() || creating.is_some() || loading.is_some() || finalizing || pending_queue {
+                                        if model.is_some() || creating.is_some() || loading.is_some() || deleting.is_some() || finalizing || pending_queue {
                                             control.finished.cancel();
                                             emit(&publish,id,AgentEventKind::ModelCompleted(Err(agentelier_llm_model::ModelFailure {kind:agentelier_llm_model::ModelFailureKind::Service,status:None,code:None,request_id:None,message:"当前任务正在执行，不能插入模型操作".into()})))?;
                                             continue;
@@ -356,7 +367,7 @@ impl AgentRuntime {
                                         }
                                     }
                                     Command::Session(command) => {
-                                        if creating.is_some() || loading.is_some() || finalizing || (matches!(command,SessionCommand::Resume {..}) && model.is_some()) {
+                                        if creating.is_some() || loading.is_some() || deleting.is_some() || finalizing || (matches!(command,SessionCommand::Resume {..}) && model.is_some()) {
                                             let id=command.id();
                                             emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Queue(agentelier_conversation::QueueEvent {
                                                 id,view:None,decision:agentelier_conversation::QueueDecision::Rejected("当前执行尚未回收，不能继续队列".into()),
@@ -389,12 +400,18 @@ impl AgentRuntime {
                                         request,
                                         steers,
                                     } => {
-                                        if model.is_some() || creating.is_some() || loading.is_some() || finalizing || pending_queue {
+                                        if model.is_some() || creating.is_some() || loading.is_some() || deleting.is_some() || finalizing || pending_queue {
                                             control.finished.cancel();
                                             emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Rejected("排队任务已经开始，当前发送未接纳，草稿保留".into())))?;
                                             continue;
                                         }
                                         match request {
+                                            ConversationRequest::Delete { session } => {
+                                                match if renaming.is_some() { Err(io::Error::other("名称写入尚未完成，请稍后删除")) } else { deleting::Deleting::start(id, control.clone(), session, &store) } {
+                                                    Ok(pending) => { *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control); deleting = Some(pending); }
+                                                    Err(failure) => { control.finished.cancel(); emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?; }
+                                                }
+                                            }
                                             ConversationRequest::Open { session } => {
                                                 match loading::Loading::start(id, Some(control.clone()), session, &store) {
                                                     Ok(pending) => {
@@ -478,6 +495,10 @@ impl AgentRuntime {
                                             );
                                             while let Ok(queued) = incoming.try_recv() {
                                                 match queued {
+                                                    Command::Conversation { id, control, request: ConversationRequest::Delete { .. }, .. } => {
+                                                        control.finished.cancel();
+                                                        emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("账号操作开始前尚未接纳删除，请重新提交".into())))?;
+                                                    }
                                                     Command::Rename { id, session, .. } => emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Renamed { session, result: Err("账号操作开始前尚未接纳名称写入，请重新提交".into()) }))?,
                                                     Command::Account(command) => {
                                                         command.reject_for_sign_out()
@@ -567,6 +588,7 @@ impl AgentRuntime {
                             }
                         }
                         if let Some(mut pending) = renaming { let result = pending.wait().await; let id = pending.id; capture_delivery(emit(&publish, id, AgentEventKind::Conversation(pending.complete(result))), &mut delivery_failure); }
+                        if let Some(mut pending) = deleting { let result = pending.wait().await; let id = pending.id; capture_delivery(emit(&publish, id, AgentEventKind::Conversation(pending.complete(result, &mut conversation))), &mut delivery_failure); }
                         let stored = store.finish().await.map_err(RuntimeFailure::Store);
                         if let Some(pending) = loading && let Some(control) = pending.control { control.finished.cancel(); }
                         let pending_saved = if let Some(mut pending) = creating {

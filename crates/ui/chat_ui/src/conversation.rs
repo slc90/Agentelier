@@ -354,6 +354,28 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
     Ok(())
 }
 
+fn forget_session(world: &mut World, session: SessionId) -> Result {
+    world.resource_mut::<SessionUiStates>().0.remove(&session);
+    let current = world
+        .resource::<ChatState>()
+        .session
+        .as_ref()
+        .is_some_and(|view| view.id == session);
+    crate::reading::forget(world, session, current);
+    if current {
+        let roots = world
+            .query_filtered::<Entity, With<Composer>>()
+            .iter(world)
+            .collect::<Vec<_>>();
+        for root in roots {
+            WidgetryTextFieldHeadless::set_text_in_world(world, root, "")
+                .map_err(|failure| failure.into_bevy_error())?;
+        }
+        *world.resource_mut::<ChatState>() = default();
+    }
+    Ok(())
+}
+
 fn button(label: &'static str, name: &'static str, action: ChatAction) -> impl Scene {
     let children: Box<dyn SceneList> = if matches!(action, ChatAction::Send) {
         Box::new(bsn_list! {Text(label) WidgetryText SendLabel})
@@ -947,6 +969,29 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         .drain()
         .collect();
     for event in events {
+        if let ConversationEvent::ArchiveCleanup(errors) = event.kind {
+            world.resource_mut::<crate::ArchiveState>().cleanup_errors = errors;
+            continue;
+        }
+        if let ConversationEvent::Deleted {
+            session,
+            cleanup_error,
+            ..
+        } = event.kind
+        {
+            if crate::session_actions::deleted(world, event.operation_id, session) {
+                crate::archives::remove_entry(world, session, cleanup_error)?;
+                forget_session(world, session)?;
+                changed = true;
+            }
+            continue;
+        }
+        if let ConversationEvent::Rejected(reason) = &event.kind
+            && crate::session_actions::rejected(world, event.operation_id, reason)
+        {
+            continue;
+        }
+
         if let ConversationEvent::Renamed { session, result } = event.kind {
             crate::session_actions::complete(world, event.operation_id, session, result)?;
             continue;
@@ -1138,6 +1183,8 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             | ConversationEvent::ArchiveFailed(_)
             | ConversationEvent::InputReceipt(_)
             | ConversationEvent::Queue(_)
+            | ConversationEvent::ArchiveCleanup(_)
+            | ConversationEvent::Deleted { .. }
             | ConversationEvent::Renamed { .. }
             | ConversationEvent::Started(_) => {}
         }
@@ -1177,6 +1224,8 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             | ConversationEvent::Opened(_)
             | ConversationEvent::ArchiveFailed(_)
             | ConversationEvent::Queue(_)
+            | ConversationEvent::ArchiveCleanup(_)
+            | ConversationEvent::Deleted { .. }
             | ConversationEvent::Renamed { .. }
             | ConversationEvent::Started(_) => {}
         }

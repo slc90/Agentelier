@@ -34,6 +34,7 @@ pub(super) struct Parsed {
     pub(super) records: Vec<SessionRecord>,
     pub(super) summary: SessionSummary,
     pub(super) manual_title: Option<String>,
+    deleted: bool,
     pub(super) sequence: u64,
     pub(super) file_length: u64,
     valid_length: u64,
@@ -67,6 +68,7 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
         records: Vec::new(),
         summary: placeholder(session),
         manual_title: None,
+        deleted: false,
         sequence: 0,
         file_length: metadata.len(),
         valid_length: 0,
@@ -103,7 +105,15 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
             if parsed.sequence.checked_add(1) != Some(record.sequence) {
                 return Err(io::Error::other("会话记录序号不连续或重复"));
             }
+            if parsed.deleted {
+                return Err(io::Error::other("已删除会话包含后续记录"));
+            }
             match record.kind {
+                RecordKind::Deleted { session: target }
+                    if parsed.initial.is_some() && target == session =>
+                {
+                    parsed.deleted = true
+                }
                 RecordKind::Created(initial)
                     if parsed.initial.is_none()
                         && record.sequence == crate::store::INITIAL_SEQUENCE
@@ -152,6 +162,7 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
     parsed.prefix_digest = digest.finalize().into();
     if let Some(initial) = &parsed.initial {
         parsed.summary = crate::journal::summarize(initial, &parsed.records, parsed.sequence).0;
+        parsed.summary.deleted = parsed.deleted;
         if let Some(title) = &parsed.manual_title {
             parsed.summary.title = title.clone();
         }
@@ -190,12 +201,17 @@ fn cached_summary(directory: &Path) -> io::Result<SessionSummary> {
     })
 }
 
-pub(super) fn scan(root: &Path) -> io::Result<Vec<ArchiveEntry>> {
+pub(super) fn scan(root: &Path) -> io::Result<crate::ArchiveCatalog> {
     let root = fs::canonicalize(root)?;
     let path = root.join("sessions");
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
-        Err(failure) if failure.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(failure) if failure.kind() == io::ErrorKind::NotFound => {
+            return Ok(crate::ArchiveCatalog {
+                entries: Vec::new(),
+                cleanup_errors: Vec::new(),
+            });
+        }
         Err(failure) => return Err(failure),
     };
     if !metadata.is_dir()
@@ -205,11 +221,24 @@ pub(super) fn scan(root: &Path) -> io::Result<Vec<ArchiveEntry>> {
         return Err(io::Error::other("会话目录包含重解析点或超出数据目录"));
     }
     let mut entries = Vec::new();
+    let mut cleanup_errors = Vec::new();
     for entry in fs::read_dir(&path)? {
         let entry = entry?;
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
             continue;
         };
+        if let Some(id) = name.strip_prefix(crate::deletion::PENDING_PREFIX) {
+            if let Ok(session) = SessionId::parse_str(id)
+                && !session.is_nil()
+                && session.to_string() == id
+                && let Err(failure) = crate::deletion::resume(&root, session)
+            {
+                cleanup_errors.push(format!(
+                    "会话 {session} 已删除，但本地清理未完成：{failure}"
+                ));
+            }
+            continue;
+        }
         let Ok(session) = SessionId::parse_str(&name) else {
             continue;
         };
@@ -241,7 +270,13 @@ pub(super) fn scan(root: &Path) -> io::Result<Vec<ArchiveEntry>> {
                         }
                     }
                 }
-                if !parsed.summary.deleted {
+                if parsed.summary.deleted {
+                    if let Err(failure) = crate::deletion::cleanup(&root, session) {
+                        cleanup_errors.push(format!(
+                            "会话 {session} 已删除，但本地清理未完成：{failure}"
+                        ));
+                    }
+                } else {
                     entries.push(ArchiveEntry {
                         summary: parsed.summary,
                         error,
@@ -266,7 +301,10 @@ pub(super) fn scan(root: &Path) -> io::Result<Vec<ArchiveEntry>> {
                     .cmp(right.summary.session.as_bytes())
             })
     });
-    Ok(entries)
+    Ok(crate::ArchiveCatalog {
+        entries,
+        cleanup_errors,
+    })
 }
 
 fn repair(
@@ -369,6 +407,9 @@ pub(super) fn load(
     let mut parsed = read(&directory, session)?;
     if let Some(issue @ Issue::Corrupt { .. }) = &parsed.issue {
         return Err(io::Error::other(issue.to_string()));
+    }
+    if parsed.summary.deleted {
+        return Err(io::Error::other("会话已删除"));
     }
     let initial = parsed
         .initial

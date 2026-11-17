@@ -12,6 +12,8 @@ use bevy_widgetry::text_field::{WidgetryTextField, WidgetryTextFieldHeadless};
 #[reflect(Resource)]
 pub(crate) struct SessionActions {
     target: Option<SessionId>,
+    title: String,
+    deleting: bool,
     pending: Option<u64>,
     error: Option<String>,
 }
@@ -20,11 +22,19 @@ struct RenamePanel;
 #[derive(Component, Clone, Default)]
 struct RenameInput;
 #[derive(Component, Clone, Default)]
+struct RenameControls;
+#[derive(Component, Clone, Default)]
+struct DeleteControls;
+#[derive(Component, Clone, Default)]
+struct DeletePrompt;
+#[derive(Component, Clone, Default)]
 struct RenameError;
 #[derive(Component, Clone)]
 struct RenameTarget(SessionId);
 #[derive(Component, Clone, Copy)]
 enum Action {
+    Delete,
+    ConfirmDelete,
     Save,
     Cancel,
 }
@@ -51,14 +61,21 @@ pub(crate) fn panel() -> impl Scene {
     bsn! {
         RenamePanel Name("SessionRenamePanel") Node { display: Display::None, width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(8), flex_shrink: 0.0 }
         Children [
-            Text("重命名会话") WidgetryText--
-            @WidgetryTextField { @value: {String::new()}, @multiline: false }
-            RenameInput Name("SessionRenameInput") Node { width: percent(100) }--
-            Text("") WidgetryText RenameError TextLayout::linebreak(LineBreak::AnyCharacter)--
-            Node { column_gap: px(8) } Children [
+            RenameControls Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(8) }
+            Children [
+                Text("重命名会话") WidgetryText--
+                @WidgetryTextField { @value: {String::new()}, @multiline: false }
+                RenameInput Name("SessionRenameInput") Node { width: percent(100) }--
                 @action("保存名称", "SaveSessionName", Action::Save)--
-                @action("取消", "CancelSessionRename", Action::Cancel)
-            ]
+                @action("删除会话", "DeleteSession", Action::Delete)
+            ]--
+            DeleteControls Node { display: Display::None, width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(8) }
+            Children [
+                Text("") WidgetryText DeletePrompt Name("SessionDeletePrompt") TextLayout::linebreak(LineBreak::AnyCharacter)--
+                @action("确认删除", "ConfirmSessionDelete", Action::ConfirmDelete)
+            ]--
+            Text("") WidgetryText RenameError TextLayout::linebreak(LineBreak::AnyCharacter)--
+            @action("取消", "CancelSessionRename", Action::Cancel)
         ]
     }
 }
@@ -90,6 +107,7 @@ fn open(event: On<Activate>, targets: Query<&RenameTarget>, mut commands: Comman
         }
         *world.resource_mut::<SessionActions>() = SessionActions {
             target: Some(session),
+            title,
             ..default()
         };
         Ok(())
@@ -108,6 +126,29 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
         };
         if matches!(action, Action::Cancel) {
             *world.resource_mut::<SessionActions>() = default();
+            return Ok(());
+        }
+        if matches!(action, Action::Delete) {
+            let mut state = world.resource_mut::<SessionActions>();
+            state.deleting = true;
+            state.error = None;
+            return Ok(());
+        }
+        if matches!(action, Action::ConfirmDelete) {
+            match world.resource::<AgentHost>().request_conversation(
+                agentelier_conversation_bridge::ConversationRequest::Delete { session },
+            ) {
+                Ok(id) => {
+                    let mut state = world.resource_mut::<SessionActions>();
+                    state.pending = Some(id);
+                    state.error = None;
+                    tracing::info!(operation_id = id, session_id = %session, "开始删除本地会话");
+                }
+                Err(failure) => {
+                    world.resource_mut::<SessionActions>().error =
+                        Some(format!("会话未删除：{failure}"))
+                }
+            }
             return Ok(());
         }
         let input = world
@@ -156,21 +197,42 @@ pub(crate) fn complete(
 }
 fn update(
     state: Res<SessionActions>,
-    mut panels: Query<&mut Node, With<RenamePanel>>,
+    mut panels: Query<
+        (&mut Node, Has<RenamePanel>, Has<RenameControls>),
+        Or<(
+            With<RenamePanel>,
+            With<RenameControls>,
+            With<DeleteControls>,
+        )>,
+    >,
     inputs: Query<Entity, With<RenameInput>>,
     actions: Query<Entity, With<Action>>,
-    mut texts: Query<&mut Text, With<RenameError>>,
+    mut texts: Query<&mut Text, (With<RenameError>, Without<DeletePrompt>)>,
+    mut prompts: Query<&mut Text, (With<DeletePrompt>, Without<RenameError>)>,
     mut commands: Commands,
 ) {
     if !state.is_changed() {
         return;
     }
-    for mut panel in &mut panels {
-        panel.display = if state.target.is_some() {
+    for (mut panel, root, rename) in &mut panels {
+        let visible = if root {
+            state.target.is_some()
+        } else if rename {
+            !state.deleting
+        } else {
+            state.deleting
+        };
+        panel.display = if visible {
             Display::Flex
         } else {
             Display::None
         };
+    }
+    for mut text in &mut prompts {
+        text.set_if_neq(Text::new(format!(
+            "确定删除“{}”？只删除此会话的本地记录和附件，不撤销已修改的项目文件。",
+            state.title
+        )));
     }
     for entity in inputs.iter().chain(actions.iter()) {
         if state.pending.is_some() {
@@ -189,4 +251,22 @@ pub(crate) fn failed(world: &mut World, reason: &str) {
     if state.pending.take().is_some() {
         state.error = Some(reason.into());
     }
+}
+
+pub(crate) fn deleted(world: &mut World, operation: u64, session: SessionId) -> bool {
+    let state = world.resource::<SessionActions>();
+    if !state.deleting || state.target != Some(session) || state.pending != Some(operation) {
+        return false;
+    }
+    *world.resource_mut::<SessionActions>() = default();
+    true
+}
+pub(crate) fn rejected(world: &mut World, operation: u64, reason: &str) -> bool {
+    let mut state = world.resource_mut::<SessionActions>();
+    if !state.deleting || state.pending != Some(operation) {
+        return false;
+    }
+    state.pending = None;
+    state.error = Some(reason.into());
+    true
 }

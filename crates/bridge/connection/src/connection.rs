@@ -83,6 +83,7 @@ pub struct Connection {
     model: Option<u64>,
     controls: HashMap<u64, u64>,
     renaming: HashMap<u64, SessionId>,
+    deleting: HashMap<u64, SessionId>,
     queue_controls: HashMap<u64, QueueRequest>,
     reserved_queue: HashSet<u64>,
     pending_requests: HashSet<u64>,
@@ -151,6 +152,7 @@ impl Connection {
             model: None,
             controls: HashMap::new(),
             renaming: HashMap::new(),
+            deleting: HashMap::new(),
             queue_controls: HashMap::new(),
             reserved_queue: HashSet::new(),
             pending_requests: HashSet::new(),
@@ -202,13 +204,16 @@ impl Connection {
         let id = if matches!(
             request,
             agentelier_conversation_bridge::ConversationRequest::Open { .. }
+                | agentelier_conversation_bridge::ConversationRequest::Delete { .. }
         ) {
             if self.stopping
                 || self.failure.is_some()
                 || self.model.is_some()
                 || self.sign_out.is_some()
             {
-                return Err(BridgeFailure("当前执行尚未结束，不能打开另一会话".into()));
+                return Err(BridgeFailure(
+                    "当前任务结束并回收后才能切换或删除会话".into(),
+                ));
             }
             self.operations
                 .allocate()
@@ -216,9 +221,18 @@ impl Connection {
         } else {
             self.allocate()?
         };
+        let deleting = match &request {
+            agentelier_conversation_bridge::ConversationRequest::Delete { session } => {
+                Some(*session)
+            }
+            _ => None,
+        };
         self.runtime
             .request_conversation(id, agentelier_conversation_bridge::request(request))
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        if let Some(session) = deleting {
+            self.deleting.insert(id, session);
+        }
         self.model = Some(id);
         self.pending_requests.insert(id);
         Ok(id)
@@ -474,6 +488,37 @@ impl Connection {
                         }
                         return Ok(Some(event));
                     }
+                    if let BridgeEventKind::Conversation(kind) = &event.kind {
+                        if let agentelier_conversation_bridge::ConversationEvent::Deleted {
+                            session,
+                            was_open,
+                            ..
+                        } = kind
+                        {
+                            if self.deleting.remove(&event.operation_id) != Some(*session) {
+                                return self.protocol_failure();
+                            }
+                            self.pending_requests.remove(&event.operation_id);
+                            if self.model == Some(event.operation_id) {
+                                self.model = None;
+                            }
+                            if *was_open {
+                                self.reserved_queue.clear();
+                            }
+                            return Ok(Some(event));
+                        }
+                        if matches!(
+                            kind,
+                            agentelier_conversation_bridge::ConversationEvent::Rejected(_)
+                        ) && self.deleting.remove(&event.operation_id).is_some()
+                        {
+                            self.pending_requests.remove(&event.operation_id);
+                            if self.model == Some(event.operation_id) {
+                                self.model = None;
+                            }
+                            return Ok(Some(event));
+                        }
+                    }
                     if self.sign_out.is_some() {
                         if matches!(
                             &event.kind,
@@ -503,7 +548,7 @@ impl Connection {
                             return Ok(Some(event));
                         }
                         BridgeEventKind::Conversation(kind) => {
-                            if event.operation_id == 0 && matches!(kind, agentelier_conversation_bridge::ConversationEvent::Archives(_) | agentelier_conversation_bridge::ConversationEvent::Opened(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveFailed(_)) {
+                            if event.operation_id == 0 && matches!(kind, agentelier_conversation_bridge::ConversationEvent::ArchiveCleanup(_) | agentelier_conversation_bridge::ConversationEvent::Archives(_) | agentelier_conversation_bridge::ConversationEvent::Opened(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveFailed(_)) {
                                 if let agentelier_conversation_bridge::ConversationEvent::Opened(view) = kind { self.reserved_queue.extend(view.queue.iter().map(|input| input.operation_id)); }
                                 return Ok(Some(event));
                             }

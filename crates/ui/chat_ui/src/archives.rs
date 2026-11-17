@@ -39,6 +39,8 @@ pub struct ArchiveState {
     pub refreshing: bool,
     pub error: Option<String>,
     pub opening: Option<(u64, SessionId)>,
+    deleted: Vec<SessionId>,
+    pub cleanup_errors: Vec<String>,
 }
 
 impl Default for ArchiveState {
@@ -50,6 +52,8 @@ impl Default for ArchiveState {
             refreshing: true,
             error: None,
             opening: None,
+            deleted: Vec::new(),
+            cleanup_errors: Vec::new(),
         }
     }
 }
@@ -184,6 +188,7 @@ fn refresh(_: On<Activate>, host: Res<AgentHost>, mut state: ResMut<ArchiveState
 pub(crate) fn catalog(world: &mut World, entries: Vec<ArchiveEntry>) -> Result {
     let mut choices = entries
         .into_iter()
+        .filter(|entry| !world.resource::<ArchiveState>().deleted.contains(&entry.id))
         .map(|entry| ArchiveChoice {
             id: entry.id,
             title: entry.title,
@@ -290,6 +295,8 @@ fn update(
     }
     let status = if let Some(error) = &state.error {
         error.clone()
+    } else if !state.cleanup_errors.is_empty() {
+        state.cleanup_errors.join("\n")
     } else if activity.model_busy && !state.loading {
         "当前任务结束并回收后可切换".into()
     } else if state.loading {
@@ -338,4 +345,33 @@ pub(crate) fn rename_entry(world: &mut World, entry: ArchiveEntry) -> Result {
         *value = choice;
     }
     Ok(())
+}
+
+pub(crate) fn remove_entry(
+    world: &mut World,
+    session: SessionId,
+    cleanup_error: Option<String>,
+) -> Result {
+    let source = world.resource::<ArchiveSource>().0;
+    let mut model = world
+        .get_mut::<WidgetryListModel<ArchiveChoice>>(source)
+        .ok_or_else(|| io::Error::other("会话列表数据源不存在"))?;
+    if let Some(index) =
+        (0..model.len()).find(|&index| model.get(index).is_some_and(|entry| entry.id == session))
+    {
+        model.remove(index);
+    }
+    let mut state = world.resource_mut::<ArchiveState>();
+    state.deleted.push(session);
+    state.entries.retain(|entry| entry.id != session);
+    if state.selected == Some(session) {
+        state.selected = None;
+    }
+    state.error = None;
+    if let Some(failure) = cleanup_error {
+        state.cleanup_errors.push(format!(
+            "会话已删除，但本地清理尚未完成；刷新列表可继续清理：{failure}"
+        ));
+    }
+    sync_selection(world)
 }
