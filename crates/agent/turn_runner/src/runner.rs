@@ -127,6 +127,7 @@ pub async fn run(
     progress: mpsc::Sender<RunnerEvent>,
     mut steers: mpsc::Receiver<SteerInput>,
     store: agentelier_session_store::SessionStoreClient,
+    user_skills_root: std::path::PathBuf,
 ) -> Result<ActiveTurn, ConversationFailure> {
     let mut context =
         agentelier_tools::ExecutionContext::new(active.view().settings.working_directory);
@@ -149,6 +150,7 @@ pub async fn run(
             &progress,
             &mut steers,
             &store,
+            user_skills_root,
         )
         .await
     } else {
@@ -207,6 +209,7 @@ async fn run_task(
     progress: &mpsc::Sender<RunnerEvent>,
     steers: &mut mpsc::Receiver<SteerInput>,
     store: &agentelier_session_store::SessionStoreClient,
+    user_skills_root: std::path::PathBuf,
 ) -> Result<TurnStatus, ConversationFailure> {
     if cancel.is_cancelled() {
         return Ok(TurnStatus::Cancelled);
@@ -221,7 +224,8 @@ async fn run_task(
         .clone();
     let loading_cancel = cancel.clone();
     let discovered = tokio::task::spawn_blocking(move || {
-        let catalog = agentelier_skills::discover_standard(&directory, &loading_cancel)?;
+        let catalog =
+            agentelier_skills::discover_standard(&directory, &user_skills_root, &loading_cancel)?;
         let selected = agentelier_skills::select(&catalog, &input, &loading_cancel)?;
         Ok::<_, agentelier_skills::Failure>((catalog, selected))
     })

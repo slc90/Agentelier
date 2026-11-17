@@ -195,7 +195,7 @@ impl AgentRuntime {
                 debug!("认证运行线程已启动");
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     runtime.block_on(async move {
-                        let store = agentelier_session_store::SessionStore::start(data_root).map_err(RuntimeFailure::Store)?;
+                        let store = agentelier_session_store::SessionStore::start(data_root.clone()).map_err(RuntimeFailure::Store)?;
                         let mut creating: Option<creation::Creation> = None;
                         let mut loading: Option<loading::Loading> = None;
                         let mut catalog = Some(store.client().scan().map_err(RuntimeFailure::Store)?);
@@ -320,7 +320,7 @@ impl AgentRuntime {
                                         match applied.kind { recording::AppliedKind::Suspended => suspending = suspending.checked_sub(1).ok_or(RuntimeFailure::ModelState)?, recording::AppliedKind::Queue => pending_queue = false, recording::AppliedKind::Finished => finalizing = false }
                                         if applied.failed && let Some(control) = owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.as_ref() { control.cancel.cancel(); }
                                         if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && !pending_queue && !finalizing && !runtime_shutdown.is_cancelled() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish)?;
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish,&data_root.join("skills"))?;
                                         }
                                     }
                                     Command::Created(result) => {
@@ -364,7 +364,7 @@ impl AgentRuntime {
                                             capture_delivery(emit(&publish, task.id, event), &mut delivery_failure);
                                         }
                                         if !finalizing && !pending_queue && suspending == 0 && delivery_failure.is_none() && !runtime_shutdown.is_cancelled() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish)?;
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish,&data_root.join("skills"))?;
                                         }
                                     }
                                     Command::Session(command) => {
@@ -464,7 +464,7 @@ impl AgentRuntime {
                                                             control,
                                                             owner_credentials.clone(),
                                                             store.client(),
-                                                            TaskRequest::Chat(Box::new(request), sender, steers),
+                                                            TaskRequest::Chat(Box::new(request), sender, steers, data_root.join("skills")),
                                                         ));
                                                     }
                                                     Err(failure) => {

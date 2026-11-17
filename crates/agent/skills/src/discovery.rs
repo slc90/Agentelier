@@ -3,13 +3,22 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio_util::sync::CancellationToken;
 
-pub fn standard_roots(directory: &Path, cancel: &CancellationToken) -> Result<Vec<Root>, Failure> {
+pub fn standard_roots(
+    directory: &Path,
+    user_skills_root: &Path,
+    cancel: &CancellationToken,
+) -> Result<Vec<Root>, Failure> {
     check(cancel)?;
     if !directory.is_absolute() {
         return Err(Failure("Skills 会话工作目录必须是绝对路径".into()));
+    }
+    if !user_skills_root.is_absolute() {
+        return Err(Failure(
+            "用户 Skills 根必须是应用数据目录下的绝对路径".into(),
+        ));
     }
     let directory = directory
         .canonicalize()
@@ -58,10 +67,8 @@ pub fn standard_roots(directory: &Path, cancel: &CancellationToken) -> Result<Ve
             source: Source::Project { scope },
         })
         .collect();
-    let profile = std::env::var_os("USERPROFILE")
-        .ok_or_else(|| Failure("缺少用户主目录 USERPROFILE".into()))?;
     roots.push(Root {
-        path: PathBuf::from(profile).join(".agents/skills"),
+        path: user_skills_root.to_owned(),
         source: Source::User,
     });
     roots.push(Root {

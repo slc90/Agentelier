@@ -144,8 +144,12 @@ fn install(root: &Path, cancel: &CancellationToken) -> Result<(), Failure> {
     check(cancel)
 }
 
-pub fn discover_standard(directory: &Path, cancel: &CancellationToken) -> Result<Catalog, Failure> {
-    let roots = crate::standard_roots(directory, cancel)?;
+pub fn discover_standard(
+    directory: &Path,
+    user_skills_root: &Path,
+    cancel: &CancellationToken,
+) -> Result<Catalog, Failure> {
+    let roots = crate::standard_roots(directory, user_skills_root, cancel)?;
     let mut active = Vec::new();
     let mut diagnostics = Vec::new();
     for root in &roots {

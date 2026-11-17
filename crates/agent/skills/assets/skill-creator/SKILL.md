@@ -11,7 +11,7 @@ Create skills that give Codex useful, non-obvious guidance without constraining 
 
 ## Agentelier Windows Host
 
-This host runs on Windows x64 with PowerShell 7. Use the existing exec_command and apply_patch tools according to their actual schemas; a Skill grants no new tools, permissions, dependency installer, or MCP connection. Resolve helper paths against this SKILL.md directory, using absolute paths or an explicit helper working directory. Keep generated output paths absolute and scoped to the user's chosen writable project or user Skills root. Builtin files are application-maintained and must not be used as an output directory.
+This host runs on Windows x64 with PowerShell 7. Use the existing exec_command and apply_patch tools according to their actual schemas; a Skill grants no new tools, permissions, dependency installer, or MCP connection. Resolve helper paths against this SKILL.md directory, using absolute paths or an explicit helper working directory. Keep generated output paths absolute and scoped to the user's chosen writable project or application user Skills root. The task catalog supplies the concrete application user Skills root under the selected data directory; never derive it from HOME, USERPROFILE, the temporary tool working directory, or the builtin cache. Builtin files are application-maintained and must not be used as an output directory.
 
 Python and PyYAML are optional. Before running Python helpers, check `Get-Command python -ErrorAction SilentlyContinue`, then check whether that interpreter can import yaml. If either is missing, do not install software automatically or claim the helper ran: author the necessary UTF-8 YAML/Markdown files with the ordinary file tools, check names and descriptions against the Agent Skills specification, check relative references on disk, and use the next task's real Skills discovery and invocation to confirm availability. Pure workflow skills need only SKILL.md; the initializer is optional. Do not create placeholder scripts, example programs, tests, or benchmarks in an application repository. Preserve existing resource files and policy/dependency fields when making a narrow update.
 
@@ -156,7 +156,7 @@ These examples illustrate options, not a required structure. Choose the organiza
 
 Adapt the work to the request. Creating a complex new skill may involve understanding realistic use cases, choosing supporting resources, initializing files, writing instructions, and validating the result. A narrow update to an existing skill may require only a focused edit and validation.
 
-Ask clarifying questions only when the missing information matters and cannot be reasonably inferred. Respect a user-specified location; otherwise create project skills in the fixed session working directory at `.agents/skills`, or cross-project skills in `$env:USERPROFILE/.agents/skills`. Do not write to Codex configuration or the application-maintained builtin root.
+Ask clarifying questions only when the missing information matters and cannot be reasonably inferred. Respect a user-specified location; otherwise create project skills in the fixed session working directory at `.agents/skills`, or cross-project skills in the application user Skills root reported in the task catalog (`<application-data-directory>/skills`). Do not write to Codex configuration or the application-maintained builtin root.
 
 Keep automatic skill selection enabled unless the user explicitly requests an explicit-only skill. When the intended invocation mode is genuinely unclear and matters to the requested workflow, ask whether the user wants normal automatic discovery or explicit-only invocation; otherwise preserve the default. Do not infer explicit-only invocation from sensitive operations or required approvals: keep the skill discoverable and require authorization immediately before the actual mutation. Preserve an existing skill's invocation policy unless the user asks to change it.
 
@@ -186,8 +186,8 @@ python scripts/init_skill.py <skill-name> --path <output-directory> [--resources
 For example:
 
 ```powershell
-python scripts/init_skill.py my-skill --path "$env:USERPROFILE/.agents/skills"
-python scripts/init_skill.py my-skill --path "$env:USERPROFILE/.agents/skills" --resources references
+python scripts/init_skill.py my-skill --path "<application-user-skills-root-from-task-catalog>"
+python scripts/init_skill.py my-skill --path "<application-user-skills-root-from-task-catalog>" --resources references
 ```
 
 Request only the resource directories the skill needs. Use `--examples` only when concrete placeholders would help, and replace or remove them before finishing. Do not initialize an existing skill again.

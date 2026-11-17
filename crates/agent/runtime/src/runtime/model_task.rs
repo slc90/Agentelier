@@ -19,6 +19,7 @@ pub(super) enum TaskRequest {
         Box<ActiveTurn>,
         mpsc::Sender<RunnerEvent>,
         mpsc::Receiver<SteerInput>,
+        std::path::PathBuf,
     ),
 }
 pub(super) struct ModelTask {
@@ -44,18 +45,21 @@ impl ModelTask {
                     result = agentelier_llm_model::execute(credentials, request) => Some(TaskResult::Model(result)),
                     _ = cancel.cancelled() => None,
                 },
-                TaskRequest::Chat(active, progress, steers) => Some(TaskResult::Chat(
-                    agentelier_turn_runner::run(
-                        *active,
-                        credentials,
-                        cancel,
-                        progress,
-                        steers,
-                        store,
-                    )
-                    .await
-                    .map(Box::new),
-                )),
+                TaskRequest::Chat(active, progress, steers, user_skills_root) => {
+                    Some(TaskResult::Chat(
+                        agentelier_turn_runner::run(
+                            *active,
+                            credentials,
+                            cancel,
+                            progress,
+                            steers,
+                            store,
+                            user_skills_root,
+                        )
+                        .await
+                        .map(Box::new),
+                    ))
+                }
             };
             debug!(operation_id = id, chat, "模型操作执行体已结束");
             result
@@ -218,6 +222,7 @@ pub(super) fn start_queued(
     credentials: &CredentialClient,
     store: &agentelier_session_store::SessionStore,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
+    user_skills_root: &std::path::Path,
 ) -> Result<(), RuntimeFailure> {
     if model.is_some() {
         return Ok(());
@@ -244,7 +249,12 @@ pub(super) fn start_queued(
         control,
         credentials.clone(),
         store.client(),
-        TaskRequest::Chat(Box::new(active), sender, steers),
+        TaskRequest::Chat(
+            Box::new(active),
+            sender,
+            steers,
+            user_skills_root.to_owned(),
+        ),
     ));
     Ok(())
 }
