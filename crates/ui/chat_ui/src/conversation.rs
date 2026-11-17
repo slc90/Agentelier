@@ -98,6 +98,7 @@ pub struct ChatTurn {
 }
 #[derive(Clone, Reflect)]
 pub struct ChatSession {
+    pub project_context: crate::project_context::ProjectContext,
     pub notice: Option<String>,
     pub id: SessionId,
     pub slug: String,
@@ -134,6 +135,7 @@ pub struct ChatReplacement {
 #[derive(Resource, Clone, Reflect, Default)]
 #[reflect(Resource)]
 pub struct ChatState {
+    pub project_rules_expanded: bool,
     pub session: Option<ChatSession>,
     pub operation: Option<u64>,
     pub cancelling: bool,
@@ -224,6 +226,7 @@ struct ChatRow {
 }
 
 pub(crate) fn install(app: &mut App) {
+    crate::project_context::install(app);
     crate::tool_timeline::install(app);
     crate::queue::install(app);
     app.init_resource::<SessionUiStates>()
@@ -304,6 +307,7 @@ pub(crate) fn create_button() -> impl Scene {
 
 #[derive(Default)]
 struct SessionUiState {
+    project_rules_expanded: bool,
     draft: String,
     revision: u64,
     expanded_tools: Vec<String>,
@@ -322,6 +326,7 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
         let saved = {
             let mut state = world.resource_mut::<ChatState>();
             let saved = SessionUiState {
+                project_rules_expanded: std::mem::take(&mut state.project_rules_expanded),
                 draft: std::mem::take(&mut state.draft),
                 revision: state.draft_revision,
                 expanded_tools: std::mem::take(&mut state.expanded_tools),
@@ -349,6 +354,7 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
         state.draft = restored.draft;
         state.draft_revision = restored.revision;
         state.expanded_tools = restored.expanded_tools;
+        state.project_rules_expanded = restored.project_rules_expanded;
         crate::reading::switch(world, previous, next.id);
     }
     world.resource_mut::<ChatState>().session = Some(next);
@@ -945,6 +951,7 @@ fn project(session: SessionView) -> Result<ChatSession> {
         session.context.covered_items.unwrap_or(0)
     );
     Ok(ChatSession {
+        project_context: crate::project_context::project(*session.project_context),
         context,
         context_details,
         context_limits: session.settings.context_limits.clone(),
@@ -1549,6 +1556,8 @@ fn task_status(state: &ChatState) -> String {
                     "正在执行工具…"
                 } else if turn.phase == "cleanup" {
                     "正在回收进程…"
+                } else if turn.phase == "project_context" {
+                    "正在采集项目规则…"
                 } else {
                     "正在请求模型…"
                 },

@@ -6,6 +6,7 @@ mod archives;
 pub use archives::{ArchiveChoice, ArchiveState};
 mod conversation;
 mod preparation;
+mod project_context;
 mod prompts;
 mod queue;
 mod reading;

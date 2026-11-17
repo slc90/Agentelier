@@ -2,6 +2,9 @@
 compile_error!("This application supports Windows x64 only");
 
 mod conversation;
+pub use conversation::{
+    ProjectCollectionStatus, ProjectContextView, ProjectRuleSource, ProjectSnapshotView,
+};
 
 pub use conversation::{
     ConversationEvent, ConversationRequest, HistoryItem, MessageView, SessionSettings, SessionView,

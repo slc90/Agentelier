@@ -440,6 +440,7 @@ impl Conversation {
         }
         let settings = restored.initial.settings;
         let view = SessionView {
+            project_context: Default::default(),
             context: restored.state.context,
             id: restored.state.session,
             notice: restored.notice,

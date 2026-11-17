@@ -39,6 +39,7 @@ pub enum TurnStatus {
 }
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum TaskPhase {
+    LoadingProjectContext,
     CompactingContext,
     RequestingModel,
     ExecutingTool,
@@ -77,6 +78,7 @@ pub struct TurnView {
 }
 #[derive(Clone)]
 pub struct SessionView {
+    pub project_context: Box<crate::ProjectContextState>,
     pub context: Box<crate::ContextState>,
     pub notice: Option<String>,
     pub id: SessionId,
@@ -240,6 +242,7 @@ impl Conversation {
                 .map_err(|_| ConversationFailure::new("工具目录配置无效"))?,
         );
         let mut session = SessionView {
+            project_context: Default::default(),
             context: Box::default(),
             notice: None,
             id,
@@ -359,7 +362,7 @@ impl Conversation {
             request_index: 0,
             committed_steps: 0,
             tools: Vec::new(),
-            phase: TaskPhase::RequestingModel,
+            phase: TaskPhase::LoadingProjectContext,
             steers: Vec::new(),
             request_instructions: session.view.settings.instructions.messages(),
             process_cleanup: Vec::new(),

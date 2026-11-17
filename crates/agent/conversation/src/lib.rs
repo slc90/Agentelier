@@ -2,6 +2,8 @@
 compile_error!("This application supports Windows x64 only");
 
 mod active;
+mod project_context;
+pub use project_context::ProjectContextState;
 mod archive;
 mod control;
 mod conversation;

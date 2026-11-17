@@ -141,6 +141,7 @@ pub struct ContextView {
 }
 #[derive(Clone)]
 pub struct SessionView {
+    pub project_context: Box<ProjectContextView>,
     pub context: Box<ContextView>,
     pub notice: Option<String>,
     pub id: SessionId,
@@ -153,6 +154,64 @@ pub struct SessionView {
     pub queue: Vec<QueuedInput>,
     pub queue_paused: bool,
 }
+#[derive(Clone)]
+pub enum ProjectCollectionStatus {
+    NotCollected,
+    Loaded,
+    Failed(String),
+}
+#[derive(Clone)]
+pub struct ProjectRuleSource {
+    pub path: std::path::PathBuf,
+    pub scope: std::path::PathBuf,
+    pub text: String,
+    pub hash: String,
+}
+#[derive(Clone)]
+pub struct ProjectSnapshotView {
+    pub working_directory: std::path::PathBuf,
+    pub project_root: Option<std::path::PathBuf>,
+    pub sources: Vec<ProjectRuleSource>,
+    pub source_bytes: usize,
+    pub hash: String,
+}
+#[derive(Clone)]
+pub struct ProjectContextView {
+    pub status: ProjectCollectionStatus,
+    pub snapshot: Option<ProjectSnapshotView>,
+}
+
+fn project_context(state: agentelier_conversation::ProjectContextState) -> ProjectContextView {
+    use agentelier_conversation::ProjectContextState;
+    let (status, snapshot) = match state {
+        ProjectContextState::NotCollected => (ProjectCollectionStatus::NotCollected, None),
+        ProjectContextState::Loaded(snapshot) => (ProjectCollectionStatus::Loaded, Some(snapshot)),
+        ProjectContextState::Failed {
+            message,
+            last_success,
+        } => (ProjectCollectionStatus::Failed(message), last_success),
+    };
+    ProjectContextView {
+        status,
+        snapshot: snapshot.map(|snapshot| ProjectSnapshotView {
+            working_directory: snapshot.working_directory.clone(),
+            project_root: snapshot.project_root.clone(),
+            source_bytes: snapshot.source_bytes,
+            hash: snapshot.hash.clone(),
+            sources: snapshot
+                .sources
+                .iter()
+                .map(|source| ProjectRuleSource {
+                    path: source.path.clone(),
+                    scope: source.scope.clone(),
+                    text: source.text.clone(),
+                    hash: source.hash.clone(),
+                })
+                .collect(),
+        }),
+    }
+}
+
 pub enum ConversationEvent {
     ArchiveCleanup(Vec<String>),
     Deleted {
@@ -242,6 +301,7 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
 
 fn view(session: agentelier_conversation::SessionView) -> SessionView {
     SessionView {
+        project_context: Box::new(project_context(*session.project_context)),
         context: Box::new(ContextView {
             window: session.context.window,
             tokens: session.context.tokens,
@@ -333,6 +393,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
         committed_steps: turn.committed_steps,
         phase: match turn.phase {
             agentelier_conversation::TaskPhase::CompactingContext => "compaction",
+            agentelier_conversation::TaskPhase::LoadingProjectContext => "project_context",
             agentelier_conversation::TaskPhase::RequestingModel => "model",
             agentelier_conversation::TaskPhase::ExecutingTool => "tool",
             agentelier_conversation::TaskPhase::ReapingProcesses => "cleanup",

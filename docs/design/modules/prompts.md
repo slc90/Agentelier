@@ -23,3 +23,5 @@ Chat UI 通过数据目录就绪事件取得当前存储路径；Widgetry JobMan
 新建会话从准备区解析快照，通过 Conversation Bridge 逐字段传入 SessionSettings。Conversation 在创建时核对并固定快照，每轮生成请求克隆同一快照；重置复制旧 SessionSettings，重试复用同一设置。指令独立于 ProtocolHistory，每次只在请求前部注入一次，不随成功轮次累计。原有历史提交、失败展示、取消和任务回收语义保持原有边界。
 
 TurnView 保留其请求所用的指令消息，Bridge 传递完整安全投影。Chat UI 的反射状态保存 JSON 形式的会话快照及最近请求指令，供用户查看和 BRP 只读核对；该 JSON 不参与网络请求构造。诊断不包含凭据、账号认证头或加密 reasoning 原文，日志不输出提示词及聊天正文。
+
+项目 `AGENTS.md` 的采集状态和来源原文在同一核对入口独立展示，来源不构造成 PromptRef，也不加入基础或补充槽位。当前只取得并展示文件材料，项目正文尚未注入请求；固定 developer 消息与默认空基础行为不变。发现机制见[项目上下文](project-context.md)。

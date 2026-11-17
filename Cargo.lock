@@ -189,6 +189,7 @@ name = "agentelier_conversation"
 version = "0.1.0"
 dependencies = [
  "agentelier_llm_model",
+ "agentelier_project_context",
  "agentelier_prompts",
  "agentelier_tools",
  "serde",
@@ -278,6 +279,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "agentelier_project_context"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.10.9",
+ "tokio-util",
+]
+
+[[package]]
 name = "agentelier_prompts"
 version = "0.1.0"
 dependencies = [
@@ -327,6 +336,7 @@ dependencies = [
  "agentelier_account",
  "agentelier_conversation",
  "agentelier_llm_model",
+ "agentelier_project_context",
  "agentelier_session_store",
  "agentelier_tools",
  "tokio",

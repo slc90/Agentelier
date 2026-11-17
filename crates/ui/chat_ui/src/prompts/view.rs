@@ -166,7 +166,13 @@ pub(super) fn render(world: &mut World) -> Result {
             Page::Session => {
                 let state = world.resource::<crate::conversation::ChatState>();
                 let value = crate::conversation::request_details(state);
-                Box::new(bsn! { @readonly(value, "PromptSessionSnapshot") })
+                Box::new(bsn! {
+                    Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(GAP), flex_shrink: 0.0 }
+                    Children [
+                        @crate::project_context::panel(state)--
+                        @readonly(value, "PromptSessionSnapshot")
+                    ]
+                })
             }
         };
         world.commands().spawn_scene_with_error_handler(bsn! {

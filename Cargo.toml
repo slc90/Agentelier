@@ -17,6 +17,7 @@ members = [
   "crates/agent/turn_runner",
   "crates/agent/tools",
   "crates/agent/prompts",
+  "crates/agent/project_context",
   "crates/bridge/conversation",
   "crates/bridge/account",
   "crates/bridge/llm_model",

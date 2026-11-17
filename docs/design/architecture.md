@@ -20,6 +20,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的聊天会话、Turn 身份、工作窗口计量、压缩检查点及恢复、展示记录与结果收敛 |
 | `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话日志、恢复读取、执行事件追加、独立名称与删除元数据、受控会话清理、不可变图片附件、单写入者、提交确认与存储收尾 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
+| `crates/agent/project_context/` | `agentelier_project_context` | 会话适用的项目规则发现、有界 UTF-8 读取、来源快照与确定性表示 |
 | `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示 |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、封闭边界自动压缩与检查点提交、正文增量和受控取消 |
 | `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型任务取消/回收及执行收尾 |
@@ -65,6 +66,7 @@ flowchart TD
     SessionStore --> Conversation
     Runtime --> Runner["Agent · turn_runner"]
     Runner --> Conversation
+    Runner --> ProjectContext["Agent · project_context"]
     Runner --> Model
     Runner --> Account
     Runner --> Tools["Agent · tools"]
@@ -74,6 +76,7 @@ flowchart TD
     Conversation --> Tools
     Conversation --> Model
     Conversation --> Prompts
+    Conversation --> ProjectContext
     ConversationBridge --> Conversation
     ConversationBridge --> Prompts
     Model --> Prompts
@@ -173,6 +176,8 @@ chat_ui 仅管理展示投影与草稿，通过 BSN 和 Widgetry 多行 TextFiel
 Markdown 的原文、解析块和原生布局由独立 UI crate 管理，不依赖 Agent/Bridge，也不改变协议正文。Chat UI 保存会话投影并把每条助手原文交给 MarkdownView；底部跟随属于聊天阅读行为。具体边界见[原生 Markdown](modules/markdown.md)。
 
 ## 提示词库与固定指令
+
+项目文件发现独立于固定提示词库：Runner 在每个任务首次请求准备时调用 Project Context，在可等待回收的阻塞工作中采集；ActiveTurn 独占最近结果，Bridge 将来源及状态转成只读投影，Chat UI 在现有会话核对入口展示。当前项目正文尚不进入模型请求，也不写入协议历史。读取失败阻止本任务请求，可修复后重试；详见[项目上下文](modules/project-context.md)。
 
 Prompts 是无 Bevy、网络和线程依赖的业务库，管理来源与派生版本、基础覆盖及有序补充配置、预设解析和完整快照。应用内置来源数据由 Assets 提供，Chat UI 在启动数据目录就绪后，通过 Widgetry JobManager 加载该目录的 `prompts.json`；保存和 UTF-8 导入同样使用辅助 Job，并等待真实终态后更新 UI。来源版本与旧版本不被编辑覆盖，文件原子替换不接触账号凭据。
 
