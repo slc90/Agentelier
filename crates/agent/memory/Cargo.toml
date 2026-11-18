@@ -1,0 +1,11 @@
+[package]
+name = "agentelier_memory"
+publish = false
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rusqlite.workspace = true
+
+[lints]
+workspace = true

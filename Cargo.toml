@@ -14,6 +14,7 @@ members = [
   "crates/agent/runtime",
   "crates/agent/conversation",
   "crates/agent/session_store",
+  "crates/agent/memory",
   "crates/agent/turn_runner",
   "crates/agent/tools",
   "crates/agent/mcp",
@@ -46,6 +47,9 @@ tracing = "0.1.44"
 winsafe = { version = "0.0.29", default-features = false }
 tempfile = { version = "3.27.0", default-features = false }
 serde_json = "1.0"
+rusqlite = { version = "0.43.0", default-features = false, features = [
+  "bundled",
+] }
 serde_yaml = "0.9.34"
 tokio = { version = "1.54.1", default-features = false, features = [
   "rt",

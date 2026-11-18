@@ -7,6 +7,7 @@ use agentelier_conversation::{
     RunnerEvent, SessionCommand, SteerInput,
 };
 use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
+use agentelier_memory::Memory;
 mod creation;
 mod deleting;
 mod loading;
@@ -52,6 +53,7 @@ pub enum RuntimeFailure {
     Account(AccountFailure),
     Conversation(ConversationFailure),
     Store(io::Error),
+    Memory(io::Error),
     Mcp(io::Error),
 }
 impl fmt::Display for RuntimeFailure {
@@ -63,6 +65,7 @@ impl fmt::Display for RuntimeFailure {
             Self::Account(error) => error.fmt(f),
             Self::Conversation(error) => error.fmt(f),
             Self::Store(error) => write!(f, "会话存储失败：{error}"),
+            Self::Memory(error) => write!(f, "记忆存储收尾失败：{error}"),
             Self::Mcp(error) => write!(f, "MCP 连接收尾失败：{error}"),
         }
     }
@@ -74,6 +77,7 @@ impl Error for RuntimeFailure {
             Self::Account(error) => Some(error),
             Self::Conversation(error) => Some(error),
             Self::Store(error) => Some(error),
+            Self::Memory(error) => Some(error),
             Self::Mcp(error) => Some(error),
             Self::Thread | Self::ModelState => None,
         }
@@ -212,6 +216,13 @@ impl AgentRuntime {
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     runtime.block_on(async move {
                         let store = agentelier_session_store::SessionStore::start(data_root.clone()).map_err(RuntimeFailure::Store)?;
+                        let memory_root = data_root.clone();
+                        let memory = tokio::task::spawn_blocking(move || Memory::open(&memory_root))
+                            .await.map_err(io::Error::other).and_then(|result| result);
+                        match &memory {
+                            Ok(_) => debug!(path = %data_root.display(), "记忆存储已打开"),
+                            Err(failure) => error!(path = %data_root.display(), error = %failure, "记忆存储不可用"),
+                        }
                         let mut mcp_settings = agentelier_mcp::ConfigStore::open(&data_root);
                         let mut material: Option<PendingMaterial> = None;
                         let mut mcp_connections = agentelier_mcp::Connections::default();
@@ -685,6 +696,17 @@ impl AgentRuntime {
                             }
                         }
                         let mcp_finished = mcp_connections.shutdown().await;
+                        let memory_finished = if let Ok(memory) = memory {
+                            let result = tokio::task::spawn_blocking(move || memory.close())
+                                .await.map_err(io::Error::other).and_then(|result| result);
+                            match &result {
+                                Ok(()) => debug!("记忆存储已关闭"),
+                                Err(failure) => error!(error = %failure, "记忆存储收尾失败"),
+                            }
+                            result
+                        } else {
+                            Ok(())
+                        };
                         while let Some(result) = records.join_next().await {
                             match result {
                                 Ok((pending, result)) => capture_delivery(recording::apply(pending, result, &mut conversation, &publish).map(|_| ()), &mut delivery_failure),
@@ -717,6 +739,7 @@ impl AgentRuntime {
                         account_finished?;
                         pending_saved?;
                         mcp_finished.map_err(RuntimeFailure::Mcp)?;
+                        memory_finished.map_err(RuntimeFailure::Memory)?;
                         if let Some(failure) = delivery_failure {
                             return Err(failure);
                         }
