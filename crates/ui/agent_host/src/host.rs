@@ -51,6 +51,12 @@ pub struct ConversationEvent {
     pub kind: agentelier_conversation_bridge::ConversationEvent,
 }
 
+#[derive(Message)]
+pub struct McpConfigEvent {
+    pub operation_id: u64,
+    pub result: std::result::Result<agentelier_bridge_connection::ConfigSnapshot, String>,
+}
+
 #[derive(Message, Clone)]
 pub struct HostFailed {
     pub reason: String,
@@ -78,6 +84,7 @@ impl Plugin for AgentHostPlugin {
             .add_message::<ModelEvent>()
             .add_message::<ConversationEvent>()
             .add_message::<HostFailed>()
+            .add_message::<McpConfigEvent>()
             .add_systems(Update, receive.in_set(ReceiveAgentEvents));
     }
 }
@@ -149,6 +156,10 @@ impl AgentHost {
         self.state()?.model_busy = false;
         Ok(id)
     }
+    pub fn mcp_config(&self, change: agentelier_bridge_connection::ConfigChange) -> Result<u64> {
+        self.submit(|connection| connection.mcp_config(change))
+    }
+
     pub fn request_model(&self, request: agentelier_llm_model_bridge::ModelRequest) -> Result<u64> {
         let id = self.submit(|connection| connection.request_model(request))?;
         self.state()?.model_busy = true;
@@ -277,6 +288,12 @@ fn receive(world: &mut World) -> Result {
                 world.write_message(ConversationEvent {
                     operation_id: event.operation_id,
                     kind,
+                });
+            }
+            BridgeEventKind::McpConfig(result) => {
+                world.write_message(McpConfigEvent {
+                    operation_id: event.operation_id,
+                    result,
                 });
             }
             BridgeEventKind::Model(kind) => {

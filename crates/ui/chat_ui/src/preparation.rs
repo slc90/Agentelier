@@ -131,6 +131,7 @@ pub fn install(app: &mut App) -> Result {
     crate::conversation::install(app);
     crate::working_directory::install(app);
     crate::prompts::install(app)?;
+    crate::mcp::install(app);
     app.register_widgetry_combo_box::<ModelChoice>()
         .map_err(|failure| failure.into_bevy_error())?;
     app.init_resource::<ModelState>()
@@ -183,7 +184,8 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
                     on(select_model)--
                     @reasoning::selector(reasoning_source)--
                     @action_button("验证模型连接", "VerifyModelConnection", ModelAction::Verify)--
-                    @crate::prompts::entry()
+                    @crate::prompts::entry()--
+                    @crate::prompts::mcp_entry()
                 ]--
                 crate::prompts::NormalContent
                 Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(PANEL_GAP) }

@@ -5,5 +5,7 @@ mod host;
 
 pub use host::{
     AccountEvent, AgentHost, AgentHostPlugin, ConversationEvent, HostActivity, HostFailed,
-    ModelEvent, ReceiveAgentEvents,
+    McpConfigEvent, ModelEvent, ReceiveAgentEvents,
 };
+
+pub use agentelier_bridge_connection::{ConfigChange, Server, ServerId, ServerSettings, Transport};

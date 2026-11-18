@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agentelier_mcp = { path = "../mcp" }
 agentelier_session_store = { path = "../session_store" }
 agentelier_turn_runner = { path = "../turn_runner" }
 agentelier_conversation = { path = "../conversation" }

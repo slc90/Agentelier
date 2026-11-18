@@ -1,5 +1,5 @@
 mod view;
-pub(crate) use view::entry;
+pub(crate) use view::{entry, mcp_entry, render};
 
 use agentelier_login_ui::DataDirectoryReady;
 use agentelier_prompts::{
@@ -50,6 +50,7 @@ enum Page {
     #[default]
     Config,
     Session,
+    Mcp,
 }
 
 #[derive(Resource)]
@@ -108,6 +109,7 @@ enum Field {
 #[derive(Component, Clone, Copy, Debug)]
 enum Action {
     Open,
+    Mcp,
     Close,
     Library,
     Config,
@@ -178,6 +180,10 @@ fn mount(_event: On<Add<PromptWorkspace>>, mut commands: Commands) {
     commands.queue(refresh);
 }
 
+pub(super) fn mcp_visible(world: &World) -> bool {
+    world.resource::<PromptState>().opened && world.resource::<PromptStore>().page == Page::Mcp
+}
+
 pub(crate) fn snapshot(world: &World) -> io::Result<InstructionSnapshot> {
     let state = world.resource::<PromptState>();
     if !state.ready {
@@ -190,6 +196,9 @@ pub(crate) fn snapshot(world: &World) -> io::Result<InstructionSnapshot> {
 }
 
 fn refresh(world: &mut World) -> Result {
+    if mcp_visible(world) {
+        crate::mcp::capture(world)?;
+    }
     let store = world.resource::<PromptStore>();
     let entries: Vec<_> = store
         .library
@@ -386,6 +395,7 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
     let action = *actions.get(event.entity)?;
     commands.queue(move |world: &mut World| -> Result {
         capture(world)?;
+        crate::mcp::capture(world)?;
         if let Err(failure) = apply(world, action) {
             error!(error = %failure, "提示词操作失败");
             world.resource_mut::<PromptState>().status = failure
@@ -401,12 +411,23 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
 }
 
 fn apply(world: &mut World, action: Action) -> Result {
-    if world.resource::<PromptState>().busy && !matches!(action, Action::Open | Action::Close) {
+    if world.resource::<PromptState>().busy
+        && !matches!(action, Action::Open | Action::Mcp | Action::Close)
+    {
         return Ok(());
     }
     match action {
         Action::Open => {
             world.resource_mut::<PromptState>().opened = true;
+            let mut store = world.resource_mut::<PromptStore>();
+            if store.page == Page::Mcp {
+                store.page = Page::Config;
+            }
+        }
+        Action::Mcp => {
+            world.resource_mut::<PromptState>().opened = true;
+            world.resource_mut::<PromptStore>().page = Page::Mcp;
+            crate::mcp::open(world);
         }
         Action::Close => {
             world.resource_mut::<PromptState>().opened = false;

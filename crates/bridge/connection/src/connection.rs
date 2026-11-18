@@ -18,6 +18,7 @@ pub enum BridgeEventKind {
     Account(AccountEventKind),
     Model(ModelEventKind),
     Conversation(agentelier_conversation_bridge::ConversationEvent),
+    McpConfig(Result<crate::ConfigSnapshot, String>),
 }
 #[derive(Clone, Debug)]
 pub struct BridgeFailure(String);
@@ -87,6 +88,7 @@ pub struct Connection {
     queue_controls: HashMap<u64, QueueRequest>,
     reserved_queue: HashSet<u64>,
     pending_requests: HashSet<u64>,
+    pending_mcp: HashSet<u64>,
 }
 impl Connection {
     pub fn start(
@@ -115,6 +117,9 @@ impl Connection {
                         ),
                         AgentEventKind::ModelCancelled => {
                             BridgeEventKind::Model(agentelier_llm_model_bridge::convert(None))
+                        }
+                        AgentEventKind::McpConfig(result) => {
+                            BridgeEventKind::McpConfig(result.map_err(|error| error.to_string()))
                         }
                         AgentEventKind::Conversation(kind) => BridgeEventKind::Conversation(
                             agentelier_conversation_bridge::convert(kind),
@@ -156,8 +161,24 @@ impl Connection {
             queue_controls: HashMap::new(),
             reserved_queue: HashSet::new(),
             pending_requests: HashSet::new(),
+            pending_mcp: HashSet::new(),
         })
     }
+    pub fn mcp_config(&mut self, change: crate::ConfigChange) -> Result<u64, BridgeFailure> {
+        if self.stopping || self.failure.is_some() {
+            return Err(BridgeFailure("执行连接已经关闭".into()));
+        }
+        let id = self
+            .operations
+            .allocate()
+            .map_err(|error| BridgeFailure(error.to_string()))?;
+        self.runtime
+            .mcp_config(id, change)
+            .map_err(|error| BridgeFailure(error.to_string()))?;
+        self.pending_mcp.insert(id);
+        Ok(id)
+    }
+
     fn allocate(&self) -> Result<u64, BridgeFailure> {
         if self.stopping || self.failure.is_some() {
             return Err(BridgeFailure("认证运行已停止".into()));
@@ -519,6 +540,12 @@ impl Connection {
                             return Ok(Some(event));
                         }
                     }
+                    if matches!(event.kind, BridgeEventKind::McpConfig(_)) {
+                        if !self.pending_mcp.remove(&event.operation_id) {
+                            return self.protocol_failure();
+                        }
+                        return Ok(Some(event));
+                    }
                     if self.sign_out.is_some() {
                         if matches!(
                             &event.kind,
@@ -535,6 +562,7 @@ impl Connection {
                         continue;
                     }
                     let kind = match &event.kind {
+                        BridgeEventKind::McpConfig(_) => return self.protocol_failure(),
                         BridgeEventKind::Model(_) => {
                             if self.pending_requests.remove(&event.operation_id)
                                 && self.model != Some(event.operation_id)

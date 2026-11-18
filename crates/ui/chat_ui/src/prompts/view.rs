@@ -19,6 +19,10 @@ pub(crate) fn entry() -> impl Scene {
     button("提示词管理", "OpenPromptManager", Action::Open, false)
 }
 
+pub(crate) fn mcp_entry() -> impl Scene {
+    button("MCP 服务器", "OpenMcpSettings", Action::Mcp, false)
+}
+
 fn button(label: &str, name: &'static str, action: Action, disabled: bool) -> impl Scene {
     let label = label.to_owned();
     (
@@ -73,7 +77,7 @@ fn readonly(value: String, name: &'static str) -> impl Scene {
     }
 }
 
-pub(super) fn render(world: &mut World) -> Result {
+pub(crate) fn render(world: &mut World) -> Result {
     let opened = world.resource::<PromptState>().opened;
     let mut nodes = world.query_filtered::<&mut Node, With<NormalContent>>();
     for mut node in nodes.iter_mut(world) {
@@ -114,7 +118,19 @@ pub(super) fn render(world: &mut World) -> Result {
                 reference.version
             ),
         };
+        let prompt_navigation = (page != Page::Mcp).then(|| {
+            bsn_list! {
+                @button("提示词库", "PromptLibraryTab", Action::Library, busy)--
+                @button("组合与预览", "PromptConfigTab", Action::Config, busy)--
+                @button("会话与请求核对", "PromptSessionTab", Action::Session, busy)--
+                @button("重新加载库", "ReloadPromptLibrary", Action::Reload, busy)
+            }
+        });
+        let prompt_status = (page != Page::Mcp).then(|| bsn! {
+            Text(status) WidgetryText Name("PromptManagerStatus") TextLayout::linebreak(LineBreak::AnyCharacter)
+        });
         let body: Box<dyn Scene> = match page {
+            Page::Mcp => crate::mcp::panel(world),
             Page::Library => Box::new(bsn! {
                 Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(GAP), flex_shrink: 0.0 }
                 Children [
@@ -183,12 +199,9 @@ pub(super) fn render(world: &mut World) -> Result {
                 Node { column_gap: px(GAP), row_gap: px(GAP), flex_wrap: FlexWrap::Wrap, flex_shrink: 0.0 }
                 Children [
                     @button("返回聊天", "ClosePromptManager", Action::Close, false)--
-                    @button("提示词库", "PromptLibraryTab", Action::Library, busy)--
-                    @button("组合与预览", "PromptConfigTab", Action::Config, busy)--
-                    @button("会话与请求核对", "PromptSessionTab", Action::Session, busy)--
-                    @button("重新加载库", "ReloadPromptLibrary", Action::Reload, busy)
+                    {prompt_navigation}
                 ]--
-                Text(status) WidgetryText Name("PromptManagerStatus") TextLayout::linebreak(LineBreak::AnyCharacter)--
+                @prompt_status--
                 @WidgetryScrollArea { @children: {Some(Box::new(bsn_list! { @body }) as Box<dyn SceneList>)} }
                 Name("PromptManagerScroll") Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }
             ]

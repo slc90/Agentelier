@@ -16,6 +16,7 @@ members = [
   "crates/agent/session_store",
   "crates/agent/turn_runner",
   "crates/agent/tools",
+  "crates/agent/mcp",
   "crates/agent/prompts",
   "crates/agent/project_context",
   "crates/agent/skills",

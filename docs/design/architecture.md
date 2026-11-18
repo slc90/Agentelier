@@ -22,6 +22,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
 | `crates/agent/project_context/` | `agentelier_project_context` | 会话适用的项目规则发现、有界 UTF-8 读取、来源快照与确定性表示 |
 | `crates/agent/skills/` | `agentelier_skills` | 本地 Skills 来源发现、有界元数据解析、任务目录快照与来源诊断 |
+| `crates/agent/mcp/` | `agentelier_mcp` | MCP 服务器配置的校验、稳定身份和持久化 |
 | `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示 |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、封闭边界自动压缩与检查点提交、正文增量和受控取消 |
 | `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型任务取消/回收及执行收尾 |
@@ -209,6 +210,10 @@ Steer 由同一个 Runner 接纳与应用，通过容量 8 的任务输入通道
 Conversation 保存 FIFO 待办和暂停状态。Connection 从统一操作序列预留待办任务身份；容量 16 的会话控制通道传递排队、移除与继续，绕过普通发送要求空闲的入口但不启动并行任务。Runtime 回收旧任务并归还历史后，按队列状态串行启动下一条，Stop/Steer 使用共享活动控制槽核对新身份。
 
 队列控制回执和自动 Started 走可靠路径；Connection 区分待接纳操作、未来预留身份和当前活动操作。跨任务快照允许合并，旧任务的 Finished 前交付该任务最终 Updated，较新任务快照不被旧终态丢弃。UI 待办投影与聊天内容流分开，不重建输入框；排队输入启动前不进入模型上下文。失败、停止与触限使队列暂停，普通消息完成不自动恢复暂停。
+
+## MCP 服务器配置
+
+Runtime 在启动数据根下打开独立的 `mcp_servers.json`；配置 Crate 管理工作副本及原子保存。Chat UI 通过唯一 Connection 提交编辑并等待保存回执。stdio 记录程序和参数、启动目录及允许继承的环境变量名称；HTTP 记录端点与可选 Bearer 环境变量名称。账号凭据由 Account 独立持有。
 
 ## 本地工具的工作环境
 

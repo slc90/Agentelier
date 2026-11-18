@@ -128,6 +128,7 @@ dependencies = [
  "agentelier_account",
  "agentelier_conversation",
  "agentelier_llm_model",
+ "agentelier_mcp",
  "agentelier_session_store",
  "agentelier_turn_runner",
  "tokio",
@@ -280,6 +281,17 @@ dependencies = [
  "tracing",
  "url",
  "winsafe",
+]
+
+[[package]]
+name = "agentelier_mcp"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "url",
+ "uuid",
 ]
 
 [[package]]

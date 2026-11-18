@@ -3,4 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod connection;
 
+pub use agentelier_agent_runtime::{
+    ConfigChange, ConfigSnapshot, Server, ServerId, ServerSettings, Transport,
+};
 pub use connection::{BridgeEvent, BridgeEventKind, BridgeFailure, Connection};

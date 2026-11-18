@@ -40,6 +40,7 @@ pub enum AgentEventKind {
     ModelCompleted(Result<ModelResult, ModelFailure>),
     ModelCancelled,
     Conversation(ConversationEvent),
+    McpConfig(io::Result<agentelier_mcp::ConfigSnapshot>),
 }
 #[derive(Debug)]
 pub enum RuntimeFailure {
@@ -84,6 +85,7 @@ impl From<ConversationFailure> for RuntimeFailure {
     }
 }
 enum Command {
+    McpConfig(u64, agentelier_mcp::ConfigChange),
     Rename {
         id: u64,
         session: SessionId,
@@ -196,6 +198,7 @@ impl AgentRuntime {
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     runtime.block_on(async move {
                         let store = agentelier_session_store::SessionStore::start(data_root.clone()).map_err(RuntimeFailure::Store)?;
+                        let mut mcp_settings = agentelier_mcp::ConfigStore::open(&data_root);
                         let mut creating: Option<creation::Creation> = None;
                         let mut loading: Option<loading::Loading> = None;
                         let mut catalog = Some(store.client().scan().map_err(RuntimeFailure::Store)?);
@@ -256,6 +259,16 @@ impl AgentRuntime {
                                     },
                                 };
                                 match command {
+                                    Command::McpConfig(id, change) => {
+                                        let changes_disk = !matches!(change, agentelier_mcp::ConfigChange::Read);
+                                        let result = mcp_settings.apply(change);
+                                        match &result {
+                                            Ok(_) if changes_disk => tracing::info!(operation_id = id, "MCP 服务器配置已保存"),
+                                            Err(failure) => error!(operation_id = id, error = %failure, "MCP 配置操作失败"),
+                                            Ok(_) => {}
+                                        }
+                                        emit(&publish, id, AgentEventKind::McpConfig(result))?;
+                                    }
                                     Command::Rename { id, session, title } => {
                                         match if renaming.is_some() || deleting.is_some() { Err(io::Error::other("已有会话管理操作正在保存")) } else { renaming::Renaming::start(id, session, title, &store) } {
                                             Ok(pending) => renaming = Some(pending),
@@ -502,6 +515,9 @@ impl AgentRuntime {
                                             );
                                             while let Ok(queued) = incoming.try_recv() {
                                                 match queued {
+                                                    Command::McpConfig(id, _) => {
+                                                        emit(&publish, id, AgentEventKind::McpConfig(Err(io::Error::other("账号操作开始前尚未接纳 MCP 配置操作，请重新提交"))))?;
+                                                    }
                                                     Command::Conversation { id, control, request: ConversationRequest::Delete { .. }, .. } => {
                                                         control.finished.cancel();
                                                         emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("账号操作开始前尚未接纳删除，请重新提交".into())))?;
@@ -648,6 +664,17 @@ impl AgentRuntime {
             model: shared_model,
             session_commands,
         })
+    }
+
+    pub fn mcp_config(&self, id: u64, change: agentelier_mcp::ConfigChange) -> io::Result<()> {
+        self.commands
+            .as_ref()
+            .ok_or_else(|| io::Error::other("执行连接已经关闭"))?
+            .try_send(Command::McpConfig(id, change))
+            .map_err(|failure| match failure {
+                mpsc::error::TrySendError::Full(_) => io::Error::other("执行连接命令队列已满"),
+                mpsc::error::TrySendError::Closed(_) => io::Error::other("执行连接已经关闭"),
+            })
     }
 
     pub fn restore(&self, operation_id: u64) -> Result<(), RuntimeFailure> {

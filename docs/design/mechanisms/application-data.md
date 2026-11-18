@@ -49,6 +49,7 @@ flowchart TD
 | --- | --- | --- |
 | 应用配置 | 可执行文件旁的 `config/config.ron` | 缩放、BRP 设置及 `data_directory` 绝对路径 |
 | 运行日志 | 可执行文件旁的 `logs/` | 统一启动、目录选择、运行与收尾日志 |
+| MCP 服务器配置 | 所选目录的 `mcp_servers.json` | Agent 侧独立校验及原子保存，保留服务器稳定身份 |
 | 账号凭据 | 所选目录的 `auth.json` | Agent/Tokio 调用 login 恢复账号，浏览器授权在同一位置安全创建主机记录及原子提交会话 |
 | 用户技能 | 所选目录的 `skills/<skill-name>/SKILL.md` 及其关联资源 | 当前数据环境内跨项目复用；任务目录明确给出该根，下一任务重新发现，缺失目录按空来源处理 |
 | 目录占用 | 所选目录的 `.agentelier.lock` | 仅用于句柄生命周期内的独占锁 |

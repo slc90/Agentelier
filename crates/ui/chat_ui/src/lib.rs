@@ -5,6 +5,7 @@ mod active_input;
 mod archives;
 pub use archives::{ArchiveChoice, ArchiveState};
 mod conversation;
+mod mcp;
 mod preparation;
 mod project_context;
 mod prompts;

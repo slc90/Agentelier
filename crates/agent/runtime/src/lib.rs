@@ -3,6 +3,9 @@ compile_error!("This application supports Windows x64 only");
 
 mod operations;
 mod runtime;
+pub use agentelier_mcp::{
+    ConfigChange, ConfigSnapshot, Server, ServerId, ServerSettings, Transport,
+};
 pub use operations::OperationSequence;
 
 pub use runtime::{AgentEvent, AgentEventKind, AgentRuntime, DeliveryFailure, RuntimeFailure};
