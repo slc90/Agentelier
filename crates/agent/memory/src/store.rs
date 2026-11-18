@@ -2,7 +2,7 @@ use rusqlite::Connection;
 use std::fs;
 use std::io;
 use std::os::windows::fs::MetadataExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
@@ -12,7 +12,10 @@ pub struct Memory {
 }
 
 #[derive(Clone)]
-pub struct MemoryClient(Arc<Mutex<Connection>>);
+pub struct MemoryClient {
+    connection: Arc<Mutex<Connection>>,
+    workspace: Arc<PathBuf>,
+}
 
 impl Memory {
     pub fn open(data_root: &Path) -> io::Result<Self> {
@@ -47,7 +50,10 @@ impl Memory {
             .map_err(io::Error::other)?;
         transaction.commit().map_err(io::Error::other)?;
         Ok(Self {
-            client: MemoryClient(Arc::new(Mutex::new(connection))),
+            client: MemoryClient {
+                connection: Arc::new(Mutex::new(connection)),
+                workspace: Arc::new(workspace),
+            },
         })
     }
 
@@ -56,7 +62,7 @@ impl Memory {
     }
 
     pub fn close(self) -> io::Result<()> {
-        Arc::into_inner(self.client.0)
+        Arc::into_inner(self.client.connection)
             .ok_or_else(|| io::Error::other("记忆数据库仍有未回收的使用者"))?
             .into_inner()
             .map_err(|_| io::Error::other("记忆数据库连接状态异常"))?
@@ -70,19 +76,28 @@ impl MemoryClient {
         &self,
         operation: impl FnOnce(&mut Connection) -> rusqlite::Result<T> + Send + 'static,
     ) -> io::Result<T> {
-        let connection = self.0.clone();
+        self.with_store(move |connection, _| operation(connection).map_err(io::Error::other))
+            .await
+    }
+
+    pub(crate) async fn with_store<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut Connection, &Path) -> io::Result<T> + Send + 'static,
+    ) -> io::Result<T> {
+        let connection = self.connection.clone();
+        let workspace = self.workspace.clone();
         tokio::task::spawn_blocking(move || {
             let mut guard = connection
                 .lock()
                 .map_err(|_| io::Error::other("记忆数据库连接状态异常"))?;
-            operation(&mut guard).map_err(io::Error::other)
+            operation(&mut guard, &workspace)
         })
         .await
         .map_err(io::Error::other)?
     }
 }
 
-fn check_path(path: &Path, directory: bool) -> io::Result<()> {
+pub(crate) fn check_path(path: &Path, directory: bool) -> io::Result<()> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),

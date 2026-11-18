@@ -12,6 +12,7 @@ use tempfile::{Builder, NamedTempFile};
 
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+const DELETION_TAIL_BYTES: u64 = 1024;
 
 pub(super) enum Issue {
     Tail(u64),
@@ -331,17 +332,54 @@ pub(super) fn memory_sessions(root: &Path) -> io::Result<Vec<SessionId>> {
     };
     let mut sessions = Vec::new();
     for entry in fs::read_dir(path)? {
-        let name = entry?.file_name();
+        let entry = entry?;
+        let name = entry.file_name();
         if let Some(name) = name.to_str()
             && let Ok(session) = SessionId::parse_str(name)
             && !session.is_nil()
             && session.to_string() == name
         {
+            if memory_tombstone(&entry, session).is_ok_and(|deleted| deleted) {
+                continue;
+            }
             sessions.push(session);
         }
     }
     sessions.sort_unstable();
     Ok(sessions)
+}
+
+fn memory_tombstone(entry: &fs::DirEntry, session: SessionId) -> io::Result<bool> {
+    let metadata = entry.metadata()?;
+    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Ok(false);
+    }
+    let mut journal = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(entry.path().join("session.jsonl"))?;
+    let metadata = journal.metadata()?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Ok(false);
+    }
+    // A committed deletion is the final record even when directory cleanup has failed.
+    let start = metadata.len().saturating_sub(DELETION_TAIL_BYTES);
+    journal.seek(SeekFrom::Start(start))?;
+    let mut tail = Vec::new();
+    journal.take(DELETION_TAIL_BYTES).read_to_end(&mut tail)?;
+    let Some(tail) = tail.strip_suffix(b"\n") else {
+        return Ok(false);
+    };
+    let record = match tail.iter().rposition(|byte| *byte == b'\n') {
+        Some(start) => &tail[start + 1..],
+        None if start == 0 => tail,
+        None => return Ok(false),
+    };
+    Ok(serde_json::from_slice::<Record>(record).is_ok_and(|record| {
+        record.format == FORMAT && record.version == FORMAT_VERSION
+            && record.sequence > crate::store::INITIAL_SEQUENCE
+            && matches!(record.kind, RecordKind::Deleted { session: deleted } if deleted == session)
+    }))
 }
 
 pub(super) fn memory_source(

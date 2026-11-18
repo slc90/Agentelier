@@ -36,6 +36,15 @@ CREATE TABLE IF NOT EXISTS published_sources (
     file_name TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS published_artifacts (
+    file_name TEXT PRIMARY KEY,
+    content TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS pending_publication (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS revisions (
     revision_id TEXT PRIMARY KEY,
     published INTEGER NOT NULL DEFAULT 0 CHECK (published IN (0, 1))
