@@ -7,3 +7,5 @@ pub use agentelier_agent_runtime::{
     ConfigChange, ConfigSnapshot, Server, ServerId, ServerSettings, Transport,
 };
 pub use connection::{BridgeEvent, BridgeEventKind, BridgeFailure, Connection};
+
+pub use agentelier_agent_runtime::{ConnectionState, ConnectionStatus};

@@ -22,7 +22,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
 | `crates/agent/project_context/` | `agentelier_project_context` | 会话适用的项目规则发现、有界 UTF-8 读取、来源快照与确定性表示 |
 | `crates/agent/skills/` | `agentelier_skills` | 本地 Skills 来源发现、有界元数据解析、任务目录快照与来源诊断 |
-| `crates/agent/mcp/` | `agentelier_mcp` | MCP 服务器配置的校验、稳定身份和持久化 |
+| `crates/agent/mcp/` | `agentelier_mcp` | MCP 服务器配置、协议协商及 stdio 生命周期 |
 | `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示 |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、封闭边界自动压缩与检查点提交、正文增量和受控取消 |
 | `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型任务取消/回收及执行收尾 |
@@ -213,7 +213,7 @@ Conversation 保存 FIFO 待办和暂停状态。Connection 从统一操作序�
 
 ## MCP 服务器配置
 
-Runtime 在启动数据根下打开独立的 `mcp_servers.json`；配置 Crate 管理工作副本及原子保存。Chat UI 通过唯一 Connection 提交编辑并等待保存回执。stdio 记录程序和参数、启动目录及允许继承的环境变量名称；HTTP 记录端点与可选 Bearer 环境变量名称。账号凭据由 Account 独立持有。
+Runtime 在启动数据根下打开独立的 `mcp_servers.json`；配置 Crate 管理工作副本及原子保存。Chat UI 通过唯一 Connection 提交编辑并等待保存回执。stdio 记录程序和参数、启动目录及允许继承的环境变量名称；HTTP 记录端点与可选 Bearer 环境变量名称。账号凭据由 Account 独立持有。已启用的 stdio 服务器由 Agent MCP 客户端在同一 Tokio Runtime 启动并通过 rmcp 协商。每项连接的状态和能力经 Bridge 投影，独立于模型任务；禁用、替换或应用退出触发 Windows Job 及协议回收。
 
 ## 本地工具的工作环境
 

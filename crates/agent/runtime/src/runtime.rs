@@ -41,6 +41,7 @@ pub enum AgentEventKind {
     ModelCancelled,
     Conversation(ConversationEvent),
     McpConfig(io::Result<agentelier_mcp::ConfigSnapshot>),
+    McpStatus(Vec<agentelier_mcp::ConnectionStatus>),
 }
 #[derive(Debug)]
 pub enum RuntimeFailure {
@@ -50,6 +51,7 @@ pub enum RuntimeFailure {
     Account(AccountFailure),
     Conversation(ConversationFailure),
     Store(io::Error),
+    Mcp(io::Error),
 }
 impl fmt::Display for RuntimeFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -60,6 +62,7 @@ impl fmt::Display for RuntimeFailure {
             Self::Account(error) => error.fmt(f),
             Self::Conversation(error) => error.fmt(f),
             Self::Store(error) => write!(f, "会话存储失败：{error}"),
+            Self::Mcp(error) => write!(f, "MCP 连接收尾失败：{error}"),
         }
     }
 }
@@ -70,6 +73,7 @@ impl Error for RuntimeFailure {
             Self::Account(error) => Some(error),
             Self::Conversation(error) => Some(error),
             Self::Store(error) => Some(error),
+            Self::Mcp(error) => Some(error),
             Self::Thread | Self::ModelState => None,
         }
     }
@@ -86,6 +90,7 @@ impl From<ConversationFailure> for RuntimeFailure {
 }
 enum Command {
     McpConfig(u64, agentelier_mcp::ConfigChange),
+    McpStatus(Vec<agentelier_mcp::ConnectionStatus>),
     Rename {
         id: u64,
         session: SessionId,
@@ -199,6 +204,10 @@ impl AgentRuntime {
                     runtime.block_on(async move {
                         let store = agentelier_session_store::SessionStore::start(data_root.clone()).map_err(RuntimeFailure::Store)?;
                         let mut mcp_settings = agentelier_mcp::ConfigStore::open(&data_root);
+                        let mut mcp_connections = agentelier_mcp::Connections::default();
+                        if let Ok(servers) = mcp_settings.servers() {
+                            mcp_connections.configure(servers);
+                        }
                         let mut creating: Option<creation::Creation> = None;
                         let mut loading: Option<loading::Loading> = None;
                         let mut catalog = Some(store.client().scan().map_err(RuntimeFailure::Store)?);
@@ -223,6 +232,7 @@ impl AgentRuntime {
                                         None => break,
                                     },
                                     _ = runtime_shutdown.cancelled() => break,
+                                    status = mcp_connections.changed() => Command::McpStatus(status),
                                     result = async { match &mut catalog {
                                         Some(reply) => reply.await.unwrap_or_else(|_| Err(io::Error::other("会话目录读取未返回结果"))),
                                         None => std::future::pending().await,
@@ -267,7 +277,21 @@ impl AgentRuntime {
                                             Err(failure) => error!(operation_id = id, error = %failure, "MCP 配置操作失败"),
                                             Ok(_) => {}
                                         }
+                                        let status = if let Ok(snapshot) = &result {
+                                            if changes_disk {
+                                                mcp_connections.configure(&snapshot.servers);
+                                            }
+                                            Some(mcp_connections.statuses())
+                                        } else {
+                                            None
+                                        };
                                         emit(&publish, id, AgentEventKind::McpConfig(result))?;
+                                        if let Some(status) = status {
+                                            emit(&publish, 0, AgentEventKind::McpStatus(status))?;
+                                        }
+                                    }
+                                    Command::McpStatus(status) => {
+                                        emit(&publish, 0, AgentEventKind::McpStatus(status))?;
                                     }
                                     Command::Rename { id, session, title } => {
                                         match if renaming.is_some() || deleting.is_some() { Err(io::Error::other("已有会话管理操作正在保存")) } else { renaming::Renaming::start(id, session, title, &store) } {
@@ -609,6 +633,7 @@ impl AgentRuntime {
                             .await,
                             &mut delivery_failure,
                         );
+                        let mcp_finished = mcp_connections.shutdown().await;
                         while let Some(result) = records.join_next().await {
                             match result {
                                 Ok((pending, result)) => capture_delivery(recording::apply(pending, result, &mut conversation, &publish).map(|_| ()), &mut delivery_failure),
@@ -640,6 +665,7 @@ impl AgentRuntime {
                         }
                         account_finished?;
                         pending_saved?;
+                        mcp_finished.map_err(RuntimeFailure::Mcp)?;
                         if let Some(failure) = delivery_failure {
                             return Err(failure);
                         }

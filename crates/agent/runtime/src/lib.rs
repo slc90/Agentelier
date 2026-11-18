@@ -9,3 +9,5 @@ pub use agentelier_mcp::{
 pub use operations::OperationSequence;
 
 pub use runtime::{AgentEvent, AgentEventKind, AgentRuntime, DeliveryFailure, RuntimeFailure};
+
+pub use agentelier_mcp::{ConnectionState, ConnectionStatus};

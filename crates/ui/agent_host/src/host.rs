@@ -57,6 +57,9 @@ pub struct McpConfigEvent {
     pub result: std::result::Result<agentelier_bridge_connection::ConfigSnapshot, String>,
 }
 
+#[derive(Message)]
+pub struct McpStatusEvent(pub Vec<agentelier_bridge_connection::ConnectionStatus>);
+
 #[derive(Message, Clone)]
 pub struct HostFailed {
     pub reason: String,
@@ -85,6 +88,7 @@ impl Plugin for AgentHostPlugin {
             .add_message::<ConversationEvent>()
             .add_message::<HostFailed>()
             .add_message::<McpConfigEvent>()
+            .add_message::<McpStatusEvent>()
             .add_systems(Update, receive.in_set(ReceiveAgentEvents));
     }
 }
@@ -289,6 +293,9 @@ fn receive(world: &mut World) -> Result {
                     operation_id: event.operation_id,
                     kind,
                 });
+            }
+            BridgeEventKind::McpStatus(status) => {
+                world.write_message(McpStatusEvent(status));
             }
             BridgeEventKind::McpConfig(result) => {
                 world.write_message(McpConfigEvent {

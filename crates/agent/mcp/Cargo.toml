@@ -5,6 +5,12 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+process-wrap.workspace = true
+rmcp.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+windows.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

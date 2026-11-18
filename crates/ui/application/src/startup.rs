@@ -56,7 +56,9 @@ fn run_application(
     let mut app = App::new();
     app.set_error_handler(diagnostics::handler);
     *guard = Some(logging.install(&mut app));
-    app.add_plugins(log_plugin());
+    let mut logging_plugin = log_plugin();
+    logging_plugin.filter.push_str(",rmcp=off");
+    app.add_plugins(logging_plugin);
     *logging_ready = true;
 
     let config_path = executable.with_file_name("config").join("config.ron");

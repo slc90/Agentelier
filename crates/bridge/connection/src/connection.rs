@@ -19,6 +19,7 @@ pub enum BridgeEventKind {
     Model(ModelEventKind),
     Conversation(agentelier_conversation_bridge::ConversationEvent),
     McpConfig(Result<crate::ConfigSnapshot, String>),
+    McpStatus(Vec<crate::ConnectionStatus>),
 }
 #[derive(Clone, Debug)]
 pub struct BridgeFailure(String);
@@ -73,6 +74,7 @@ pub struct Connection {
     runtime: AgentRuntime,
     events: mpsc::Receiver<BridgeEvent>,
     progress: Arc<Mutex<Option<BridgeEvent>>>,
+    mcp_status: Arc<Mutex<Option<BridgeEvent>>>,
     deferred: Option<BridgeEvent>,
     wake: Arc<WakeGate>,
     operations: agentelier_agent_runtime::OperationSequence,
@@ -98,6 +100,8 @@ impl Connection {
         let (sender, events) = mpsc::sync_channel(RESULT_CAPACITY);
         let progress = Arc::new(Mutex::new(None));
         let delivery_progress = progress.clone();
+        let mcp_status = Arc::new(Mutex::new(None));
+        let delivery_mcp_status = mcp_status.clone();
         let wake = Arc::new(WakeGate(Mutex::new(Some(Box::new(notify)))));
         let delivery_wake = wake.clone();
         let finished_wake = wake.clone();
@@ -118,6 +122,7 @@ impl Connection {
                         AgentEventKind::ModelCancelled => {
                             BridgeEventKind::Model(agentelier_llm_model_bridge::convert(None))
                         }
+                        AgentEventKind::McpStatus(status) => BridgeEventKind::McpStatus(status),
                         AgentEventKind::McpConfig(result) => {
                             BridgeEventKind::McpConfig(result.map_err(|error| error.to_string()))
                         }
@@ -126,7 +131,9 @@ impl Connection {
                         ),
                     },
                 };
-                if matches!(&event.kind, BridgeEventKind::Conversation(kind) if kind.is_progress())
+                if matches!(event.kind, BridgeEventKind::McpStatus(_)) {
+                    *delivery_mcp_status.lock().map_err(|_| DeliveryFailure::Closed)? = Some(event);
+                } else if matches!(&event.kind, BridgeEventKind::Conversation(kind) if kind.is_progress())
                 {
                     *delivery_progress
                         .lock()
@@ -146,6 +153,7 @@ impl Connection {
             runtime,
             events,
             progress,
+            mcp_status,
             deferred: None,
             wake,
             operations,
@@ -470,6 +478,15 @@ impl Connection {
                 }
                 other => other,
             };
+            let received = match received {
+                Err(mpsc::TryRecvError::Empty) => self
+                    .mcp_status
+                    .lock()
+                    .map_err(|_| BridgeFailure("MCP 连接状态锁已损坏".into()))?
+                    .take()
+                    .ok_or(mpsc::TryRecvError::Empty),
+                other => other,
+            };
             match received {
                 Ok(event) => {
                     if let BridgeEventKind::Account(kind) = &event.kind
@@ -540,6 +557,9 @@ impl Connection {
                             return Ok(Some(event));
                         }
                     }
+                    if matches!(event.kind, BridgeEventKind::McpStatus(_)) {
+                        return Ok(Some(event));
+                    }
                     if matches!(event.kind, BridgeEventKind::McpConfig(_)) {
                         if !self.pending_mcp.remove(&event.operation_id) {
                             return self.protocol_failure();
@@ -562,7 +582,9 @@ impl Connection {
                         continue;
                     }
                     let kind = match &event.kind {
-                        BridgeEventKind::McpConfig(_) => return self.protocol_failure(),
+                        BridgeEventKind::McpStatus(_) | BridgeEventKind::McpConfig(_) => {
+                            return self.protocol_failure();
+                        }
                         BridgeEventKind::Model(_) => {
                             if self.pending_requests.remove(&event.operation_id)
                                 && self.model != Some(event.operation_id)

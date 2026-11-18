@@ -1,6 +1,6 @@
 use agentelier_agent_host::{
-    AgentHost, ConfigChange, McpConfigEvent, ReceiveAgentEvents, Server, ServerId, ServerSettings,
-    Transport,
+    AgentHost, ConfigChange, ConnectionState, ConnectionStatus, McpConfigEvent, McpStatusEvent,
+    ReceiveAgentEvents, Server, ServerId, ServerSettings, Transport,
 };
 use bevy::prelude::*;
 use bevy::text::LineBreak;
@@ -102,6 +102,7 @@ impl Draft {
 #[derive(Resource, Default)]
 struct Editor {
     servers: Vec<Server>,
+    connections: Vec<ConnectionStatus>,
     draft: Draft,
     pending: Option<u64>,
     ready: bool,
@@ -140,7 +141,10 @@ pub(crate) fn install(app: &mut App) {
     app.init_resource::<Editor>()
         .init_resource::<McpConfigState>()
         .register_type::<McpConfigState>()
-        .add_systems(Update, receive.after(ReceiveAgentEvents));
+        .add_systems(
+            Update,
+            (receive, receive_status).chain().after(ReceiveAgentEvents),
+        );
 }
 
 pub(crate) fn open(world: &mut World) {
@@ -188,11 +192,7 @@ fn receive(mut events: MessageReader<McpConfigEvent>, mut commands: Commands) {
                 }
                 Err(failure) => failure,
             };
-            let servers = editor
-                .servers
-                .iter()
-                .map(|server| label(&server.settings))
-                .collect();
+            let servers = labels(&editor);
             *world.resource_mut::<McpConfigState>() = McpConfigState {
                 servers,
                 status,
@@ -204,6 +204,41 @@ fn receive(mut events: MessageReader<McpConfigEvent>, mut commands: Commands) {
             Ok(())
         });
     }
+}
+
+fn labels(editor: &Editor) -> Vec<String> {
+    editor
+        .servers
+        .iter()
+        .map(|server| {
+            let state = editor
+                .connections
+                .iter()
+                .find(|status| status.server == server.id)
+                .map(|status| &status.state);
+            label(&server.settings, state)
+        })
+        .collect()
+}
+
+fn receive_status(mut events: MessageReader<McpStatusEvent>, mut commands: Commands) {
+    let Some(event) = events.read().last() else {
+        return;
+    };
+    let connections = event.0.clone();
+    commands.queue(move |world: &mut World| -> Result {
+        let visible = crate::prompts::mcp_visible(world);
+        if visible {
+            capture(world)?;
+        }
+        let mut editor = world.resource_mut::<Editor>();
+        editor.connections = connections;
+        world.resource_mut::<McpConfigState>().servers = labels(&editor);
+        if visible {
+            crate::prompts::render(world)?;
+        }
+        Ok(())
+    });
 }
 
 pub(crate) fn capture(world: &mut World) -> Result {
@@ -268,17 +303,41 @@ fn apply(world: &mut World, action: Action) -> Result {
     Ok(())
 }
 
-fn label(settings: &ServerSettings) -> String {
+fn label(settings: &ServerSettings, state: Option<&ConnectionState>) -> String {
     let transport = match settings.transport {
         Transport::Stdio { .. } => "stdio",
         Transport::StreamableHttp { .. } => "Streamable HTTP",
     };
-    let state = if settings.enabled {
-        "已启用，未连接"
-    } else {
-        "已禁用"
+    let status = match state {
+        Some(ConnectionState::Starting) => "启动中".into(),
+        Some(ConnectionState::Negotiating) => "协商中".into(),
+        Some(ConnectionState::Ready(info)) => {
+            let capabilities = [
+                info.tools.then_some("Tools"),
+                info.resources.then_some("Resources"),
+                info.prompts.then_some("Prompts"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(", ");
+            format!(
+                "已连接 · {} · {}",
+                info.version,
+                if capabilities.is_empty() {
+                    "无 Tools、Resources 或 Prompts 能力"
+                } else {
+                    &capabilities
+                }
+            )
+        }
+        Some(ConnectionState::Closing) => "关闭中".into(),
+        Some(ConnectionState::Closed) => "已关闭".into(),
+        Some(ConnectionState::Failed { stage, reason }) => format!("{stage}失败：{reason}"),
+        None if settings.enabled => "已启用，未连接".into(),
+        None => "已禁用".into(),
     };
-    format!("{} · {transport} · {state}", settings.name)
+    format!("{} · {transport} · {status}", settings.name)
 }
 
 fn button(
