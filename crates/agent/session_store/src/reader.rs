@@ -6,7 +6,7 @@ use agentelier_conversation::{
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{fs, io};
 use tempfile::{Builder, NamedTempFile};
 
@@ -202,16 +202,13 @@ fn cached_summary(directory: &Path) -> io::Result<SessionSummary> {
     })
 }
 
-pub(super) fn scan(root: &Path) -> io::Result<crate::ArchiveCatalog> {
+fn sessions_directory(root: &Path) -> io::Result<Option<(PathBuf, PathBuf)>> {
     let root = fs::canonicalize(root)?;
     let path = root.join("sessions");
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(failure) if failure.kind() == io::ErrorKind::NotFound => {
-            return Ok(crate::ArchiveCatalog {
-                entries: Vec::new(),
-                cleanup_errors: Vec::new(),
-            });
+            return Ok(None);
         }
         Err(failure) => return Err(failure),
     };
@@ -221,6 +218,16 @@ pub(super) fn scan(root: &Path) -> io::Result<crate::ArchiveCatalog> {
     {
         return Err(io::Error::other("会话目录包含重解析点或超出数据目录"));
     }
+    Ok(Some((root, path)))
+}
+
+pub(super) fn scan(root: &Path) -> io::Result<crate::ArchiveCatalog> {
+    let Some((root, path)) = sessions_directory(root)? else {
+        return Ok(crate::ArchiveCatalog {
+            entries: Vec::new(),
+            cleanup_errors: Vec::new(),
+        });
+    };
     let mut entries = Vec::new();
     let mut cleanup_errors = Vec::new();
     for entry in fs::read_dir(&path)? {
@@ -306,6 +313,101 @@ pub(super) fn scan(root: &Path) -> io::Result<crate::ArchiveCatalog> {
         entries,
         cleanup_errors,
     })
+}
+
+pub struct MemorySourceSnapshot {
+    pub session: SessionId,
+    pub sequence: u64,
+    pub revision: [u8; 32],
+    pub activity_ms: u64,
+    pub work_directory: PathBuf,
+    pub model: String,
+    pub turns: Vec<(u64, Box<agentelier_conversation::TurnView>)>,
+}
+
+pub(super) fn memory_sessions(root: &Path) -> io::Result<Vec<SessionId>> {
+    let Some((_, path)) = sessions_directory(root)? else {
+        return Ok(Vec::new());
+    };
+    let mut sessions = Vec::new();
+    for entry in fs::read_dir(path)? {
+        let name = entry?.file_name();
+        if let Some(name) = name.to_str()
+            && let Ok(session) = SessionId::parse_str(name)
+            && !session.is_nil()
+            && session.to_string() == name
+        {
+            sessions.push(session);
+        }
+    }
+    sessions.sort_unstable();
+    Ok(sessions)
+}
+
+pub(super) fn memory_source(
+    root: &Path,
+    session: SessionId,
+) -> io::Result<Option<MemorySourceSnapshot>> {
+    use agentelier_conversation::TurnStatus;
+    let parsed = match crate::attachments::session_directory(root, session)
+        .and_then(|directory| read(&directory, session))
+    {
+        Ok(parsed) => parsed,
+        Err(failure) if failure.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(failure) => return Err(failure),
+    };
+    match parsed.issue {
+        Some(Issue::Tail(_)) => return Ok(None),
+        Some(issue @ Issue::Corrupt { .. }) => return Err(io::Error::other(issue.to_string())),
+        None => {}
+    }
+    if parsed.summary.deleted {
+        return Ok(None);
+    }
+    let Some(last) = parsed.records.last() else {
+        return Ok(None);
+    };
+    if last
+        .event
+        .state()
+        .turn
+        .as_ref()
+        .is_some_and(|turn| matches!(turn.status, TurnStatus::Running))
+    {
+        return Ok(None);
+    }
+    let activity_ms = last.at_ms.max(parsed.summary.last_activity_ms);
+    let initial = parsed
+        .initial
+        .ok_or_else(|| io::Error::other("记忆来源缺少会话初始记录"))?;
+    let mut turns = Vec::new();
+    for record in parsed.records {
+        if let RecordEvent::Finished { state, .. } | RecordEvent::Finalized { state, .. } =
+            record.event
+            && let Some(turn) = state.turn
+            && !matches!(turn.status, TurnStatus::Running)
+        {
+            if turns.last().is_some_and(
+                |(_, last): &(u64, Box<agentelier_conversation::TurnView>)| last.id == turn.id,
+            ) {
+                // The first terminal record fixes the turn's evidence and reset boundary.
+                continue;
+            }
+            turns.push((record.sequence, turn));
+        }
+    }
+    if turns.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(MemorySourceSnapshot {
+        session,
+        sequence: parsed.sequence,
+        revision: parsed.prefix_digest,
+        activity_ms,
+        work_directory: initial.settings.working_directory,
+        model: initial.settings.slug,
+        turns,
+    }))
 }
 
 fn repair(

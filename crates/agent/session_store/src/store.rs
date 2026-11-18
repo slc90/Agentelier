@@ -57,6 +57,11 @@ enum Command {
     Delete(SessionId, oneshot::Sender<io::Result<DeleteCommit>>),
     Rename(SessionId, String, oneshot::Sender<io::Result<RenameCommit>>),
     Scan(oneshot::Sender<io::Result<ArchiveCatalog>>),
+    MemorySessions(oneshot::Sender<io::Result<Vec<SessionId>>>),
+    MemorySource(
+        SessionId,
+        oneshot::Sender<io::Result<Option<crate::MemorySourceSnapshot>>>,
+    ),
     Load(
         SessionId,
         oneshot::Sender<io::Result<agentelier_conversation::RestoredSession>>,
@@ -102,6 +107,31 @@ impl SessionStoreClient {
             .try_send(Command::Scan(reply))
             .map_err(|failure| io::Error::other(format!("无法接纳会话目录读取：{failure}")))?;
         Ok(result)
+    }
+
+    pub async fn memory_sessions(&self) -> io::Result<Vec<SessionId>> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::MemorySessions(reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("记忆来源目录未返回读取结果"))?
+    }
+
+    pub async fn memory_source(
+        &self,
+        session: SessionId,
+    ) -> io::Result<Option<crate::MemorySourceSnapshot>> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::MemorySource(session, reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("记忆来源未返回读取结果"))?
     }
 
     pub fn load(
@@ -199,6 +229,12 @@ impl SessionStore {
                             let result = crate::reader::scan(&root);
                             if let Err(failure) = &result { error!(error = %failure, "本地会话目录读取失败"); }
                             if reply.send(result).is_err() { debug!("会话目录读取已结束，等待者已离开"); }
+                        }
+                        Command::MemorySessions(reply) => {
+                            let _closed = reply.send(crate::reader::memory_sessions(&root));
+                        }
+                        Command::MemorySource(session, reply) => {
+                            let _closed = reply.send(crate::reader::memory_source(&root, session));
                         }
                         Command::Load(session, reply) => {
                             let result = crate::reader::load(&root, session, &mut writer);

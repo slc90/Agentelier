@@ -12,6 +12,7 @@ agentelier_turn_runner = { path = "../turn_runner" }
 agentelier_conversation = { path = "../conversation" }
 agentelier_account = { path = "../account" }
 agentelier_llm_model = { path = "../llm_model" }
+serde_json.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true

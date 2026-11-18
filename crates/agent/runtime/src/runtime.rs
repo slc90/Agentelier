@@ -11,6 +11,7 @@ use agentelier_memory::Memory;
 mod creation;
 mod deleting;
 mod loading;
+mod memory;
 mod model_task;
 mod recording;
 mod renaming;
@@ -223,6 +224,10 @@ impl AgentRuntime {
                             Ok(_) => debug!(path = %data_root.display(), "记忆存储已打开"),
                             Err(failure) => error!(path = %data_root.display(), error = %failure, "记忆存储不可用"),
                         }
+                        let memory_cancel = runtime_shutdown.child_token();
+                        let memory_worker = memory.as_ref().ok().map(|memory| tokio::spawn(memory::Worker::new(
+                            memory.client(), store.client(), owner_credentials.clone(), memory_cancel.clone(),
+                        ).run()));
                         let mut mcp_settings = agentelier_mcp::ConfigStore::open(&data_root);
                         let mut material: Option<PendingMaterial> = None;
                         let mut mcp_connections = agentelier_mcp::Connections::default();
@@ -696,6 +701,10 @@ impl AgentRuntime {
                             }
                         }
                         let mcp_finished = mcp_connections.shutdown().await;
+                        memory_cancel.cancel();
+                        let memory_worker_finished = if let Some(worker) = memory_worker {
+                            worker.await.map_err(io::Error::other)
+                        } else { Ok(()) };
                         let memory_finished = if let Ok(memory) = memory {
                             let result = tokio::task::spawn_blocking(move || memory.close())
                                 .await.map_err(io::Error::other).and_then(|result| result);
@@ -739,6 +748,7 @@ impl AgentRuntime {
                         account_finished?;
                         pending_saved?;
                         mcp_finished.map_err(RuntimeFailure::Mcp)?;
+                        memory_worker_finished.map_err(RuntimeFailure::Memory)?;
                         memory_finished.map_err(RuntimeFailure::Memory)?;
                         if let Some(failure) = delivery_failure {
                             return Err(failure);

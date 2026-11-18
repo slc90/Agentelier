@@ -1,4 +1,6 @@
-use agentelier_account::{AuthenticatedRequest, CredentialClient, UsableCredentials};
+use agentelier_account::{
+    AuthenticatedRequest, CredentialClient, ExecutionIdentity, UsableCredentials,
+};
 use reqwest::{Client, Response};
 use serde::Deserialize;
 use serde_json::Value;
@@ -189,13 +191,79 @@ pub async fn execute(
     if let Some(effort) = &effort {
         payload["reasoning"] = serde_json::json!({"effort": effort});
     }
+    let output = request_text(&client, &credentials, current, None, &payload).await?;
+    Ok(ModelResult::Verified(ModelReply {
+        slug,
+        effort,
+        model: display_name,
+        text: text_output(output.messages),
+    }))
+}
+
+pub struct BackgroundText {
+    pub text: String,
+    pub usage: Option<crate::ResponseUsage>,
+    pub response_id: Option<String>,
+}
+
+pub async fn background_text(
+    credentials: &CredentialClient,
+    identity: &ExecutionIdentity,
+    model: &ModelInfo,
+    instruction: &str,
+    input: &str,
+    format: Value,
+) -> Result<BackgroundText, ModelFailure> {
+    let client = Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "无法建立安全模型客户端"))?;
+    let current = acquire(credentials).await?;
+    let payload = serde_json::json!({
+        "model": model.slug,
+        "input": [{"role": "developer", "content": instruction}, {"role": "user", "content": input}],
+        "store": false,
+        "stream": true,
+        "text": {"format": format},
+    });
+    let output = request_text(&client, credentials, current, Some(identity), &payload).await?;
+    Ok(BackgroundText {
+        text: text_output(output.messages),
+        usage: output.usage,
+        response_id: output.response_id,
+    })
+}
+
+fn text_output(messages: Vec<crate::OutputMessage>) -> String {
+    messages
+        .into_iter()
+        .flat_map(|message| message.content.into_iter().map(|part| part.text))
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+async fn request_text(
+    client: &Client,
+    credentials: &CredentialClient,
+    mut current: UsableCredentials,
+    identity: Option<&ExecutionIdentity>,
+    payload: &Value,
+) -> Result<crate::GenerationResult, ModelFailure> {
     let mut request = AuthenticatedRequest::new(&current);
     loop {
+        if let Some(identity) = identity {
+            identity
+                .validate(&current)
+                .map_err(ModelFailure::authentication)?;
+        }
         let response = client
             .post(RESPONSES_URL)
             .bearer_auth(current.access_token())
             .header(reqwest::header::ACCEPT, "text/event-stream")
-            .json(&payload)
+            .json(payload)
             .send()
             .await
             .map_err(network)?;
@@ -204,30 +272,22 @@ pub async fn execute(
             let id = request_id(&response);
             crate::stream::consume(response, &mut request, None, false)
                 .await
-                .map(|output| {
-                    output
-                        .messages
-                        .into_iter()
-                        .flat_map(|message| message.content.into_iter().map(|part| part.text))
-                        .collect::<Vec<_>>()
-                        .join("\n\n")
-                })
                 .map_err(|failure| with_response(failure, status, id))
         } else {
             Err(http_failure(response).await)
         };
         match outcome {
-            Ok(text) => {
-                return Ok(ModelResult::Verified(ModelReply {
-                    slug,
-                    effort,
-                    model: display_name,
-                    text,
-                }));
+            Ok(output) => {
+                if let Some(identity) = identity {
+                    identity
+                        .validate(&current)
+                        .map_err(ModelFailure::authentication)?;
+                }
+                return Ok(output);
             }
             Err(failure) => {
                 if let Some(replacement) =
-                    recover(&credentials, &mut request, &current, &failure).await?
+                    recover(credentials, &mut request, &current, &failure).await?
                 {
                     current = replacement;
                 } else {

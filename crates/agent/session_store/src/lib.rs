@@ -12,4 +12,5 @@ pub use store::{
     SessionStoreClient,
 };
 
+pub use reader::MemorySourceSnapshot;
 pub use store::{ArchiveCatalog, DeleteCommit};

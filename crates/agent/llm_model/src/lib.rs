@@ -19,8 +19,8 @@ pub use protocol::{
 pub use stream::{FunctionCall, GenerationResult, OutputMessage, OutputText, StreamEvent};
 
 pub use model::{
-    ModelFailure, ModelFailureKind, ModelInfo, ModelReply, ModelRequest, ModelResult, execute,
-    task_model,
+    BackgroundText, ModelFailure, ModelFailureKind, ModelInfo, ModelReply, ModelRequest,
+    ModelResult, background_text, execute, task_model,
 };
 
 pub use protocol::estimated_text_tokens;

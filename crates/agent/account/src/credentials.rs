@@ -38,6 +38,10 @@ pub struct ExecutionIdentity {
     invalidated: CancellationToken,
 }
 impl ExecutionIdentity {
+    pub async fn invalidated(&self) {
+        self.invalidated.cancelled().await;
+    }
+
     pub fn validate(&self, credentials: &UsableCredentials) -> Result<(), SessionFailure> {
         if self.invalidated.is_cancelled() || !self.version.same_account(credentials.version()) {
             return Err(SessionFailure::new(

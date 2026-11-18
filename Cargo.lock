@@ -132,6 +132,7 @@ dependencies = [
  "agentelier_memory",
  "agentelier_session_store",
  "agentelier_turn_runner",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tracing",
@@ -310,7 +311,13 @@ dependencies = [
 name = "agentelier_memory"
 version = "0.1.0"
 dependencies = [
+ "agentelier_conversation",
+ "agentelier_session_store",
+ "regex",
  "rusqlite",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

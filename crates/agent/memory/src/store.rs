@@ -3,12 +3,16 @@ use std::fs;
 use std::io;
 use std::os::windows::fs::MetadataExt;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 pub struct Memory {
-    connection: Connection,
+    client: MemoryClient,
 }
+
+#[derive(Clone)]
+pub struct MemoryClient(Arc<Mutex<Connection>>);
 
 impl Memory {
     pub fn open(data_root: &Path) -> io::Result<Self> {
@@ -35,14 +39,46 @@ impl Memory {
         transaction
             .execute_batch(include_str!("schema.sql"))
             .map_err(io::Error::other)?;
+        transaction
+            .execute(
+                "UPDATE sources SET status = 'pending' WHERE status = 'processing'",
+                [],
+            )
+            .map_err(io::Error::other)?;
         transaction.commit().map_err(io::Error::other)?;
-        Ok(Self { connection })
+        Ok(Self {
+            client: MemoryClient(Arc::new(Mutex::new(connection))),
+        })
+    }
+
+    pub fn client(&self) -> MemoryClient {
+        self.client.clone()
     }
 
     pub fn close(self) -> io::Result<()> {
-        self.connection
+        Arc::into_inner(self.client.0)
+            .ok_or_else(|| io::Error::other("记忆数据库仍有未回收的使用者"))?
+            .into_inner()
+            .map_err(|_| io::Error::other("记忆数据库连接状态异常"))?
             .close()
             .map_err(|(_, error)| io::Error::other(error))
+    }
+}
+
+impl MemoryClient {
+    pub(crate) async fn with_connection<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut Connection) -> rusqlite::Result<T> + Send + 'static,
+    ) -> io::Result<T> {
+        let connection = self.0.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut guard = connection
+                .lock()
+                .map_err(|_| io::Error::other("记忆数据库连接状态异常"))?;
+            operation(&mut guard).map_err(io::Error::other)
+        })
+        .await
+        .map_err(io::Error::other)?
     }
 }
 
