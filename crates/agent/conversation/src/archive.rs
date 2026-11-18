@@ -163,12 +163,7 @@ pub struct StoredSettings {
     pub tools: Vec<StoredTool>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct StoredTool {
-    pub name: String,
-    pub description: String,
-    pub parameters: serde_json::Value,
-}
+pub use agentelier_tools::ToolDefinition as StoredTool;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct InitialSession {

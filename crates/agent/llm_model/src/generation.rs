@@ -164,8 +164,8 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         "store": false,
         "stream": true,
     });
-    payload["tools"] = serde_json::Value::Array(generation.tools.definitions().iter().map(|tool| serde_json::json!({
-        "type":"function", "name":tool.name, "description":tool.description, "parameters":tool.parameters, "strict":true
+    payload["tools"] = serde_json::Value::Array(generation.tools.definitions().map(|tool| serde_json::json!({
+        "type":"function", "name":tool.name, "description":tool.description, "parameters":tool.parameters, "strict":tool.strict
     })).collect());
     payload["tool_choice"] = serde_json::json!("auto");
     payload["parallel_tool_calls"] = serde_json::json!(true);

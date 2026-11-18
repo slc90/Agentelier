@@ -113,7 +113,7 @@ sequenceDiagram
 
 | 位置 | 本阶段职责 |
 | --- | --- |
-| `agent/tools`，`agentelier_tools` | 固定工具目录、描述、输入校验、具体实现、任务级执行资源、可取消执行和业务结果 |
+| `agent/tools`，`agentelier_tools` | 冻结的工具登记、输入校验、内置执行器、任务级执行资源、可取消执行和业务结果 |
 | `agent/turn_runner`，`agentelier_turn_runner` | 推进一个用户任务中的模型请求、串行工具批次、结果反馈、预算及 Steer 生效 |
 | `agent/conversation` | 定义会话、任务记录、协议历史提交规则、稳定身份和会话待办队列 |
 | `agent/llm_model` | Responses/SSE 编解码、工具协议项、单次请求和服务错误；不执行工具 |

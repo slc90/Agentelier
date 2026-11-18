@@ -137,9 +137,11 @@ impl ActiveTurn {
             self.history.clone()
         };
         turn.request_items = context.summary();
-        self.view
-            .context
-            .refresh(&context, &self.view.settings.instructions, &self.tools)?;
+        self.view.context.refresh(
+            &context,
+            &self.view.settings.instructions,
+            self.tools.definitions(),
+        )?;
         Ok(GenerationRequest {
             selected_skills: turn.selected_skills.clone(),
             skill_catalog: turn
@@ -539,9 +541,11 @@ impl ActiveTurn {
                 });
             }
         }
-        self.view
-            .context
-            .refresh(&self.history, &self.view.settings.instructions, &self.tools)?;
+        self.view.context.refresh(
+            &self.history,
+            &self.view.settings.instructions,
+            self.tools.definitions(),
+        )?;
         Ok(())
     }
 
@@ -567,9 +571,11 @@ impl ActiveTurn {
             }
         }
         turn.status = status;
-        self.view
-            .context
-            .refresh(&self.history, &self.view.settings.instructions, &self.tools)?;
+        self.view.context.refresh(
+            &self.history,
+            &self.view.settings.instructions,
+            self.tools.definitions(),
+        )?;
         Ok(())
     }
 }

@@ -56,7 +56,7 @@ impl ToolResult {
     pub fn not_executed(code: &str, message: &str) -> Self {
         Self::error(ToolStatus::NotExecuted, code, message)
     }
-    pub(crate) fn error(status: ToolStatus, code: &str, message: &str) -> Self {
+    pub fn error(status: ToolStatus, code: &str, message: &str) -> Self {
         let mut end = message.len().min(ERROR_MESSAGE_BYTES);
         while !message.is_char_boundary(end) {
             end -= 1;
@@ -89,24 +89,24 @@ pub async fn execute(
             "工具参数超过大小限制",
         );
     }
-    let Some(implementation) = catalog.find(name) else {
+    let Some(tool) = catalog.find(name) else {
         return ToolResult::error(ToolStatus::Failed, "unknown_tool", "未登记的工具名称");
     };
-    match implementation {
-        crate::catalog::Implementation::Exec => context.exec(arguments, cancel).await,
-        crate::catalog::Implementation::Stdin => context.stdin(arguments, cancel).await,
-        crate::catalog::Implementation::Patch => {
-            crate::patch::run(arguments, context.directory.clone(), cancel).await
-        }
-        crate::catalog::Implementation::Image { supported } => {
-            if supported == Some(false) {
-                return ToolResult::error(
-                    ToolStatus::Failed,
-                    "image_capability",
-                    "模型目录明确不支持图片输入，未读取图片",
-                );
-            }
-            crate::image::run(arguments, context.directory.clone(), cancel).await
-        }
+    tool.execute(context, arguments, cancel).await
+}
+
+pub(crate) async fn image(
+    context: &mut crate::ExecutionContext,
+    arguments: &str,
+    cancel: &CancellationToken,
+    supported: Option<bool>,
+) -> ToolResult {
+    if supported == Some(false) {
+        return ToolResult::error(
+            ToolStatus::Failed,
+            "image_capability",
+            "模型目录明确不支持图片输入，未读取图片",
+        );
     }
+    crate::image::run(arguments, context.directory.clone(), cancel).await
 }

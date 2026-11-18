@@ -15,7 +15,6 @@ pub struct RestoredSession {
     initial: InitialSession,
     history: ProtocolHistory,
     publications: Vec<Arc<agentelier_llm_model::ProjectPublication>>,
-    tools: Arc<ToolCatalog>,
     next_turn: u64,
     notice: Option<String>,
     pub normalized: bool,
@@ -475,41 +474,16 @@ pub fn restore(
         return Err(ConversationFailure::new("恢复的工作上下文超过会话图片预算"));
     }
     state.committed_items = history.summary();
-    let tools = Arc::new(
-        ToolCatalog::standard(
-            &initial.settings.working_directory,
-            initial.settings.image_input,
-        )
-        .map_err(|failure| ConversationFailure::new(failure.to_string()))?,
-    );
-    let contract_matches = initial.settings.tools.len() == tools.definitions().len()
-        && initial
-            .settings
-            .tools
-            .iter()
-            .zip(tools.definitions())
-            .all(|(stored, current)| {
-                stored.name == current.name
-                    && stored.description == current.description
-                    && stored.parameters == current.parameters
-            });
-    if !contract_matches || !initial.settings.working_directory.is_absolute() {
-        state.execution_blocked = true;
-        notices.push("当前工具契约或工作目录与存档不兼容，已阻止执行；历史仍可查看".into());
-    } else if let Err(failure) =
-        agentelier_tools::WorkingDirectory::validate(&initial.settings.working_directory)
-    {
-        notices.push(format!("原工作目录不可用，工具执行会拒绝该路径：{failure}"));
-    }
-    state
-        .context
-        .refresh(&history, &initial.settings.instructions, &tools)?;
+    state.context.refresh(
+        &history,
+        &initial.settings.instructions,
+        &initial.settings.tools,
+    )?;
     Ok(RestoredSession {
         state,
         initial,
         history,
         publications,
-        tools,
         next_turn,
         notice: (!notices.is_empty()).then(|| notices.join("\n")),
         normalized,
@@ -526,6 +500,35 @@ impl Conversation {
         {
             turn.operation_id = 0;
         }
+        let settings = &restored.initial.settings;
+        let tools = ToolCatalog::with_extensions(
+            &settings.working_directory,
+            settings.image_input,
+            &self.extensions,
+        )
+        .and_then(|available| available.rebind(&settings.tools));
+        let tools = match tools {
+            Ok(tools) if settings.working_directory.is_absolute() => {
+                if let Err(failure) =
+                    agentelier_tools::WorkingDirectory::validate(&settings.working_directory)
+                {
+                    restored.add_recovery_notice(&format!(
+                        "原工作目录不可用，工具执行会拒绝该路径：{failure}"
+                    ));
+                }
+                tools
+            }
+            result => {
+                restored.state.execution_blocked = true;
+                let reason = result.err().map_or_else(
+                    || "存档工作目录不是绝对路径".into(),
+                    |failure| failure.to_string(),
+                );
+                restored.add_recovery_notice(&format!("{reason}，已阻止执行；历史仍可查看"));
+                ToolCatalog::default()
+            }
+        };
+
         let settings = restored.initial.settings;
         let view = SessionView {
             project_context: Box::new(match restored.state.project_error {
@@ -572,7 +575,7 @@ impl Conversation {
         self.session = Some(ChatSession {
             view: view.clone(),
             history: Some(restored.history),
-            tools: restored.tools,
+            tools: Arc::new(tools),
             pending_results: BTreeMap::new(),
         });
         view

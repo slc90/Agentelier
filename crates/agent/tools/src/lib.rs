@@ -14,7 +14,7 @@ mod sessions;
 
 pub use environment::WorkingDirectory;
 
-pub use catalog::{ToolCatalog, ToolDefinition};
+pub use catalog::{ToolCatalog, ToolDefinition, ToolExecution, ToolRegistration, ToolSource};
 pub use execution::{MAX_TOOL_BODY_BYTES, ToolFailure, ToolResult, ToolStatus, execute};
 
 pub use payload::{

@@ -26,13 +26,11 @@ flowchart TD
 
 ### 当前机制的可复用部分
 
-`agent/tools/catalog.rs` 的 `ToolCatalog::standard` 生成四个固定声明，`execution.rs` 按 `Implementation` 枚举分发；`turn_runner` 在收到完整 `response.completed` 后才开始执行，再用 `call_id` 绑定结果。`llm_model` 只负责编解码 Responses 协议。会话在创建时冻结工具描述和 Schema，存档恢复时重建目录并核对契约，不匹配则阻止继续执行，同时保留历史可查看。
-
-这些机制不需要更换。需要扩展的是：工具名字目前为 `&'static str`、实现被固定枚举列举、恢复时直接重建四工具目录。它们都默认了工具只能来自当前静态列表。
+`agent/tools/catalog.rs` 的 `ToolRegistration` 将声明和异步执行器绑定。工具名可由提供者定义，`execution.rs` 通过同一目录查找执行器。`turn_runner` 在完整 `response.completed` 后才开始调用，并用 `call_id` 绑定结果。`llm_model` 从目录读取声明和严格模式生成 Responses 请求。
 
 ### 一份登记同时绑定声明与执行能力
 
-建议保留 `ToolCatalog` 作为唯一的工具目录，将目录条目扩展为四类相互关联的信息：
+`ToolCatalog` 的登记包含四类相互关联的信息：
 
 | 信息 | 作用 |
 | --- | --- |
@@ -43,7 +41,7 @@ flowchart TD
 
 调用仍按模型看到的唯一名称进行。目录构造阶段发现冲突就明确报错，不让后注册的工具覆盖已有工具；MCP 的名称由服务器身份与原始名称生成可逆或有显式映射的模型可用名，实际调用使用保存的原始 `server + tool`，不从压缩名称猜测目标。内部扩展同样不得抢占内置工具名称。显示名称可与执行名称分离。
 
-来自 MCP 的工具 Schema **不能被无条件强制改写为严格 Schema**。现有 `llm_model/generation.rs` 对全部工具发送 `strict=true`，适用于当前完整 required/封闭对象的四个内置工具；MCP `inputSchema` 则允许可选字段和不同结构。借鉴 Codex `codex-rs/tools/src/mcp_tool.rs` 与 `responses_api.rs` 的做法，保留输入含义并为 MCP 使用适当的非严格声明；必要的最低限度格式适配仅修复模型接口的语法要求，不把 optional 擅自改为 required。服务端仍是自身 Schema 与业务校验的权威。无法向当前模型合法声明的工具应单独报告不可用，而不是制造一个与原工具不同的接口。
+来自 MCP 的工具 Schema **不能被无条件强制改写为严格 Schema**。`llm_model/generation.rs` 使用登记的严格模式，四个内置工具继续使用完整 required/封闭对象及 `strict=true`；MCP `inputSchema` 则允许可选字段和不同结构。借鉴 Codex `codex-rs/tools/src/mcp_tool.rs` 与 `responses_api.rs` 的做法，保留输入含义并为 MCP 使用适当的非严格声明；必要的最低限度格式适配仅修复模型接口的语法要求，不把 optional 擅自改为 required。服务端仍是自身 Schema 与业务校验的权威。无法向当前模型合法声明的工具应单独报告不可用，而不是制造一个与原工具不同的接口。
 
 既有单次参数上限、模型请求上限、结果大小与图片预算继续生效。MCP 的 `outputSchema`、`structuredContent`、内容块及 `isError` 是结果协议，不等于模型输入 Schema；转换时不能只取一段展示文本丢掉错误状态或结构化内容。
 
@@ -145,7 +143,7 @@ MCP Prompts 经 `prompts/list` 发现名称、描述和所需参数，用户选�
 
 **固定的是模型可见的工具契约，不是服务器永远在线。** 新建会话时汇集内置工具、编译进程序的扩展工具和当前可成功发现的 MCP Tools，形成只读快照。会话目录包括来源与路由身份；模型声明与运行分发共用它。服务器之后通知列表变化或配置改变时，新会话可取得新目录，但旧会话不在一次任务中悄悄改变工具名、描述和 Schema。
 
-现有 `StoredTool` 只保存名称、描述和参数；恢复仅调用 `ToolCatalog::standard` 再逐项核对。扩展后需要保存足以安全重绑定的来源身份及兼容的模型声明。恢复时用同一来源重新构造执行器并核对已存契约；已存在的同名工具不能替代失踪的原服务器。契约不匹配时沿用当前“保留历史、阻止执行”的语义；契约匹配而服务器暂时离线时，应显示真实连接错误并允许后续连接恢复，不能假称旧工具已被删除或自动替换。
+`StoredTool` 保存名称、描述、参数、严格模式和来源身份。恢复时 Conversation 逐项核对保存的契约，并以原目录顺序重新绑定同一来源的执行器；已存在的同名工具不能替代失踪的原服务器。契约不匹配时沿用当前“保留历史、阻止执行”的语义；契约匹配而服务器暂时离线时，应显示真实连接错误并允许后续连接恢复，不能假称旧工具已被删除或自动替换。
 
 Resources 和 Prompts 的列表可以随服务器状态重新获取，因为它们不是会话工具目录的一部分；但**已经提交的资源文本或 Prompt 展开结果必须按当时内容留在历史**，不能在恢复时再从服务器获取并替换原文。这与现有 Prompt 快照、Skills 任务材料和项目来源记录的原则一致。
 

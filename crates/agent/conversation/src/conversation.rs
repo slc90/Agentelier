@@ -3,7 +3,7 @@ use crate::control::SteerView;
 use crate::queue::QueuedInput;
 use agentelier_llm_model::{OutputMessage, ProtocolHistory, ProtocolItemSummary};
 use agentelier_prompts::{InstructionMessage, InstructionSnapshot};
-use agentelier_tools::{ToolCatalog, ToolStatus};
+use agentelier_tools::{ToolCatalog, ToolRegistration, ToolStatus};
 use std::sync::Arc;
 use std::{error::Error, fmt};
 
@@ -153,10 +153,18 @@ pub struct PreparedSession {
 pub struct Conversation {
     pub(crate) session: Option<ChatSession>,
     pub(crate) next_turn: u64,
+    pub(crate) extensions: Arc<[ToolRegistration]>,
     pub(crate) queue_pause_revision: u64,
 }
 
 impl Conversation {
+    pub fn with_extensions(extensions: Vec<ToolRegistration>) -> Self {
+        Self {
+            extensions: extensions.into(),
+            ..Self::default()
+        }
+    }
+
     pub fn remove(&mut self, id: SessionId) {
         if self
             .session
@@ -245,8 +253,12 @@ impl Conversation {
                 .path()
                 .to_path_buf();
         let tools = Arc::new(
-            ToolCatalog::standard(&settings.working_directory, settings.image_input)
-                .map_err(|_| ConversationFailure::new("工具目录配置无效"))?,
+            ToolCatalog::with_extensions(
+                &settings.working_directory,
+                settings.image_input,
+                &self.extensions,
+            )
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))?,
         );
         let mut session = SessionView {
             project_publications: Arc::default(),
@@ -263,7 +275,6 @@ impl Conversation {
             queue_paused: false,
             tool_catalog: tools
                 .definitions()
-                .iter()
                 .map(|tool| (tool.name.to_owned(), tool.description.to_owned()))
                 .collect(),
         };
@@ -271,20 +282,10 @@ impl Conversation {
         session.context.refresh(
             &ProtocolHistory::default(),
             &session.settings.instructions,
-            &tools,
+            tools.definitions(),
         )?;
-        let initial = crate::InitialSession::from_view(
-            &session,
-            tools
-                .definitions()
-                .iter()
-                .map(|tool| crate::StoredTool {
-                    name: tool.name.into(),
-                    description: tool.description.clone(),
-                    parameters: tool.parameters.clone(),
-                })
-                .collect(),
-        )?;
+        let initial =
+            crate::InitialSession::from_view(&session, tools.definitions().cloned().collect())?;
         Ok(PreparedSession {
             initial,
             session: ChatSession {

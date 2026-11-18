@@ -1,7 +1,7 @@
 use crate::ConversationFailure;
 use agentelier_llm_model::{ContextLimits, ProtocolHistory, ResponseUsage, estimated_text_tokens};
 use agentelier_prompts::InstructionSnapshot;
-use agentelier_tools::ToolCatalog;
+use agentelier_tools::ToolDefinition;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -31,11 +31,11 @@ pub struct ContextState {
     pub estimated_tokens: u64,
 }
 impl ContextState {
-    pub fn refresh(
+    pub fn refresh<'a>(
         &mut self,
         history: &ProtocolHistory,
         instructions: &InstructionSnapshot,
-        tools: &ToolCatalog,
+        tools: impl IntoIterator<Item = &'a ToolDefinition>,
     ) -> Result<(), ConversationFailure> {
         let (base, boundary) = if let Some(anchor) = &self.anchor {
             if anchor.fact.window != self.window || anchor.covered_items > history.len() {
@@ -59,11 +59,11 @@ impl ContextState {
                         .saturating_add(estimated_text_tokens(&message.role))
                 })
                 .fold(0, u64::saturating_add);
-            for tool in tools.definitions() {
+            for tool in tools {
                 let parameters = serde_json::to_string(&tool.parameters)
                     .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
                 fixed = fixed
-                    .saturating_add(estimated_text_tokens(tool.name))
+                    .saturating_add(estimated_text_tokens(&tool.name))
                     .saturating_add(estimated_text_tokens(&tool.description))
                     .saturating_add(estimated_text_tokens(&parameters));
             }

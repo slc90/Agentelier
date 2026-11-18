@@ -74,6 +74,10 @@ impl ExecutionContext {
         }
     }
 
+    pub fn working_directory(&self) -> &std::path::Path {
+        &self.directory
+    }
+
     pub(crate) async fn exec(&mut self, text: &str, cancel: &CancellationToken) -> ToolResult {
         let input: ExecArguments = match arguments(text, &["cmd", "workdir", "yield_time_ms"]) {
             Ok(value) => value,

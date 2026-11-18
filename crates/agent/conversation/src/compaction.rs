@@ -78,7 +78,11 @@ impl ActiveTurn {
             ..Default::default()
         });
         context.latest = self.view.context.latest.clone();
-        context.refresh(&history, &self.view.settings.instructions, &self.tools)?;
+        context.refresh(
+            &history,
+            &self.view.settings.instructions,
+            self.tools.definitions(),
+        )?;
         let checkpoint = CompactionCheckpoint {
             project_publication: self
                 .view
