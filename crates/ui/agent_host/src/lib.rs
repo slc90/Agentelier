@@ -5,9 +5,14 @@ mod host;
 
 pub use host::{
     AccountEvent, AgentHost, AgentHostPlugin, ConversationEvent, HostActivity, HostFailed,
-    McpConfigEvent, McpStatusEvent, ModelEvent, ReceiveAgentEvents,
+    McpConfigEvent, McpMaterialEvent, McpStatusEvent, ModelEvent, ReceiveAgentEvents,
 };
 
 pub use agentelier_bridge_connection::{ConfigChange, Server, ServerId, ServerSettings, Transport};
 
 pub use agentelier_bridge_connection::{ConnectionState, ConnectionStatus};
+
+pub use agentelier_bridge_connection::{
+    MAX_MATERIAL_BYTES, MaterialOrigin, MaterialPreview, MaterialReply, MaterialRequest,
+    ResourceChoice, expand_resource_uri,
+};

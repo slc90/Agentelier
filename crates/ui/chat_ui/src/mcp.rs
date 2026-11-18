@@ -130,6 +130,7 @@ enum Field {
 #[derive(Component, Clone, Copy)]
 enum Action {
     Select(ServerId),
+    Resources(ServerId),
     New,
     Transport,
     Save,
@@ -138,6 +139,7 @@ enum Action {
 }
 
 pub(crate) fn install(app: &mut App) {
+    crate::mcp_materials::install(app);
     app.init_resource::<Editor>()
         .init_resource::<McpConfigState>()
         .register_type::<McpConfigState>()
@@ -241,6 +243,7 @@ fn receive_status(mut events: MessageReader<McpStatusEvent>, mut commands: Comma
 }
 
 pub(crate) fn capture(world: &mut World) -> Result {
+    crate::mcp_materials::capture(world)?;
     let fields = world
         .query::<(Entity, &Field)>()
         .iter(world)
@@ -282,6 +285,7 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
 fn apply(world: &mut World, action: Action) -> Result {
     let mut editor = world.resource_mut::<Editor>();
     match action {
+        Action::Resources(id) => crate::mcp_materials::open(world, id)?,
         Action::Select(id) => {
             let server = editor
                 .servers
@@ -375,6 +379,9 @@ fn field(label: &'static str, value: &str, kind: Field, name: &'static str) -> i
 }
 
 pub(crate) fn panel(world: &World) -> Box<dyn Scene> {
+    if crate::mcp_materials::opened(world) {
+        return crate::mcp_materials::panel(world);
+    }
     let editor = world.resource::<Editor>();
     let state = world.resource::<McpConfigState>();
     let busy = state.busy || !editor.ready;
@@ -433,7 +440,8 @@ pub(crate) fn panel(world: &World) -> Box<dyn Scene> {
             Node { column_gap: px(ROW_GAP), flex_wrap: FlexWrap::Wrap }
             Children [
                 @button(if enabled { "禁用服务器" } else { "启用服务器" }, "ToggleMcpServer", Action::SetEnabled(id, !enabled), busy)--
-                @button("移除服务器", "RemoveMcpServer", Action::Remove(id), busy)
+                @button("移除服务器", "RemoveMcpServer", Action::Remove(id), busy)--
+                @button("资源", "OpenMcpResources", Action::Resources(id), busy)
             ]
         }
     });

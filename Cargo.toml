@@ -87,6 +87,7 @@ image = { version = "0.25.9", default-features = false, features = [
 ] }
 getrandom = "0.4"
 url = "2.5"
+uritemplate = { package = "uritemplate-next", version = "0.2.0" }
 httparse = "1.10"
 time = { version = "0.3", default-features = false, features = ["parsing"] }
 win-custody = "0.1.1"

@@ -42,6 +42,7 @@ pub enum AgentEventKind {
     Conversation(ConversationEvent),
     McpConfig(io::Result<agentelier_mcp::ConfigSnapshot>),
     McpStatus(Vec<agentelier_mcp::ConnectionStatus>),
+    McpMaterial(Result<agentelier_mcp::MaterialReply, String>),
 }
 #[derive(Debug)]
 pub enum RuntimeFailure {
@@ -88,7 +89,15 @@ impl From<ConversationFailure> for RuntimeFailure {
         Self::Conversation(failure)
     }
 }
+struct PendingMaterial {
+    id: u64,
+    cancel: CancellationToken,
+    task: tokio::task::JoinHandle<Result<agentelier_mcp::MaterialReply, String>>,
+}
 enum Command {
+    McpMaterial(u64, agentelier_mcp::MaterialRequest),
+    CancelMcpMaterial(u64),
+    McpMaterialFinished(Result<agentelier_mcp::MaterialReply, String>),
     McpConfig(u64, agentelier_mcp::ConfigChange),
     McpStatus(Vec<agentelier_mcp::ConnectionStatus>),
     Rename {
@@ -204,6 +213,7 @@ impl AgentRuntime {
                     runtime.block_on(async move {
                         let store = agentelier_session_store::SessionStore::start(data_root.clone()).map_err(RuntimeFailure::Store)?;
                         let mut mcp_settings = agentelier_mcp::ConfigStore::open(&data_root);
+                        let mut material: Option<PendingMaterial> = None;
                         let mut mcp_connections = agentelier_mcp::Connections::default();
                         if let Ok(servers) = mcp_settings.servers() {
                             mcp_connections.configure(servers);
@@ -232,6 +242,12 @@ impl AgentRuntime {
                                         None => break,
                                     },
                                     _ = runtime_shutdown.cancelled() => break,
+                                    reply = async {
+                                        match &mut material {
+                                            Some(job) => (&mut job.task).await.unwrap_or_else(|_| Err("MCP 材料请求任务异常结束".into())),
+                                            None => std::future::pending().await,
+                                        }
+                                    } => Command::McpMaterialFinished(reply),
                                     status = mcp_connections.changed() => Command::McpStatus(status),
                                     result = async { match &mut catalog {
                                         Some(reply) => reply.await.unwrap_or_else(|_| Err(io::Error::other("会话目录读取未返回结果"))),
@@ -269,6 +285,27 @@ impl AgentRuntime {
                                     },
                                 };
                                 match command {
+                                    Command::McpMaterial(id, request) => {
+                                        let cancel = CancellationToken::new();
+                                        let result = if material.is_some() {
+                                            Err("已有 MCP 材料操作进行中".into())
+                                        } else {
+                                            mcp_connections.material_request(request, cancel.clone())
+                                        };
+                                        match result {
+                                            Ok(task) => material = Some(PendingMaterial { id, cancel, task }),
+                                            Err(reason) => emit(&publish, id, AgentEventKind::McpMaterial(Err(reason)))?,
+                                        }
+                                    }
+                                    Command::CancelMcpMaterial(id) => {
+                                        if let Some(job) = &material && job.id == id {
+                                            job.cancel.cancel();
+                                        }
+                                    }
+                                    Command::McpMaterialFinished(reply) => {
+                                        let job = material.take().ok_or(RuntimeFailure::ModelState)?;
+                                        emit(&publish, job.id, AgentEventKind::McpMaterial(reply))?;
+                                    }
                                     Command::McpConfig(id, change) => {
                                         let changes_disk = !matches!(change, agentelier_mcp::ConfigChange::Read);
                                         let result = mcp_settings.apply(change);
@@ -539,6 +576,14 @@ impl AgentRuntime {
                                             );
                                             while let Ok(queued) = incoming.try_recv() {
                                                 match queued {
+                                                    Command::McpMaterial(id, _) => {
+                                                        emit(&publish, id, AgentEventKind::McpMaterial(Err("账号操作开始前尚未接纳 MCP 材料操作，请重新提交".into())))?;
+                                                    }
+                                                    Command::CancelMcpMaterial(id) => {
+                                                        if let Some(job) = &material && job.id == id {
+                                                            job.cancel.cancel();
+                                                        }
+                                                    }
                                                     Command::McpConfig(id, _) => {
                                                         emit(&publish, id, AgentEventKind::McpConfig(Err(io::Error::other("账号操作开始前尚未接纳 MCP 配置操作，请重新提交"))))?;
                                                     }
@@ -633,6 +678,12 @@ impl AgentRuntime {
                             .await,
                             &mut delivery_failure,
                         );
+                        if let Some(job) = material {
+                            job.cancel.cancel();
+                            if job.task.await.is_err() {
+                                error!(operation_id = job.id, "关闭时 MCP 材料请求任务异常结束");
+                            }
+                        }
                         let mcp_finished = mcp_connections.shutdown().await;
                         while let Some(result) = records.join_next().await {
                             match result {
@@ -690,6 +741,18 @@ impl AgentRuntime {
             model: shared_model,
             session_commands,
         })
+    }
+
+    pub fn mcp_material(
+        &self,
+        id: u64,
+        request: agentelier_mcp::MaterialRequest,
+    ) -> Result<(), RuntimeFailure> {
+        self.send(Command::McpMaterial(id, request))
+    }
+
+    pub fn cancel_mcp_material(&self, id: u64) -> Result<(), RuntimeFailure> {
+        self.send(Command::CancelMcpMaterial(id))
     }
 
     pub fn mcp_config(&self, id: u64, change: agentelier_mcp::ConfigChange) -> io::Result<()> {

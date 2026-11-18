@@ -673,6 +673,39 @@ fn stop(world: &mut World) -> Result {
     Ok(())
 }
 
+pub(crate) fn append_mcp_draft(world: &mut World, material: &str) -> Result {
+    if world.resource::<ChatState>().session.is_none() {
+        return Err(io::Error::other("请先打开聊天会话").into());
+    }
+    let root = world
+        .query_filtered::<Entity, With<Composer>>()
+        .single(world)?;
+    let mut draft = WidgetryTextFieldHeadless::text(world, root)
+        .map_err(|failure| failure.into_bevy_error())?;
+    let separator = if draft.is_empty() { "" } else { "\n\n" };
+    if draft.len() + separator.len() + material.len() > agentelier_agent_host::MAX_MATERIAL_BYTES {
+        return Err(io::Error::other("加入材料后草稿将超过 64 KiB").into());
+    }
+    draft.push_str(separator);
+    draft.push_str(material);
+    WidgetryTextFieldHeadless::set_text_in_world(world, root, &draft)
+        .map_err(|failure| failure.into_bevy_error())?;
+    sync_draft(world, draft)
+}
+
+fn sync_draft(world: &mut World, draft: String) -> Result {
+    let mut state = world.resource_mut::<ChatState>();
+    if state.draft != draft {
+        let revision = state
+            .draft_revision
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("草稿修订已耗尽"))?;
+        state.draft = draft;
+        state.draft_revision = revision;
+    }
+    Ok(())
+}
+
 fn send(world: &mut World) -> Result {
     if world.resource::<ChatState>().operation.is_some() {
         return steer(world);
@@ -835,14 +868,7 @@ fn process_input(world: &mut World) -> Result {
                 .map_err(|failure| failure.into_bevy_error())?;
             value.clear();
         }
-        if world.resource::<ChatState>().draft != value {
-            let mut state = world.resource_mut::<ChatState>();
-            state.draft = value;
-            state.draft_revision = state
-                .draft_revision
-                .checked_add(1)
-                .ok_or_else(|| io::Error::other("草稿修订已耗尽"))?;
-        }
+        sync_draft(world, value)?;
     }
     if std::mem::take(&mut world.resource_mut::<InputIntents>().send) {
         send(world)?;

@@ -4,6 +4,7 @@ compile_error!("This application supports Windows x64 only");
 mod call;
 mod connections;
 mod discovery;
+mod materials;
 mod settings;
 mod stdio;
 
@@ -11,4 +12,9 @@ pub use connections::{ConnectionState, ConnectionStatus, Connections, ServerCapa
 
 pub use settings::{
     ConfigChange, ConfigSnapshot, ConfigStore, Server, ServerId, ServerSettings, Transport,
+};
+
+pub use materials::{
+    MAX_MATERIAL_BYTES, MaterialOrigin, MaterialPreview, MaterialReply, MaterialRequest,
+    ResourceChoice, expand_resource_uri,
 };

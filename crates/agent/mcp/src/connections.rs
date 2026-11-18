@@ -299,6 +299,42 @@ impl Connections {
             .collect()
     }
 
+    pub fn material_request(
+        &self,
+        request: crate::MaterialRequest,
+        cancel: CancellationToken,
+    ) -> Result<tokio::task::JoinHandle<Result<crate::MaterialReply, String>>, String> {
+        let server = request.server();
+        let (transport, name) = self.known.get(&server).ok_or("原 MCP 服务器已移除")?;
+        if !request.matches(transport) {
+            return Err("原 MCP 传输配置已改变，请重新获取清单".into());
+        }
+        let entry = self
+            .active
+            .get(&server)
+            .filter(|entry| !entry.cancel.is_cancelled() && &entry.transport == transport)
+            .ok_or("原 MCP 服务器尚未就绪")?;
+        let ConnectionState::Ready(info) = &entry.state else {
+            return Err("原 MCP 服务器尚未就绪".into());
+        };
+        if !info.resources {
+            return Err("此服务器没有公开 MCP Resources".into());
+        }
+        let peer = entry.peer.clone().ok_or("原 MCP 服务器尚未就绪")?;
+        let origin = crate::MaterialOrigin {
+            server,
+            name: name.clone(),
+            target: discovery::transport_identity(transport),
+        };
+        Ok(tokio::spawn(crate::materials::execute(
+            peer,
+            origin,
+            request,
+            entry.cancel.clone(),
+            cancel,
+        )))
+    }
+
     pub async fn changed(&mut self) -> Vec<ConnectionStatus> {
         tokio::select! {
             Some((task, state)) = self.progress.recv() => {
@@ -331,6 +367,8 @@ impl Connections {
                 };
                 if let Some((server, entry)) = self.active.iter_mut().find(|(_, entry)| entry.task == Some(task)) {
                     entry.task = None;
+                    entry.peer = None;
+                    entry.catalog = None;
                     entry.state = match result {
                         Ok(()) => ConnectionState::Closed,
                         Err(failure) => {

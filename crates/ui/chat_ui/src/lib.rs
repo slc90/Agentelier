@@ -6,6 +6,7 @@ mod archives;
 pub use archives::{ArchiveChoice, ArchiveState};
 mod conversation;
 mod mcp;
+mod mcp_materials;
 mod preparation;
 mod project_context;
 mod prompts;

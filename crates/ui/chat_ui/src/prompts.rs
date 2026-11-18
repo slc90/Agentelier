@@ -430,6 +430,9 @@ fn apply(world: &mut World, action: Action) -> Result {
             crate::mcp::open(world);
         }
         Action::Close => {
+            if crate::mcp_materials::opened(world) {
+                crate::mcp_materials::close(world)?;
+            }
             world.resource_mut::<PromptState>().opened = false;
         }
         Action::Library | Action::Config | Action::Session => {

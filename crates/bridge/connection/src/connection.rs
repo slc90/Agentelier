@@ -20,6 +20,7 @@ pub enum BridgeEventKind {
     Conversation(agentelier_conversation_bridge::ConversationEvent),
     McpConfig(Result<crate::ConfigSnapshot, String>),
     McpStatus(Vec<crate::ConnectionStatus>),
+    McpMaterial(Result<crate::MaterialReply, String>),
 }
 #[derive(Clone, Debug)]
 pub struct BridgeFailure(String);
@@ -122,6 +123,7 @@ impl Connection {
                         AgentEventKind::ModelCancelled => {
                             BridgeEventKind::Model(agentelier_llm_model_bridge::convert(None))
                         }
+                        AgentEventKind::McpMaterial(reply) => BridgeEventKind::McpMaterial(reply),
                         AgentEventKind::McpStatus(status) => BridgeEventKind::McpStatus(status),
                         AgentEventKind::McpConfig(result) => {
                             BridgeEventKind::McpConfig(result.map_err(|error| error.to_string()))
@@ -185,6 +187,30 @@ impl Connection {
             .map_err(|error| BridgeFailure(error.to_string()))?;
         self.pending_mcp.insert(id);
         Ok(id)
+    }
+
+    pub fn mcp_material(&mut self, request: crate::MaterialRequest) -> Result<u64, BridgeFailure> {
+        if self.stopping || self.failure.is_some() {
+            return Err(BridgeFailure("执行连接已经关闭".into()));
+        }
+        let id = self
+            .operations
+            .allocate()
+            .map_err(|error| BridgeFailure(error.to_string()))?;
+        self.runtime
+            .mcp_material(id, request)
+            .map_err(|error| BridgeFailure(error.to_string()))?;
+        self.pending_mcp.insert(id);
+        Ok(id)
+    }
+
+    pub fn cancel_mcp_material(&mut self, id: u64) -> Result<(), BridgeFailure> {
+        if self.pending_mcp.contains(&id) {
+            self.runtime
+                .cancel_mcp_material(id)
+                .map_err(|error| BridgeFailure(error.to_string()))?;
+        }
+        Ok(())
     }
 
     fn allocate(&self) -> Result<u64, BridgeFailure> {
@@ -560,7 +586,10 @@ impl Connection {
                     if matches!(event.kind, BridgeEventKind::McpStatus(_)) {
                         return Ok(Some(event));
                     }
-                    if matches!(event.kind, BridgeEventKind::McpConfig(_)) {
+                    if matches!(
+                        event.kind,
+                        BridgeEventKind::McpConfig(_) | BridgeEventKind::McpMaterial(_)
+                    ) {
                         if !self.pending_mcp.remove(&event.operation_id) {
                             return self.protocol_failure();
                         }
@@ -582,7 +611,9 @@ impl Connection {
                         continue;
                     }
                     let kind = match &event.kind {
-                        BridgeEventKind::McpStatus(_) | BridgeEventKind::McpConfig(_) => {
+                        BridgeEventKind::McpStatus(_)
+                        | BridgeEventKind::McpConfig(_)
+                        | BridgeEventKind::McpMaterial(_) => {
                             return self.protocol_failure();
                         }
                         BridgeEventKind::Model(_) => {
