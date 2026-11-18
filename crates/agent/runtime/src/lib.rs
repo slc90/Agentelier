@@ -13,6 +13,6 @@ pub use runtime::{AgentEvent, AgentEventKind, AgentRuntime, DeliveryFailure, Run
 pub use agentelier_mcp::{ConnectionState, ConnectionStatus};
 
 pub use agentelier_mcp::{
-    MAX_MATERIAL_BYTES, MaterialOrigin, MaterialPreview, MaterialReply, MaterialRequest,
-    ResourceChoice, expand_resource_uri,
+    MAX_MATERIAL_BYTES, MaterialKind, MaterialOrigin, MaterialPreview, MaterialReply,
+    MaterialRequest, PromptChoice, ResourceChoice, expand_resource_uri,
 };

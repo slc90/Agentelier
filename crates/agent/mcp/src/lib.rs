@@ -15,6 +15,6 @@ pub use settings::{
 };
 
 pub use materials::{
-    MAX_MATERIAL_BYTES, MaterialOrigin, MaterialPreview, MaterialReply, MaterialRequest,
-    ResourceChoice, expand_resource_uri,
+    MAX_MATERIAL_BYTES, MaterialKind, MaterialOrigin, MaterialPreview, MaterialReply,
+    MaterialRequest, PromptChoice, ResourceChoice, expand_resource_uri,
 };

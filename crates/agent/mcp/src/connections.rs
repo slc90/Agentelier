@@ -317,8 +317,14 @@ impl Connections {
         let ConnectionState::Ready(info) = &entry.state else {
             return Err("原 MCP 服务器尚未就绪".into());
         };
-        if !info.resources {
-            return Err("此服务器没有公开 MCP Resources".into());
+        match request.kind() {
+            crate::MaterialKind::Resources if !info.resources => {
+                return Err("此服务器没有公开 MCP Resources".into());
+            }
+            crate::MaterialKind::Prompts if !info.prompts => {
+                return Err("此服务器没有公开 MCP Prompts".into());
+            }
+            _ => {}
         }
         let peer = entry.peer.clone().ok_or("原 MCP 服务器尚未就绪")?;
         let origin = crate::MaterialOrigin {

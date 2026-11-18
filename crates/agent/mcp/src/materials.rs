@@ -2,7 +2,10 @@ use crate::{ServerId, discovery};
 use base64::Engine;
 use rmcp::{
     RoleClient,
-    model::{PaginatedRequestParams, ReadResourceRequestParams, ResourceContents},
+    model::{
+        ContentBlock, GetPromptRequestParams, PaginatedRequestParams, ReadResourceRequestParams,
+        ResourceContents, Role,
+    },
     service::Peer,
 };
 use sha2::{Digest, Sha256};
@@ -42,13 +45,50 @@ pub struct MaterialPreview {
     pub usable: bool,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum MaterialKind {
+    #[default]
+    Resources,
+    Prompts,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct PromptChoice {
+    pub name: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub parameters: Vec<PromptParameter>,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct PromptParameter {
+    pub name: String,
+    pub description: Option<String>,
+    pub required: bool,
+}
+
 pub enum MaterialRequest {
-    Resources(ServerId),
-    ReadResource { origin: MaterialOrigin, uri: String },
+    List {
+        server: ServerId,
+        kind: MaterialKind,
+    },
+    GetPrompt {
+        origin: MaterialOrigin,
+        name: String,
+        arguments: BTreeMap<String, String>,
+    },
+    ReadResource {
+        origin: MaterialOrigin,
+        uri: String,
+    },
 }
 
 #[derive(Clone)]
 pub enum MaterialReply {
+    Prompts {
+        origin: MaterialOrigin,
+        entries: Vec<PromptChoice>,
+    },
     Resources {
         origin: MaterialOrigin,
         entries: Vec<ResourceChoice>,
@@ -59,15 +99,23 @@ pub enum MaterialReply {
 impl MaterialRequest {
     pub(crate) fn server(&self) -> ServerId {
         match self {
-            Self::Resources(server) => *server,
-            Self::ReadResource { origin, .. } => origin.server,
+            Self::List { server, .. } => *server,
+            Self::ReadResource { origin, .. } | Self::GetPrompt { origin, .. } => origin.server,
+        }
+    }
+
+    pub(crate) fn kind(&self) -> MaterialKind {
+        match self {
+            Self::List { kind, .. } => *kind,
+            Self::ReadResource { .. } => MaterialKind::Resources,
+            Self::GetPrompt { .. } => MaterialKind::Prompts,
         }
     }
 
     pub(crate) fn matches(&self, transport: &crate::Transport) -> bool {
         match self {
-            Self::Resources(_) => true,
-            Self::ReadResource { origin, .. } => {
+            Self::List { .. } => true,
+            Self::ReadResource { origin, .. } | Self::GetPrompt { origin, .. } => {
                 origin.target == discovery::transport_identity(transport)
             }
         }
@@ -83,7 +131,17 @@ pub(crate) async fn execute(
 ) -> Result<MaterialReply, String> {
     let operation = async {
         match request {
-            MaterialRequest::Resources(_) => load_resources(&peer, origin).await,
+            MaterialRequest::List {
+                kind: MaterialKind::Resources,
+                ..
+            } => load_resources(&peer, origin).await,
+            MaterialRequest::List {
+                kind: MaterialKind::Prompts,
+                ..
+            } => load_prompts(&peer, origin).await,
+            MaterialRequest::GetPrompt {
+                name, arguments, ..
+            } => get_prompt(&peer, &origin, name, arguments).await,
             MaterialRequest::ReadResource { uri, .. } => read_resource(&peer, &origin, &uri).await,
         }
     };
@@ -94,6 +152,140 @@ pub(crate) async fn execute(
         result = tokio::time::timeout(MATERIAL_TIMEOUT, operation) =>
             result.map_err(|_| "MCP 材料操作超时".to_owned())?,
     }
+}
+
+async fn load_prompts(
+    peer: &Peer<RoleClient>,
+    origin: MaterialOrigin,
+) -> Result<MaterialReply, String> {
+    let entries = pages(|params| async move {
+        let reply = peer
+            .list_prompts(Some(params))
+            .await
+            .map_err(|_| "无法读取 MCP 提示词清单")?;
+        let entries = reply
+            .prompts
+            .into_iter()
+            .map(|prompt| PromptChoice {
+                name: prompt.name,
+                title: prompt.title,
+                description: prompt.description,
+                parameters: prompt
+                    .arguments
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|arg| PromptParameter {
+                        name: arg.name,
+                        description: arg.description,
+                        required: arg.required.unwrap_or(false),
+                    })
+                    .collect(),
+            })
+            .collect();
+        Ok((entries, reply.next_cursor))
+    })
+    .await?;
+    Ok(MaterialReply::Prompts { origin, entries })
+}
+
+async fn get_prompt(
+    peer: &Peer<RoleClient>,
+    origin: &MaterialOrigin,
+    name: String,
+    arguments: BTreeMap<String, String>,
+) -> Result<MaterialReply, String> {
+    let encoded = serde_json::to_vec(&arguments).map_err(|_| "提示词参数无法编码")?;
+    if name.trim().is_empty() || encoded.len() > MAX_MATERIAL_BYTES {
+        return Err("MCP 提示词名称为空或参数超过预算".into());
+    }
+    let argument_names = arguments
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let params = GetPromptRequestParams::new(name.clone()).with_arguments(
+        arguments
+            .into_iter()
+            .map(|(name, value)| (name, serde_json::Value::String(value)))
+            .collect(),
+    );
+    let result = peer.get_prompt(params).await.map_err(|error| match error {
+        rmcp::service::ServiceError::McpError(error) => format!(
+            "服务器拒绝展开 MCP 提示词，JSON-RPC 错误码 {}",
+            error.code.0
+        ),
+        _ => "无法取得有效的 MCP 提示词展开结果".into(),
+    })?;
+    let usable = matches!(result.messages.as_slice(), [message] if message.role == Role::User && matches!(&message.content, ContentBlock::Text(text) if !text.text.is_empty()));
+    let mut text = format!(
+        "[MCP Prompt]\nServer: {} ({})\nTemplate: {name}\nArguments: {argument_names}\n",
+        origin.name, origin.server
+    );
+    if let Some(description) = result.description {
+        text.push_str(&format!("Description: {description}\n"));
+    }
+    if !usable {
+        text.push_str("只有单条非空的 user 纯文本消息可加入聊天草稿。\n");
+    }
+    if result.messages.len() > MAX_ITEMS {
+        return Err("展开结果的消息条数超过预算".into());
+    }
+    for message in result.messages {
+        text.push_str(&format!("\nRole: {:?}\n", message.role));
+        match message.content {
+            ContentBlock::Text(body) => {
+                text.push_str(&format!(
+                    "UTF-8 bytes: {}\nSHA-256: {:x}\n\n{}\n",
+                    body.text.len(),
+                    Sha256::digest(body.text.as_bytes()),
+                    body.text
+                ));
+            }
+            ContentBlock::ResourceLink(resource) => {
+                text.push_str(&format!("resource_link · {}\n", resource.uri))
+            }
+            ContentBlock::Resource(resource) => match resource.resource {
+                ResourceContents::TextResourceContents {
+                    uri,
+                    mime_type,
+                    text: body,
+                    ..
+                } => text.push_str(&format!(
+                    "text resource · {uri} · {mime_type:?} · {} bytes\n",
+                    body.len()
+                )),
+                ResourceContents::BlobResourceContents {
+                    uri,
+                    mime_type,
+                    blob,
+                    ..
+                } => text.push_str(&format!(
+                    "binary resource · {uri} · {mime_type:?} · {} Base64 bytes\n",
+                    blob.len()
+                )),
+                _ => text.push_str("embedded resource\n"),
+            },
+            ContentBlock::Image(image) => text.push_str(&format!(
+                "image · {} · {} Base64 bytes\n",
+                image.mime_type,
+                image.data.len()
+            )),
+            ContentBlock::Audio(audio) => text.push_str(&format!(
+                "audio · {} · {} Base64 bytes\n",
+                audio.mime_type,
+                audio.data.len()
+            )),
+            _ => text.push_str("不支持的内容块\n"),
+        }
+        if text.len() > MAX_MATERIAL_BYTES {
+            return Err("展开结果超过 64 KiB 预览预算".into());
+        }
+    }
+    text.push_str("\n[/MCP Prompt]");
+    if text.len() > MAX_MATERIAL_BYTES {
+        return Err("展开结果超过 64 KiB 预览预算".into());
+    }
+    Ok(MaterialReply::Preview(MaterialPreview { text, usable }))
 }
 
 async fn load_resources(

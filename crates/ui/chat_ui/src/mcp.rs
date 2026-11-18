@@ -130,7 +130,7 @@ enum Field {
 #[derive(Component, Clone, Copy)]
 enum Action {
     Select(ServerId),
-    Resources(ServerId),
+    Materials(ServerId, agentelier_agent_host::MaterialKind),
     New,
     Transport,
     Save,
@@ -285,7 +285,7 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
 fn apply(world: &mut World, action: Action) -> Result {
     let mut editor = world.resource_mut::<Editor>();
     match action {
-        Action::Resources(id) => crate::mcp_materials::open(world, id)?,
+        Action::Materials(id, kind) => crate::mcp_materials::open(world, id, kind)?,
         Action::Select(id) => {
             let server = editor
                 .servers
@@ -441,7 +441,8 @@ pub(crate) fn panel(world: &World) -> Box<dyn Scene> {
             Children [
                 @button(if enabled { "禁用服务器" } else { "启用服务器" }, "ToggleMcpServer", Action::SetEnabled(id, !enabled), busy)--
                 @button("移除服务器", "RemoveMcpServer", Action::Remove(id), busy)--
-                @button("资源", "OpenMcpResources", Action::Resources(id), busy)
+                @button("资源", "OpenMcpResources", Action::Materials(id, agentelier_agent_host::MaterialKind::Resources), busy)--
+                @button("提示词", "OpenMcpPrompts", Action::Materials(id, agentelier_agent_host::MaterialKind::Prompts), busy)
             ]
         }
     });

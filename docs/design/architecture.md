@@ -213,7 +213,7 @@ Conversation 保存 FIFO 待办和暂停状态。Connection 从统一操作序�
 
 ## MCP 服务器配置
 
-Runtime 在启动数据根下打开独立的 `mcp_servers.json`；配置 Crate 管理工作副本及原子保存。Chat UI 通过唯一 Connection 提交编辑并等待保存回执。stdio 记录程序和参数、启动目录及允许继承的环境变量名称；HTTP 记录端点与可选 Bearer 环境变量名称。账号凭据由 Account 独立持有。已启用的 stdio 服务器由 Agent MCP 客户端在同一 Tokio Runtime 启动并通过 rmcp 协商。每项连接的状态和能力经 Bridge 投影，独立于模型任务；禁用、替换或应用退出触发 Windows Job 及协议回收。客户端对就绪服务器分页发现 Tools，Runtime 在创建会话时合并其经校验的非严格声明，存档保存服务器 UUID、传输配置摘要和原始工具名。执行器用同一来源和声明核对当前连接，经 rmcp 调用真实工具；Runner 继续记录模型 call_id、串行结果以及取消后的封闭历史。Resources 通过同一 Connection 读取分页清单和文本预览，确认后复制到当前聊天草稿，再按原有用户输入路径提交。
+Runtime 在启动数据根下打开独立的 `mcp_servers.json`；配置 Crate 管理工作副本及原子保存。Chat UI 通过唯一 Connection 提交编辑并等待保存回执。stdio 记录程序和参数、启动目录及允许继承的环境变量名称；HTTP 记录端点与可选 Bearer 环境变量名称。账号凭据由 Account 独立持有。已启用的 stdio 服务器由 Agent MCP 客户端在同一 Tokio Runtime 启动并通过 rmcp 协商。每项连接的状态和能力经 Bridge 投影，独立于模型任务；禁用、替换或应用退出触发 Windows Job 及协议回收。客户端对就绪服务器分页发现 Tools，Runtime 在创建会话时合并其经校验的非严格声明，存档保存服务器 UUID、传输配置摘要和原始工具名。执行器用同一来源和声明核对当前连接，经 rmcp 调用真实工具；Runner 继续记录模型 call_id、串行结果以及取消后的封闭历史。Resources 和 Prompts 通过同一 Connection 读取分页清单及实际预览。文本资源或单条纯文本 user 模板确认后复制到当前聊天草稿，再按原有用户输入路径提交。
 
 ## 本地工具的工作环境
 

@@ -13,6 +13,6 @@ pub use agentelier_bridge_connection::{ConfigChange, Server, ServerId, ServerSet
 pub use agentelier_bridge_connection::{ConnectionState, ConnectionStatus};
 
 pub use agentelier_bridge_connection::{
-    MAX_MATERIAL_BYTES, MaterialOrigin, MaterialPreview, MaterialReply, MaterialRequest,
-    ResourceChoice, expand_resource_uri,
+    MAX_MATERIAL_BYTES, MaterialKind, MaterialOrigin, MaterialPreview, MaterialReply,
+    MaterialRequest, PromptChoice, ResourceChoice, expand_resource_uri,
 };

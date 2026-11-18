@@ -11,6 +11,6 @@ pub use connection::{BridgeEvent, BridgeEventKind, BridgeFailure, Connection};
 pub use agentelier_agent_runtime::{ConnectionState, ConnectionStatus};
 
 pub use agentelier_agent_runtime::{
-    MAX_MATERIAL_BYTES, MaterialOrigin, MaterialPreview, MaterialReply, MaterialRequest,
-    ResourceChoice, expand_resource_uri,
+    MAX_MATERIAL_BYTES, MaterialKind, MaterialOrigin, MaterialPreview, MaterialReply,
+    MaterialRequest, PromptChoice, ResourceChoice, expand_resource_uri,
 };
