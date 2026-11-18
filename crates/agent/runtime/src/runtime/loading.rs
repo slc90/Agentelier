@@ -37,6 +37,7 @@ impl Loading {
         result: io::Result<RestoredSession>,
         operations: &crate::OperationSequence,
         conversation: &mut Conversation,
+        mcp: &agentelier_mcp::Connections,
     ) -> ConversationEvent {
         if let Some(control) = self.control {
             control.finished.cancel();
@@ -52,7 +53,8 @@ impl Loading {
         });
         match result {
             Ok(restored) => {
-                let view = conversation.install_restored(restored);
+                let tools = mcp.restore_registrations(restored.tool_definitions());
+                let view = conversation.install_restored(restored, &tools);
                 tracing::info!(session_id = %view.id, "本地会话已打开，未启动模型或待办");
                 ConversationEvent::Opened(view)
             }

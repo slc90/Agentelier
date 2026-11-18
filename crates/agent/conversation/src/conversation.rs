@@ -223,6 +223,7 @@ impl Conversation {
     pub fn prepare(
         &self,
         mut settings: SessionSettings,
+        discovered: &[ToolRegistration],
     ) -> Result<PreparedSession, ConversationFailure> {
         if self
             .session
@@ -256,7 +257,7 @@ impl Conversation {
             ToolCatalog::with_extensions(
                 &settings.working_directory,
                 settings.image_input,
-                &self.extensions,
+                self.extensions.iter().chain(discovered),
             )
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?,
         );
@@ -275,7 +276,7 @@ impl Conversation {
             queue_paused: false,
             tool_catalog: tools
                 .definitions()
-                .map(|tool| (tool.name.to_owned(), tool.description.to_owned()))
+                .map(|tool| (tool.name.clone(), tool.catalog_description()))
                 .collect(),
         };
         session.context.limits = session.settings.context_limits.as_ref().clone();
@@ -304,7 +305,11 @@ impl Conversation {
         view
     }
 
-    pub fn prepare_reset(&self, id: SessionId) -> Result<PreparedSession, ConversationFailure> {
+    pub fn prepare_reset(
+        &self,
+        id: SessionId,
+        tools: &[ToolRegistration],
+    ) -> Result<PreparedSession, ConversationFailure> {
         let settings = self
             .session
             .as_ref()
@@ -313,7 +318,7 @@ impl Conversation {
             .view
             .settings
             .clone();
-        self.prepare(settings)
+        self.prepare(settings, tools)
     }
 
     pub fn begin(

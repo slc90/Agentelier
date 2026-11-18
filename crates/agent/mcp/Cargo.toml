@@ -5,6 +5,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agentelier_tools = { path = "../tools" }
+sha2.workspace = true
 process-wrap.workspace = true
 rmcp.workspace = true
 tokio.workspace = true

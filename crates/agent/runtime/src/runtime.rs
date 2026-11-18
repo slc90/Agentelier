@@ -341,7 +341,7 @@ impl AgentRuntime {
                                     Command::Loaded(result) => {
                                         let pending = loading.take().ok_or(RuntimeFailure::ModelState)?;
                                         let id = pending.id;
-                                        let event = pending.complete(*result, &operations, &mut conversation);
+                                        let event = pending.complete(*result, &operations, &mut conversation, &mcp_connections);
                                         let opened = matches!(&event, ConversationEvent::Opened(_));
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
                                         if opened && catalog.is_none() {
@@ -468,7 +468,7 @@ impl AgentRuntime {
                                                 }
                                             }
                                             request @ (ConversationRequest::Create(_) | ConversationRequest::Reset { .. }) => {
-                                                match creation::Creation::start(id, control.clone(), request, &conversation, &store) {
+                                                match creation::Creation::start(id, control.clone(), request, &conversation, &store, &mcp_connections) {
                                                     Ok(pending) => {
                                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control);
                                                         creating = Some(pending);

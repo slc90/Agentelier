@@ -103,7 +103,7 @@ stdio 连接使用官方 rmcp 3.5.1 的 Auto 生命周期与有界 stdout 传输
 
 ### Tools：进入模型可调用目录
 
-MCP Tools 经过 `tools/list`（需要时翻页）发现，登记入统一 `ToolCatalog`。模型只看到名称、描述、模型兼容 Schema；当模型输出 `function_call` 时，Runner 仍按原顺序执行，执行器把 JSON 参数原样按相应协议对象转交给 `tools/call`。服务端返回的 `content`、`structuredContent`、`isError` 要经过有界映射成为既有 `ToolResult`，再交给下一次 Responses 请求。
+连接就绪后使用 `tools/list` 分页发现，监听旧版 tools list changed 通知刷新候选目录。清单、Schema 及描述受数量和字节约束。模型名由服务器 UUID 与原始工具名确定，原始身份和传输配置摘要进入存档。通过校验的工具才登记入统一 `ToolCatalog`。模型只看到名称、描述、模型兼容 Schema；当模型输出 `function_call` 时，Runner 仍按原顺序执行，执行器把 JSON 参数原样按相应协议对象转交给 `tools/call`。服务端返回的 `content`、`structuredContent`、`isError` 要经过有界映射成为既有 `ToolResult`，再交给下一次 Responses 请求。
 
 ```mermaid
 sequenceDiagram

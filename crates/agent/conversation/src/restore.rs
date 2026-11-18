@@ -21,6 +21,10 @@ pub struct RestoredSession {
 }
 
 impl RestoredSession {
+    pub fn tool_definitions(&self) -> &[crate::StoredTool] {
+        &self.initial.settings.tools
+    }
+
     pub fn add_recovery_notice(&mut self, notice: &str) {
         self.notice = Some(match self.notice.take() {
             Some(previous) => format!("{previous}\n{notice}"),
@@ -491,7 +495,11 @@ pub fn restore(
 }
 
 impl Conversation {
-    pub fn install_restored(&mut self, mut restored: RestoredSession) -> SessionView {
+    pub fn install_restored(
+        &mut self,
+        mut restored: RestoredSession,
+        tools: &[agentelier_tools::ToolRegistration],
+    ) -> SessionView {
         for turn in restored
             .state
             .previous_turns
@@ -504,7 +512,7 @@ impl Conversation {
         let tools = ToolCatalog::with_extensions(
             &settings.working_directory,
             settings.image_input,
-            &self.extensions,
+            self.extensions.iter().chain(tools),
         )
         .and_then(|available| available.rebind(&settings.tools));
         let tools = match tools {
@@ -566,7 +574,7 @@ impl Conversation {
             tool_catalog: settings
                 .tools
                 .into_iter()
-                .map(|tool| (tool.name, tool.description))
+                .map(|tool| (tool.name.clone(), tool.catalog_description()))
                 .collect(),
             queue: restored.state.queue,
             queue_paused: restored.state.queue_paused,

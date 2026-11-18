@@ -1,5 +1,5 @@
 use crate::Transport;
-use crate::connections::{ConnectionState, Failure, serve};
+use crate::connections::{Failure, Update, serve};
 use process_wrap::tokio::{ChildWrapper, CommandWrap, CreationFlags, JobObject, KillOnDrop};
 use rmcp::transport::async_rw::AsyncRwTransport;
 use std::{
@@ -20,7 +20,7 @@ const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
 pub(crate) async fn run(
     transport: Transport,
     stop: CancellationToken,
-    publish: impl Fn(ConnectionState),
+    publish: impl Fn(Update),
 ) -> Result<(), Failure> {
     let Transport::Stdio {
         command,

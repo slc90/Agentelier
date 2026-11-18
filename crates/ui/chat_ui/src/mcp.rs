@@ -214,8 +214,7 @@ fn labels(editor: &Editor) -> Vec<String> {
             let state = editor
                 .connections
                 .iter()
-                .find(|status| status.server == server.id)
-                .map(|status| &status.state);
+                .find(|status| status.server == server.id);
             label(&server.settings, state)
         })
         .collect()
@@ -303,12 +302,12 @@ fn apply(world: &mut World, action: Action) -> Result {
     Ok(())
 }
 
-fn label(settings: &ServerSettings, state: Option<&ConnectionState>) -> String {
+fn label(settings: &ServerSettings, connection: Option<&ConnectionStatus>) -> String {
     let transport = match settings.transport {
         Transport::Stdio { .. } => "stdio",
         Transport::StreamableHttp { .. } => "Streamable HTTP",
     };
-    let status = match state {
+    let status = match connection.map(|status| &status.state) {
         Some(ConnectionState::Starting) => "启动中".into(),
         Some(ConnectionState::Negotiating) => "协商中".into(),
         Some(ConnectionState::Ready(info)) => {
@@ -337,7 +336,12 @@ fn label(settings: &ServerSettings, state: Option<&ConnectionState>) -> String {
         None if settings.enabled => "已启用，未连接".into(),
         None => "已禁用".into(),
     };
-    format!("{} · {transport} · {status}", settings.name)
+    let tools = match connection.and_then(|status| status.tools) {
+        Some(Ok(count)) => format!(" · {count} 项工具"),
+        Some(Err(reason)) => format!(" · 工具发现失败：{reason}"),
+        None => String::new(),
+    };
+    format!("{} · {transport} · {status}{tools}", settings.name)
 }
 
 fn button(
@@ -414,6 +418,15 @@ pub(crate) fn panel(world: &World) -> Box<dyn Scene> {
             )
         })
         .collect::<Vec<_>>();
+    let tool_issues = selected
+        .and_then(|id| {
+            editor
+                .connections
+                .iter()
+                .find(|connection| connection.server == id)
+        })
+        .filter(|connection| !connection.tool_issues.is_empty())
+        .map(|connection| connection.tool_issues.join("\n"));
     let controls = selected.map(|id| {
         let enabled = draft.enabled;
         bsn! {
@@ -435,6 +448,9 @@ pub(crate) fn panel(world: &World) -> Box<dyn Scene> {
                 {rows}
             ]--
             @controls--
+            @{tool_issues.map(|issues| bsn! {
+                Text(issues) WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter)
+            })}--
             @field("服务器名称", &draft.name, Field::Name, "McpName")--
             @button(transport_label, "McpTransport", Action::Transport, busy)--
             @fields--

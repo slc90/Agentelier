@@ -1,8 +1,16 @@
-use crate::{Server, ServerId, Transport, stdio};
+use crate::{Server, ServerId, Transport, discovery, stdio};
+use agentelier_tools::{ToolDefinition, ToolRegistration, ToolSource};
+use rmcp::{
+    ClientHandler, RoleClient,
+    model::{ClientCapabilities, ClientConfig, Implementation, Tool},
+    service::NotificationContext,
+};
+use std::sync::Arc;
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
 };
+use tokio::sync::Notify;
 use tokio::{
     sync::mpsc,
     task::{Id, JoinSet},
@@ -38,6 +46,8 @@ pub enum ConnectionState {
 pub struct ConnectionStatus {
     pub server: ServerId,
     pub state: ConnectionState,
+    pub tools: Option<Result<usize, &'static str>>,
+    pub tool_issues: Vec<String>,
 }
 
 pub(crate) struct Failure {
@@ -45,20 +55,41 @@ pub(crate) struct Failure {
     pub(crate) reason: &'static str,
 }
 
+pub(crate) enum Update {
+    State(ConnectionState),
+    Tools(Result<Vec<Tool>, &'static str>),
+}
+
+struct Client {
+    config: ClientConfig,
+    refresh: Arc<Notify>,
+}
+
+impl ClientHandler for Client {
+    fn get_info(&self) -> ClientConfig {
+        self.config.clone()
+    }
+
+    async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        self.refresh.notify_one();
+    }
+}
+
 struct Connection {
     transport: Transport,
     cancel: CancellationToken,
     task: Option<Id>,
     state: ConnectionState,
+    catalog: Option<Result<discovery::Catalog, &'static str>>,
 }
 
 pub struct Connections {
     configured: BTreeMap<ServerId, Transport>,
-    known: BTreeSet<ServerId>,
+    known: BTreeMap<ServerId, Transport>,
     active: BTreeMap<ServerId, Connection>,
     tasks: JoinSet<Result<(), Failure>>,
-    progress: mpsc::UnboundedReceiver<(Id, ConnectionState)>,
-    publish: mpsc::UnboundedSender<(Id, ConnectionState)>,
+    progress: mpsc::UnboundedReceiver<(Id, Update)>,
+    publish: mpsc::UnboundedSender<(Id, Update)>,
 }
 
 impl Default for Connections {
@@ -66,7 +97,7 @@ impl Default for Connections {
         let (publish, progress) = mpsc::unbounded_channel();
         Self {
             configured: BTreeMap::new(),
-            known: BTreeSet::new(),
+            known: BTreeMap::new(),
             active: BTreeMap::new(),
             tasks: JoinSet::new(),
             progress,
@@ -77,7 +108,10 @@ impl Default for Connections {
 
 impl Connections {
     pub fn configure(&mut self, servers: &[Server]) {
-        self.known = servers.iter().map(|server| server.id).collect();
+        self.known = servers
+            .iter()
+            .map(|server| (server.id, server.settings.transport.clone()))
+            .collect();
         self.configured = servers
             .iter()
             .filter(|server| {
@@ -99,7 +133,7 @@ impl Connections {
                 entry.cancel.cancel();
                 return true;
             }
-            self.known.contains(id)
+            self.known.contains_key(id)
                 && (matches!(
                     entry.state,
                     ConnectionState::Failed {
@@ -138,6 +172,7 @@ impl Connections {
                     cancel,
                     task: Some(task),
                     state: ConnectionState::Starting,
+                    catalog: None,
                 },
             );
         }
@@ -149,6 +184,83 @@ impl Connections {
             .map(|(server, connection)| ConnectionStatus {
                 server: *server,
                 state: connection.state.clone(),
+                tools: connection.catalog.as_ref().map(|result| {
+                    result
+                        .as_ref()
+                        .map(|catalog| catalog.tools.len())
+                        .map_err(|error| *error)
+                }),
+                tool_issues: connection
+                    .catalog
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .map(|catalog| catalog.issues.clone())
+                    .unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    pub fn registrations(&self) -> Vec<ToolRegistration> {
+        const MAX_SESSION_CATALOG_BYTES: usize = 512 * 1024;
+        let mut bytes = 0;
+        let mut definitions = BTreeMap::new();
+        let mut collisions = BTreeSet::new();
+        for (server, entry) in self
+            .active
+            .iter()
+            .filter(|(_, entry)| matches!(entry.state, ConnectionState::Ready(_)))
+        {
+            let Some(Ok(catalog)) = &entry.catalog else {
+                continue;
+            };
+            let size: usize = catalog
+                .tools
+                .iter()
+                .map(|tool| {
+                    tool.name.len() + tool.description.len() + tool.parameters.to_string().len()
+                })
+                .sum();
+            if bytes + size > MAX_SESSION_CATALOG_BYTES {
+                error!(server_id = %server, "MCP 工具清单超过会话目录预算");
+                continue;
+            }
+            for tool in &catalog.tools {
+                if definitions.insert(&tool.name, tool).is_some() {
+                    collisions.insert(&tool.name);
+                    error!(server_id = %server, tool = %tool.name, "MCP 模型工具名称冲突");
+                }
+            }
+            bytes += size;
+        }
+        definitions
+            .into_iter()
+            .filter(|(name, _)| !collisions.contains(name))
+            .map(|(_, tool)| discovery::register(tool.clone()))
+            .collect()
+    }
+
+    pub fn restore_registrations(&self, saved: &[ToolDefinition]) -> Vec<ToolRegistration> {
+        saved
+            .iter()
+            .filter_map(|tool| {
+                let ToolSource::Mcp { server, target, .. } = &tool.source else {
+                    return None;
+                };
+                if self
+                    .known
+                    .get(server)
+                    .is_none_or(|config| discovery::transport_identity(config) != *target)
+                {
+                    return None;
+                }
+                if let Some(entry) = self.active.get(server)
+                    && matches!(entry.state, ConnectionState::Ready(_))
+                    && let Some(Ok(catalog)) = &entry.catalog
+                    && !catalog.tools.contains(tool)
+                {
+                    return None;
+                }
+                Some(discovery::register(tool.clone()))
             })
             .collect()
     }
@@ -159,10 +271,21 @@ impl Connections {
                 if let Some((server, entry)) = self.active.iter_mut().find(|(_, entry)| entry.task == Some(task))
                     && !entry.cancel.is_cancelled()
                 {
-                    if let ConnectionState::Ready(capabilities) = &state {
-                        debug!(server_id = %server, protocol = %capabilities.version, "MCP 协议已就绪");
+                    match state {
+                        Update::State(state) => {
+                            if let ConnectionState::Ready(capabilities) = &state {
+                                debug!(server_id = %server, protocol = %capabilities.version, "MCP 协议已就绪");
+                            }
+                            entry.state = state;
+                        }
+                        Update::Tools(tools) => {
+                            let catalog = tools.map(|tools| discovery::convert(*server, &entry.transport, tools));
+                            if let Err(reason) = &catalog {
+                                error!(server_id = %server, reason, "MCP 工具发现失败");
+                            }
+                            entry.catalog = Some(catalog);
+                        }
                     }
-                    entry.state = state;
                 }
             }
             Some(result) = self.tasks.join_next_with_id(), if !self.tasks.is_empty() => {
@@ -211,19 +334,23 @@ impl Connections {
 pub(crate) async fn serve(
     transport: impl rmcp::transport::Transport<rmcp::RoleClient> + 'static,
     stop: &CancellationToken,
-    publish: impl Fn(ConnectionState),
+    publish: impl Fn(Update),
 ) -> Result<(), Failure> {
-    use rmcp::model::{ClientCapabilities, ClientConfig, Implementation, ProtocolVersion};
+    use rmcp::model::ProtocolVersion;
     use rmcp::service::serve_client_with_lifecycle_and_ct;
-    let client = ClientConfig::new(
-        ClientCapabilities::default(),
-        Implementation::new("Agentelier", env!("CARGO_PKG_VERSION")),
-    );
+    let refresh = Arc::new(Notify::new());
+    let client = Client {
+        config: ClientConfig::new(
+            ClientCapabilities::default(),
+            Implementation::new("Agentelier", env!("CARGO_PKG_VERSION")),
+        ),
+        refresh: refresh.clone(),
+    };
     let lifecycle = rmcp::ClientLifecycleMode::Auto {
         preferred_versions: vec![ProtocolVersion::V_2026_07_28],
         legacy_version: Some(ProtocolVersion::V_2025_11_25),
     };
-    publish(ConnectionState::Negotiating);
+    publish(Update::State(ConnectionState::Negotiating));
     let client = tokio::select! {
         biased;
         _ = stop.cancelled() => return Ok(()),
@@ -245,12 +372,22 @@ pub(crate) async fn serve(
         });
     };
     let cancel = client.cancellation_token();
-    publish(ConnectionState::Ready(ServerCapabilities {
+    let peer = client.peer().clone();
+    publish(Update::State(ConnectionState::Ready(ServerCapabilities {
         version: info.protocol_version.to_string(),
         tools: info.capabilities.tools.is_some(),
         resources: info.capabilities.resources.is_some(),
         prompts: info.capabilities.prompts.is_some(),
-    }));
+    })));
+    if info.capabilities.tools.is_some() {
+        refresh.notify_one();
+    }
+    let discover = async {
+        loop {
+            refresh.notified().await;
+            publish(Update::Tools(discovery::list(&peer).await));
+        }
+    };
     let waiting = client.waiting();
     tokio::pin!(waiting);
     tokio::select! {
@@ -262,12 +399,13 @@ pub(crate) async fn serve(
                 _ => Err(Failure { stage: "回收", reason: "无法确认 MCP 协议连接关闭" }),
             }
         }
+        _ = discover => Err(Failure { stage: "发现", reason: "工具发现任务异常结束" }),
         _ = &mut waiting => Err(Failure { stage: "连接", reason: "MCP 服务器已断开" }),
     }
 }
 
 async fn close(
-    client: &mut rmcp::service::RunningService<rmcp::RoleClient, rmcp::model::ClientConfig>,
+    client: &mut rmcp::service::RunningService<rmcp::RoleClient, Client>,
 ) -> Result<(), Failure> {
     match client.close_with_timeout(CLOSE_TIMEOUT).await {
         Ok(Some(_)) => Ok(()),

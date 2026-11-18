@@ -21,10 +21,14 @@ impl Creation {
         request: ConversationRequest,
         conversation: &Conversation,
         store: &SessionStore,
+        mcp: &agentelier_mcp::Connections,
     ) -> Result<Self, ConversationFailure> {
+        let tools = mcp.registrations();
         let prepared = match request {
-            ConversationRequest::Create(settings) => conversation.prepare(settings)?,
-            ConversationRequest::Reset { session } => conversation.prepare_reset(session)?,
+            ConversationRequest::Create(settings) => conversation.prepare(settings, &tools)?,
+            ConversationRequest::Reset { session } => {
+                conversation.prepare_reset(session, &tools)?
+            }
             _ => return Err(ConversationFailure::new("存档创建收到非创建请求")),
         };
         let reply = store

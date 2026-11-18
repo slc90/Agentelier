@@ -15,6 +15,11 @@ pub enum ToolSource {
         provider: String,
         tool: String,
     },
+    Mcp {
+        server: uuid::Uuid,
+        target: String,
+        tool: String,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +31,18 @@ pub struct ToolDefinition {
     pub source: ToolSource,
     #[serde(default = "strict_by_default")]
     pub strict: bool,
+}
+
+impl ToolDefinition {
+    pub fn catalog_description(&self) -> String {
+        match &self.source {
+            ToolSource::Mcp { server, tool, .. } => format!(
+                "MCP {server} · {tool} · strict={}\n{}\n{}",
+                self.strict, self.description, self.parameters
+            ),
+            _ => self.description.clone(),
+        }
+    }
 }
 
 fn strict_by_default() -> bool {
@@ -131,22 +148,21 @@ impl ToolCatalog {
         ]
     }
 
-    pub fn with_extensions(
+    pub fn with_extensions<'a>(
         directory: &std::path::Path,
         image_input: Option<bool>,
-        extensions: &[ToolRegistration],
+        extensions: impl IntoIterator<Item = &'a ToolRegistration>,
     ) -> Result<Self, ToolFailure> {
         let mut tools = Self::builtins(directory, image_input);
-        if extensions
-            .iter()
-            .any(|tool| matches!(tool.definition.source, ToolSource::Builtin))
-        {
-            return Err(ToolFailure::new(
-                "invalid_source",
-                "扩展工具不能声明内置来源",
-            ));
+        for tool in extensions {
+            if matches!(tool.definition.source, ToolSource::Builtin) {
+                return Err(ToolFailure::new(
+                    "invalid_source",
+                    "外部工具不能声明内置来源",
+                ));
+            }
+            tools.push(tool.clone());
         }
-        tools.extend_from_slice(extensions);
         let mut names = HashSet::new();
         let mut sources = HashSet::new();
         for tool in &tools {

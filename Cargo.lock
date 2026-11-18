@@ -287,10 +287,12 @@ dependencies = [
 name = "agentelier_mcp"
 version = "0.1.0"
 dependencies = [
+ "agentelier_tools",
  "process-wrap",
  "rmcp",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tokio-util",

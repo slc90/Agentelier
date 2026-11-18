@@ -2,6 +2,7 @@
 compile_error!("This application supports Windows x64 only");
 
 mod connections;
+mod discovery;
 mod settings;
 mod stdio;
 
