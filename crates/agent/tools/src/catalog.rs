@@ -31,15 +31,37 @@ pub struct ToolDefinition {
     pub source: ToolSource,
     #[serde(default = "strict_by_default")]
     pub strict: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
 }
 
 impl ToolDefinition {
+    pub fn same_declaration(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.description == other.description
+            && self.parameters == other.parameters
+            && self.source == other.source
+            && self.strict == other.strict
+    }
+
     pub fn catalog_description(&self) -> String {
         match &self.source {
-            ToolSource::Mcp { server, tool, .. } => format!(
-                "MCP {server} · {tool} · strict={}\n{}\n{}",
-                self.strict, self.description, self.parameters
-            ),
+            ToolSource::Mcp { server, tool, .. } => {
+                let source = self
+                    .display_source
+                    .clone()
+                    .unwrap_or_else(|| format!("MCP {server} · {tool}"));
+                let mut details = format!(
+                    "{source} · strict={}\n{}\n{}",
+                    self.strict, self.description, self.parameters
+                );
+                if let Some(schema) = &self.output_schema {
+                    details.push_str(&format!("\noutputSchema {schema}"));
+                }
+                details
+            }
             _ => self.description.clone(),
         }
     }
@@ -114,6 +136,8 @@ impl ToolCatalog {
                 name: "view_image".into(),
                 source: ToolSource::Builtin,
                 strict: true,
+                display_source: None,
+                output_schema: None,
                 description: format!("Read one existing local static PNG or JPEG and return its actual image content to the model, with safe metadata. Required JSON: {{\"path\":\"image.png\"}}. Relative paths resolve in fixed session directory {}; absolute paths use local Windows rules. Detects format from bytes, not extension. Does not capture screenshots, click, edit, generate or OCR images. At most 10 MiB input, 25 million pixels, longest sent edge 2048 px (proportional resize), 4 MiB encoded result, 16 MiB retained images per session and 32 MiB serialized model request. Immutable image bytes remain in history even if the original file changes or is deleted; use a new call to read new content. Model image capability from catalog: {}. Errors preserve existing history, without changing model or account.", directory.display(), match image_input { Some(true)=>"supported", Some(false)=>"unsupported", None=>"unknown; actual request determines support" }),
                 parameters: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
             }, move |context, arguments, cancel| Box::pin(execution::image(context, arguments, cancel, image_input))),
@@ -121,6 +145,8 @@ impl ToolCatalog {
                 name: "apply_patch".into(),
                 source: ToolSource::Builtin,
                 strict: true,
+                display_source: None,
+                output_schema: None,
                 description: format!("Modify UTF-8 text using a JSON object with required patch and workdir (string or null). Null workdir uses {}; relative workdir resolves there. Paths may be absolute or relative to workdir. Example: {{\"patch\":\"*** Begin Patch\\n*** Add File: hello.txt\\n+hello\\n*** End Patch\\n\",\"workdir\":null}}. Supports *** Add File:, *** Delete File:, *** Update File:, optional *** Move to: immediately after Update, @@ or @@ exact-anchor, context lines prefixed by space, - removals, + additions, and *** End of File after a chunk. Context must match exactly and uniquely. Read changed files before retrying. At most 64 actions, 8 MiB per file, 32 MiB prepared text. Preserves existing UTF-8 BOM and uniform LF/CRLF; new files use LF without BOM. Validates the whole patch before writing. Commits files separately, with actual action and temporary-file reports; errors or Stop preserve completed changes and never roll back. Does not overwrite existing add/move destinations.", directory.display()),
                 parameters: json!({"type":"object","properties":{"patch":{"type":"string"},"workdir":{"type":["string","null"]}},"required":["patch","workdir"],"additionalProperties":false}),
             }, patch),
@@ -128,6 +154,8 @@ impl ToolCatalog {
                 name: "exec_command".into(),
                 source: ToolSource::Builtin,
                 strict: true,
+                display_source: None,
+                output_schema: None,
                 description: format!("Execute PowerShell 7 using UTF-8 pipes and no profile. workdir null uses fixed session directory {}; relative values resolve there. yield_time_ms null waits 10000 ms; 0..30000 is allowed. If still running, returns a task-scoped session_id for write_stdin and new output. No command lifetime limit. At most 8 unreaped sessions. All processes are reaped when this user task ends; old IDs cannot be used in a later task. Runs with current-user access, without a sandbox or PTY.", directory.display()),
                 parameters: json!({"type":"object","properties":{
                     "cmd":{"type":"string"},"workdir":{"type":["string","null"]},
@@ -138,6 +166,8 @@ impl ToolCatalog {
                 name: "write_stdin".into(),
                 source: ToolSource::Builtin,
                 strict: true,
+                display_source: None,
+                output_schema: None,
                 description: "Continue a process session from this user task. Empty chars only polls for new output; nonempty chars writes exactly those UTF-8 bytes, without adding a newline. close_stdin closes input after this write (EOF). terminate kills and reaps that process group, and cannot be combined with nonempty chars or close_stdin. yield_time_ms null waits 10000 ms; range 0..30000. Output is consumed, never repeated; no automatic input retry. Nonzero exit codes are preserved. Sessions expire at task end. Pipes are not window keyboard input or a terminal.".into(),
                 parameters: json!({"type":"object","properties":{
                     "session_id":{"type":"string"},"chars":{"type":"string"},
@@ -202,7 +232,7 @@ impl ToolCatalog {
             }
             let registration = self
                 .find(&definition.name)
-                .filter(|tool| tool.definition == *definition)
+                .filter(|tool| tool.definition.same_declaration(definition))
                 .ok_or_else(|| {
                     ToolFailure::new(
                         "tool_contract",
@@ -218,6 +248,10 @@ impl ToolCatalog {
             return Err(ToolFailure::new("tool_contract", "存档缺少内置工具契约"));
         }
         Ok(Self(tools))
+    }
+
+    pub fn display_source(&self, name: &str) -> Option<&str> {
+        self.find(name)?.definition.display_source.as_deref()
     }
 
     pub(crate) fn find(&self, name: &str) -> Option<&ToolRegistration> {

@@ -1,5 +1,5 @@
 use crate::{ServerId, Transport};
-use agentelier_tools::{ToolDefinition, ToolRegistration, ToolResult, ToolSource};
+use agentelier_tools::{ToolDefinition, ToolSource};
 use rmcp::{
     RoleClient,
     model::{PaginatedRequestParams, Tool},
@@ -65,7 +65,12 @@ pub(crate) struct Catalog {
     pub(crate) issues: Vec<String>,
 }
 
-pub(crate) fn convert(server: ServerId, transport: &Transport, tools: Vec<Tool>) -> Catalog {
+pub(crate) fn convert(
+    server: ServerId,
+    label: &str,
+    transport: &Transport,
+    tools: Vec<Tool>,
+) -> Catalog {
     let target = transport_identity(transport);
     let mut names = HashMap::new();
     for tool in &tools {
@@ -80,7 +85,7 @@ pub(crate) fn convert(server: ServerId, transport: &Transport, tools: Vec<Tool>)
         let entry = if names.get(name).copied().unwrap_or_default() > 1 {
             Err("原始名称重复")
         } else {
-            normalize(server, &target, &tool)
+            normalize(server, label, &target, &tool)
         };
         match entry {
             Ok(definition) => catalog.tools.push(definition),
@@ -97,7 +102,12 @@ pub(crate) fn convert(server: ServerId, transport: &Transport, tools: Vec<Tool>)
     catalog
 }
 
-fn normalize(server: ServerId, target: &str, tool: &Tool) -> Result<ToolDefinition, &'static str> {
+fn normalize(
+    server: ServerId,
+    label: &str,
+    target: &str,
+    tool: &Tool,
+) -> Result<ToolDefinition, &'static str> {
     let name = tool.name.as_ref();
     if name.is_empty() || name.len() > 256 || name.chars().any(char::is_control) {
         return Err("工具名称无效或过长");
@@ -146,16 +156,7 @@ fn normalize(server: ServerId, target: &str, tool: &Tool) -> Result<ToolDefiniti
             tool: name.into(),
         },
         strict: false,
-    })
-}
-
-pub(crate) fn register(definition: ToolDefinition) -> ToolRegistration {
-    ToolRegistration::new(definition, |_, _, _| {
-        Box::pin(async {
-            ToolResult::not_executed(
-                "mcp_discovery_only",
-                "此版本已发现 MCP 工具，远端调用尚不可用",
-            )
-        })
+        output_schema: tool.output_schema.as_deref().cloned().map(Value::Object),
+        display_source: Some(format!("MCP {label} · {name}")),
     })
 }

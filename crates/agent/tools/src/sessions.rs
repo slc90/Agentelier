@@ -25,6 +25,7 @@ pub struct CleanupReport {
 pub struct ExecutionContext {
     pub(crate) directory: PathBuf,
     processes: BTreeMap<String, Process>,
+    image_input: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -67,11 +68,16 @@ fn failure(error: ToolFailure) -> ToolResult {
 }
 
 impl ExecutionContext {
-    pub fn new(directory: PathBuf) -> Self {
+    pub fn new(directory: PathBuf, image_input: Option<bool>) -> Self {
         Self {
             directory,
+            image_input,
             processes: BTreeMap::new(),
         }
+    }
+
+    pub fn image_input(&self) -> Option<bool> {
+        self.image_input
     }
 
     pub fn working_directory(&self) -> &std::path::Path {

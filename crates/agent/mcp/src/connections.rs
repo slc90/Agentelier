@@ -1,9 +1,13 @@
-use crate::{Server, ServerId, Transport, discovery, stdio};
+use crate::{
+    Server, ServerId, Transport,
+    call::{Gateway, Route},
+    discovery, stdio,
+};
 use agentelier_tools::{ToolDefinition, ToolRegistration, ToolSource};
 use rmcp::{
     ClientHandler, RoleClient,
     model::{ClientCapabilities, ClientConfig, Implementation, Tool},
-    service::NotificationContext,
+    service::{NotificationContext, Peer},
 };
 use std::sync::Arc;
 use std::{
@@ -57,6 +61,8 @@ pub(crate) struct Failure {
 
 pub(crate) enum Update {
     State(ConnectionState),
+    Ready(ServerCapabilities, Peer<RoleClient>),
+    Discovering,
     Tools(Result<Vec<Tool>, &'static str>),
 }
 
@@ -80,12 +86,14 @@ struct Connection {
     cancel: CancellationToken,
     task: Option<Id>,
     state: ConnectionState,
-    catalog: Option<Result<discovery::Catalog, &'static str>>,
+    catalog: Option<Result<Arc<discovery::Catalog>, &'static str>>,
+    peer: Option<Peer<RoleClient>>,
 }
 
 pub struct Connections {
     configured: BTreeMap<ServerId, Transport>,
-    known: BTreeMap<ServerId, Transport>,
+    known: BTreeMap<ServerId, (Transport, String)>,
+    gateway: Gateway,
     active: BTreeMap<ServerId, Connection>,
     tasks: JoinSet<Result<(), Failure>>,
     progress: mpsc::UnboundedReceiver<(Id, Update)>,
@@ -98,6 +106,7 @@ impl Default for Connections {
         Self {
             configured: BTreeMap::new(),
             known: BTreeMap::new(),
+            gateway: Gateway::default(),
             active: BTreeMap::new(),
             tasks: JoinSet::new(),
             progress,
@@ -110,7 +119,15 @@ impl Connections {
     pub fn configure(&mut self, servers: &[Server]) {
         self.known = servers
             .iter()
-            .map(|server| (server.id, server.settings.transport.clone()))
+            .map(|server| {
+                (
+                    server.id,
+                    (
+                        server.settings.transport.clone(),
+                        server.settings.name.clone(),
+                    ),
+                )
+            })
             .collect();
         self.configured = servers
             .iter()
@@ -173,9 +190,11 @@ impl Connections {
                     task: Some(task),
                     state: ConnectionState::Starting,
                     catalog: None,
+                    peer: None,
                 },
             );
         }
+        self.update_gateway();
     }
 
     pub fn statuses(&self) -> Vec<ConnectionStatus> {
@@ -217,7 +236,13 @@ impl Connections {
                 .tools
                 .iter()
                 .map(|tool| {
-                    tool.name.len() + tool.description.len() + tool.parameters.to_string().len()
+                    tool.name.len()
+                        + tool.description.len()
+                        + tool.parameters.to_string().len()
+                        + tool
+                            .output_schema
+                            .as_ref()
+                            .map_or(0, |schema| schema.to_string().len())
                 })
                 .sum();
             if bytes + size > MAX_SESSION_CATALOG_BYTES {
@@ -235,7 +260,7 @@ impl Connections {
         definitions
             .into_iter()
             .filter(|(name, _)| !collisions.contains(name))
-            .map(|(_, tool)| discovery::register(tool.clone()))
+            .map(|(_, tool)| self.gateway.register(tool.clone()))
             .collect()
     }
 
@@ -249,18 +274,27 @@ impl Connections {
                 if self
                     .known
                     .get(server)
-                    .is_none_or(|config| discovery::transport_identity(config) != *target)
+                    .is_none_or(|(config, _)| discovery::transport_identity(config) != *target)
                 {
                     return None;
                 }
                 if let Some(entry) = self.active.get(server)
                     && matches!(entry.state, ConnectionState::Ready(_))
                     && let Some(Ok(catalog)) = &entry.catalog
-                    && !catalog.tools.contains(tool)
+                    && !catalog
+                        .tools
+                        .iter()
+                        .any(|current| current.same_declaration(tool))
                 {
                     return None;
                 }
-                Some(discovery::register(tool.clone()))
+                let mut definition = tool.clone();
+                if let ToolSource::Mcp { tool, .. } = &definition.source
+                    && let Some((_, name)) = self.known.get(server)
+                {
+                    definition.display_source = Some(format!("MCP {name} · {tool}"));
+                }
+                Some(self.gateway.register(definition))
             })
             .collect()
     }
@@ -272,14 +306,16 @@ impl Connections {
                     && !entry.cancel.is_cancelled()
                 {
                     match state {
-                        Update::State(state) => {
-                            if let ConnectionState::Ready(capabilities) = &state {
-                                debug!(server_id = %server, protocol = %capabilities.version, "MCP 协议已就绪");
-                            }
-                            entry.state = state;
+                        Update::State(state) => entry.state = state,
+                        Update::Ready(capabilities, peer) => {
+                            debug!(server_id = %server, protocol = %capabilities.version, "MCP 协议已就绪");
+                            entry.state = ConnectionState::Ready(capabilities);
+                            entry.peer = Some(peer);
                         }
+                        Update::Discovering => entry.catalog = None,
                         Update::Tools(tools) => {
-                            let catalog = tools.map(|tools| discovery::convert(*server, &entry.transport, tools));
+                            let label = self.known.get(server).map_or("", |(_, name)| name.as_str());
+                            let catalog = tools.map(|tools| Arc::new(discovery::convert(*server, label, &entry.transport, tools)));
                             if let Err(reason) = &catalog {
                                 error!(server_id = %server, reason, "MCP 工具发现失败");
                             }
@@ -306,7 +342,33 @@ impl Connections {
                 self.reconcile();
             }
         }
+        self.update_gateway();
         self.statuses()
+    }
+
+    fn update_gateway(&self) {
+        self.gateway.update(
+            self.active
+                .iter()
+                .filter_map(|(server, entry)| {
+                    if !matches!(entry.state, ConnectionState::Ready(_))
+                        || entry.cancel.is_cancelled()
+                    {
+                        return None;
+                    }
+                    let peer = entry.peer.clone()?;
+                    let catalog = entry.catalog.as_ref()?.as_ref().ok()?.clone();
+                    Some((
+                        *server,
+                        Route {
+                            peer,
+                            catalog,
+                            closed: entry.cancel.clone(),
+                        },
+                    ))
+                })
+                .collect(),
+        );
     }
 
     pub async fn shutdown(&mut self) -> std::io::Result<()> {
@@ -327,6 +389,7 @@ impl Connections {
             }
         }
         self.active.clear();
+        self.update_gateway();
         failure.map_or(Ok(()), Err)
     }
 }
@@ -373,18 +436,22 @@ pub(crate) async fn serve(
     };
     let cancel = client.cancellation_token();
     let peer = client.peer().clone();
-    publish(Update::State(ConnectionState::Ready(ServerCapabilities {
-        version: info.protocol_version.to_string(),
-        tools: info.capabilities.tools.is_some(),
-        resources: info.capabilities.resources.is_some(),
-        prompts: info.capabilities.prompts.is_some(),
-    })));
+    publish(Update::Ready(
+        ServerCapabilities {
+            version: info.protocol_version.to_string(),
+            tools: info.capabilities.tools.is_some(),
+            resources: info.capabilities.resources.is_some(),
+            prompts: info.capabilities.prompts.is_some(),
+        },
+        peer.clone(),
+    ));
     if info.capabilities.tools.is_some() {
         refresh.notify_one();
     }
     let discover = async {
         loop {
             refresh.notified().await;
+            publish(Update::Discovering);
             publish(Update::Tools(discovery::list(&peer).await));
         }
     };

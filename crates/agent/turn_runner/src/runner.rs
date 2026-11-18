@@ -129,8 +129,10 @@ pub async fn run(
     store: agentelier_session_store::SessionStoreClient,
     user_skills_root: std::path::PathBuf,
 ) -> Result<ActiveTurn, ConversationFailure> {
-    let mut context =
-        agentelier_tools::ExecutionContext::new(active.view().settings.working_directory);
+    let mut context = agentelier_tools::ExecutionContext::new(
+        active.view().settings.working_directory,
+        active.view().settings.image_input,
+    );
     let admitted = record(
         &store,
         RecordEvent::Accepted {

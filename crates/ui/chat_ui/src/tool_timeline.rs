@@ -137,7 +137,7 @@ fn summary(tool: &ChatTool) -> String {
     };
     format!(
         "工具 · {} · {} · 请求 {} / 输出 {} · {}\n参数：{}\n结果：{}",
-        tool.name,
+        tool.source.as_deref().unwrap_or(&tool.name),
         label,
         tool.request_index,
         tool.output_index,

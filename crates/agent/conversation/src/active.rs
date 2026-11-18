@@ -194,7 +194,7 @@ impl ActiveTurn {
             }
 
             StreamEvent::FunctionCall(call) => {
-                Self::upsert_tool(turn, call, ToolStatus::Receiving)?;
+                Self::upsert_tool(turn, call, ToolStatus::Receiving, &self.tools)?;
             }
             StreamEvent::Item(mut message) => {
                 turn.phase = TaskPhase::RequestingModel;
@@ -363,6 +363,7 @@ impl ActiveTurn {
         turn: &mut TurnView,
         call: FunctionCall,
         status: ToolStatus,
+        catalog: &ToolCatalog,
     ) -> Result<(), ConversationFailure> {
         let existing = turn.tools.iter().position(|tool| {
             tool.request_index == turn.request_index && tool.output_index == call.output_index
@@ -387,6 +388,7 @@ impl ActiveTurn {
             id: call.id,
             output_index: call.output_index,
             call_id: call.call_id,
+            source: catalog.display_source(&call.name).map(str::to_owned),
             name: call.name,
             arguments,
             arguments_truncated,
@@ -427,7 +429,7 @@ impl ActiveTurn {
                 message
             }));
         for call in &result.calls {
-            Self::upsert_tool(turn, call.clone(), ToolStatus::Pending)?;
+            Self::upsert_tool(turn, call.clone(), ToolStatus::Pending, &self.tools)?;
         }
         Ok(())
     }

@@ -52,6 +52,8 @@ pub struct ToolView {
     pub output_index: usize,
     pub call_id: String,
     pub name: String,
+    #[serde(default)]
+    pub source: Option<String>,
     pub arguments: String,
     pub arguments_truncated: bool,
     pub status: ToolStatus,

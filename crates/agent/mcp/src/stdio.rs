@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 
 const PROCESS_CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
-const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
+const MAX_FRAME_BYTES: usize = 6 * 1024 * 1024;
 
 pub(crate) async fn run(
     transport: Transport,
@@ -155,7 +155,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for BoundedRead<R> {
                     } else {
                         self.line_bytes += 1;
                         if self.line_bytes > MAX_FRAME_BYTES {
-                            return Poll::Ready(Err(io::Error::other("MCP 消息帧超过 2 MiB")));
+                            return Poll::Ready(Err(io::Error::other("MCP 消息帧超过 6 MiB")));
                         }
                     }
                 }

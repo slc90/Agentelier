@@ -288,6 +288,7 @@ name = "agentelier_mcp"
 version = "0.1.0"
 dependencies = [
  "agentelier_tools",
+ "base64",
  "process-wrap",
  "rmcp",
  "serde",

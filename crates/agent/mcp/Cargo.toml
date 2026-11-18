@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+base64.workspace = true
 agentelier_tools = { path = "../tools" }
 sha2.workspace = true
 process-wrap.workspace = true

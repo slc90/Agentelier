@@ -80,9 +80,39 @@ fn read(
     if bytes.len() > MAX_INPUT_BYTES {
         return Err(failure("image_input_limit", "实际读取图片超过 10 MiB"));
     }
+    let (image, original_width, original_height, source_digest) = decode(bytes, None, control)?;
+    let summary = json!({"ok":true,"data":{"path":path,"original_format":if image.mime == "image/png" {"png"} else {"jpeg"},"original_width":original_width,"original_height":original_height,"width":image.width,"height":image.height,"mime":image.mime,"source_sha256":source_digest,"sha256":image.digest,"encoded_bytes":image.bytes.len()}}).to_string();
+    if summary.len() > crate::MAX_TOOL_BODY_BYTES {
+        return Err(failure("image_summary_limit", "图片说明超过文字预算"));
+    }
+    Ok(ToolPayload::Image {
+        summary,
+        image: Arc::new(image),
+    })
+}
+
+fn decode(
+    bytes: Vec<u8>,
+    declared_mime: Option<&str>,
+    control: &blocking::Control,
+) -> Result<(ImagePayload, u32, u32, String), ToolFailure> {
     control.check()?;
+    if bytes.len() > MAX_INPUT_BYTES {
+        return Err(failure("image_input_limit", "原始图片超过 10 MiB"));
+    }
     let source_digest = format!("{:x}", Sha256::digest(&bytes));
     let format = image::guess_format(&bytes).map_err(|error| failure("image_format", error))?;
+    if declared_mime.is_some_and(|mime| {
+        !matches!(
+            (mime, format),
+            ("image/png", ImageFormat::Png) | ("image/jpeg", ImageFormat::Jpeg)
+        )
+    }) {
+        return Err(failure(
+            "image_format",
+            "MCP 图片 MIME 与实际静态 PNG/JPEG 格式不匹配",
+        ));
+    }
     let mut limits = image::Limits::default();
     limits.max_alloc = Some(MAX_PIXELS * MAX_BYTES_PER_PIXEL);
     if format == ImageFormat::Png {
@@ -161,20 +191,40 @@ fn read(
     };
     control.check()?;
     let digest = format!("{:x}", Sha256::digest(&encoded.0));
-    let summary = json!({"ok":true,"data":{"path":path,"original_format":if format==ImageFormat::Png {"png"} else {"jpeg"},"original_width":width,"original_height":height,"width":sent_width,"height":sent_height,"mime":mime,"source_sha256":source_digest,"sha256":digest,"encoded_bytes":encoded.0.len()}}).to_string();
-    if summary.len() > crate::MAX_TOOL_BODY_BYTES {
-        return Err(failure("image_summary_limit", "图片说明超过文字预算"));
-    }
-    Ok(ToolPayload::Image {
-        summary,
-        image: Arc::new(ImagePayload {
+    Ok((
+        ImagePayload {
             bytes: encoded.0,
             mime,
             digest,
             width: sent_width,
             height: sent_height,
-        }),
+        },
+        width,
+        height,
+        source_digest,
+    ))
+}
+
+pub async fn from_mcp_bytes(
+    bytes: Vec<u8>,
+    mime: String,
+    summary: String,
+    cancel: &CancellationToken,
+) -> ToolResult {
+    blocking::run(cancel, move |control| {
+        match decode(bytes, Some(&mime), &control) {
+            Ok((image, _, _, _)) => ToolResult {
+                status: ToolStatus::Succeeded,
+                output: ToolPayload::Image {
+                    summary,
+                    image: Arc::new(image),
+                },
+                cleanup_failed: false,
+            },
+            Err(error) => blocking::failure(error),
+        }
     })
+    .await
 }
 
 fn check_dimensions(width: u32, height: u32) -> Result<(), ToolFailure> {

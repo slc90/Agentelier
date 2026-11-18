@@ -13,6 +13,7 @@ mod process;
 mod sessions;
 
 pub use environment::WorkingDirectory;
+pub use image::from_mcp_bytes;
 
 pub use catalog::{ToolCatalog, ToolDefinition, ToolExecution, ToolRegistration, ToolSource};
 pub use execution::{MAX_TOOL_BODY_BYTES, ToolFailure, ToolResult, ToolStatus, execute};
