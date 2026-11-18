@@ -97,7 +97,9 @@ MCP 配置保存于本次数据目录的 `mcp_servers.json`，由 Runtime 持有
 
 `bevy_brp_mcp` 使用 rmcp，已说明能够协商截至 `2025-11-25` 的旧版初始化流程，并为 `2026-07-28` 使用请求级 `_meta`。新版 MCP 核心不再要求 `initialize` / `initialized` 会话握手，能力和协议版本随请求表达，支持 `server/discover`。因此客户端不应把旧式握手写死为所有服务器共通的生命周期。
 
-stdio 连接使用官方 rmcp 3.5.1 的 Auto 生命周期与有界 stdout 传输。它先尝试发现 2026-07-28，按 SDK 支持的条件回退到旧初始化。MCP 业务层依赖**连接可用、能力信息、请求完成**这些稳定语义。首批支持 stdio，并以官方的 Streamable HTTP 为另一种明确传输；不为未经需求确认的 SSE 旧传输或自定义 socket 设计兼容层。若版本或必需能力不能协商，应得到明确失败，不假装已连接。
+stdio 与 Streamable HTTP 共用官方 rmcp 3.9.0 的 Auto 生命周期和能力投影。客户端优先协商 2026-07-28 的请求级元数据，按 SDK 支持的条件回退到旧版初始化。stdio 读取有界 stdout 帧。Streamable HTTP 由 SDK 处理会话和有界响应，Tools、Resources 与 Prompts 使用同一业务入口。
+
+HTTP 直连配置的 HTTPS 或回环 HTTP 端点，localhost 固定解析到回环地址。连接不跟随重定向，普通请求不会因会话过期被重放。Bearer 凭据读取配置指向的进程环境变量，认证受限时报告状态。SDK 关闭现有连接时负责结束 HTTP 流及旧会话。
 
 ## 服务器提供三种不同能力
 

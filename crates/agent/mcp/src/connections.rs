@@ -1,7 +1,7 @@
 use crate::{
     Server, ServerId, Transport,
     call::{Gateway, Route},
-    discovery, stdio,
+    discovery, http, stdio,
 };
 use agentelier_tools::{ToolDefinition, ToolRegistration, ToolSource};
 use rmcp::{
@@ -131,10 +131,7 @@ impl Connections {
             .collect();
         self.configured = servers
             .iter()
-            .filter(|server| {
-                server.settings.enabled
-                    && matches!(server.settings.transport, Transport::Stdio { .. })
-            })
+            .filter(|server| server.settings.enabled)
             .map(|server| (server.id, server.settings.transport.clone()))
             .collect();
         self.reconcile();
@@ -174,12 +171,18 @@ impl Connections {
                 .spawn(async move {
                     let task = tokio::task::id();
                     debug!(server_id = %server, "开始启动 MCP 服务");
-                    stdio::run(task_transport, stop, |state| {
+                    let progress = |state| {
                         if publish.send((task, state)).is_err() {
                             debug!(server_id = %server, "MCP 状态接收端已关闭");
                         }
-                    })
-                    .await
+                    };
+                    match task_transport {
+                        Transport::Stdio { .. } => stdio::run(task_transport, stop, progress).await,
+                        Transport::StreamableHttp {
+                            endpoint,
+                            bearer_environment,
+                        } => http::run(endpoint, bearer_environment, stop, progress).await,
+                    }
                 })
                 .id();
             self.active.insert(
@@ -530,6 +533,12 @@ async fn close(
 fn negotiation_failure(error: &rmcp::service::ClientInitializeError) -> Failure {
     use rmcp::service::ClientInitializeError;
     let reason = match error {
+        ClientInitializeError::TransportError { error, .. } => {
+            if let Some(failure) = http::transport_failure(error) {
+                return failure;
+            }
+            "无法完成初始化协议交换"
+        }
         ClientInitializeError::NoCompatibleProtocolVersion { .. } => "双方没有兼容的 MCP 协议版本",
         ClientInitializeError::ConnectionClosed(_)
         | ClientInitializeError::ExpectedInitResponse(None) => {

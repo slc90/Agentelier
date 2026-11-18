@@ -9,6 +9,7 @@ base64.workspace = true
 agentelier_tools = { path = "../tools" }
 sha2.workspace = true
 process-wrap.workspace = true
+reqwest.workspace = true
 rmcp.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

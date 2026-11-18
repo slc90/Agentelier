@@ -4,6 +4,9 @@ compile_error!("This application supports Windows x64 only");
 mod call;
 mod connections;
 mod discovery;
+mod http;
+
+const MAX_WIRE_MESSAGE_BYTES: usize = 6 * 1024 * 1024;
 mod materials;
 mod settings;
 mod stdio;

@@ -140,7 +140,9 @@ fn disconnected() -> ToolResult {
 
 fn protocol_error(error: ServiceError) -> ToolResult {
     match error {
-        ServiceError::TransportSend(_) | ServiceError::TransportClosed => disconnected(),
+        ServiceError::TransportSend(error) => crate::http::transport_failure(&error)
+            .map_or_else(disconnected, |failure| fail("mcp_http", failure.reason)),
+        ServiceError::TransportClosed => disconnected(),
         ServiceError::Timeout { .. } => timed_out(),
         ServiceError::Cancelled { .. } => cancelled("MCP 服务器取消了本次请求"),
         ServiceError::McpError(error) => fail(
