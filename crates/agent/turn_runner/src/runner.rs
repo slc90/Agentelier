@@ -128,6 +128,7 @@ pub async fn run(
     mut steers: mpsc::Receiver<SteerInput>,
     store: agentelier_session_store::SessionStoreClient,
     user_skills_root: std::path::PathBuf,
+    memory: Option<agentelier_memory::MemoryClient>,
 ) -> Result<ActiveTurn, ConversationFailure> {
     let mut context = agentelier_tools::ExecutionContext::new(
         active.view().settings.working_directory,
@@ -153,6 +154,7 @@ pub async fn run(
             &mut steers,
             &store,
             user_skills_root,
+            memory,
         )
         .await
     } else {
@@ -212,6 +214,7 @@ async fn run_task(
     steers: &mut mpsc::Receiver<SteerInput>,
     store: &agentelier_session_store::SessionStoreClient,
     user_skills_root: std::path::PathBuf,
+    memory: Option<agentelier_memory::MemoryClient>,
 ) -> Result<TurnStatus, ConversationFailure> {
     if cancel.is_cancelled() {
         return Ok(TurnStatus::Cancelled);
@@ -304,7 +307,11 @@ async fn run_task(
             control::receipt(progress, id, InputDecision::Applied).await?;
         }
         requests_used += 1;
-        context.set_user_turn(active.tool_user_turn()?);
+        let epoch = memory
+            .as_ref()
+            .and_then(agentelier_memory::MemoryClient::epoch);
+        active.use_memory_epoch(epoch);
+        context.set_user_turn(active.tool_user_turn(epoch)?);
         let result = match request_once(
             active,
             credentials.clone(),

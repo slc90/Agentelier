@@ -74,7 +74,7 @@ struct IndexedSource {
 
 impl MemoryClient {
     pub async fn inspect(&self, processing: bool) -> io::Result<MemoryInspection> {
-        self.with_store(move |connection, workspace| {
+        self.with_active_store(move |connection, workspace| {
             let snapshot = crate::publication::snapshot(connection, workspace)?;
             let processing = processing || (snapshot.is_none() && connection.query_row(
                 "SELECT EXISTS(SELECT 1 FROM sources WHERE status = 'summary'
@@ -108,7 +108,7 @@ impl MemoryClient {
                 "记忆发布标识无效",
             ));
         }
-        self.with_store(move |connection, workspace| {
+        self.with_active_store(move |connection, workspace| {
             let current: bool = connection
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM publication WHERE publication_id = ?1)",
@@ -140,7 +140,7 @@ impl MemoryClient {
                 "记忆查询需为 1 至 256 字节",
             ));
         }
-        self.with_store(move |connection, _| {
+        self.with_active_store(move |connection, _| {
             check_cancel(&cancel)?;
             let words: Vec<_> = query.split_whitespace().collect();
             let mut matches = Vec::new();
@@ -184,7 +184,7 @@ impl MemoryClient {
         record: String,
         cancel: CancellationToken,
     ) -> io::Result<MemoryDetail> {
-        self.with_store(move |connection, workspace| {
+        self.with_active_store(move |connection, workspace| {
             check_cancel(&cancel)?;
             let indexed = source(connection, &record)?;
             if indexed.scope.as_deref() != Some(directory.as_path()) {

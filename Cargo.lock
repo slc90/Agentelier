@@ -401,6 +401,7 @@ dependencies = [
  "agentelier_account",
  "agentelier_conversation",
  "agentelier_llm_model",
+ "agentelier_memory",
  "agentelier_project_context",
  "agentelier_session_store",
  "agentelier_skills",

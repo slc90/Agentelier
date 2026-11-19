@@ -28,11 +28,13 @@ const CONSOLIDATE: &str = "Write a concise Markdown navigation summary (at most 
 
 pub enum MemoryRequest {
     Inspect,
+    Reset,
     Detail { publication: String, record: String },
 }
 
 #[derive(Clone)]
 pub enum MemoryReply {
+    Reset,
     Inspection(MemoryInspection),
     Detail(MemoryDetail),
 }
@@ -46,6 +48,7 @@ pub(super) async fn inspect(
         .ok_or_else(|| io::Error::other("长期记忆存储不可用"))?
         .client();
     match request {
+        MemoryRequest::Reset => Err(io::Error::other("重置需要暂停记忆后台")),
         MemoryRequest::Inspect => client
             .inspect(processing)
             .await
@@ -60,7 +63,53 @@ pub(super) async fn inspect(
     }
 }
 
-pub(super) struct Worker {
+pub(super) struct Background {
+    cancel: CancellationToken,
+    handle: tokio::task::JoinHandle<()>,
+}
+impl Background {
+    pub(super) fn start(
+        memory: MemoryClient,
+        store: SessionStoreClient,
+        credentials: CredentialClient,
+        shutdown: &CancellationToken,
+        processing: Arc<AtomicBool>,
+    ) -> Option<Self> {
+        memory.epoch()?;
+        let cancel = shutdown.child_token();
+        let handle =
+            tokio::spawn(Worker::new(memory, store, credentials, cancel.clone(), processing).run());
+        Some(Self { cancel, handle })
+    }
+    pub(super) async fn stop(self) -> io::Result<()> {
+        self.cancel.cancel();
+        self.handle.await.map_err(io::Error::other)
+    }
+}
+
+pub(super) async fn reset(
+    memory: Option<&agentelier_memory::Memory>,
+    worker: &mut Option<Background>,
+    store: &SessionStoreClient,
+) -> io::Result<MemoryReply> {
+    let client = memory
+        .ok_or_else(|| io::Error::other("长期记忆存储不可用"))?
+        .client();
+    client.suspend();
+    let outcome = async {
+        if let Some(worker) = worker.take() {
+            worker.stop().await?;
+        }
+        client.reset(store).await
+    }
+    .await;
+    let readiness = client.resume_if_ready().await;
+    outcome?;
+    readiness?;
+    Ok(MemoryReply::Reset)
+}
+
+struct Worker {
     processing: Arc<AtomicBool>,
     memory: MemoryClient,
     store: SessionStoreClient,
@@ -75,7 +124,7 @@ struct AvailableModels {
 }
 
 impl Worker {
-    pub(super) fn new(
+    fn new(
         memory: MemoryClient,
         store: SessionStoreClient,
         credentials: CredentialClient,
@@ -92,7 +141,7 @@ impl Worker {
         }
     }
 
-    pub(super) async fn run(mut self) {
+    async fn run(mut self) {
         let mut scans = tokio::time::interval_at(
             tokio::time::Instant::now() + FIRST_SCAN_DELAY,
             SCAN_INTERVAL,

@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 impl crate::MemoryClient {
     pub async fn snapshot(&self) -> io::Result<Option<MemorySnapshot>> {
-        self.with_store(|connection, workspace| snapshot(connection, workspace))
+        self.with_active_store(|connection, workspace| snapshot(connection, workspace))
             .await
     }
 }
@@ -184,7 +184,7 @@ pub(crate) fn publish(
             |row| row.get(0),
         )
         .map_err(io::Error::other)?;
-    let notes = crate::revision::revisions(workspace)?;
+    let notes = crate::revision::revisions(workspace, epoch)?;
     if work.previous_id != current.id
         || work.epoch != epoch
         || !notes
@@ -289,7 +289,7 @@ fn load_artifacts(connection: &Connection) -> io::Result<Artifacts> {
         .map_err(io::Error::other)
 }
 
-fn install(workspace: &Path, artifacts: &Artifacts) -> io::Result<()> {
+pub(crate) fn install(workspace: &Path, artifacts: &Artifacts) -> io::Result<()> {
     check_path(workspace, true)?;
     let details = workspace.join(DETAILS);
     check_path(&details, true)?;
@@ -346,7 +346,7 @@ fn replace(path: &Path, content: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn prune(directory: &Path, should_remove: impl Fn(&str) -> bool) -> io::Result<()> {
+pub(crate) fn prune(directory: &Path, should_remove: impl Fn(&str) -> bool) -> io::Result<()> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),

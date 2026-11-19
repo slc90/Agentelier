@@ -5,6 +5,7 @@ mod consolidation;
 mod extraction;
 mod publication;
 mod redaction;
+mod reset;
 mod retrieval;
 mod revision;
 mod store;

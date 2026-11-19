@@ -122,7 +122,25 @@ impl ActiveTurn {
         self.view.execution_blocked = true;
     }
 
-    pub fn tool_user_turn(&self) -> Result<agentelier_tools::ToolUserTurn, ConversationFailure> {
+    pub fn use_memory_epoch(&mut self, epoch: Option<i64>) {
+        if self
+            .memory
+            .as_ref()
+            .is_some_and(|memory| Some(memory.epoch) != epoch)
+            && let Some(memory) = self.memory.take()
+        {
+            self.view.context.task_material_tokens = self
+                .view
+                .context
+                .task_material_tokens
+                .saturating_sub(memory.estimated_tokens());
+        }
+    }
+
+    pub fn tool_user_turn(
+        &self,
+        memory_epoch: Option<i64>,
+    ) -> Result<agentelier_tools::ToolUserTurn, ConversationFailure> {
         let turn = self
             .view
             .turn
@@ -137,6 +155,7 @@ impl ActiveTurn {
             )
             .collect();
         Ok(agentelier_tools::ToolUserTurn {
+            memory_epoch,
             session: self.view.id,
             turn: turn.id.0,
             input: turn.input_id.0,

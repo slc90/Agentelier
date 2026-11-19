@@ -20,6 +20,7 @@ pub(super) enum TaskRequest {
         mpsc::Sender<RunnerEvent>,
         mpsc::Receiver<SteerInput>,
         std::path::PathBuf,
+        Option<agentelier_memory::MemoryClient>,
     ),
 }
 pub(super) struct ModelTask {
@@ -45,7 +46,7 @@ impl ModelTask {
                     result = agentelier_llm_model::execute(credentials, request) => Some(TaskResult::Model(result)),
                     _ = cancel.cancelled() => None,
                 },
-                TaskRequest::Chat(active, progress, steers, user_skills_root) => {
+                TaskRequest::Chat(active, progress, steers, user_skills_root, memory) => {
                     Some(TaskResult::Chat(
                         agentelier_turn_runner::run(
                             *active,
@@ -55,6 +56,7 @@ impl ModelTask {
                             steers,
                             store,
                             user_skills_root,
+                            memory,
                         )
                         .await
                         .map(Box::new),
@@ -223,6 +225,7 @@ pub(super) fn start_queued(
     store: &agentelier_session_store::SessionStore,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
     user_skills_root: &std::path::Path,
+    memory: Option<agentelier_memory::MemoryClient>,
 ) -> Result<(), RuntimeFailure> {
     if model.is_some() {
         return Ok(());
@@ -254,6 +257,7 @@ pub(super) fn start_queued(
             sender,
             steers,
             user_skills_root.to_owned(),
+            memory,
         ),
     ));
     Ok(())

@@ -67,3 +67,12 @@ CREATE TABLE IF NOT EXISTS reset_cutoffs (
     session_id TEXT PRIMARY KEY,
     sequence INTEGER NOT NULL CHECK (sequence > 0)
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS reset_turn_cutoffs (
+    session_id TEXT PRIMARY KEY,
+    last_turn INTEGER NOT NULL CHECK (last_turn >= 0)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS pending_reset (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1)
+) STRICT;

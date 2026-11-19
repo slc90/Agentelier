@@ -316,6 +316,39 @@ pub(super) fn scan(root: &Path) -> io::Result<crate::ArchiveCatalog> {
     })
 }
 
+pub struct MemoryCutoff {
+    pub session: SessionId,
+    pub sequence: u64,
+    pub last_turn: u64,
+}
+
+pub(super) fn memory_cutoffs(root: &Path) -> io::Result<Vec<MemoryCutoff>> {
+    let mut cutoffs = Vec::new();
+    for session in memory_sessions(root)? {
+        let directory = crate::attachments::session_directory(root, session)?;
+        let parsed = read(&directory, session)?;
+        if let Some(issue @ Issue::Corrupt { .. }) = parsed.issue {
+            return Err(io::Error::other(format!(
+                "无法确认会话 {session} 的提交边界：{issue}"
+            )));
+        }
+        if !parsed.summary.deleted && parsed.initial.is_some() {
+            let last_turn = parsed
+                .records
+                .iter()
+                .filter_map(|record| record.event.state().turn.as_ref().map(|turn| turn.id.0))
+                .max()
+                .unwrap_or(0);
+            cutoffs.push(MemoryCutoff {
+                session,
+                sequence: parsed.sequence,
+                last_turn,
+            });
+        }
+    }
+    Ok(cutoffs)
+}
+
 pub struct MemorySourceSnapshot {
     pub session: SessionId,
     pub sequence: u64,

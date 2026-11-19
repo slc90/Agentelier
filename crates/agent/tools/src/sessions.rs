@@ -23,6 +23,7 @@ pub struct CleanupReport {
     pub failed: bool,
 }
 pub struct ToolUserTurn {
+    pub memory_epoch: Option<i64>,
     pub session: uuid::Uuid,
     pub turn: u64,
     pub input: u64,

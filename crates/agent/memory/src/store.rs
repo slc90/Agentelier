@@ -3,8 +3,12 @@ use std::fs;
 use std::io;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicI64, Ordering},
+};
 
+const SUSPENDED_EPOCH: i64 = -1;
 pub(crate) const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 pub struct Memory {
@@ -15,6 +19,7 @@ pub struct Memory {
 pub struct MemoryClient {
     connection: Arc<Mutex<Connection>>,
     workspace: Arc<PathBuf>,
+    active_epoch: Arc<AtomicI64>,
     pub(crate) revision_signal: Arc<tokio::sync::Notify>,
 }
 
@@ -50,10 +55,18 @@ impl Memory {
             )
             .map_err(io::Error::other)?;
         transaction.commit().map_err(io::Error::other)?;
+        if crate::reset::pending(&connection)?
+            && let Err(failure) = crate::reset::finish(&connection, &workspace)
+        {
+            tracing::error!(error = %failure, "启动时未完成长期记忆重置清理");
+        }
+        let epoch = crate::reset::available_epoch(&connection)?;
+
         Ok(Self {
             client: MemoryClient {
                 connection: Arc::new(Mutex::new(connection)),
                 workspace: Arc::new(workspace),
+                active_epoch: Arc::new(AtomicI64::new(epoch.unwrap_or(SUSPENDED_EPOCH))),
                 revision_signal: Arc::default(),
             },
         })
@@ -74,6 +87,45 @@ impl Memory {
 }
 
 impl MemoryClient {
+    pub fn epoch(&self) -> Option<i64> {
+        let epoch = self.active_epoch.load(Ordering::Acquire);
+        (epoch >= 0).then_some(epoch)
+    }
+
+    pub fn suspend(&self) {
+        self.active_epoch.store(SUSPENDED_EPOCH, Ordering::Release);
+    }
+
+    pub async fn resume_if_ready(&self) -> io::Result<()> {
+        let epoch = self
+            .with_store(|connection, _| crate::reset::available_epoch(connection))
+            .await?;
+        self.active_epoch
+            .store(epoch.unwrap_or(SUSPENDED_EPOCH), Ordering::Release);
+        Ok(())
+    }
+
+    pub(crate) async fn with_active_store<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut Connection, &Path) -> io::Result<T> + Send + 'static,
+    ) -> io::Result<T> {
+        let paused = || {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "长期记忆重置进行中或清理尚未完成",
+            )
+        };
+        let epoch = self.epoch().ok_or_else(paused)?;
+        let current = self.active_epoch.clone();
+        self.with_store(move |connection, workspace| {
+            if current.load(Ordering::Acquire) != epoch {
+                return Err(paused());
+            }
+            operation(connection, workspace)
+        })
+        .await
+    }
+
     pub(crate) async fn with_connection<T: Send + 'static>(
         &self,
         operation: impl FnOnce(&mut Connection) -> rusqlite::Result<T> + Send + 'static,

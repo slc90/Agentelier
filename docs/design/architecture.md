@@ -78,6 +78,7 @@ flowchart TD
     Conversation --> Skills
     Runner --> ProjectContext["Agent · project_context"]
     Runner --> Model
+    Runner --> Memory
     Runner --> Account
     Runner --> Tools["Agent · tools"]
     Runner --> SessionStore

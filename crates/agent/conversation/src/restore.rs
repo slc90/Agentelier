@@ -179,12 +179,9 @@ pub fn restore(
                     ));
                 }
                 if pending.is_some()
-                    || fact
-                        .projection
-                        .memory
-                        .as_ref()
-                        .map(|material| &material.snapshot)
-                        != initial.settings.memory.as_ref()
+                    || fact.projection.memory.as_ref().is_some_and(|material| {
+                        Some(&material.snapshot) != initial.settings.memory.as_ref()
+                    })
                     || fact.request != turn.request_index
                     || fact.window != incoming.context.window
                     || fact.publication != publications.last().map(|publication| publication.id)

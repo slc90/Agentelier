@@ -227,11 +227,10 @@ impl AgentRuntime {
                             Ok(_) => debug!(path = %data_root.display(), "记忆存储已打开"),
                             Err(failure) => error!(path = %data_root.display(), error = %failure, "记忆存储不可用"),
                         }
-                        let memory_cancel = runtime_shutdown.child_token();
                         let memory_processing = Arc::new(std::sync::atomic::AtomicBool::new(false));
-                        let memory_worker = memory.as_ref().ok().map(|memory| tokio::spawn(memory::Worker::new(
-                            memory.client(), store.client(), owner_credentials.clone(), memory_cancel.clone(), memory_processing.clone(),
-                        ).run()));
+                        let mut memory_worker = memory.as_ref().ok().and_then(|memory| memory::Background::start(
+                            memory.client(), store.client(), owner_credentials.clone(), &runtime_shutdown, memory_processing.clone(),
+                        ));
                         let mut mcp_settings = agentelier_mcp::ConfigStore::open(&data_root);
                         let mut material: Option<PendingMaterial> = None;
                         let mut mcp_connections = agentelier_mcp::Connections::default();
@@ -307,6 +306,20 @@ impl AgentRuntime {
                                     },
                                 };
                                 match command {
+                                    Command::Memory(id, MemoryRequest::Reset) => {
+                                        tracing::info!(operation_id = id, "已确认长期记忆重置，等待后台收敛");
+                                        let result = memory::reset(memory.as_ref().ok(), &mut memory_worker, &store.client()).await;
+                                        memory_processing.store(false, std::sync::atomic::Ordering::Relaxed);
+                                        memory_worker = memory.as_ref().ok().and_then(|memory| memory::Background::start(
+                                            memory.client(), store.client(), owner_credentials.clone(), &runtime_shutdown, memory_processing.clone(),
+                                        ));
+                                        match &result {
+                                            Ok(_) => tracing::info!(operation_id = id, "长期记忆重置已持久提交"),
+                                            Err(failure) => error!(operation_id = id, error = %failure, "长期记忆重置未确认完成"),
+                                        }
+                                        let reply = result.map_err(|_| "长期记忆重置未完成，详见应用日志。可重试清理。".into());
+                                        emit(&publish, id, AgentEventKind::Memory(reply))?;
+                                    }
                                     Command::Memory(id, request) => {
                                         let result = memory::inspect(memory.as_ref().ok(), memory_processing.load(std::sync::atomic::Ordering::Relaxed), request).await;
                                         match &result {
@@ -314,6 +327,7 @@ impl AgentRuntime {
                                             Err(failure) => error!(operation_id = id, error = %failure, "读取长期记忆展示材料失败"),
                                         }
                                         let reply = result.map_err(|failure| match failure.kind() {
+                                            io::ErrorKind::WouldBlock => failure.to_string(),
                                             io::ErrorKind::InvalidInput | io::ErrorKind::NotFound => "找不到所选长期记忆材料，请刷新后重试".into(),
                                             _ => "读取长期记忆失败，详见应用日志".into(),
                                         });
@@ -428,7 +442,7 @@ impl AgentRuntime {
                                         match applied.kind { recording::AppliedKind::Suspended => suspending = suspending.checked_sub(1).ok_or(RuntimeFailure::ModelState)?, recording::AppliedKind::Queue => pending_queue = false, recording::AppliedKind::Finished => finalizing = false }
                                         if applied.failed && let Some(control) = owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.as_ref() { control.cancel.cancel(); }
                                         if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && !pending_queue && !finalizing && !runtime_shutdown.is_cancelled() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish,&data_root.join("skills"))?;
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client))?;
                                         }
                                     }
                                     Command::Created(result) => {
@@ -472,7 +486,7 @@ impl AgentRuntime {
                                             capture_delivery(emit(&publish, task.id, event), &mut delivery_failure);
                                         }
                                         if !finalizing && !pending_queue && suspending == 0 && delivery_failure.is_none() && !runtime_shutdown.is_cancelled() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish,&data_root.join("skills"))?;
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client))?;
                                         }
                                     }
                                     Command::Session(command) => {
@@ -581,7 +595,7 @@ impl AgentRuntime {
                                                             control,
                                                             owner_credentials.clone(),
                                                             store.client(),
-                                                            TaskRequest::Chat(Box::new(request), sender, steers, data_root.join("skills")),
+                                                            TaskRequest::Chat(Box::new(request), sender, steers, data_root.join("skills"), memory.as_ref().ok().map(Memory::client)),
                                                         ));
                                                     }
                                                     Err(failure) => {
@@ -731,9 +745,8 @@ impl AgentRuntime {
                             }
                         }
                         let mcp_finished = mcp_connections.shutdown().await;
-                        memory_cancel.cancel();
                         let memory_worker_finished = if let Some(worker) = memory_worker {
-                            worker.await.map_err(io::Error::other)
+                            worker.stop().await
                         } else { Ok(()) };
                         while let Some(result) = records.join_next().await {
                             match result {

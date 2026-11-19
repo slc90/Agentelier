@@ -17,7 +17,7 @@ const REVISION_INPUT_BYTES: usize = 256 * 1024;
 const TEXT_BYTES: usize = 1024;
 const NOTE_HEADER: &str = "# Long-term memory revision\n\n```json\n";
 const NOTE_FOOTER: &str = "\n```\n";
-const TEMP_PREFIX: &str = ".agentelier-memory-note-";
+pub(crate) const TEMP_PREFIX: &str = ".agentelier-memory-note-";
 
 #[derive(Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,6 +54,8 @@ enum RevisionScope {
 #[derive(Deserialize, Serialize)]
 pub(crate) struct Revision {
     pub(crate) id: String,
+    #[serde(default)]
+    epoch: i64,
     pub(crate) action: Action,
     pub(crate) target: String,
     replacement: Option<String>,
@@ -84,10 +86,11 @@ impl Revision {
     }
 
     fn key(&self) -> String {
-        sha256(&format!(
-            "{}:{}:{}",
-            self.session_id, self.input, self.user_request
-        ))
+        let statement = format!("{}:{}:{}", self.session_id, self.input, self.user_request);
+        if self.epoch == 0 {
+            return sha256(&statement);
+        }
+        sha256(&format!("{}:{statement}", self.epoch))
     }
 }
 
@@ -103,6 +106,15 @@ impl MemoryClient {
         arguments: RevisionArguments,
         cancel: CancellationToken,
     ) -> io::Result<RevisionReceipt> {
+        let epoch = turn
+            .memory_epoch
+            .filter(|epoch| Some(*epoch) == self.epoch())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "该请求早于当前记忆边界，请重新提交修订",
+                )
+            })?;
         let redactor = Redactor::new()?;
         let user_request = validated(arguments.user_request, &redactor)?;
         if !turn.statements.iter().any(|statement| {
@@ -148,6 +160,7 @@ impl MemoryClient {
         };
         let mut note = Revision {
             id: String::new(),
+            epoch,
             action: arguments.action,
             target,
             replacement,
@@ -165,7 +178,12 @@ impl MemoryClient {
             user_request,
         };
         note.id = note.key();
-        let (receipt, added) = self.with_store(move |connection, workspace| {
+        let (receipt, added) = self.with_active_store(move |connection, workspace| {
+            let current = crate::reset::available_epoch(connection)?;
+            let cutoff = crate::reset::last_turn(connection, &note.session_id.to_string())?;
+            if current != Some(epoch) || note.input <= cutoff {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "该用户输入早于当前记忆边界，请重新提交修订"));
+            }
             check_cancel(&cancel)?;
             let folder = notes_directory(workspace, true)?;
             let path = folder.join(format!("{}.md", note.id));
@@ -179,7 +197,7 @@ impl MemoryClient {
                     state: if published { "published" } else { "saved_pending_consolidation" },
                 }, false));
             }
-            let notes = revisions(workspace)?;
+            let notes = revisions(workspace, epoch)?;
             let bytes = serde_json::to_vec(&notes).map_err(io::Error::other)?.len();
             let body = serde_json::to_string(&note).map_err(io::Error::other)?;
             if bytes.saturating_add(body.len()).saturating_add(1) > REVISION_INPUT_BYTES {
@@ -264,7 +282,7 @@ pub(crate) fn notes_directory(workspace: &Path, create: bool) -> io::Result<Path
     Ok(directory)
 }
 
-pub(crate) fn revisions(workspace: &Path) -> io::Result<Vec<Revision>> {
+pub(crate) fn revisions(workspace: &Path, epoch: i64) -> io::Result<Vec<Revision>> {
     let directory = notes_directory(workspace, false)?;
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
@@ -285,6 +303,9 @@ pub(crate) fn revisions(workspace: &Path) -> io::Result<Vec<Revision>> {
         };
         let note = read_note(&entry.path(), id)?
             .ok_or_else(|| io::Error::other("长期记忆修订笔记已丢失"))?;
+        if note.epoch != epoch {
+            continue;
+        }
         bytes =
             bytes.saturating_add(serde_json::to_vec(&note).map_err(io::Error::other)?.len() + 1);
         if bytes > REVISION_INPUT_BYTES {

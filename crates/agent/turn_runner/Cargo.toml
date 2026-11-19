@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agentelier_memory = { path = "../memory" }
 agentelier_session_store = { path = "../session_store" }
 agentelier_tools = { path = "../tools" }
 agentelier_project_context = { path = "../project_context" }

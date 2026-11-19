@@ -16,6 +16,7 @@ pub struct SourceClaim {
     revision: String,
     epoch: i64,
     cutoff: u64,
+    cutoff_turn: u64,
     attempts: u32,
 }
 
@@ -59,6 +60,10 @@ impl MemoryClient {
                 [&session], |row| Ok((row.get(0)?, row.get(1)?)),
             )?;
             if sequence <= cutoff { return Ok(None); }
+            let cutoff_turn: i64 = tx.query_row(
+                "SELECT COALESCE((SELECT last_turn FROM reset_turn_cutoffs WHERE session_id = ?1), 0)",
+                [&session], |row| row.get(0),
+            )?;
             let attempts = tx.query_row(
                 "INSERT INTO sources (session_id, sequence, revision, work_directory, activity_ms, status, attempts)
                  VALUES (?1, ?2, ?3, ?4, ?5, 'processing', 1)
@@ -71,7 +76,7 @@ impl MemoryClient {
                 params![session, sequence, revision, directory, activity, now_ms], |row| row.get(0),
             ).optional()?;
             tx.commit()?;
-            Ok(attempts.map(|attempts| SourceClaim { session, sequence, revision, epoch, cutoff: cutoff.cast_unsigned(), attempts }))
+            Ok(attempts.map(|attempts| SourceClaim { session, sequence, revision, epoch, cutoff: cutoff.cast_unsigned(), cutoff_turn: cutoff_turn.cast_unsigned(), attempts }))
         }).await
     }
 
@@ -121,8 +126,9 @@ pub fn extraction_prompt(
         .iter()
         .rev()
         .take_while(|(sequence, _)| *sequence > claim.cutoff)
+        .filter(|(_, turn)| turn.input_id.0 > claim.cutoff_turn)
     {
-        let mut items = turn_evidence(turn, &redactor);
+        let mut items = turn_evidence(turn, &redactor, claim.cutoff == 0);
         while let Some(item) = items.pop() {
             let size = serde_json::to_vec(&item).map_err(io::Error::other)?.len() + 1;
             if used + size > EVIDENCE_BYTES {
@@ -147,7 +153,7 @@ pub fn extraction_prompt(
     }).to_string()))
 }
 
-fn turn_evidence(turn: &TurnView, redactor: &Redactor) -> Vec<Evidence> {
+fn turn_evidence(turn: &TurnView, redactor: &Redactor, include_assistant: bool) -> Vec<Evidence> {
     let item = |role, text: &str| Evidence {
         role,
         text: redactor.clean(text, EVIDENCE_ITEM_BYTES),
@@ -180,7 +186,7 @@ fn turn_evidence(turn: &TurnView, redactor: &Redactor) -> Vec<Evidence> {
             item("tool_observation", &text),
         ));
     }
-    if matches!(turn.status, TurnStatus::Completed) {
+    if include_assistant && matches!(turn.status, TurnStatus::Completed) {
         for message in &turn.messages {
             for part in &message.content {
                 ordered.push((

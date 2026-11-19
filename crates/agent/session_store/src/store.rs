@@ -58,6 +58,7 @@ enum Command {
     Rename(SessionId, String, oneshot::Sender<io::Result<RenameCommit>>),
     Scan(oneshot::Sender<io::Result<ArchiveCatalog>>),
     MemorySessions(oneshot::Sender<io::Result<Vec<SessionId>>>),
+    MemoryCutoffs(oneshot::Sender<io::Result<Vec<crate::MemoryCutoff>>>),
     MemorySource(
         SessionId,
         oneshot::Sender<io::Result<Option<crate::MemorySourceSnapshot>>>,
@@ -107,6 +108,17 @@ impl SessionStoreClient {
             .try_send(Command::Scan(reply))
             .map_err(|failure| io::Error::other(format!("无法接纳会话目录读取：{failure}")))?;
         Ok(result)
+    }
+
+    pub async fn memory_cutoffs(&self) -> io::Result<Vec<crate::MemoryCutoff>> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::MemoryCutoffs(reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("会话存储未确认记忆重置边界"))?
     }
 
     pub async fn memory_sessions(&self) -> io::Result<Vec<SessionId>> {
@@ -229,6 +241,9 @@ impl SessionStore {
                             let result = crate::reader::scan(&root);
                             if let Err(failure) = &result { error!(error = %failure, "本地会话目录读取失败"); }
                             if reply.send(result).is_err() { debug!("会话目录读取已结束，等待者已离开"); }
+                        }
+                        Command::MemoryCutoffs(reply) => {
+                            let _closed = reply.send(crate::reader::memory_cutoffs(&root));
                         }
                         Command::MemorySessions(reply) => {
                             let _closed = reply.send(crate::reader::memory_sessions(&root));

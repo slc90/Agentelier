@@ -4,6 +4,7 @@ use agentelier_agent_host::{
 };
 use bevy::prelude::*;
 use bevy::text::LineBreak;
+use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
 use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::text::WidgetryText;
@@ -17,6 +18,9 @@ const MILLIS_PER_SECOND: i64 = 1_000;
 #[derive(Resource, Default)]
 pub(super) struct MemoryPane {
     pending: Option<u64>,
+    confirming_reset: bool,
+    resetting: bool,
+    reset_notice: Option<String>,
     inspection: Option<MemoryInspection>,
     detail: Option<MemoryDetail>,
     status: String,
@@ -24,6 +28,9 @@ pub(super) struct MemoryPane {
 
 #[derive(Clone, Component)]
 enum Action {
+    BeginReset,
+    CancelReset,
+    ConfirmReset,
     Refresh,
     Detail { publication: String, record: String },
 }
@@ -38,12 +45,37 @@ pub(super) fn open(world: &mut World) {
 }
 
 pub(super) fn close(world: &mut World) {
-    *world.resource_mut::<MemoryPane>() = MemoryPane::default();
+    let mut state = world.resource_mut::<MemoryPane>();
+    state.confirming_reset = false;
+    state.inspection = None;
+    state.detail = None;
+    if !state.resetting {
+        state.pending = None;
+        state.status.clear();
+    }
 }
 
 fn request(world: &mut World, action: Action) {
-    let (request, waiting) = match action {
-        Action::Refresh => (MemoryRequest::Inspect, "正在读取长期记忆…"),
+    let mut state = world.resource_mut::<MemoryPane>();
+    if state.resetting {
+        return;
+    }
+    let (request, waiting, resetting) = match action {
+        Action::BeginReset => {
+            state.confirming_reset = true;
+            state.reset_notice = None;
+            return;
+        }
+        Action::CancelReset => {
+            state.confirming_reset = false;
+            return;
+        }
+        Action::ConfirmReset if state.confirming_reset => {
+            state.confirming_reset = false;
+            (MemoryRequest::Reset, "正在清空长期记忆…", true)
+        }
+        Action::ConfirmReset => return,
+        Action::Refresh => (MemoryRequest::Inspect, "正在读取长期记忆…", false),
         Action::Detail {
             publication,
             record,
@@ -53,6 +85,7 @@ fn request(world: &mut World, action: Action) {
                 record,
             },
             "正在读取来源详情…",
+            false,
         ),
     };
     let result = world.resource::<AgentHost>().request_memory(request);
@@ -61,7 +94,11 @@ fn request(world: &mut World, action: Action) {
     match result {
         Ok(id) => {
             state.pending = Some(id);
+            state.resetting = resetting;
             state.status = waiting.into();
+            if resetting {
+                state.inspection = None;
+            }
         }
         Err(failure) => {
             state.pending = None;
@@ -96,10 +133,11 @@ fn receive(
         return;
     }
     commands.queue(move |world: &mut World| -> Result {
-        if !crate::prompts::memory_visible(world) {
+        let visible = crate::prompts::memory_visible(world);
+        if !visible && !world.resource::<MemoryPane>().resetting {
             return Ok(());
         }
-        if switched {
+        if switched && visible {
             open(world);
         }
         let mut changed = switched;
@@ -108,14 +146,25 @@ fn receive(
             if state.pending != Some(id) {
                 continue;
             }
+            let resetting = state.resetting;
             state.pending = None;
+            state.resetting = false;
             state.status.clear();
             match result {
+                Ok(MemoryReply::Reset) => {
+                    state.inspection = Some(MemoryInspection {
+                        summary: None,
+                        sources: Vec::new(),
+                        processing: false,
+                    });
+                    state.reset_notice = Some("长期记忆已清空。".into());
+                }
                 Ok(MemoryReply::Inspection(inspection)) => {
                     state.inspection = Some(inspection);
                     state.detail = None;
                 }
                 Ok(MemoryReply::Detail(detail)) => state.detail = Some(detail),
+                Err(failure) if resetting => state.reset_notice = Some(failure),
                 Err(failure) => state.status = failure,
             }
             changed = true;
@@ -123,10 +172,16 @@ fn receive(
         if let Some(failure) = failure
             && state.pending.take().is_some()
         {
-            state.status = failure;
+            if state.resetting {
+                state.resetting = false;
+                state.status.clear();
+                state.reset_notice = Some("执行连接结束，长期记忆重置结果尚未确认。".into());
+            } else {
+                state.status = failure;
+            }
             changed = true;
         }
-        if changed {
+        if changed && visible {
             crate::prompts::render(world)?;
         }
         Ok(())
@@ -145,13 +200,16 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
     Ok(())
 }
 
-fn button(label: String, name: impl Into<String>, action: Action) -> impl Scene {
+fn button(label: String, name: impl Into<String>, action: Action, disabled: bool) -> impl Scene {
     let name = name.into();
-    bsn! {
-        @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter) }) as Box<dyn SceneList>)} }
-        Name(name) action on(activate)
-        Node { align_self: AlignSelf::Start, flex_shrink: 0.0 }
-    }
+    (
+        bsn! {
+            @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter) }) as Box<dyn SceneList>)} }
+            Name(name) action on(activate)
+            Node { align_self: AlignSelf::Start, flex_shrink: 0.0 }
+        },
+        disabled.then_some(bsn! { InteractionDisabled }),
+    )
 }
 
 fn readonly(text: String, name: &'static str) -> impl Scene {
@@ -192,7 +250,16 @@ fn source_label(source: &MemorySource) -> String {
 }
 
 pub(super) fn panel(state: &MemoryPane) -> impl Scene + use<> {
-    let mut status = state.status.clone();
+    let mut status = state.reset_notice.as_ref().map_or_else(
+        || state.status.clone(),
+        |notice| {
+            if state.status.is_empty() {
+                notice.clone()
+            } else {
+                format!("{notice}\n{}", state.status)
+            }
+        },
+    );
     let mut summary = None;
     let mut sources = Vec::<Box<dyn Scene>>::new();
     if let Some(view) = &state.inspection {
@@ -207,6 +274,7 @@ pub(super) fn panel(state: &MemoryPane) -> impl Scene + use<> {
                             publication: value.id.clone(),
                             record: source.record.clone(),
                         },
+                        false,
                     )));
                 }
                 let when = timestamp(value.published_at_ms).unwrap_or_else(|| "时间未知".into());
@@ -232,11 +300,27 @@ pub(super) fn panel(state: &MemoryPane) -> impl Scene + use<> {
         }
     });
     let summary = summary.map(|text| bsn_list! { @readonly(text, "PublishedMemoryBody") });
+    let confirmation = state.confirming_reset.then_some(bsn_list! {
+        Text("清空当前数据目录的长期记忆和修订记录？已有会话与账号会保留，记忆将从以后提交的新内容重新积累。")
+        WidgetryText Name("MemoryResetConfirmation") TextLayout::linebreak(LineBreak::AnyCharacter)--
+        Node { column_gap: px(GAP), flex_wrap: FlexWrap::Wrap }
+        Children [
+            @button("确认清空长期记忆".into(), "ConfirmMemoryReset", Action::ConfirmReset, false)--
+            @button("取消".into(), "CancelMemoryReset", Action::CancelReset, false)
+        ]
+    });
+    let resetting = state.resetting;
+    let confirming = state.confirming_reset;
     bsn! {
         Name("MemoryInspection")
         Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(GAP), flex_shrink: 0.0 }
         Children [
-            @button("刷新长期记忆".into(), "RefreshMemoryInspection", Action::Refresh)--
+            Node { column_gap: px(GAP), flex_wrap: FlexWrap::Wrap }
+            Children [
+                @button("刷新长期记忆".into(), "RefreshMemoryInspection", Action::Refresh, resetting)--
+                @button("清空长期记忆".into(), "BeginMemoryReset", Action::BeginReset, resetting || confirming)
+            ]--
+            {confirmation}--
             Text(status) WidgetryText Name("MemoryInspectionStatus")
             TextLayout::linebreak(LineBreak::AnyCharacter)--
             {summary}--

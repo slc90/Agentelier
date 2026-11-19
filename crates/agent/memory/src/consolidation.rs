@@ -66,7 +66,14 @@ impl MemoryClient {
         self.with_store(move |connection, workspace| {
             let baseline = publication::restore(connection, workspace)?;
             let details = select(connection, &sessions)?;
-            let revisions = revision::revisions(workspace)?;
+            let epoch = connection
+                .query_row(
+                    "SELECT epoch FROM memory_state WHERE singleton = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(io::Error::other)?;
+            let revisions = revision::revisions(workspace, epoch)?;
             let mut statement = connection
                 .prepare("SELECT revision_id FROM revisions WHERE published = 1")
                 .map_err(io::Error::other)?;
@@ -103,13 +110,6 @@ impl MemoryClient {
             {
                 return Ok(None);
             }
-            let epoch = connection
-                .query_row(
-                    "SELECT epoch FROM memory_state WHERE singleton = 1",
-                    [],
-                    |row| row.get(0),
-                )
-                .map_err(io::Error::other)?;
             let deleted = changes
                 .removed
                 .iter()
