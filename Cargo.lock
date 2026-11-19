@@ -315,6 +315,7 @@ dependencies = [
  "agentelier_conversation",
  "agentelier_llm_model",
  "agentelier_session_store",
+ "agentelier_tools",
  "regex",
  "rusqlite",
  "serde",
@@ -323,6 +324,8 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "tokio-util",
+ "tracing",
  "uuid",
 ]
 

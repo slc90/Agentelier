@@ -27,6 +27,9 @@ pub(crate) struct Detail {
     pub(crate) hash: String,
     pub(crate) name: String,
     pub(crate) content: String,
+    pub(crate) directory: String,
+    pub(crate) sequence: i64,
+    pub(crate) activity_ms: i64,
     project: String,
     date: time::Date,
     excerpt: String,
@@ -200,13 +203,13 @@ fn select(
         }
         let sequence: i64 = row.get(1).map_err(io::Error::other)?;
         let revision: String = row.get(2).map_err(io::Error::other)?;
-        let project: String = row.get(3).map_err(io::Error::other)?;
+        let directory: String = row.get(3).map_err(io::Error::other)?;
         let timestamp_ms: i64 = row.get(4).map_err(io::Error::other)?;
         let summary: String = row.get(5).map_err(io::Error::other)?;
         let date = time::OffsetDateTime::from_unix_timestamp(timestamp_ms / 1_000)
             .map_err(io::Error::other)?
             .date();
-        let project = redactor.clean(&project.replace(['\n', '\r'], " "), MAX_PROJECT_BYTES);
+        let project = redactor.clean(&directory.replace(['\n', '\r'], " "), MAX_PROJECT_BYTES);
         let content = format!(
             "# 会话 {id}\n\n- 项目目录 `{project}`\n- 日期 {date}\n- 已处理日志序号 {sequence}\n- 来源修订 `{revision}`\n\n{summary}\n"
         );
@@ -219,6 +222,9 @@ fn select(
                 hash,
                 name,
                 content,
+                directory,
+                sequence,
+                activity_ms: timestamp_ms,
                 project,
                 date,
                 excerpt: redactor.clean(&summary, MAX_SOURCE_EXCERPT_BYTES),

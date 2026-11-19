@@ -36,6 +36,13 @@ CREATE TABLE IF NOT EXISTS published_sources (
     file_name TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS published_source_metadata (
+    session_id TEXT PRIMARY KEY,
+    work_directory TEXT NOT NULL,
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    activity_ms INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS published_artifacts (
     file_name TEXT PRIMARY KEY,
     content TEXT NOT NULL

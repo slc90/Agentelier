@@ -1,6 +1,6 @@
 use crate::{
     consolidation::{Consolidation, sha256},
-    store::check_path,
+    store::{FILE_ATTRIBUTE_REPARSE_POINT, check_path},
 };
 use agentelier_conversation::SessionId;
 use agentelier_llm_model::{MAX_MEMORY_SUMMARY_BYTES, MemorySnapshot};
@@ -8,6 +8,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read, Write};
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 use tempfile::NamedTempFile;
 use uuid::Uuid;
@@ -31,12 +32,18 @@ impl crate::MemoryClient {
     }
 }
 
-fn read_checked(path: &Path, limit: usize, hash: &str) -> io::Result<String> {
-    check_path(path, false)?;
+pub(crate) fn read_checked(path: &Path, limit: usize, hash: &str) -> io::Result<String> {
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(io::Error::other("已发布记忆必须是普通文件"));
+    }
     let mut text = String::new();
-    fs::File::open(path)?
-        .take(limit as u64 + 1)
-        .read_to_string(&mut text)?;
+    file.take(limit as u64 + 1).read_to_string(&mut text)?;
     if text.len() > limit || sha256(&text) != hash {
         return Err(io::Error::other("已发布记忆文件大小或校验值无效"));
     }
@@ -44,7 +51,7 @@ fn read_checked(path: &Path, limit: usize, hash: &str) -> io::Result<String> {
 }
 
 const SUMMARY: &str = "memory_summary.md";
-const DETAILS: &str = "rollout_summaries";
+pub(crate) const DETAILS: &str = "rollout_summaries";
 const TEMP_PREFIX: &str = ".agentelier-memory-publish-";
 const UUID_TEXT_BYTES: usize = 36;
 const DIGEST_BYTES: usize = 64;
@@ -161,7 +168,7 @@ fn commit(
 ) -> io::Result<()> {
     let tx = connection.transaction().map_err(io::Error::other)?;
     tx.execute_batch(
-        "DELETE FROM published_artifacts; DELETE FROM published_sources; DELETE FROM publication;",
+        "DELETE FROM published_artifacts; DELETE FROM published_sources; DELETE FROM published_source_metadata; DELETE FROM publication;",
     )
     .map_err(io::Error::other)?;
     let mut artifacts = Artifacts::new();
@@ -172,6 +179,8 @@ fn commit(
         for (id, detail) in work.details {
             tx.execute("INSERT INTO published_sources (session_id, revision, content_hash, file_name) VALUES (?1, ?2, ?3, ?4)",
                 params![id, detail.revision, detail.hash, detail.name]).map_err(io::Error::other)?;
+            tx.execute("INSERT INTO published_source_metadata (session_id, work_directory, sequence, activity_ms) VALUES (?1, ?2, ?3, ?4)",
+                params![id, detail.directory, detail.sequence, detail.activity_ms]).map_err(io::Error::other)?;
             artifacts.insert(detail.name, detail.content);
         }
         artifacts.insert(SUMMARY.to_owned(), summary);
@@ -288,7 +297,7 @@ fn remove(path: &Path) -> io::Result<()> {
     }
 }
 
-fn detail_name(name: &str) -> bool {
+pub(crate) fn detail_name(name: &str) -> bool {
     let Some((id, tail)) = name.split_at_checked(UUID_TEXT_BYTES) else {
         return false;
     };

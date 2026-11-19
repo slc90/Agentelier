@@ -5,7 +5,7 @@ use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+pub(crate) const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 
 pub struct Memory {
     client: MemoryClient,

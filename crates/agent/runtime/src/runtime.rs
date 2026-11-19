@@ -247,7 +247,9 @@ impl AgentRuntime {
                         let mut account = Account::new(credentials_path, owner_credentials.clone());
                         let mut delivery_failure = None;
                         let mut model: Option<ModelTask> = None;
-                        let mut conversation = Conversation::default();
+                        let mut conversation = Conversation::with_extensions(agentelier_memory::registrations(
+                            memory.as_ref().ok().map(Memory::client),
+                        ));
                         let mut current_subject: Option<String> = None;
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
@@ -714,17 +716,6 @@ impl AgentRuntime {
                         let memory_worker_finished = if let Some(worker) = memory_worker {
                             worker.await.map_err(io::Error::other)
                         } else { Ok(()) };
-                        let memory_finished = if let Ok(memory) = memory {
-                            let result = tokio::task::spawn_blocking(move || memory.close())
-                                .await.map_err(io::Error::other).and_then(|result| result);
-                            match &result {
-                                Ok(()) => debug!("记忆存储已关闭"),
-                                Err(failure) => error!(error = %failure, "记忆存储收尾失败"),
-                            }
-                            result
-                        } else {
-                            Ok(())
-                        };
                         while let Some(result) = records.join_next().await {
                             match result {
                                 Ok((pending, result)) => capture_delivery(recording::apply(pending, result, &mut conversation, &publish).map(|_| ()), &mut delivery_failure),
@@ -742,6 +733,18 @@ impl AgentRuntime {
                                 Some(failure) => Err(failure),
                                 None => Ok(()),
                             }).map_err(RuntimeFailure::Store)
+                        } else {
+                            Ok(())
+                        };
+                        drop(conversation);
+                        let memory_finished = if let Ok(memory) = memory {
+                            let result = tokio::task::spawn_blocking(move || memory.close())
+                                .await.map_err(io::Error::other).and_then(|result| result);
+                            match &result {
+                                Ok(()) => debug!("记忆存储已关闭"),
+                                Err(failure) => error!(error = %failure, "记忆存储收尾失败"),
+                            }
+                            result
                         } else {
                             Ok(())
                         };
