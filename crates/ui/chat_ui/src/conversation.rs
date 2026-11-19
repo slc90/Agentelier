@@ -81,7 +81,18 @@ pub struct ChatProcessCleanup {
     pub output: String,
 }
 #[derive(Clone, Reflect)]
+pub struct ChatRequestMemory {
+    pub publication_id: String,
+    pub hash: String,
+    pub text: String,
+    pub role: String,
+    pub input_index: usize,
+}
+
+#[derive(Clone, Reflect)]
 pub struct ChatRequest {
+    pub memory: Option<ChatRequestMemory>,
+    pub skills: Vec<(usize, String)>,
     pub sending_started: bool,
     pub response_status: Option<u16>,
     pub request: u32,
@@ -903,6 +914,14 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
             .requests
             .into_iter()
             .map(|fact| ChatRequest {
+                memory: fact.memory.map(|memory| ChatRequestMemory {
+                    publication_id: memory.publication_id,
+                    hash: memory.hash,
+                    text: memory.text,
+                    role: memory.role,
+                    input_index: memory.input_index,
+                }),
+                skills: fact.skills,
                 sending_started: fact.sending_started,
                 response_status: fact.response_status,
                 request: fact.request,

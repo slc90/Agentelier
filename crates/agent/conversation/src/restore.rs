@@ -103,6 +103,11 @@ pub fn restore(
     };
     let mut publications = Vec::<Arc<agentelier_llm_model::ProjectPublication>>::new();
     let mut history = ProtocolArchive::default();
+    if let Some(memory) = &initial.settings.memory {
+        memory
+            .validate()
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+    }
     let mut pending: Option<PendingResponse> = None;
     let mut retained_input = false;
     let mut covered_sequence = 1;
@@ -148,7 +153,7 @@ pub fn restore(
                     .last()
                     .ok_or_else(|| ConversationFailure::new("准备记录缺少请求材料"))?;
                 fact.projection
-                    .validate_skill_materials()
+                    .validate_request_materials()
                     .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
                 for selected in &turn.selected_skills {
                     selected
@@ -174,6 +179,12 @@ pub fn restore(
                     ));
                 }
                 if pending.is_some()
+                    || fact
+                        .projection
+                        .memory
+                        .as_ref()
+                        .map(|material| &material.snapshot)
+                        != initial.settings.memory.as_ref()
                     || fact.request != turn.request_index
                     || fact.window != incoming.context.window
                     || fact.publication != publications.last().map(|publication| publication.id)
@@ -581,6 +592,7 @@ impl Conversation {
         };
         self.next_turn = restored.next_turn;
         self.session = Some(ChatSession {
+            memory: settings.memory.map(Arc::new),
             view: view.clone(),
             history: Some(restored.history),
             tools: Arc::new(tools),

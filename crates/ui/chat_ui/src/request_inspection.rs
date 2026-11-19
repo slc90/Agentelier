@@ -35,6 +35,7 @@ enum Body {
     Base,
     Project,
     Order,
+    Memory,
 }
 #[derive(Component, Clone, Default)]
 struct Sources {
@@ -76,6 +77,8 @@ pub(crate) fn panel() -> impl Scene {
             Text::default() WidgetryText Metadata Name("SelectedRequestMetadata") TextLayout::linebreak(LineBreak::AnyCharacter)--
             Text("固定基础与 supplements · developer · 按保存顺序") WidgetryText--
             @field("SelectedRequestBase", Body::Base)--
+            Text("长期记忆") WidgetryText--
+            @field("SelectedRequestMemory", Body::Memory)--
             Text("自动项目材料 · user · 最终包装正文") WidgetryText--
             @field("SelectedRequestProject", Body::Project)--
             @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text("展开所选请求来源") WidgetryText SourcesLabel }) as Box<dyn SceneList>)} }
@@ -134,8 +137,7 @@ fn order(request: &ChatRequest) -> String {
     let mut lines = request
         .base_hashes
         .iter()
-        .enumerate()
-        .map(|(index, hash)| format!("{}. developer · 基础/supplement · {hash}", index + 1))
+        .map(|hash| format!("developer · 基础/supplement · {hash}"))
         .collect::<Vec<_>>();
     for item in &request.items {
         let description = match item {
@@ -153,9 +155,25 @@ fn order(request: &ChatRequest) -> String {
             }
             ChatHistoryItem::Compaction => "compaction（不展示密文）".into(),
         };
-        lines.push(format!("{}. {description}", lines.len() + 1));
+        lines.push(description);
     }
-    lines.join("\n")
+    let mut materials = request.skills.clone();
+    if let Some(memory) = &request.memory {
+        materials.push((
+            memory.input_index,
+            format!("{} · 长期记忆 · {}", memory.role, memory.publication_id),
+        ));
+    }
+    materials.sort_by_key(|(index, _)| *index);
+    for (index, text) in materials {
+        lines.insert(index.min(lines.len()), text);
+    }
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, text)| format!("{}. {text}", index + 1))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 fn synchronize(world: &mut World) -> Result {
     let mounted = world
@@ -170,6 +188,7 @@ fn synchronize(world: &mut World) -> Result {
     let list = requests(&state);
     let mut metadata = "尚无已准备的请求；采集状态见下方".to_owned();
     let (mut base, mut project, mut protocol) = (String::new(), String::new(), String::new());
+    let mut memory_body = String::new();
     let mut publication = None;
     if let Some(index) = selected(&state, &list) {
         let (turn, request) = list[index];
@@ -198,6 +217,19 @@ fn synchronize(world: &mut World) -> Result {
         } else {
             turn.request_instructions.clone()
         };
+        memory_body = request.memory.as_ref().map_or_else(
+            || "本次请求未注入长期记忆".into(),
+            |memory| {
+                format!(
+                    "{} · 输入 {} · 发布 {}\n摘要 SHA-256 {}\n\n{}",
+                    memory.role,
+                    memory.input_index + 1,
+                    memory.publication_id,
+                    memory.hash,
+                    memory.text
+                )
+            },
+        );
         protocol = order(request);
         if let Some(session) = &state.session
             && let Some(found) = session
@@ -247,6 +279,7 @@ fn synchronize(world: &mut World) -> Result {
             Body::Base => &base,
             Body::Project => &project,
             Body::Order => &protocol,
+            Body::Memory => &memory_body,
         };
         if WidgetryTextFieldHeadless::text(world, entity)
             .map_err(|failure| failure.into_bevy_error())?

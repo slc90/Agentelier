@@ -32,6 +32,7 @@ impl std::io::Write for RequestBytes {
 }
 
 pub struct GenerationRequest {
+    pub memory: Option<crate::MemorySnapshot>,
     pub selected_skills: Vec<agentelier_skills::SelectedSkill>,
     pub skill_catalog: Option<String>,
     pub slug: String,
@@ -46,6 +47,8 @@ pub struct GenerationRequest {
 pub struct RequestProjection {
     #[serde(default)]
     pub skill_materials: Vec<SkillMaterial>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<crate::MemoryMaterial>,
     pub items: Vec<crate::ProtocolItemSummary>,
     pub base_hashes: Vec<String>,
     pub payload_hash: String,
@@ -68,14 +71,18 @@ pub struct SkillMaterial {
 }
 
 impl RequestProjection {
-    pub fn validate_skill_materials(&self) -> Result<(), ModelFailure> {
+    pub fn validate_request_materials(&self) -> Result<(), ModelFailure> {
         use sha2::{Digest, Sha256};
+        let catalog_index = self.base_hashes.len() + usize::from(self.memory.is_some());
+        if let Some(memory) = &self.memory {
+            memory.validate(self.base_hashes.len())?;
+        }
         let selected_start = self
             .skill_materials
             .get(1)
-            .map_or(self.base_hashes.len() + 1, |material| material.input_index);
-        if selected_start != self.base_hashes.len() + 1
-            && selected_start != self.base_hashes.len() + 1 + self.items.len()
+            .map_or(catalog_index + 1, |material| material.input_index);
+        if selected_start != catalog_index + 1
+            && selected_start != catalog_index + 1 + self.items.len()
         {
             return Err(crate::model::protocol(
                 "选中 Skills 请求材料未处于完整历史边界",
@@ -83,7 +90,7 @@ impl RequestProjection {
         }
         for (index, material) in self.skill_materials.iter().enumerate() {
             let expected_index = if index == 0 {
-                self.base_hashes.len()
+                catalog_index
             } else {
                 selected_start + index - 1
             };
@@ -128,6 +135,15 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         .into_iter()
         .map(|message| serde_json::json!({"role": message.role, "content": message.text}))
         .collect();
+    let memory = generation
+        .memory
+        .map(|snapshot| {
+            let material = crate::MemoryMaterial::new(snapshot, input.len());
+            material.validate(input.len())?;
+            input.push(serde_json::json!({"role": material.role, "content": material.text}));
+            Ok::<_, ModelFailure>(material)
+        })
+        .transpose()?;
     let mut skill_materials = Vec::new();
     if let Some(catalog) = generation.skill_catalog {
         use sha2::{Digest, Sha256};
@@ -198,6 +214,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     use sha2::{Digest, Sha256};
     let projection = RequestProjection {
         skill_materials,
+        memory,
         items,
         base_hashes,
         payload_hash: format!("{:x}", Sha256::digest(&body.0)),

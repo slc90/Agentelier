@@ -93,3 +93,5 @@ generate 在进入 HTTP 发送阶段和取得响应头时分别发布 Sending �
 普通任务的 Skills 目录由 Runner 取得，Conversation 按当前 Turn 提供给 GenerationRequest。模型层不读取磁盘：固定 developer 指令之后、原始协议历史之前，每次请求只加入一份允许隐式调用的技能摘要。目录和原始工具结果分开保存，RequestProjection 记录其角色、input 索引、文本和摘要；有界序列化、请求准备持久确认及认证冻结字节重发沿用原有边界。Skill 目录不注册新 Tool，也不自动执行脚本或建立 MCP 连接。
 
 显式 `$name` 的选中正文由 Skills 在任务启动时完整读取并由 Conversation 固定。GenerationRequest 携带已确定材料；模型层验证其正文摘要，然后在完整原始协议历史后按输入顺序注入独立 user 项。每个 SkillMaterial 保存来源路径、角色、input 索引、包装正文和摘要。正文不写回 ProtocolHistory，同一任务的多次准备引用相同快照，认证重发完全复用 PreparedGeneration 字节。
+
+新会话绑定的长期记忆摘要在固定基础指令之后作为一条 developer 背景消息加入。RequestProjection 保存发布 ID、摘要 SHA-256、输入位置和实际包装正文。已有协议项的顺序与身份保持原样，认证重发继续发送原先冻结的字节。

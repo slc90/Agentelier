@@ -11,7 +11,7 @@ const MAX_SOURCES: usize = 12;
 const MAX_SOURCE_EXCERPT_BYTES: usize = 2 * 1024;
 const MAX_PREVIOUS_EXCERPT_BYTES: usize = 4 * 1024;
 const MAX_PROJECT_BYTES: usize = 160;
-pub(crate) const MAX_SUMMARY_BYTES: usize = 10 * 1024;
+use agentelier_llm_model::MAX_MEMORY_SUMMARY_BYTES;
 
 pub struct Consolidation {
     pub(crate) previous_id: Option<String>,
@@ -152,13 +152,13 @@ impl Consolidation {
             return Ok(None);
         }
         let output = output.ok_or_else(|| io::Error::other("整合结果缺少模型正文"))?;
-        if output.len() > MAX_SUMMARY_BYTES * 2 {
+        if output.len() > MAX_MEMORY_SUMMARY_BYTES * 2 {
             return Err(io::Error::other("全局记忆模型响应超出大小限制"));
         }
         let result: ConsolidatedText = serde_json::from_str(output)
             .map_err(|_| io::Error::other("全局记忆模型返回无效结构"))?;
         let body = result.summary.trim();
-        if body.is_empty() || body.len() > MAX_SUMMARY_BYTES {
+        if body.is_empty() || body.len() > MAX_MEMORY_SUMMARY_BYTES {
             return Err(io::Error::other("全局记忆摘要为空或超出大小限制"));
         }
         let mut index = String::from("\n\n## 来源会话\n\n");
@@ -170,9 +170,9 @@ impl Consolidation {
             )
             .map_err(io::Error::other)?;
         }
-        let body = Redactor::new()?.clean(body, MAX_SUMMARY_BYTES);
+        let body = Redactor::new()?.clean(body, MAX_MEMORY_SUMMARY_BYTES);
         let summary = format!("{body}{index}");
-        if summary.len() > MAX_SUMMARY_BYTES {
+        if summary.len() > MAX_MEMORY_SUMMARY_BYTES {
             return Err(io::Error::other("全局记忆摘要与来源导航合计超过 10 KiB"));
         }
         Ok(Some(summary))

@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 agentelier_conversation = { path = "../conversation" }
+agentelier_llm_model = { path = "../llm_model" }
 agentelier_session_store = { path = "../session_store" }
 regex.workspace = true
 rusqlite.workspace = true

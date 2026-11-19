@@ -5,6 +5,7 @@ mod compaction;
 pub use compaction::{CompactionItem, CompactionMetadata};
 mod context;
 mod generation;
+mod memory;
 pub use context::{ContextLimits, ResponseUsage};
 mod model;
 mod project;
@@ -13,6 +14,7 @@ pub use project::{ProjectItem, ProjectPublication, PublicationKind};
 mod stream;
 
 pub use generation::{GenerationRequest, PreparedGeneration, RequestProjection, generate, prepare};
+pub use memory::{MAX_MEMORY_SUMMARY_BYTES, MemoryMaterial, MemorySnapshot};
 pub use protocol::{
     ArchivedPayload, ProtocolArchive, ProtocolHistory, ProtocolItemSummary, ProtocolOutput,
 };

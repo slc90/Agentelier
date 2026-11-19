@@ -22,12 +22,15 @@ impl Creation {
         conversation: &Conversation,
         store: &SessionStore,
         mcp: &agentelier_mcp::Connections,
+        memory: Option<agentelier_llm_model::MemorySnapshot>,
     ) -> Result<Self, ConversationFailure> {
         let tools = mcp.registrations();
         let prepared = match request {
-            ConversationRequest::Create(settings) => conversation.prepare(settings, &tools)?,
+            ConversationRequest::Create(settings) => {
+                conversation.prepare(settings, &tools, memory)?
+            }
             ConversationRequest::Reset { session } => {
-                conversation.prepare_reset(session, &tools)?
+                conversation.prepare_reset(session, &tools, memory)?
             }
             _ => return Err(ConversationFailure::new("存档创建收到非创建请求")),
         };

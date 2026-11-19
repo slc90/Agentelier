@@ -152,6 +152,8 @@ pub struct StoredImage {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct StoredSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<agentelier_llm_model::MemorySnapshot>,
     #[serde(default)]
     pub context_limits: Box<agentelier_llm_model::ContextLimits>,
     pub slug: String,
@@ -187,6 +189,7 @@ impl InitialSession {
     pub(crate) fn from_view(
         view: &SessionView,
         tools: Vec<StoredTool>,
+        memory: Option<agentelier_llm_model::MemorySnapshot>,
     ) -> Result<Self, crate::ConversationFailure> {
         let created_at_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -199,6 +202,7 @@ impl InitialSession {
             title: "新会话".into(),
             created_at_ms,
             settings: StoredSettings {
+                memory,
                 context_limits: view.settings.context_limits.clone(),
                 slug: view.settings.slug.clone(),
                 display_name: view.settings.display_name.clone(),

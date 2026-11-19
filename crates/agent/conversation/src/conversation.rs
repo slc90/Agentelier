@@ -140,6 +140,7 @@ impl Error for ConversationFailure {}
 
 #[derive(Clone)]
 pub(crate) struct ChatSession {
+    pub(crate) memory: Option<Arc<agentelier_llm_model::MemorySnapshot>>,
     pub(crate) view: SessionView,
     pub(crate) history: Option<ProtocolHistory>,
     pub(crate) tools: Arc<ToolCatalog>,
@@ -226,6 +227,7 @@ impl Conversation {
         &self,
         mut settings: SessionSettings,
         discovered: &[ToolRegistration],
+        memory: Option<agentelier_llm_model::MemorySnapshot>,
     ) -> Result<PreparedSession, ConversationFailure> {
         if self
             .session
@@ -281,17 +283,24 @@ impl Conversation {
                 .map(|tool| (tool.name.clone(), tool.catalog_description()))
                 .collect(),
         };
+        if let Some(snapshot) = &memory {
+            session.context.task_material_tokens = snapshot.estimated_tokens();
+        }
         session.context.limits = session.settings.context_limits.as_ref().clone();
         session.context.refresh(
             &ProtocolHistory::default(),
             &session.settings.instructions,
             tools.definitions(),
         )?;
-        let initial =
-            crate::InitialSession::from_view(&session, tools.definitions().cloned().collect())?;
+        let initial = crate::InitialSession::from_view(
+            &session,
+            tools.definitions().cloned().collect(),
+            memory.clone(),
+        )?;
         Ok(PreparedSession {
             initial,
             session: ChatSession {
+                memory: memory.map(Arc::new),
                 view: session,
                 history: Some(ProtocolHistory::default()),
                 tools,
@@ -311,6 +320,7 @@ impl Conversation {
         &self,
         id: SessionId,
         tools: &[ToolRegistration],
+        memory: Option<agentelier_llm_model::MemorySnapshot>,
     ) -> Result<PreparedSession, ConversationFailure> {
         let settings = self
             .session
@@ -320,7 +330,7 @@ impl Conversation {
             .view
             .settings
             .clone();
-        self.prepare(settings, tools)
+        self.prepare(settings, tools, memory)
     }
 
     pub fn begin(
@@ -388,6 +398,7 @@ impl Conversation {
         }));
         self.next_turn = id;
         let active = ActiveTurn {
+            memory: session.memory.clone(),
             source_sequence: None,
             history_confirmed: true,
             view: session.view.clone(),

@@ -89,7 +89,18 @@ pub struct ProcessCleanup {
     pub output: String,
 }
 #[derive(Clone)]
+pub struct RequestMemory {
+    pub publication_id: String,
+    pub hash: String,
+    pub text: String,
+    pub role: String,
+    pub input_index: usize,
+}
+
+#[derive(Clone)]
 pub struct RequestView {
+    pub memory: Option<RequestMemory>,
+    pub skills: Vec<(usize, String)>,
     pub sending_started: bool,
     pub response_status: Option<u16>,
     pub request: u32,
@@ -447,6 +458,29 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
             .requests
             .into_iter()
             .map(|fact| RequestView {
+                memory: fact.projection.memory.map(|material| RequestMemory {
+                    publication_id: material.snapshot.publication_id.to_string(),
+                    hash: material.snapshot.hash,
+                    text: material.text,
+                    role: material.role,
+                    input_index: material.input_index,
+                }),
+                skills: fact
+                    .projection
+                    .skill_materials
+                    .into_iter()
+                    .map(|material| {
+                        (
+                            material.input_index,
+                            if material.path.is_some() {
+                                "user · 显式 Skill"
+                            } else {
+                                "developer · Skills 目录"
+                            }
+                            .into(),
+                        )
+                    })
+                    .collect(),
                 sending_started: fact.sending_started,
                 response_status: fact.response_status,
                 request: fact.request,

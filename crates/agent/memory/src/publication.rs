@@ -3,6 +3,7 @@ use crate::{
     store::check_path,
 };
 use agentelier_conversation::SessionId;
+use agentelier_llm_model::{MAX_MEMORY_SUMMARY_BYTES, MemorySnapshot};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::BTreeMap;
 use std::fs;
@@ -10,6 +11,37 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use tempfile::NamedTempFile;
 use uuid::Uuid;
+
+impl crate::MemoryClient {
+    pub async fn snapshot(&self) -> io::Result<Option<MemorySnapshot>> {
+        self.with_store(|connection, workspace| {
+            let record: Option<(String, String, i64)> = connection.query_row(
+                "SELECT publication_id, summary_hash, epoch FROM publication CROSS JOIN memory_state",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).optional().map_err(io::Error::other)?;
+            let Some((publication_id, hash, epoch)) = record else { return Ok(None) };
+            check_path(workspace, true)?;
+            let publication_id = Uuid::parse_str(&publication_id).map_err(io::Error::other)?;
+            let summary = read_checked(&workspace.join(SUMMARY), MAX_MEMORY_SUMMARY_BYTES, &hash)?;
+            let snapshot = MemorySnapshot { publication_id, hash, epoch, summary };
+            snapshot.validate().map_err(io::Error::other)?;
+            Ok(Some(snapshot))
+        }).await
+    }
+}
+
+fn read_checked(path: &Path, limit: usize, hash: &str) -> io::Result<String> {
+    check_path(path, false)?;
+    let mut text = String::new();
+    fs::File::open(path)?
+        .take(limit as u64 + 1)
+        .read_to_string(&mut text)?;
+    if text.len() > limit || sha256(&text) != hash {
+        return Err(io::Error::other("已发布记忆文件大小或校验值无效"));
+    }
+    Ok(text)
+}
 
 const SUMMARY: &str = "memory_summary.md";
 const DETAILS: &str = "rollout_summaries";

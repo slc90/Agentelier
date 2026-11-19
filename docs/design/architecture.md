@@ -69,6 +69,7 @@ flowchart TD
     Runtime --> Memory["Agent · memory"]
     Memory --> SessionStore
     Memory --> Conversation
+    Memory --> Model
     SessionStore --> Conversation
     Runtime --> Runner["Agent · turn_runner"]
     Runner --> Conversation

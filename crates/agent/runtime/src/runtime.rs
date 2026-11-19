@@ -521,7 +521,16 @@ impl AgentRuntime {
                                                 }
                                             }
                                             request @ (ConversationRequest::Create(_) | ConversationRequest::Reset { .. }) => {
-                                                match creation::Creation::start(id, control.clone(), request, &conversation, &store, &mcp_connections) {
+                                                let snapshot = if let Ok(memory) = &memory {
+                                                    match memory.client().snapshot().await {
+                                                        Ok(snapshot) => snapshot,
+                                                        Err(failure) => {
+                                                            error!(operation_id = id, error = %failure, "无法取得已发布的会话记忆");
+                                                            None
+                                                        }
+                                                    }
+                                                } else { None };
+                                                match creation::Creation::start(id, control.clone(), request, &conversation, &store, &mcp_connections, snapshot) {
                                                     Ok(pending) => {
                                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control);
                                                         creating = Some(pending);

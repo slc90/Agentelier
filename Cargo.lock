@@ -225,6 +225,7 @@ dependencies = [
  "sha2 0.10.9",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -312,6 +313,7 @@ name = "agentelier_memory"
 version = "0.1.0"
 dependencies = [
  "agentelier_conversation",
+ "agentelier_llm_model",
  "agentelier_session_store",
  "regex",
  "rusqlite",

@@ -11,6 +11,7 @@ use agentelier_tools::{
 use std::sync::Arc;
 
 pub struct ActiveTurn {
+    pub(crate) memory: Option<Arc<agentelier_llm_model::MemorySnapshot>>,
     pub(crate) source_sequence: Option<u64>,
     pub(crate) history_confirmed: bool,
     pub(crate) view: SessionView,
@@ -30,7 +31,12 @@ impl ActiveTurn {
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
         self.view.context.task_material_tokens =
             agentelier_llm_model::estimated_text_tokens(&rendered)
-                .saturating_add(agentelier_llm_model::estimated_text_tokens("developer"));
+                .saturating_add(agentelier_llm_model::estimated_text_tokens("developer"))
+                .saturating_add(
+                    self.memory
+                        .as_ref()
+                        .map_or(0, |memory| memory.estimated_tokens()),
+                );
         for skill in &selected {
             skill
                 .validate()
@@ -143,6 +149,7 @@ impl ActiveTurn {
             self.tools.definitions(),
         )?;
         Ok(GenerationRequest {
+            memory: self.memory.as_deref().cloned(),
             selected_skills: turn.selected_skills.clone(),
             skill_catalog: turn
                 .skills
