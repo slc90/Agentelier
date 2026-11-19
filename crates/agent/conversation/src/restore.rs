@@ -4,7 +4,8 @@ use crate::{
     SessionView, StoredImage, StoredState, TurnStatus,
 };
 use agentelier_llm_model::{
-    ArchivedPayload, ModelFailure, ModelFailureKind, ProtocolArchive, ProtocolHistory,
+    ArchivedPayload, HistoryAppend, ModelFailure, ModelFailureKind, ProtocolArchive,
+    ProtocolHistory,
 };
 use agentelier_tools::{
     ImagePayload, MAX_SESSION_IMAGE_BYTES, ToolCatalog, ToolContract, ToolStatus,
@@ -48,10 +49,20 @@ impl RestoredSession {
 
 struct PendingResponse {
     output: ProtocolArchive,
-    results: BTreeMap<String, ArchivedPayload>,
+    results: BTreeMap<String, SavedResult>,
     started: HashSet<String>,
+    appended: HashSet<String>,
+    sequence: u64,
+    turn: crate::TurnId,
     request_index: u32,
+    in_history: bool,
     over_budget: bool,
+    rejected: Vec<String>,
+}
+
+struct SavedResult {
+    sequence: u64,
+    output: ArchivedPayload,
 }
 
 fn model_failure(message: impl ToString) -> ModelFailure {
@@ -192,6 +203,12 @@ pub fn restore(
                     || fact.request != turn.request_index
                     || fact.window != incoming.context.window
                     || fact.publication != publications.last().map(|publication| publication.id)
+                    || fact.projection.history.as_ref().is_some_and(|frozen| {
+                        frozen.position != history.len()
+                            || !history
+                                .result_ids()
+                                .eq(frozen.result_calls.iter().map(String::as_str))
+                    })
                     || fact.projection.base_hashes
                         != initial
                             .settings
@@ -246,9 +263,10 @@ pub fn restore(
                 covered_sequence = record.sequence;
             }
             RecordEvent::Response {
-                state: incoming,
+                state: mut incoming,
                 output,
                 registrations,
+                acceptance,
             } => {
                 if pending.is_some() {
                     return Err(ConversationFailure::new("存档完整响应没有封闭边界"));
@@ -269,23 +287,75 @@ pub fn restore(
                 }
                 let turn = incoming
                     .turn
-                    .as_ref()
+                    .as_mut()
                     .ok_or_else(|| ConversationFailure::new("完整响应缺少任务身份"))?;
                 let over_budget = matches!(&registrations, Some(crate::ResponseTasks::OverBudget));
+                let mut rejected = Vec::new();
                 if let Some(registrations) = registrations {
                     let calls = output
                         .function_calls()
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
-                    registrations.validate(&calls, turn.id, turn.request_index)?;
-                    tasks.install(registrations, record.sequence, false)?;
+                    let settled = if let Some(acceptance) = &acceptance {
+                        let frozen = state
+                            .turn
+                            .as_ref()
+                            .filter(|source| {
+                                source.id == turn.id && source.request_index == turn.request_index
+                            })
+                            .and_then(|source| source.requests.last())
+                            .and_then(|request| request.projection.history.as_ref())
+                            .ok_or_else(|| ConversationFailure::new("存档响应缺少对应冻结请求"))?;
+                        let expected =
+                            tasks.plan_delivery(&calls, &frozen.result_calls, !over_budget);
+                        if acceptance.delivery != expected {
+                            return Err(ConversationFailure::new("存档响应的任务结算或准入不一致"));
+                        }
+                        rejected = expected.rejected;
+                        expected.settled
+                    } else {
+                        let included: Vec<_> = history.result_ids().map(str::to_owned).collect();
+                        tasks.plan_delivery(&[], &included, true).settled
+                    };
+                    registrations.validate(&calls, turn.id, turn.request_index, &rejected)?;
+                    tasks.install(registrations, &settled, record.sequence, false)?;
+                } else if acceptance.is_some() {
+                    return Err(ConversationFailure::new("已接纳响应缺少任务登记"));
+                }
+                if let Some(acceptance) = &acceptance {
+                    history
+                        .append_response(
+                            (!retained_input).then_some(turn.input.as_str()),
+                            &output,
+                            acceptance.append,
+                        )
+                        .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+                    retained_input = true;
+                    covered_sequence = record.sequence;
+                    turn.committed_steps = turn
+                        .committed_steps
+                        .checked_add(1)
+                        .ok_or_else(|| ConversationFailure::new("提交步骤数超出范围"))?;
+                    for tool in &mut turn.tools {
+                        if tool.request_index == turn.request_index {
+                            tool.retained = true;
+                        }
+                    }
+                    if output.has_compaction() {
+                        incoming.context.anchor = None;
+                    }
                 }
                 pending = Some(PendingResponse {
                     output,
                     results: BTreeMap::new(),
                     started: HashSet::new(),
+                    appended: HashSet::new(),
+                    sequence: record.sequence,
+                    turn: turn.id,
                     request_index: turn.request_index,
+                    in_history: acceptance.is_some(),
                     over_budget,
+                    rejected,
                 });
                 merge(&mut state, incoming);
             }
@@ -298,6 +368,7 @@ pub fn restore(
                     .as_mut()
                     .ok_or_else(|| ConversationFailure::new("工具开始缺少完整响应"))?;
                 if response.over_budget
+                    || response.rejected.contains(&call_id)
                     || !response.output.call_ids().any(|id| id == call_id)
                     || !response.started.insert(call_id.clone())
                 {
@@ -307,6 +378,9 @@ pub fn restore(
                     .turn
                     .as_ref()
                     .ok_or_else(|| ConversationFailure::new("工具开始缺少来源任务"))?;
+                if turn.id != response.turn || turn.request_index != response.request_index {
+                    return Err(ConversationFailure::new("工具开始不属于来源请求"));
+                }
                 tasks.transition(
                     turn.id,
                     turn.request_index,
@@ -328,10 +402,20 @@ pub fn restore(
                 let response = pending
                     .as_mut()
                     .ok_or_else(|| ConversationFailure::new("工具结果缺少完整响应"))?;
-                if (response.over_budget && status != ToolStatus::NotExecuted)
+                if ((response.over_budget || response.rejected.contains(&call_id))
+                    && status != ToolStatus::NotExecuted)
                     || !response.output.call_ids().any(|id| id == call_id)
                     || (status != ToolStatus::NotExecuted && !response.started.contains(&call_id))
-                    || response.results.insert(call_id.clone(), output).is_some()
+                    || response
+                        .results
+                        .insert(
+                            call_id.clone(),
+                            SavedResult {
+                                sequence: record.sequence,
+                                output,
+                            },
+                        )
+                        .is_some()
                 {
                     return Err(ConversationFailure::new(
                         "工具结果身份未知、重复或缺少开始事实",
@@ -341,6 +425,9 @@ pub fn restore(
                     .turn
                     .as_ref()
                     .ok_or_else(|| ConversationFailure::new("工具结果缺少来源任务"))?;
+                if turn.id != response.turn || turn.request_index != response.request_index {
+                    return Err(ConversationFailure::new("工具结果不属于来源请求"));
+                }
                 tasks.transition(
                     turn.id,
                     turn.request_index,
@@ -352,6 +439,54 @@ pub fn restore(
                 )?;
                 merge(&mut state, incoming);
             }
+            RecordEvent::ResultAppended {
+                state: incoming,
+                call_id,
+                saved_sequence,
+                append,
+            } => {
+                let response = pending
+                    .as_mut()
+                    .filter(|response| response.in_history)
+                    .ok_or_else(|| ConversationFailure::new("追加工具结果缺少已接纳的原始响应"))?;
+                if !incoming.turn.as_ref().is_some_and(|turn| {
+                    turn.id == response.turn && turn.request_index == response.request_index
+                }) || !response.appended.insert(call_id.clone())
+                {
+                    return Err(ConversationFailure::new("工具结果追加身份重复或过期"));
+                }
+                let saved = response
+                    .results
+                    .get(&call_id)
+                    .filter(|saved| saved.sequence == saved_sequence)
+                    .ok_or_else(|| ConversationFailure::new("追加工具结果缺少已保存载荷"))?;
+                tasks.append_result(&call_id, saved_sequence)?;
+                history
+                    .append_result(call_id, saved.output.clone(), append)
+                    .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+                covered_sequence = record.sequence;
+                merge(&mut state, incoming);
+            }
+            RecordEvent::ResponseClosed {
+                state: incoming,
+                response_sequence,
+            } => {
+                let response = pending
+                    .take()
+                    .filter(|response| {
+                        response.in_history
+                            && response.sequence == response_sequence
+                            && response.output.call_ids().count() == response.appended.len()
+                    })
+                    .ok_or_else(|| ConversationFailure::new("批次结束前工具结果尚未全部追加"))?;
+                if !incoming.turn.as_ref().is_some_and(|turn| {
+                    turn.id == response.turn && turn.request_index == response.request_index
+                }) {
+                    return Err(ConversationFailure::new("批次结束不属于已接纳的请求"));
+                }
+                covered_sequence = record.sequence;
+                merge(&mut state, incoming);
+            }
             RecordEvent::Sealed {
                 state: incoming,
                 history: complete,
@@ -359,9 +494,12 @@ pub fn restore(
                 let response = pending
                     .take()
                     .ok_or_else(|| ConversationFailure::new("封闭步骤缺少完整响应"))?;
-                if response.output.call_ids().count() != response.results.len() {
+                if response.in_history
+                    || response.output.call_ids().count() != response.results.len()
+                {
                     return Err(ConversationFailure::new("封闭步骤缺少实际工具结果"));
                 }
+                tasks.restore_appended(complete.result_ids());
                 history = complete;
                 retained_input = true;
                 covered_sequence = record.sequence;
@@ -393,6 +531,9 @@ pub fn restore(
                 state: incoming,
                 history: finalized,
             } => {
+                if pending.as_ref().is_some_and(|response| response.in_history) {
+                    return Err(ConversationFailure::new("终态不能替换尚未收齐结果的历史"));
+                }
                 history = finalized;
                 state.queue_paused |= incoming.queue_paused;
                 merge(&mut state, incoming);
@@ -405,6 +546,9 @@ pub fn restore(
                     tasks.settle_turn(turn.id, record.sequence);
                 }
                 if let Some(finished) = finished {
+                    if pending.as_ref().is_some_and(|response| response.in_history) {
+                        return Err(ConversationFailure::new("已结束任务缺少已确认的批次终态"));
+                    }
                     history = finished;
                 } else {
                     // An unconfirmed writer acknowledgement must not overwrite a durable replacement.
@@ -425,6 +569,7 @@ pub fn restore(
                 state = incoming;
                 covered_sequence = record.sequence;
                 history = recovered;
+                tasks.restore_appended(history.result_ids());
                 pending = None;
                 retained_input = state
                     .turn
@@ -437,7 +582,7 @@ pub fn restore(
         }
     }
     let mut normalized = false;
-    if let Some(response) = pending {
+    if let Some(mut response) = pending {
         let calls = response
             .output
             .call_ids()
@@ -459,8 +604,8 @@ pub fn restore(
                         tool.request_index == response.request_index && tool.call_id == *call_id
                     })
                     .ok_or_else(|| ConversationFailure::new("中断响应缺少对应工具展示身份"))?;
-                if let Some(output) = response.results.get(call_id) {
-                    tool.output = Some(match output {
+                if let Some(saved) = response.results.get(call_id) {
+                    tool.output = Some(match &saved.output {
                         ArchivedPayload::Text { text } => text.clone(),
                         ArchivedPayload::Image { summary, .. } => summary.clone(),
                     });
@@ -481,24 +626,50 @@ pub fn restore(
                 }
                 tool.retained = true;
             }
-            history
-                .seal_interrupted(
-                    response.output,
-                    response.results,
-                    &response.started,
-                    (!retained_input).then_some(turn.input.as_str()),
-                )
-                .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
-            turn.committed_steps = turn
-                .committed_steps
-                .checked_add(1)
-                .ok_or_else(|| ConversationFailure::new("恢复步骤数超出范围"))?;
+            if response.in_history {
+                for call_id in calls.iter().filter(|id| !response.appended.contains(*id)) {
+                    let payload = response.results.remove(call_id).map_or_else(
+                        || ArchivedPayload::interrupted(response.started.contains(call_id)),
+                        |saved| saved.output,
+                    );
+                    let start = history.len();
+                    history
+                        .append_result(
+                            call_id.clone(),
+                            payload,
+                            HistoryAppend {
+                                start,
+                                end: start + 1,
+                            },
+                        )
+                        .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+                }
+            } else {
+                history
+                    .seal_interrupted(
+                        response.output,
+                        response
+                            .results
+                            .into_iter()
+                            .map(|(id, stored)| (id, stored.output))
+                            .collect(),
+                        &response.started,
+                        (!retained_input).then_some(turn.input.as_str()),
+                    )
+                    .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+                turn.committed_steps = turn
+                    .committed_steps
+                    .checked_add(1)
+                    .ok_or_else(|| ConversationFailure::new("恢复步骤数超出范围"))?;
+            }
         }
         turn.status =
             TurnStatus::Failed("上次运行中断；已保留实际记录，缺失结果仅作为中断说明续接".into());
         normalized = true;
         notices.push(
-            if calls.is_empty() {
+            if calls.is_empty() && response.in_history {
+                "上次运行收尾中断，已保留完整确认的模型输出"
+            } else if calls.is_empty() {
                 "上次运行在提交前中断，已有展示保留，未完成输出没有进入工作上下文"
             } else {
                 "上次运行中断，工具结果未确认的部分不会自动重试"
@@ -529,6 +700,9 @@ pub fn restore(
     }
     state.queue_paused |= !state.queue.is_empty();
     state.execution_blocked = false;
+    if normalized {
+        tasks.restore_appended(history.result_ids());
+    }
     let mut images = HashMap::<String, Arc<ImagePayload>>::new();
     if !initial.settings.tool_contract.is_flat() {
         history
@@ -555,6 +729,11 @@ pub fn restore(
     history
         .validate_projects(&publications)
         .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+    if history.has_open_calls() {
+        return Err(ConversationFailure::new(
+            "当前执行阶段要求恢复时封闭所有调用",
+        ));
+    }
     if history.image_bytes_with(std::iter::empty()) > MAX_SESSION_IMAGE_BYTES {
         return Err(ConversationFailure::new("恢复的工作上下文超过会话图片预算"));
     }

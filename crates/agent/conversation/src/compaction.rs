@@ -45,8 +45,12 @@ impl ActiveTurn<'_> {
     pub fn history_confirmed(&self) -> bool {
         self.state.history_confirmed
     }
-    pub fn committing_checkpoint(&mut self) {
+    pub fn begin_history_commit(&mut self) {
         self.state.history_confirmed = false;
+    }
+    pub fn confirm_history_commit(&mut self, sequence: u64) {
+        self.state.history_confirmed = true;
+        self.recorded(sequence);
     }
     pub fn compaction_candidate(
         &mut self,

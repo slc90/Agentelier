@@ -3,7 +3,8 @@ use crate::conversation::{
     ConversationFailure, SessionView, TaskPhase, ToolView, TurnStatus, TurnView,
 };
 use agentelier_llm_model::{
-    FunctionCall, GenerationRequest, GenerationResult, OutputText, ProtocolHistory, StreamEvent,
+    FunctionCall, GenerationRequest, GenerationResult, HistoryAppend, OutputText, ProtocolHistory,
+    StreamEvent,
 };
 use agentelier_tools::{
     MAX_SESSION_IMAGE_BYTES, MAX_TOOL_BODY_BYTES, ToolCatalog, ToolPayload, ToolResult, ToolStatus,
@@ -13,10 +14,16 @@ use std::sync::Arc;
 pub(crate) struct ActiveState {
     pub(crate) memory: Option<Arc<agentelier_llm_model::MemorySnapshot>>,
     pub(crate) source_sequence: Option<u64>,
+    pub(crate) response_sequence: Option<u64>,
     pub(crate) history_confirmed: bool,
     pub(crate) input_retained: bool,
     pub(crate) accepting_steers: bool,
     pub(crate) completion: Option<TurnStatus>,
+}
+
+pub(crate) struct ToolResultEntry {
+    output: ToolPayload,
+    saved: Option<u64>,
 }
 
 pub struct ActiveTurn<'a> {
@@ -24,7 +31,7 @@ pub struct ActiveTurn<'a> {
     pub(crate) view: &'a mut SessionView,
     pub(crate) history: &'a mut ProtocolHistory,
     pub(crate) tools: &'a Arc<ToolCatalog>,
-    pub(crate) results: &'a mut std::collections::BTreeMap<String, ToolPayload>,
+    pub(crate) results: &'a mut std::collections::BTreeMap<String, ToolResultEntry>,
     pub(crate) tasks: &'a mut crate::tasks::TaskLedger,
 }
 
@@ -202,6 +209,41 @@ impl ActiveTurn<'_> {
             return Err(ConversationFailure::new("会话记录不属于当前任务"));
         }
         let (call_id, execution, status) = match event {
+            crate::RecordEvent::Response {
+                acceptance: Some(acceptance),
+                output,
+                ..
+            } => {
+                let append = acceptance.append;
+                if self.state.response_sequence.is_some()
+                    || append.start != self.history.position()
+                    || append.end.checked_sub(append.start)
+                        != Some(output.len() + usize::from(!self.state.input_retained))
+                {
+                    return Err(ConversationFailure::new("会话响应追加位置已过期"));
+                }
+                return Ok(());
+            }
+            crate::RecordEvent::ResponseClosed {
+                response_sequence, ..
+            } => {
+                if self.state.response_sequence != Some(*response_sequence) || self.has_open_calls()
+                {
+                    return Err(ConversationFailure::new("批次仍有未确认的工具结果"));
+                }
+                return Ok(());
+            }
+            crate::RecordEvent::ResultAppended {
+                call_id,
+                saved_sequence,
+                append,
+                ..
+            } => {
+                if self.result_append(call_id, *saved_sequence)? != *append {
+                    return Err(ConversationFailure::new("会话工具结果追加位置已过期"));
+                }
+                return Ok(());
+            }
             crate::RecordEvent::ToolStarted {
                 call_id, execution, ..
             } => (call_id, *execution, ToolStatus::Running),
@@ -221,6 +263,13 @@ impl ActiveTurn<'_> {
             status,
             false,
         )?;
+        if !live.tools.iter().any(|tool| {
+            tool.request_index == live.request_index
+                && &tool.call_id == call_id
+                && tool.status == status
+        }) {
+            return Err(ConversationFailure::new("工具记录不属于当前响应的调用状态"));
+        }
         Ok(())
     }
 
@@ -259,6 +308,7 @@ impl ActiveTurn<'_> {
             self.tools.definitions(),
         )?;
         Ok(GenerationRequest {
+            history_position: self.history.position(),
             memory: self.state.memory.as_deref().cloned(),
             selected_skills: turn.selected_skills.clone(),
             skill_catalog: turn
@@ -537,7 +587,7 @@ impl ActiveTurn<'_> {
         result: &GenerationResult,
         memory_epoch: Option<i64>,
         within_budget: bool,
-    ) -> Result<crate::ResponseTasks, ConversationFailure> {
+    ) -> Result<(crate::ResponseTasks, crate::ResponseAcceptance), ConversationFailure> {
         let previous_calls: std::collections::HashSet<_> = self
             .view
             .previous_turns
@@ -570,25 +620,48 @@ impl ActiveTurn<'_> {
         for call in &result.calls {
             Self::upsert_tool(turn, call.clone(), ToolStatus::Pending, self.tools)?;
         }
-        self.tasks.prepare(
+        let append = self
+            .history
+            .response_append(
+                (!self.state.input_retained).then_some(turn.input.as_str()),
+                &result.output,
+            )
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+        let history = turn
+            .requests
+            .last()
+            .filter(|request| request.request == turn.request_index)
+            .and_then(|request| request.projection.history.as_ref())
+            .ok_or_else(|| ConversationFailure::new("完整响应缺少冻结请求的历史集合"))?;
+        let (registrations, delivery) = self.tasks.prepare(
             &result.calls,
             turn.id,
             turn.request_index,
             memory_epoch,
             within_budget,
-        )
+            &history.result_calls,
+        )?;
+        Ok((
+            registrations,
+            crate::ResponseAcceptance { append, delivery },
+        ))
     }
 
     pub fn confirm_tasks(
         &mut self,
         registrations: crate::ResponseTasks,
+        delivery: &[crate::TaskId],
         sequence: u64,
     ) -> Result<bool, ConversationFailure> {
-        self.tasks.install(registrations, sequence, true)
+        self.tasks.install(registrations, delivery, sequence, true)
     }
 
     pub fn task_execution(&self, call_id: &str) -> Option<crate::TaskExecution> {
         self.tasks.execution(call_id)
+    }
+
+    pub fn has_open_calls(&self) -> bool {
+        self.history.has_open_calls()
     }
 
     pub fn confirm_task_status(
@@ -614,6 +687,22 @@ impl ActiveTurn<'_> {
         )
     }
 
+    pub fn confirm_result_saved(
+        &mut self,
+        call_id: &str,
+        execution: Option<crate::TaskExecution>,
+        status: ToolStatus,
+        sequence: u64,
+    ) -> Result<bool, ConversationFailure> {
+        let result = self
+            .results
+            .get_mut(call_id)
+            .filter(|entry| entry.saved.is_none())
+            .ok_or_else(|| ConversationFailure::new("保存回执缺少唯一工具载荷"))?;
+        result.saved = Some(sequence);
+        self.confirm_task_status(call_id, execution, status, sequence)
+    }
+
     pub fn tool_started(&mut self, call_id: &str) -> Result<(), ConversationFailure> {
         let turn = self
             .view
@@ -634,53 +723,64 @@ impl ActiveTurn<'_> {
         &mut self,
         call_id: &str,
         mut result: ToolResult,
-    ) -> Result<(ToolStatus, ToolPayload), ConversationFailure> {
-        if result.output.image().is_some()
-            && self
-                .history
-                .image_bytes_with(self.results.values().chain(std::iter::once(&result.output)))
-                > MAX_SESSION_IMAGE_BYTES
-        {
-            result = result.reject_image_budget();
-        }
-        if self.results.contains_key(call_id) {
-            return Err(ConversationFailure::new("工具结果身份重复"));
-        }
+    ) -> Result<Option<(ToolStatus, ToolPayload)>, ConversationFailure> {
         let turn = self
             .view
             .turn
             .as_mut()
-            .ok_or(ConversationFailure::new("活动任务缺少轮次"))?;
+            .ok_or_else(|| ConversationFailure::new("活动任务缺少轮次"))?;
         let tool = turn
             .tools
             .iter_mut()
             .find(|tool| tool.request_index == turn.request_index && tool.call_id == call_id)
-            .ok_or(ConversationFailure::new("工具结果缺少调用记录"))?;
+            .ok_or_else(|| ConversationFailure::new("工具结果缺少调用记录"))?;
+        let previous = self
+            .results
+            .get(call_id)
+            .map(|entry| &entry.output)
+            .or_else(|| self.history.result_payload(call_id));
+        if let Some(previous) = previous {
+            if tool.status == result.status
+                && agentelier_llm_model::ArchivedPayload::capture(previous)
+                    == agentelier_llm_model::ArchivedPayload::capture(&result.output)
+            {
+                return Ok(None);
+            }
+            return Err(ConversationFailure::new("同一调用收到互相冲突的工具结果"));
+        }
+        if result.output.image().is_some()
+            && self.history.image_bytes_with(
+                self.results
+                    .values()
+                    .map(|entry| &entry.output)
+                    .chain(std::iter::once(&result.output)),
+            ) > MAX_SESSION_IMAGE_BYTES
+        {
+            result = result.reject_image_budget();
+        }
         tool.status = result.status;
         tool.output = Some(result.output.summary().to_owned());
-        self.results
-            .insert(call_id.to_owned(), result.output.clone());
-        Ok((result.status, result.output))
+        self.results.insert(
+            call_id.to_owned(),
+            ToolResultEntry {
+                output: result.output.clone(),
+                saved: None,
+            },
+        );
+        Ok(Some((result.status, result.output)))
     }
 
-    pub fn seal(&mut self, result: GenerationResult) -> Result<(), ConversationFailure> {
+    pub fn confirm_response_history(
+        &mut self,
+        result: GenerationResult,
+        append: HistoryAppend,
+        sequence: u64,
+    ) -> Result<Option<agentelier_llm_model::CompactionMetadata>, ConversationFailure> {
         let turn = self
             .view
             .turn
             .as_mut()
             .ok_or(ConversationFailure::new("活动任务缺少轮次"))?;
-        let results = result
-            .calls
-            .iter()
-            .map(|call| {
-                let output = self
-                    .results
-                    .get(&call.call_id)
-                    .cloned()
-                    .ok_or(ConversationFailure::new("工具步骤尚未封闭"))?;
-                Ok((call.call_id.clone(), output))
-            })
-            .collect::<Result<Vec<_>, ConversationFailure>>()?;
         let coverage = turn
             .request_items
             .len()
@@ -693,16 +793,20 @@ impl ActiveTurn<'_> {
             response_id: result.response_id,
             usage,
         });
+        if append.start != self.history.position() || append.end != coverage {
+            return Err(ConversationFailure::new("响应历史位置与回执不一致"));
+        }
         self.history
-            .seal(
+            .append_response(
                 (!self.state.input_retained).then_some(turn.input.as_str()),
                 result.output,
-                results,
             )
-            .map_err(|_| ConversationFailure::new("工具历史关系损坏"))?;
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
         self.state.input_retained = true;
-        self.results.clear();
-        turn.committed_steps += 1;
+        turn.committed_steps = turn
+            .committed_steps
+            .checked_add(1)
+            .ok_or_else(|| ConversationFailure::new("提交步骤数超出范围"))?;
         for tool in &mut turn.tools {
             if tool.request_index == turn.request_index {
                 tool.retained = true;
@@ -728,6 +832,70 @@ impl ActiveTurn<'_> {
             &self.view.settings.instructions,
             self.tools.definitions(),
         )?;
+        self.confirm_history_commit(sequence);
+        self.state.response_sequence = Some(sequence);
+        Ok(result.compaction)
+    }
+
+    pub fn confirm_response_closed(
+        &mut self,
+        response_sequence: u64,
+        sequence: u64,
+    ) -> Result<(), ConversationFailure> {
+        if self.state.response_sequence != Some(response_sequence) || self.has_open_calls() {
+            return Err(ConversationFailure::new("批次关闭回执与当前响应不一致"));
+        }
+        self.state.response_sequence = None;
+        self.confirm_history_commit(sequence);
+        Ok(())
+    }
+
+    pub fn result_append(
+        &self,
+        call_id: &str,
+        saved_sequence: u64,
+    ) -> Result<HistoryAppend, ConversationFailure> {
+        if self.results.get(call_id).and_then(|entry| entry.saved) != Some(saved_sequence) {
+            return Err(ConversationFailure::new("工具结果追加缺少已确认的载荷"));
+        }
+        self.history
+            .result_append(call_id)
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))
+    }
+
+    pub fn next_saved_result(&self) -> Option<(String, u64)> {
+        self.results
+            .iter()
+            .filter_map(|(id, entry)| entry.saved.map(|sequence| (id, sequence)))
+            .min_by_key(|(_, sequence)| *sequence)
+            .map(|(id, sequence)| (id.clone(), sequence))
+    }
+
+    pub fn confirm_result_append(
+        &mut self,
+        call_id: String,
+        saved_sequence: u64,
+        append: HistoryAppend,
+        sequence: u64,
+    ) -> Result<(), ConversationFailure> {
+        if self.result_append(&call_id, saved_sequence)? != append {
+            return Err(ConversationFailure::new("结果历史位置与回执不一致"));
+        }
+        let output = self
+            .results
+            .remove(&call_id)
+            .ok_or_else(|| ConversationFailure::new("确认追加时工具结果已丢失"))?;
+        self.tasks.append_result(&call_id, saved_sequence)?;
+        self.history
+            .append_result(call_id, output.output)
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+        self.view.committed_items = self.history.summary();
+        self.view.context.refresh(
+            self.history,
+            &self.view.settings.instructions,
+            self.tools.definitions(),
+        )?;
+        self.confirm_history_commit(sequence);
         Ok(())
     }
 

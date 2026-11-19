@@ -40,6 +40,7 @@ pub struct GenerationRequest {
     pub compact_threshold: u64,
     pub effort: Option<String>,
     pub context: ProtocolHistory,
+    pub history_position: usize,
     pub instructions: Arc<InstructionSnapshot>,
     pub tools: Arc<ToolCatalog>,
 }
@@ -52,10 +53,18 @@ pub struct RequestProjection {
     pub skill_materials: Vec<SkillMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<crate::MemoryMaterial>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<RequestHistory>,
     pub items: Vec<crate::ProtocolItemSummary>,
     pub base_hashes: Vec<String>,
     pub payload_hash: String,
     pub payload_bytes: usize,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct RequestHistory {
+    pub position: usize,
+    pub result_calls: Vec<String>,
 }
 
 pub struct PreparedGeneration {
@@ -81,6 +90,20 @@ impl RequestProjection {
 
     pub fn validate_request_materials(&self) -> Result<(), ModelFailure> {
         use sha2::{Digest, Sha256};
+        if let Some(history) = &self.history {
+            let covered = self.items.len();
+            let results = self.items.iter().filter_map(|item| match item {
+                crate::ProtocolItemSummary::FunctionResult { call_id } => Some(call_id),
+                _ => None,
+            });
+            if (history.position != covered
+                && (history.position.checked_add(1) != Some(covered)
+                    || !matches!(self.items.last(), Some(crate::ProtocolItemSummary::User))))
+                || !results.eq(history.result_calls.iter())
+            {
+                return Err(crate::model::protocol("冻结请求的历史范围或结果集合不一致"));
+            }
+        }
         let memory_index = usize::from(self.additional_tools_in_input()) + self.base_hashes.len();
         let catalog_index = memory_index + usize::from(self.memory.is_some());
         if let Some(memory) = &self.memory {
@@ -127,6 +150,15 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     if generation.skill_catalog.is_none() && !generation.selected_skills.is_empty() {
         return Err(crate::model::protocol("显式 Skill 缺少任务目录"));
     }
+    if generation.context.has_open_calls() {
+        return Err(crate::model::protocol(
+            "当前执行阶段仍需收齐工具结果再发请求",
+        ));
+    }
+    let history = RequestHistory {
+        position: generation.history_position,
+        result_calls: generation.context.result_ids().map(str::to_owned).collect(),
+    };
     let items = generation.context.summary();
     let base_hashes = generation
         .instructions
@@ -245,6 +277,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         tool_contract: contract,
         skill_materials,
         memory,
+        history: Some(history),
         items,
         base_hashes,
         payload_hash: format!("{:x}", Sha256::digest(&body.0)),

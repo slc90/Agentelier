@@ -38,6 +38,12 @@ impl From<&SessionView> for StoredState {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+pub struct ResponseAcceptance {
+    pub append: agentelier_llm_model::HistoryAppend,
+    pub delivery: crate::ResponseDelivery,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RecordEvent {
     ProjectPublished {
@@ -71,6 +77,8 @@ pub enum RecordEvent {
         output: agentelier_llm_model::ProtocolArchive,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         registrations: Option<crate::ResponseTasks>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        acceptance: Option<ResponseAcceptance>,
     },
     ToolStarted {
         state: StoredState,
@@ -85,6 +93,16 @@ pub enum RecordEvent {
         output: agentelier_llm_model::ArchivedPayload,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         execution: Option<crate::TaskExecution>,
+    },
+    ResultAppended {
+        state: StoredState,
+        call_id: String,
+        saved_sequence: u64,
+        append: agentelier_llm_model::HistoryAppend,
+    },
+    ResponseClosed {
+        state: StoredState,
+        response_sequence: u64,
     },
     Sealed {
         state: StoredState,
@@ -124,6 +142,8 @@ impl RecordEvent {
             | Self::Response { state, .. }
             | Self::ToolStarted { state, .. }
             | Self::ToolReturned { state, .. }
+            | Self::ResultAppended { state, .. }
+            | Self::ResponseClosed { state, .. }
             | Self::Sealed { state, .. }
             | Self::SteerAccepted { state }
             | Self::SteerApplied { state, .. }

@@ -197,9 +197,9 @@ pub async fn run(
     let finalized = active
         .call(move |mut turn| {
             turn.finish(status)?;
-            if !turn.history_confirmed() {
+            if !turn.history_confirmed() || turn.has_open_calls() {
                 return Err(ConversationFailure::new(
-                    "压缩检查点的提交结果未确认，请从存档重新加载后继续",
+                    "模型历史有未确认的提交或待归并结果，请从存档重新加载后继续",
                 ));
             }
             Ok(RecordEvent::Finalized {
@@ -286,6 +286,7 @@ async fn run_task(
     let mut tools_used = 0;
     let mut requests_used = 0;
     while requests_used < MAX_MODEL_REQUESTS {
+        append_saved_results(active).await?;
         control::drain(active, steers, progress).await?;
         if cancel.is_cancelled() {
             return Ok(TurnStatus::Cancelled);
@@ -299,7 +300,7 @@ async fn run_task(
                     return Ok(None);
                 };
                 let event = candidate.event(&turn);
-                turn.committing_checkpoint();
+                turn.begin_history_commit();
                 Ok(Some((candidate, event)))
             })
             .await?;
@@ -368,32 +369,45 @@ async fn run_task(
             None => return Ok(TurnStatus::Cancelled),
         };
         let limited = result.calls.len() > MAX_TOOL_CALLS.saturating_sub(tools_used);
-        let (result, registrations, event) = match active
+        let (result, calls, registrations, acceptance, event) = match active
             .call(move |mut turn| {
-                let registrations = turn.accept_response(&result, epoch, !limited)?;
+                let (registrations, acceptance) = turn.accept_response(&result, epoch, !limited)?;
                 let event = RecordEvent::Response {
                     state: turn.stored_state(),
                     output: result.output.archive(),
                     registrations: Some(registrations.clone()),
+                    acceptance: Some(acceptance.clone()),
                 };
-                Ok((result, registrations, event))
+                turn.begin_history_commit();
+                let mut result = result;
+                let calls = std::mem::take(&mut result.calls);
+                Ok((result, calls, registrations, acceptance, event))
             })
             .await
         {
             Ok(accepted) => accepted,
             Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())),
         };
-        let sequence = active.record(event).await?;
-        if active
-            .call(move |mut turn| turn.confirm_tasks(registrations, sequence))
-            .await?
-        {
+        let response_sequence = active.record(event).await?;
+        let (compaction, tasks_changed, rejected) = active
+            .call(move |mut turn| {
+                let compaction =
+                    turn.confirm_response_history(result, acceptance.append, response_sequence)?;
+                let changed = turn.confirm_tasks(
+                    registrations,
+                    &acceptance.delivery.settled,
+                    response_sequence,
+                )?;
+                Ok((compaction, changed, acceptance.delivery.rejected))
+            })
+            .await?;
+        if tasks_changed {
             active.publish_tasks().await?;
         }
         publish(progress, cancel).await?;
         control::drain(active, steers, progress).await?;
-        if result.calls.is_empty() {
-            seal_response(active, result, progress, cancel).await?;
+        if calls.is_empty() {
+            close_response(active, response_sequence, compaction, progress, cancel).await?;
             if cancel.is_cancelled() {
                 return Ok(TurnStatus::Cancelled);
             }
@@ -406,8 +420,8 @@ async fn run_task(
             }
             return Ok(TurnStatus::Completed);
         }
-        tools_used += result.calls.len();
-        for call in &result.calls {
+        tools_used += calls.len();
+        for call in &calls {
             control::drain(active, steers, progress).await?;
             let call_id = call.call_id.clone();
             let execution = active
@@ -417,6 +431,11 @@ async fn run_task(
                 ToolResult::not_executed("cleanup_failed", "工具资源清理未确认，后续调用未执行")
             } else if limited {
                 ToolResult::not_executed("tool_budget", "本批调用超过任务限额，整批未执行")
+            } else if rejected.contains(&call.call_id) {
+                ToolResult::not_executed(
+                    "session_delivery_budget",
+                    "会话异步任务交付额度已满，此调用未执行",
+                )
             } else if cancel.is_cancelled() {
                 ToolResult::not_executed("stopped", "用户已停止，工具未执行")
             } else if active.call(|turn| Ok(turn.has_pending_steer())).await? {
@@ -507,17 +526,20 @@ async fn run_task(
             let (outcome, storage_failure) = persist_image(active, session, outcome).await;
             cleanup_failed |= outcome.cleanup_failed;
             let call_id = call.call_id.clone();
-            let (event, status) = active
+            let returned = active
                 .call(move |mut turn| {
-                    let (status, output) = turn.tool_result(&call_id, outcome)?;
-                    let event = RecordEvent::ToolReturned {
-                        state: turn.stored_state(),
-                        call_id,
-                        status,
-                        output: agentelier_llm_model::ArchivedPayload::capture(&output),
-                        execution,
-                    };
-                    Ok((event, status))
+                    Ok(turn
+                        .tool_result(&call_id, outcome)?
+                        .map(|(status, output)| {
+                            let event = RecordEvent::ToolReturned {
+                                state: turn.stored_state(),
+                                call_id,
+                                status,
+                                output: agentelier_llm_model::ArchivedPayload::capture(&output),
+                                execution,
+                            };
+                            (event, status)
+                        }))
                 })
                 .await?;
             if let Some(failure) = storage_failure {
@@ -525,19 +547,24 @@ async fn run_task(
                     "图片已读取，附件保存失败，停止后续执行：{failure}"
                 )));
             }
-            let sequence = active.record(event).await?;
+            let Some((event, status)) = returned else {
+                append_saved_results(active).await?;
+                continue;
+            };
+            let saved_sequence = active.record(event).await?;
             let call_id = call.call_id.clone();
             if active
                 .call(move |mut turn| {
-                    turn.confirm_task_status(&call_id, execution, status, sequence)
+                    turn.confirm_result_saved(&call_id, execution, status, saved_sequence)
                 })
                 .await?
             {
                 active.publish_tasks().await?;
             }
+            append_saved_results(active).await?;
             publish(progress, cancel).await?;
         }
-        seal_response(active, result, progress, cancel).await?;
+        close_response(active, response_sequence, compaction, progress, cancel).await?;
         if cleanup_failed {
             active
                 .call(|mut turn| {
@@ -557,6 +584,34 @@ async fn run_task(
         }
     }
     Ok(TurnStatus::Limited)
+}
+
+async fn append_saved_results(active: &TurnAccess) -> Result<(), ConversationFailure> {
+    while let Some((call_id, saved_sequence, append, event)) = active
+        .call(|mut turn| {
+            let Some((call_id, saved_sequence)) = turn.next_saved_result() else {
+                return Ok(None);
+            };
+            let append = turn.result_append(&call_id, saved_sequence)?;
+            let event = RecordEvent::ResultAppended {
+                state: turn.stored_state(),
+                call_id: call_id.clone(),
+                saved_sequence,
+                append,
+            };
+            turn.begin_history_commit();
+            Ok(Some((call_id, saved_sequence, append, event)))
+        })
+        .await?
+    {
+        let sequence = active.record(event).await?;
+        active
+            .call(move |mut turn| {
+                turn.confirm_result_append(call_id, saved_sequence, append, sequence)
+            })
+            .await?;
+    }
+    Ok(())
 }
 
 async fn persist_image(
@@ -584,28 +639,28 @@ async fn persist_image(
     (result, None)
 }
 
-async fn seal_response(
+async fn close_response(
     active: &TurnAccess,
-    result: GenerationResult,
+    response_sequence: u64,
+    compaction: Option<agentelier_llm_model::CompactionMetadata>,
     progress: &mpsc::Sender<RunnerEvent>,
     cancel: &CancellationToken,
 ) -> Result<(), ConversationFailure> {
-    let compaction = result.compaction.clone();
     let event = active
         .call(move |mut turn| {
-            turn.seal(result)?;
-            Ok(RecordEvent::Sealed {
+            if turn.has_open_calls() {
+                return Err(ConversationFailure::new("本批工具结果尚未收齐"));
+            }
+            turn.begin_history_commit();
+            Ok(RecordEvent::ResponseClosed {
                 state: turn.stored_state(),
-                history: turn.archive(),
+                response_sequence,
             })
         })
         .await?;
     let sequence = active.record(event).await?;
     active
-        .call(move |mut turn| {
-            turn.recorded(sequence);
-            Ok(())
-        })
+        .call(move |mut turn| turn.confirm_response_closed(response_sequence, sequence))
         .await?;
     if let Some(metadata) = compaction {
         if cancel.is_cancelled() {
@@ -621,7 +676,7 @@ async fn seal_response(
         let (candidate, event) = active
             .call(move |mut turn| {
                 let event = candidate.event(&turn);
-                turn.committing_checkpoint();
+                turn.begin_history_commit();
                 Ok((candidate, event))
             })
             .await?;

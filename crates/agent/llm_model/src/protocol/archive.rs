@@ -1,10 +1,11 @@
-use super::{ProtocolHistory, ProtocolItem, ProtocolOutput};
+use super::{HistoryAppend, ProtocolHistory, ProtocolItem, ProtocolOutput};
 use agentelier_tools::{ImageDescriptor, ImagePayload, ToolPayload};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ArchivedPayload {
     Text {
@@ -132,6 +133,71 @@ impl ProtocolArchive {
         })
     }
 
+    pub fn result_ids(&self) -> impl Iterator<Item = &str> {
+        self.items.iter().filter_map(|item| match item {
+            ArchivedItem::FunctionResult { call_id, .. } => Some(call_id.as_str()),
+            _ => None,
+        })
+    }
+
+    pub fn append_response(
+        &mut self,
+        input: Option<&str>,
+        output: &ProtocolArchive,
+        append: HistoryAppend,
+    ) -> Result<(), crate::ModelFailure> {
+        let finished: HashSet<_> = self.result_ids().collect();
+        if self.items.iter().any(|item| {
+            matches!(item,
+                ArchivedItem::FunctionCall { raw, call_id, .. }
+                    if !finished.contains(call_id.as_str())
+                        && raw.get("async").and_then(Value::as_bool) != Some(true)
+            )
+        }) {
+            return Err(crate::model::protocol("存档含有未配对的同步工具调用"));
+        }
+        let mut identities: HashSet<_> = self.call_ids().collect();
+        if append != HistoryAppend::at(self.len(), output.len() + usize::from(input.is_some()))?
+            || output.call_ids().any(|id| !identities.insert(id))
+            || output.items.iter().any(|item| {
+                matches!(
+                    item,
+                    ArchivedItem::User { .. }
+                        | ArchivedItem::Project { .. }
+                        | ArchivedItem::FunctionResult { .. }
+                )
+            })
+        {
+            return Err(crate::model::protocol("已保存响应的身份或历史位置不一致"));
+        }
+        if let Some(text) = input {
+            self.items.push(ArchivedItem::User { text: text.into() });
+        }
+        self.items.extend(output.items.iter().cloned());
+        Ok(())
+    }
+
+    pub fn append_result(
+        &mut self,
+        call_id: String,
+        output: ArchivedPayload,
+        append: HistoryAppend,
+    ) -> Result<(), crate::ModelFailure> {
+        let matching = self.items.iter().rev().find(|item| match item {
+            ArchivedItem::FunctionCall { call_id: id, .. }
+            | ArchivedItem::FunctionResult { call_id: id, .. } => id == &call_id,
+            _ => false,
+        });
+        if append != HistoryAppend::at(self.len(), 1)?
+            || !matches!(matching, Some(ArchivedItem::FunctionCall { .. }))
+        {
+            return Err(crate::model::protocol("已保存结果的身份或历史位置不一致"));
+        }
+        self.items
+            .push(ArchivedItem::FunctionResult { call_id, output });
+        Ok(())
+    }
+
     pub fn validate_tool_contract(
         &self,
         contract: agentelier_tools::ToolContract,
@@ -196,11 +262,27 @@ impl ProtocolArchive {
         }
         self.items.extend(output.items);
         for call_id in calls {
-            let output = results.remove(&call_id).unwrap_or_else(|| ArchivedPayload::Text { text: serde_json::json!({"ok":false,"error":{"code":"aborted","message":if started.contains(&call_id) {"上次运行中断，执行结果未确认；不表示文件副作用已撤销"} else {"上次运行中断，此调用未执行"}}}).to_string() });
+            let output = results
+                .remove(&call_id)
+                .unwrap_or_else(|| ArchivedPayload::interrupted(started.contains(&call_id)));
             self.items
                 .push(ArchivedItem::FunctionResult { call_id, output });
         }
         Ok(())
+    }
+}
+
+impl ArchivedPayload {
+    pub fn interrupted(started: bool) -> Self {
+        let message = if started {
+            "上次运行中断，执行结果未确认；不表示文件副作用已撤销"
+        } else {
+            "上次运行中断，此调用未执行"
+        };
+        Self::Text {
+            text: serde_json::json!({"ok":false,"error":{"code":"aborted","message":message}})
+                .to_string(),
+        }
     }
 }
 
@@ -244,19 +326,22 @@ impl ProtocolHistory {
         mut load: impl FnMut(&ImageDescriptor, &str) -> Result<Arc<ImagePayload>, crate::ModelFailure>,
     ) -> Result<Self, crate::ModelFailure> {
         let mut items = Vec::with_capacity(archive.items.len());
-        let mut pending = std::collections::VecDeque::new();
+        let mut pending = HashMap::new();
         for item in archive.items {
             let item = match item {
                 ArchivedItem::Project { item } => {
-                    if !pending.is_empty() || item.publication == 0 || item.text.is_empty() {
+                    if pending.values().any(|asynchronous| !asynchronous)
+                        || item.publication == 0
+                        || item.text.is_empty()
+                    {
                         return Err(crate::model::protocol("项目协议项身份或边界无效"));
                     }
                     ProtocolItem::Project(item)
                 }
                 ArchivedItem::Compaction { item } => ProtocolItem::Compaction(item),
                 ArchivedItem::User { text } => {
-                    if !pending.is_empty() {
-                        return Err(crate::model::protocol("历史用户消息插入未封闭调用"));
+                    if pending.values().any(|asynchronous| !asynchronous) {
+                        return Err(crate::model::protocol("历史用户消息插入未封闭同步调用"));
                     }
                     ProtocolItem::User(text)
                 }
@@ -267,16 +352,19 @@ impl ProtocolHistory {
                         || raw.get("call_id").and_then(Value::as_str) != Some(call_id.as_str())
                         || raw.get("name").and_then(Value::as_str) != Some(name.as_str())
                         || !raw.get("arguments").is_some_and(Value::is_string)
-                        || pending.contains(&call_id)
+                        || pending.contains_key(&call_id)
                     {
                         return Err(crate::model::protocol("历史函数调用身份或协议不一致"));
                     }
-                    pending.push_back(call_id.clone());
+                    pending.insert(
+                        call_id.clone(),
+                        raw.get("async").and_then(Value::as_bool).unwrap_or(false),
+                    );
                     ProtocolItem::FunctionCall { raw, call_id, name }
                 }
                 ArchivedItem::FunctionResult { call_id, output } => {
-                    if pending.pop_front().as_deref() != Some(call_id.as_str()) {
-                        return Err(crate::model::protocol("历史函数结果未按调用身份封闭"));
+                    if pending.remove(&call_id).is_none() {
+                        return Err(crate::model::protocol("历史函数结果缺少唯一原始调用"));
                     }
                     ProtocolItem::FunctionResult {
                         call_id,
@@ -307,9 +395,6 @@ impl ProtocolHistory {
                 }
             };
             items.push(item);
-        }
-        if !pending.is_empty() {
-            return Err(crate::model::protocol("历史函数调用缺少匹配结果"));
         }
         Ok(Self(items))
     }

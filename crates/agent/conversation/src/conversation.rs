@@ -144,7 +144,7 @@ pub(crate) struct ChatSession {
     pub(crate) view: SessionView,
     pub(crate) history: Option<ProtocolHistory>,
     pub(crate) tools: Arc<ToolCatalog>,
-    pub(crate) pending_results: std::collections::BTreeMap<String, agentelier_tools::ToolPayload>,
+    pub(crate) pending_results: std::collections::BTreeMap<String, crate::active::ToolResultEntry>,
     pub(crate) active: Option<ActiveState>,
     pub(crate) tasks: crate::tasks::TaskLedger,
 }
@@ -421,6 +421,7 @@ impl Conversation {
         session.active = Some(ActiveState {
             memory: session.memory.clone(),
             source_sequence: None,
+            response_sequence: None,
             history_confirmed: true,
             input_retained: false,
             accepting_steers: true,

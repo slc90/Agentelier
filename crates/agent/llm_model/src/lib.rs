@@ -13,10 +13,13 @@ mod protocol;
 pub use project::{ProjectItem, ProjectPublication, PublicationKind};
 mod stream;
 
-pub use generation::{GenerationRequest, PreparedGeneration, RequestProjection, generate, prepare};
+pub use generation::{
+    GenerationRequest, PreparedGeneration, RequestHistory, RequestProjection, generate, prepare,
+};
 pub use memory::{MAX_MEMORY_SUMMARY_BYTES, MemoryMaterial, MemorySnapshot};
 pub use protocol::{
-    ArchivedPayload, ProtocolArchive, ProtocolHistory, ProtocolItemSummary, ProtocolOutput,
+    ArchivedPayload, HistoryAppend, ProtocolArchive, ProtocolHistory, ProtocolItemSummary,
+    ProtocolOutput,
 };
 pub use stream::{FunctionCall, GenerationResult, OutputMessage, OutputText, StreamEvent};
 

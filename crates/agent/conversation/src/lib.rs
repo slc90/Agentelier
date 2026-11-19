@@ -14,12 +14,13 @@ mod tasks;
 pub use archive::ArchiveEntry;
 pub use restore::{RestoredSession, restore};
 pub use tasks::{
-    ResponseTasks, SessionTaskView, SessionTasks, TaskExecution, TaskId, TaskRegistration,
+    ResponseDelivery, ResponseTasks, SessionTaskView, SessionTasks, TaskExecution, TaskId,
+    TaskRegistration,
 };
 
 pub use archive::{
-    InitialSession, RecordEvent, SessionRecord, SessionSummary, StoredImage, StoredSettings,
-    StoredState, StoredTool,
+    InitialSession, RecordEvent, ResponseAcceptance, SessionRecord, SessionSummary, StoredImage,
+    StoredSettings, StoredState, StoredTool,
 };
 pub use conversation::PreparedSession;
 
