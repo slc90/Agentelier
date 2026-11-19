@@ -327,6 +327,7 @@ impl ProtocolHistory {
     ) -> Result<Self, crate::ModelFailure> {
         let mut items = Vec::with_capacity(archive.items.len());
         let mut pending = HashMap::new();
+        let mut seen = HashSet::new();
         for item in archive.items {
             let item = match item {
                 ArchivedItem::Project { item } => {
@@ -352,7 +353,7 @@ impl ProtocolHistory {
                         || raw.get("call_id").and_then(Value::as_str) != Some(call_id.as_str())
                         || raw.get("name").and_then(Value::as_str) != Some(name.as_str())
                         || !raw.get("arguments").is_some_and(Value::is_string)
-                        || pending.contains_key(&call_id)
+                        || !seen.insert(call_id.clone())
                     {
                         return Err(crate::model::protocol("历史函数调用身份或协议不一致"));
                     }

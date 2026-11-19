@@ -1,3 +1,4 @@
+use crate::archive::{RecoveredResult, RecoveryEvidence};
 use crate::conversation::ChatSession;
 use crate::{
     Conversation, ConversationFailure, InitialSession, RecordEvent, SessionRecord, SessionSettings,
@@ -21,6 +22,7 @@ pub struct RestoredSession {
     publications: Vec<Arc<agentelier_llm_model::ProjectPublication>>,
     next_turn: u64,
     notice: Option<String>,
+    recovered_results: Vec<RecoveredResult>,
     pub normalized: bool,
 }
 
@@ -38,12 +40,17 @@ impl RestoredSession {
     pub fn recovery_event(&self) -> RecordEvent {
         RecordEvent::Recovered {
             state: self.state.clone(),
-            history: self.history.archive(),
+            history: None,
             notice: self
                 .notice
                 .clone()
                 .unwrap_or_else(|| "已恢复有效历史，待办保持暂停".into()),
+            results: Some(self.recovered_results.clone()),
         }
+    }
+
+    pub fn confirm_recovery(&mut self, sequence: u64) {
+        self.tasks.confirm_recovery(sequence);
     }
 }
 
@@ -62,7 +69,150 @@ struct PendingResponse {
 
 struct SavedResult {
     sequence: u64,
+    status: ToolStatus,
     output: ArchivedPayload,
+}
+
+#[derive(Default)]
+struct PendingResponses(BTreeMap<u64, PendingResponse>);
+
+impl PendingResponses {
+    fn has_barrier(&self) -> bool {
+        self.0.values().any(|response| {
+            !response.in_history
+                || response.output.function_calls().any(|call| {
+                    call.map_or(true, |call| {
+                        call.mode() == agentelier_tools::ToolMode::Synchronous
+                            && !response.appended.contains(&call.call_id)
+                    })
+                })
+        })
+    }
+
+    fn source(&mut self, state: &StoredState) -> Option<&mut PendingResponse> {
+        let turn = state.turn.as_ref()?;
+        self.0.values_mut().find(|response| {
+            response.turn == turn.id && response.request_index == turn.request_index
+        })
+    }
+
+    fn recover(
+        &mut self,
+        history: &mut ProtocolArchive,
+        state: &mut StoredState,
+        retained_input: bool,
+    ) -> Result<Vec<RecoveredResult>, ConversationFailure> {
+        let mut facts = Vec::new();
+        for response in std::mem::take(&mut self.0).into_values() {
+            recover_response(history, state, response, retained_input, &mut facts)?;
+        }
+        Ok(facts)
+    }
+}
+
+fn recover_response(
+    history: &mut ProtocolArchive,
+    state: &mut StoredState,
+    response: PendingResponse,
+    retained_input: bool,
+    facts: &mut Vec<RecoveredResult>,
+) -> Result<(), ConversationFailure> {
+    let mut calls: Vec<_> = response.output.call_ids().map(str::to_owned).collect();
+    let turn = state
+        .turn
+        .iter_mut()
+        .map(Box::as_mut)
+        .chain(state.previous_turns.iter_mut())
+        .find(|turn| turn.id == response.turn)
+        .ok_or_else(|| ConversationFailure::new("中断响应缺少来源任务"))?;
+    if calls.is_empty() {
+        return Ok(());
+    }
+    if response.output.has_compaction() {
+        state.context.anchor = None;
+    }
+    // Preserve durable completion order before filling calls that have no saved result.
+    if response.in_history {
+        calls.sort_by_key(|id| {
+            response
+                .results
+                .get(id)
+                .map_or(u64::MAX, |saved| saved.sequence)
+        });
+    }
+    for call_id in calls {
+        let tool = turn
+            .tools
+            .iter_mut()
+            .find(|tool| tool.request_index == response.request_index && tool.call_id == call_id)
+            .ok_or_else(|| ConversationFailure::new("中断响应缺少对应工具展示身份"))?;
+        let started = response.started.contains(&call_id);
+        let (status, evidence, output) = match response.results.get(&call_id) {
+            Some(saved) => (
+                saved.status,
+                RecoveryEvidence::Saved {
+                    sequence: saved.sequence,
+                },
+                saved.output.clone(),
+            ),
+            None if started => (
+                ToolStatus::Unconfirmed,
+                RecoveryEvidence::Unconfirmed,
+                ArchivedPayload::interrupted(true),
+            ),
+            None => (
+                ToolStatus::NotExecuted,
+                RecoveryEvidence::NotExecuted,
+                ArchivedPayload::interrupted(false),
+            ),
+        };
+        tool.status = status;
+        tool.output = Some(match &output {
+            ArchivedPayload::Text { text } => text.clone(),
+            ArchivedPayload::Image { summary, .. } => summary.clone(),
+        });
+        tool.retained = true;
+        if response.appended.contains(&call_id) {
+            continue;
+        }
+        facts.push(RecoveredResult {
+            response_sequence: response.sequence,
+            call_id: call_id.clone(),
+            evidence,
+        });
+        if response.in_history {
+            let start = history.len();
+            history
+                .append_result(
+                    call_id,
+                    output,
+                    HistoryAppend {
+                        start,
+                        end: start + 1,
+                    },
+                )
+                .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+        }
+    }
+    if !response.in_history {
+        history
+            .seal_interrupted(
+                response.output,
+                response
+                    .results
+                    .into_iter()
+                    .map(|(id, saved)| (id, saved.output))
+                    .collect(),
+                &response.started,
+                (!retained_input).then_some(turn.input.as_str()),
+            )
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+        turn.committed_steps = turn
+            .committed_steps
+            .checked_add(1)
+            .ok_or_else(|| ConversationFailure::new("恢复步骤数超出范围"))?;
+    }
+    Ok(())
 }
 
 fn model_failure(message: impl ToString) -> ModelFailure {
@@ -74,6 +224,51 @@ fn model_failure(message: impl ToString) -> ModelFailure {
         code: None,
         request_id: None,
         message: message.to_string(),
+    }
+}
+
+fn is_read_only(tools: &[crate::StoredTool], name: &str) -> bool {
+    use agentelier_tools::ToolSource;
+
+    tools
+        .iter()
+        .find(|tool| tool.name == name)
+        .is_some_and(|tool| match &tool.source {
+            ToolSource::Builtin => name == "view_image",
+            ToolSource::Extension { provider, tool } => {
+                provider == "memory" && matches!(tool.as_str(), "search_memory" | "read_memory")
+            }
+            ToolSource::Mcp { .. } => false,
+        })
+}
+
+fn remember_process(
+    processes: &mut BTreeMap<String, crate::TurnId>,
+    tool: &crate::ToolView,
+    output: &ArchivedPayload,
+    turn: crate::TurnId,
+) {
+    if !matches!(tool.name.as_str(), "exec_command" | "write_stdin") {
+        return;
+    }
+    let ArchivedPayload::Text { text } = output else {
+        return;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return;
+    };
+    let data = &value["data"];
+    let Some(id) = data["session_id"].as_str() else {
+        return;
+    };
+    match data["state"].as_str() {
+        Some("running" | "cleanup_unconfirmed") => {
+            processes.entry(id.to_owned()).or_insert(turn);
+        }
+        Some("exited") if data["cleanup_confirmed"].as_bool() == Some(true) => {
+            processes.remove(id);
+        }
+        _ => {}
     }
 }
 
@@ -93,6 +288,32 @@ fn merge(state: &mut StoredState, mut incoming: StoredState) {
     incoming.queue = std::mem::take(&mut state.queue);
     incoming.queue_paused = state.queue_paused;
     *state = incoming;
+}
+
+fn merge_tool(state: &mut StoredState, mut incoming: StoredState, call_id: &str) {
+    let Some(source) = incoming.turn.as_mut() else {
+        return;
+    };
+    let Some(target) = state
+        .turn
+        .iter_mut()
+        .map(Box::as_mut)
+        .chain(state.previous_turns.iter_mut())
+        .find(|turn| turn.id == source.id)
+    else {
+        return;
+    };
+    let matches = |tool: &crate::ToolView| tool.call_id == call_id;
+    if let Some((saved, current)) = source
+        .tools
+        .iter()
+        .find(|tool| matches(tool))
+        .zip(target.tools.iter_mut().find(|tool| matches(tool)))
+    {
+        current.status = saved.status;
+        current.output.clone_from(&saved.output);
+        current.retained |= saved.retained;
+    }
 }
 
 pub fn restore(
@@ -123,13 +344,16 @@ pub fn restore(
             .validate()
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
     }
-    let mut pending: Option<PendingResponse> = None;
+    let mut pending = PendingResponses::default();
     let mut seen_calls = HashSet::new();
+    let mut seen_items = HashSet::new();
+    let mut completed_requests = HashSet::new();
     let mut tasks = crate::tasks::TaskLedger::default();
     let mut retained_input = false;
     let mut covered_sequence = 1;
     let mut next_turn = 0;
     let mut notices = Vec::new();
+    let mut historical_processes = BTreeMap::new();
     for record in records {
         if record.session != initial.session || record.event.state().session != initial.session {
             return Err(ConversationFailure::new("存档事件属于另一会话"));
@@ -144,7 +368,7 @@ pub fn restore(
                 publication
                     .validate()
                     .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
-                if pending.is_some()
+                if pending.has_barrier()
                     || publication.id != publications.len() as u64 + 1
                     || publication.window != state.context.window
                     || publication.snapshot.working_directory != initial.settings.working_directory
@@ -195,7 +419,7 @@ pub fn restore(
                         "请求选中 Skills 与任务正文快照不一致",
                     ));
                 }
-                if pending.is_some()
+                if pending.has_barrier()
                     || fact.projection.tool_contract != initial.settings.tool_contract
                     || fact.projection.memory.as_ref().is_some_and(|material| {
                         Some(&material.snapshot) != initial.settings.memory.as_ref()
@@ -227,7 +451,7 @@ pub fn restore(
                 checkpoint,
             } => {
                 checkpoint.validate(&incoming)?;
-                if pending.is_some()
+                if !pending.0.is_empty()
                     || checkpoint.project_publication
                         != publications.last().map(|publication| publication.id)
                     || publications
@@ -255,7 +479,7 @@ pub fn restore(
             }
             RecordEvent::Accepted { state: incoming } => {
                 notices.clear();
-                if pending.is_some() {
+                if pending.has_barrier() {
                     return Err(ConversationFailure::new("存档在未封闭响应之后开始另一任务"));
                 }
                 state = incoming;
@@ -268,7 +492,7 @@ pub fn restore(
                 registrations,
                 acceptance,
             } => {
-                if pending.is_some() {
+                if pending.has_barrier() || pending.source(&incoming).is_some() {
                     return Err(ConversationFailure::new("存档完整响应没有封闭边界"));
                 }
                 if !initial.settings.tool_contract.is_flat() {
@@ -278,17 +502,21 @@ pub fn restore(
                             &initial.settings.tools,
                         )
                         .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
-                    if output
-                        .call_ids()
-                        .any(|id| !seen_calls.insert(id.to_owned()))
-                    {
-                        return Err(ConversationFailure::new("存档重复使用已有 call_id"));
+                    for call in output.function_calls() {
+                        let call =
+                            call.map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+                        if !seen_calls.insert(call.call_id) || !seen_items.insert(call.id) {
+                            return Err(ConversationFailure::new("存档重复使用已有调用身份"));
+                        }
                     }
                 }
                 let turn = incoming
                     .turn
                     .as_mut()
                     .ok_or_else(|| ConversationFailure::new("完整响应缺少任务身份"))?;
+                if !completed_requests.insert((turn.id.0, turn.request_index)) {
+                    return Err(ConversationFailure::new("同一请求出现多份完整响应"));
+                }
                 let over_budget = matches!(&registrations, Some(crate::ResponseTasks::OverBudget));
                 let mut rejected = Vec::new();
                 if let Some(registrations) = registrations {
@@ -345,18 +573,21 @@ pub fn restore(
                         incoming.context.anchor = None;
                     }
                 }
-                pending = Some(PendingResponse {
-                    output,
-                    results: BTreeMap::new(),
-                    started: HashSet::new(),
-                    appended: HashSet::new(),
-                    sequence: record.sequence,
-                    turn: turn.id,
-                    request_index: turn.request_index,
-                    in_history: acceptance.is_some(),
-                    over_budget,
-                    rejected,
-                });
+                pending.0.insert(
+                    record.sequence,
+                    PendingResponse {
+                        output,
+                        results: BTreeMap::new(),
+                        started: HashSet::new(),
+                        appended: HashSet::new(),
+                        sequence: record.sequence,
+                        turn: turn.id,
+                        request_index: turn.request_index,
+                        in_history: acceptance.is_some(),
+                        over_budget,
+                        rejected,
+                    },
+                );
                 merge(&mut state, incoming);
             }
             RecordEvent::ToolStarted {
@@ -365,7 +596,7 @@ pub fn restore(
                 execution,
             } => {
                 let response = pending
-                    .as_mut()
+                    .source(&incoming)
                     .ok_or_else(|| ConversationFailure::new("工具开始缺少完整响应"))?;
                 if response.over_budget
                     || response.rejected.contains(&call_id)
@@ -390,7 +621,7 @@ pub fn restore(
                     record.sequence,
                     true,
                 )?;
-                merge(&mut state, incoming);
+                merge_tool(&mut state, incoming, &call_id);
             }
             RecordEvent::ToolReturned {
                 state: incoming,
@@ -399,8 +630,29 @@ pub fn restore(
                 output,
                 execution,
             } => {
+                if !matches!(
+                    status,
+                    ToolStatus::Succeeded
+                        | ToolStatus::Failed
+                        | ToolStatus::TimedOut
+                        | ToolStatus::Cancelled
+                        | ToolStatus::NotExecuted
+                        | ToolStatus::Unconfirmed
+                ) {
+                    return Err(ConversationFailure::new("已保存的工具结果缺少终态"));
+                }
+                if let ArchivedPayload::Image { summary, image } = &output {
+                    let loaded = load(&StoredImage {
+                        session: initial.session,
+                        summary: summary.clone(),
+                        image: image.clone(),
+                    })?;
+                    if loaded.descriptor() != *image {
+                        return Err(ConversationFailure::new("已保存工具结果的附件不匹配"));
+                    }
+                }
                 let response = pending
-                    .as_mut()
+                    .source(&incoming)
                     .ok_or_else(|| ConversationFailure::new("工具结果缺少完整响应"))?;
                 if ((response.over_budget || response.rejected.contains(&call_id))
                     && status != ToolStatus::NotExecuted)
@@ -412,7 +664,8 @@ pub fn restore(
                             call_id.clone(),
                             SavedResult {
                                 sequence: record.sequence,
-                                output,
+                                status,
+                                output: output.clone(),
                             },
                         )
                         .is_some()
@@ -428,6 +681,24 @@ pub fn restore(
                 if turn.id != response.turn || turn.request_index != response.request_index {
                     return Err(ConversationFailure::new("工具结果不属于来源请求"));
                 }
+                let tool = turn
+                    .tools
+                    .iter()
+                    .find(|tool| {
+                        tool.call_id == call_id && tool.request_index == turn.request_index
+                    })
+                    .ok_or_else(|| ConversationFailure::new("工具结果缺少展示身份"))?;
+                if matches!(
+                    initial
+                        .settings
+                        .tools
+                        .iter()
+                        .find(|definition| definition.name == tool.name)
+                        .map(|definition| &definition.source),
+                    Some(agentelier_tools::ToolSource::Builtin)
+                ) {
+                    remember_process(&mut historical_processes, tool, &output, turn.id);
+                }
                 tasks.transition(
                     turn.id,
                     turn.request_index,
@@ -437,7 +708,7 @@ pub fn restore(
                     record.sequence,
                     true,
                 )?;
-                merge(&mut state, incoming);
+                merge_tool(&mut state, incoming, &call_id);
             }
             RecordEvent::ResultAppended {
                 state: incoming,
@@ -446,7 +717,7 @@ pub fn restore(
                 append,
             } => {
                 let response = pending
-                    .as_mut()
+                    .source(&incoming)
                     .filter(|response| response.in_history)
                     .ok_or_else(|| ConversationFailure::new("追加工具结果缺少已接纳的原始响应"))?;
                 if !incoming.turn.as_ref().is_some_and(|turn| {
@@ -462,17 +733,18 @@ pub fn restore(
                     .ok_or_else(|| ConversationFailure::new("追加工具结果缺少已保存载荷"))?;
                 tasks.append_result(&call_id, saved_sequence)?;
                 history
-                    .append_result(call_id, saved.output.clone(), append)
+                    .append_result(call_id.clone(), saved.output.clone(), append)
                     .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
                 covered_sequence = record.sequence;
-                merge(&mut state, incoming);
+                merge_tool(&mut state, incoming, &call_id);
             }
             RecordEvent::ResponseClosed {
                 state: incoming,
                 response_sequence,
             } => {
                 let response = pending
-                    .take()
+                    .0
+                    .remove(&response_sequence)
                     .filter(|response| {
                         response.in_history
                             && response.sequence == response_sequence
@@ -492,7 +764,9 @@ pub fn restore(
                 history: complete,
             } => {
                 let response = pending
-                    .take()
+                    .0
+                    .pop_first()
+                    .map(|(_, response)| response)
                     .ok_or_else(|| ConversationFailure::new("封闭步骤缺少完整响应"))?;
                 if response.in_history
                     || response.output.call_ids().count() != response.results.len()
@@ -510,7 +784,7 @@ pub fn restore(
                 state: incoming,
                 history: applied,
             } => {
-                if pending.is_some() {
+                if pending.has_barrier() {
                     return Err(ConversationFailure::new("补充输入应用于未封闭响应"));
                 }
                 history = applied;
@@ -531,7 +805,7 @@ pub fn restore(
                 state: incoming,
                 history: finalized,
             } => {
-                if pending.as_ref().is_some_and(|response| response.in_history) {
+                if pending.0.values().any(|response| response.in_history) {
                     return Err(ConversationFailure::new("终态不能替换尚未收齐结果的历史"));
                 }
                 history = finalized;
@@ -542,13 +816,7 @@ pub fn restore(
                 state: mut incoming,
                 history: finished,
             } => {
-                if let Some(turn) = &incoming.turn {
-                    tasks.settle_turn(turn.id, record.sequence);
-                }
-                if let Some(finished) = finished {
-                    if pending.as_ref().is_some_and(|response| response.in_history) {
-                        return Err(ConversationFailure::new("已结束任务缺少已确认的批次终态"));
-                    }
+                if let Some(finished) = finished.filter(|_| pending.0.is_empty()) {
                     history = finished;
                 } else {
                     // An unconfirmed writer acknowledgement must not overwrite a durable replacement.
@@ -562,15 +830,26 @@ pub fn restore(
                 state: incoming,
                 history: recovered,
                 notice,
+                results,
             } => {
-                if let Some(turn) = &incoming.turn {
-                    tasks.settle_turn(turn.id, record.sequence);
+                match (recovered, results) {
+                    (None, Some(results)) => {
+                        let expected = pending.recover(&mut history, &mut state, retained_input)?;
+                        if expected != results {
+                            return Err(ConversationFailure::new("恢复结果与已确认工具事实不一致"));
+                        }
+                    }
+                    (Some(recovered), None) => {
+                        pending.recover(&mut history, &mut state, retained_input)?;
+                        history = recovered;
+                    }
+                    _ => return Err(ConversationFailure::new("恢复记录的历史材料无效")),
                 }
                 state = incoming;
                 covered_sequence = record.sequence;
-                history = recovered;
+                tasks.recover_interrupted();
                 tasks.restore_appended(history.result_ids());
-                pending = None;
+                tasks.confirm_recovery(record.sequence);
                 retained_input = state
                     .turn
                     .as_ref()
@@ -581,107 +860,29 @@ pub fn restore(
             }
         }
     }
-    let mut normalized = false;
-    if let Some(mut response) = pending {
-        let calls = response
-            .output
-            .call_ids()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        let turn = state
-            .turn
-            .as_mut()
-            .ok_or_else(|| ConversationFailure::new("中断响应缺少任务"))?;
-        if !calls.is_empty() {
-            if response.output.has_compaction() {
-                state.context.anchor = None;
-            }
-            for call_id in &calls {
-                let tool = turn
-                    .tools
-                    .iter_mut()
-                    .find(|tool| {
-                        tool.request_index == response.request_index && tool.call_id == *call_id
-                    })
-                    .ok_or_else(|| ConversationFailure::new("中断响应缺少对应工具展示身份"))?;
-                if let Some(saved) = response.results.get(call_id) {
-                    tool.output = Some(match &saved.output {
-                        ArchivedPayload::Text { text } => text.clone(),
-                        ArchivedPayload::Image { summary, .. } => summary.clone(),
-                    });
-                } else {
-                    tool.status = if response.started.contains(call_id) {
-                        ToolStatus::Unconfirmed
-                    } else {
-                        ToolStatus::NotExecuted
-                    };
-                    tool.output = Some(
-                        if response.started.contains(call_id) {
-                            "上次运行中断，执行结果未确认；不表示文件副作用已撤销"
-                        } else {
-                            "上次运行中断，此调用未执行"
-                        }
-                        .into(),
-                    );
-                }
-                tool.retained = true;
-            }
-            if response.in_history {
-                for call_id in calls.iter().filter(|id| !response.appended.contains(*id)) {
-                    let payload = response.results.remove(call_id).map_or_else(
-                        || ArchivedPayload::interrupted(response.started.contains(call_id)),
-                        |saved| saved.output,
-                    );
-                    let start = history.len();
-                    history
-                        .append_result(
-                            call_id.clone(),
-                            payload,
-                            HistoryAppend {
-                                start,
-                                end: start + 1,
-                            },
-                        )
-                        .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
-                }
-            } else {
-                history
-                    .seal_interrupted(
-                        response.output,
-                        response
-                            .results
-                            .into_iter()
-                            .map(|(id, stored)| (id, stored.output))
-                            .collect(),
-                        &response.started,
-                        (!retained_input).then_some(turn.input.as_str()),
-                    )
-                    .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
-                turn.committed_steps = turn
-                    .committed_steps
-                    .checked_add(1)
-                    .ok_or_else(|| ConversationFailure::new("恢复步骤数超出范围"))?;
-            }
-        }
-        turn.status =
-            TurnStatus::Failed("上次运行中断；已保留实际记录，缺失结果仅作为中断说明续接".into());
-        normalized = true;
-        notices.push(
-            if calls.is_empty() && response.in_history {
-                "上次运行收尾中断，已保留完整确认的模型输出"
-            } else if calls.is_empty() {
-                "上次运行在提交前中断，已有展示保留，未完成输出没有进入工作上下文"
-            } else {
-                "上次运行中断，工具结果未确认的部分不会自动重试"
-            }
-            .into(),
-        );
+    let normalized_response = !pending.0.is_empty();
+    let mut normalized = normalized_response;
+    let recovered_results = pending.recover(&mut history, &mut state, retained_input)?;
+    if normalized {
+        notices.push("已恢复确认的模型输出，缺失的工具结果已按开始事实补充说明".into());
     }
     if let Some(turn) = &mut state.turn {
         if matches!(turn.status, TurnStatus::Running) {
             turn.status = TurnStatus::Failed("上次运行在响应完成前中断".into());
             normalized = true;
-            notices.push("未完成的模型输出没有进入工作上下文".into());
+            if turn.requests.last().is_some_and(|request| {
+                request.sending_started
+                    && !completed_requests.contains(&(turn.id.0, request.request))
+            }) && !normalized_response
+            {
+                notices.push("上次请求已开始发送，服务结果未知；已保存的工具结果保留".into());
+            } else if !normalized_response {
+                if completed_requests.contains(&(turn.id.0, turn.request_index)) {
+                    notices.push("已保留完整响应及保存的工具结果，等待用户继续".into());
+                } else {
+                    notices.push("未完成的模型输出没有进入工作上下文".into());
+                }
+            }
         }
         for steer in &mut turn.steers {
             if matches!(steer.state, crate::SteerState::Accepted) {
@@ -699,7 +900,48 @@ pub fn restore(
         }
     }
     state.queue_paused |= !state.queue.is_empty();
-    state.execution_blocked = false;
+    for (id, origin) in historical_processes {
+        let mut turns = state
+            .turn
+            .iter_mut()
+            .map(Box::as_mut)
+            .chain(&mut state.previous_turns);
+        if let Some(turn) = turns.find(|turn| turn.id == origin)
+            && !turn
+                .process_cleanup
+                .iter()
+                .any(|process| process.session_id == id)
+        {
+            turn.process_cleanup.push(agentelier_tools::ProcessCleanup {
+                session_id: id,
+                cleanup_confirmed: false,
+                output: "历史进程的结束与回收没有确认记录".into(),
+            });
+            normalized = true;
+        }
+    }
+    state.execution_blocked = state
+        .turn
+        .iter()
+        .map(Box::as_ref)
+        .chain(&state.previous_turns)
+        .any(|turn| {
+            turn.process_cleanup
+                .iter()
+                .any(|process| !process.cleanup_confirmed)
+                || turn.tools.iter().any(|tool| {
+                    tool.retained
+                        && tool.status == ToolStatus::Unconfirmed
+                        && !is_read_only(&initial.settings.tools, &tool.name)
+                })
+        });
+    if state.execution_blocked {
+        state.queue_paused = true;
+        let notice = "上次工具的外部效果或清理未确认，当前会话已暂停执行";
+        if !notices.iter().any(|saved| saved.contains(notice)) {
+            notices.push(notice.into());
+        }
+    }
     if normalized {
         tasks.restore_appended(history.result_ids());
     }
@@ -753,6 +995,7 @@ pub fn restore(
         next_turn,
         notice: (!notices.is_empty()).then(|| notices.join("\n")),
         normalized,
+        recovered_results,
     })
 }
 

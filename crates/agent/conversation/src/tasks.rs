@@ -376,6 +376,7 @@ impl TaskLedger {
             ToolStatus::Succeeded
             | ToolStatus::Failed
             | ToolStatus::TimedOut
+            | ToolStatus::Unconfirmed
             | ToolStatus::Cancelled => task.status == ToolStatus::Running,
             _ => false,
         };
@@ -388,6 +389,12 @@ impl TaskLedger {
     pub(crate) fn recover_interrupted(&mut self) {
         for task in &mut self.tasks {
             task.recover_interrupted();
+        }
+    }
+
+    pub(crate) fn confirm_recovery(&mut self, sequence: u64) {
+        if !self.tasks.is_empty() {
+            self.revision = self.revision.max(sequence);
         }
     }
 

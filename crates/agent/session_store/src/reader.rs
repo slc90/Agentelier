@@ -603,6 +603,7 @@ pub(super) fn load(
     if matches!(parsed.issue, Some(Issue::Tail(_))) {
         restored.add_recovery_notice("日志尾部残缺，已保留原件并恢复有效记录");
         let commit = repair(root, session, &parsed, restored.recovery_event())?;
+        restored.confirm_recovery(commit.sequence);
         writer.reset(session);
         if let Some(failure) = commit.summary_failure {
             tracing::error!(session_id = %session, error = %failure, "日志尾部已恢复，摘要更新失败");
@@ -610,6 +611,7 @@ pub(super) fn load(
     } else if restored.normalized {
         writer.reset(session);
         let commit = writer.append(root, restored.recovery_event())?;
+        restored.confirm_recovery(commit.sequence);
         if let Some(failure) = commit.summary_failure {
             tracing::error!(session_id = %session, error = %failure, "中断历史已规范化，摘要更新失败");
         }

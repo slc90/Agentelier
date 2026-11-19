@@ -43,6 +43,21 @@ pub struct ResponseAcceptance {
     pub delivery: crate::ResponseDelivery,
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveredResult {
+    pub response_sequence: u64,
+    pub call_id: String,
+    pub evidence: RecoveryEvidence,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RecoveryEvidence {
+    NotExecuted,
+    Unconfirmed,
+    Saved { sequence: u64 },
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RecordEvent {
@@ -66,8 +81,11 @@ pub enum RecordEvent {
     },
     Recovered {
         state: StoredState,
-        history: agentelier_llm_model::ProtocolArchive,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        history: Option<agentelier_llm_model::ProtocolArchive>,
         notice: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        results: Option<Vec<RecoveredResult>>,
     },
     Accepted {
         state: StoredState,
