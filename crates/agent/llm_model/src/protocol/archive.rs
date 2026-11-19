@@ -48,7 +48,7 @@ impl ArchivedPayload {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ArchivedItem {
     Project {
@@ -79,12 +79,114 @@ enum ArchivedItem {
     },
 }
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProtocolArchive {
     items: Vec<ArchivedItem>,
 }
 
 impl ProtocolArchive {
+    pub fn prefix_fingerprint(&self, covered: usize) -> Result<String, crate::ModelFailure> {
+        use sha2::{Digest, Sha256};
+
+        struct DigestWriter(Sha256);
+        impl std::io::Write for DigestWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.update(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let prefix = self
+            .items
+            .get(..covered)
+            .ok_or_else(|| crate::model::protocol("压缩前缀超出存档历史"))?;
+        let mut digest = DigestWriter(Sha256::new());
+        serde_json::to_writer(&mut digest, prefix)
+            .map_err(|failure| crate::model::protocol(&failure.to_string()))?;
+        Ok(format!("{:x}", digest.0.finalize()))
+    }
+
+    pub fn replace_compacted_prefix(
+        &self,
+        covered: usize,
+        fingerprint: &str,
+        replacement: &Self,
+    ) -> Result<Self, crate::ModelFailure> {
+        use super::{BoundaryItem, compaction_boundary};
+        if self.prefix_fingerprint(covered)? != fingerprint {
+            return Err(crate::model::protocol("压缩所覆盖的历史前缀已变化"));
+        }
+        let prefix = &self.items[..covered];
+        let cut = compaction_boundary(prefix.iter().map(|item| match item {
+            ArchivedItem::FunctionCall { call_id, .. } => BoundaryItem::Call(call_id),
+            ArchivedItem::FunctionResult { call_id, .. } => BoundaryItem::Result(call_id),
+            ArchivedItem::Compaction { .. } => BoundaryItem::Compaction,
+            _ => BoundaryItem::Other,
+        }));
+        if !matches!(prefix.get(cut), Some(ArchivedItem::Compaction { .. }))
+            || prefix.get(cut..) != Some(replacement.items.as_slice())
+        {
+            return Err(crate::model::protocol(
+                "替换窗口与原压缩边界或尾部事实不一致",
+            ));
+        }
+        Ok(Self {
+            items: replacement
+                .items
+                .iter()
+                .chain(&self.items[covered..])
+                .cloned()
+                .collect(),
+        })
+    }
+
+    pub fn accepts_compaction(&self, output: &Self) -> bool {
+        let completed: HashSet<_> = self.result_ids().collect();
+        let mut open = self.call_ids().any(|call| !completed.contains(call));
+        for item in &output.items {
+            match item {
+                ArchivedItem::FunctionCall { .. } => open = true,
+                ArchivedItem::Compaction { .. } if open => return false,
+                _ => {}
+            }
+        }
+        true
+    }
+
+    pub fn matches_request_history(
+        &self,
+        frozen: &crate::RequestHistory,
+        check_pending: bool,
+    ) -> bool {
+        let Some(items) = self.items.get(..frozen.position) else {
+            return false;
+        };
+        let results: Vec<_> = items
+            .iter()
+            .filter_map(|item| match item {
+                ArchivedItem::FunctionResult { call_id, .. } => Some(call_id),
+                _ => None,
+            })
+            .collect();
+        if !results.iter().copied().eq(&frozen.result_calls) {
+            return false;
+        }
+        if !check_pending {
+            return true;
+        }
+        let completed: HashSet<_> = results.into_iter().collect();
+        items
+            .iter()
+            .filter_map(|item| match item {
+                ArchivedItem::FunctionCall { call_id, .. } if !completed.contains(call_id) => {
+                    Some(call_id)
+                }
+                _ => None,
+            })
+            .eq(&frozen.pending_calls)
+    }
     pub fn len(&self) -> usize {
         self.items.len()
     }
@@ -100,28 +202,31 @@ impl ProtocolArchive {
         if !self.has_compaction() {
             return Err(crate::model::protocol("压缩替换历史缺少压缩项"));
         }
-        let mut pending = std::collections::VecDeque::new();
+        let mut pending = HashMap::new();
+        let mut seen = HashSet::new();
         for item in &self.items {
             match item {
-                ArchivedItem::FunctionCall { call_id, .. } => {
-                    if pending.contains(&call_id) {
+                ArchivedItem::FunctionCall { call_id, raw, .. } => {
+                    if !seen.insert(call_id) {
                         return Err(crate::model::protocol("压缩历史调用身份重复"));
                     }
-                    pending.push_back(call_id);
+                    pending.insert(
+                        call_id,
+                        raw.get("async").and_then(Value::as_bool) == Some(true),
+                    );
                 }
                 ArchivedItem::FunctionResult { call_id, .. } => {
-                    if pending.pop_front() != Some(call_id) {
+                    if pending.remove(call_id).is_none() {
                         return Err(crate::model::protocol("压缩历史工具结果不匹配"));
                     }
                 }
-                ArchivedItem::User { .. } | ArchivedItem::Project { .. } if !pending.is_empty() => {
+                ArchivedItem::User { .. } | ArchivedItem::Project { .. }
+                    if pending.values().any(|asynchronous| !asynchronous) =>
+                {
                     return Err(crate::model::protocol("压缩历史用户输入插入未封闭调用"));
                 }
                 _ => {}
             }
-        }
-        if !pending.is_empty() {
-            return Err(crate::model::protocol("压缩历史工具调用未封闭"));
         }
         Ok(())
     }

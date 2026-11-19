@@ -10,6 +10,7 @@ mod control;
 mod conversation;
 mod queue;
 mod restore;
+mod result_budget;
 mod tasks;
 pub use archive::ArchiveEntry;
 pub use restore::{RestoredSession, restore};
@@ -25,8 +26,9 @@ pub use archive::{
 pub use conversation::PreparedSession;
 
 pub use conversation::{
-    Conversation, ConversationEvent, ConversationFailure, ConversationRequest, SessionId,
-    SessionSettings, SessionView, TaskPhase, ToolView, TurnId, TurnStatus, TurnView,
+    CompactionContinuation, Conversation, ConversationEvent, ConversationFailure,
+    ConversationRequest, MAX_TURN_REQUESTS, SessionId, SessionSettings, SessionView, TaskPhase,
+    ToolView, TurnId, TurnStatus, TurnView,
 };
 
 pub use agentelier_llm_model::ProtocolItemSummary;

@@ -91,6 +91,7 @@ pub struct ChatRequestMemory {
 
 #[derive(Clone, Reflect)]
 pub struct ChatRequest {
+    pub response_accepted: Option<bool>,
     pub additional_tools_in_input: bool,
     pub memory: Option<ChatRequestMemory>,
     pub skills: Vec<(usize, String)>,
@@ -106,6 +107,7 @@ pub struct ChatRequest {
 }
 #[derive(Clone, Reflect)]
 pub struct ChatTurn {
+    pub compaction_continuation: Option<u32>,
     pub requests: Vec<ChatRequest>,
     pub id: u64,
     pub operation_id: u64,
@@ -613,6 +615,7 @@ fn can_retry(
             !session.execution_blocked
                 && session.turn.as_ref().is_some_and(|turn| {
                     turn.committed_steps == 0
+                        && turn.compaction_continuation.is_none()
                         && !turn
                             .steers
                             .iter()
@@ -926,10 +929,12 @@ fn history_item(item: agentelier_conversation_bridge::HistoryItem) -> ChatHistor
 }
 fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTurn> {
     Ok(ChatTurn {
+        compaction_continuation: turn.compaction_continuation,
         requests: turn
             .requests
             .into_iter()
             .map(|fact| ChatRequest {
+                response_accepted: fact.response_accepted,
                 additional_tools_in_input: fact.additional_tools_in_input,
                 memory: fact.memory.map(|memory| ChatRequestMemory {
                     publication_id: memory.publication_id,
@@ -1493,7 +1498,13 @@ fn reconcile(world: &mut World) -> Result {
                 }
                 let mut output = Vec::new();
                 for message in &turn.messages {
-                    let retained = if message.request_index <= turn.committed_steps {
+                    let accepted = turn
+                        .requests
+                        .iter()
+                        .find(|fact| fact.request == message.request_index)
+                        .and_then(|fact| fact.response_accepted)
+                        .unwrap_or(message.request_index <= turn.committed_steps);
+                    let retained = if accepted {
                         "已保留"
                     } else if matches!(turn.status, ChatTurnStatus::Running) {
                         "接收中"

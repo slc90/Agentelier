@@ -5,6 +5,7 @@ mod archive;
 mod estimate;
 pub use archive::{ArchivedPayload, ProtocolArchive};
 pub use estimate::text_tokens as estimated_text_tokens;
+pub use estimate::{result_token_budget, result_tokens, result_wire_bytes};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HistoryAppend {
@@ -94,6 +95,36 @@ impl ProtocolHistory {
         !self.pending_calls().is_empty()
     }
 
+    pub fn has_open_synchronous_calls(&self) -> bool {
+        self.pending_calls()
+            .values()
+            .any(|asynchronous| !asynchronous)
+    }
+
+    pub fn open_calls(&self) -> impl Iterator<Item = (&str, &str)> {
+        let pending = self.pending_calls();
+        self.0.iter().filter_map(move |item| match item {
+            ProtocolItem::FunctionCall { call_id, name, .. }
+                if pending.contains_key(call_id.as_str()) =>
+            {
+                Some((call_id.as_str(), name.as_str()))
+            }
+            _ => None,
+        })
+    }
+
+    pub fn accepts_compaction(&self, output: &ProtocolOutput) -> bool {
+        let mut open = self.has_open_calls();
+        for item in &output.0 {
+            match item {
+                ProtocolItem::FunctionCall { .. } => open = true,
+                ProtocolItem::Compaction(_) if open => return false,
+                _ => {}
+            }
+        }
+        true
+    }
+
     fn pending_calls(&self) -> HashMap<&str, bool> {
         let mut pending = HashMap::new();
         for item in &self.0 {
@@ -135,22 +166,41 @@ impl ProtocolHistory {
         Ok(())
     }
     pub fn compacted(&self) -> Self {
-        let mut pending = std::collections::HashSet::new();
-        let mut boundary = 0;
-        // A cut must not leave tool results without their original calls.
-        for (index, item) in self.0.iter().enumerate() {
-            match item {
-                ProtocolItem::FunctionCall { call_id, .. } => {
-                    pending.insert(call_id);
-                }
-                ProtocolItem::FunctionResult { call_id, .. } => {
-                    pending.remove(call_id);
-                }
-                ProtocolItem::Compaction(_) if pending.is_empty() => boundary = index,
-                _ => {}
-            }
+        Self(
+            self.0[compaction_boundary(self.0.iter().map(|item| match item {
+                ProtocolItem::FunctionCall { call_id, .. } => BoundaryItem::Call(call_id),
+                ProtocolItem::FunctionResult { call_id, .. } => BoundaryItem::Result(call_id),
+                ProtocolItem::Compaction(_) => BoundaryItem::Compaction,
+                _ => BoundaryItem::Other,
+            }))..]
+                .to_vec(),
+        )
+    }
+
+    pub fn replace_prefix(
+        &self,
+        covered: usize,
+        replacement: &Self,
+    ) -> Result<Self, crate::ModelFailure> {
+        let tail = self
+            .0
+            .get(covered..)
+            .ok_or_else(|| crate::model::protocol("压缩前缀超出工作历史"))?;
+        Ok(Self(replacement.0.iter().chain(tail).cloned().collect()))
+    }
+
+    pub fn with_response(
+        &self,
+        input: Option<&str>,
+        output: &ProtocolOutput,
+    ) -> Result<Self, crate::ModelFailure> {
+        self.response_append(input, output)?;
+        let mut history = self.clone();
+        if let Some(input) = input {
+            history.0.push(ProtocolItem::User(input.to_owned()));
         }
-        Self(self.0[boundary..].to_vec())
+        history.0.extend_from_slice(&output.0);
+        Ok(history)
     }
     pub fn with_user(&self, input: &str) -> Self {
         let mut history = self.clone();
@@ -277,7 +327,7 @@ impl ProtocolHistory {
                 _ => None,
             })
             .chain(pending.filter_map(ToolPayload::image))
-            .filter(|image| seen.insert(std::sync::Arc::as_ptr(image)))
+            .filter(|image| seen.insert(image.digest()))
             .map(|image| image.bytes().len())
             .sum()
     }
@@ -306,6 +356,31 @@ impl ProtocolHistory {
             })
             .collect()
     }
+}
+
+enum BoundaryItem<'a> {
+    Call(&'a str),
+    Result(&'a str),
+    Compaction,
+    Other,
+}
+
+fn compaction_boundary<'a>(items: impl Iterator<Item = BoundaryItem<'a>>) -> usize {
+    let mut pending = HashSet::new();
+    let mut boundary = 0;
+    for (index, item) in items.enumerate() {
+        match item {
+            BoundaryItem::Call(id) => {
+                pending.insert(id);
+            }
+            BoundaryItem::Result(id) => {
+                pending.remove(id);
+            }
+            BoundaryItem::Compaction if pending.is_empty() => boundary = index,
+            _ => {}
+        }
+    }
+    boundary
 }
 
 impl HistoryAppend {

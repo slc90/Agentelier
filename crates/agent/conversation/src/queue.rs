@@ -201,7 +201,10 @@ impl Conversation {
         let Some(session) = self.session.as_ref().filter(|session| {
             !session.view.queue_paused
                 && !session.view.execution_blocked
-                && session.history.is_some()
+                && session
+                    .history
+                    .as_ref()
+                    .is_some_and(|history| !history.has_open_calls())
                 && session
                     .view
                     .turn

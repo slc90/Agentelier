@@ -19,10 +19,11 @@ pub(crate) struct ActiveState {
     pub(crate) input_retained: bool,
     pub(crate) accepting_steers: bool,
     pub(crate) completion: Option<TurnStatus>,
+    pub(crate) continuation: Option<crate::CompactionContinuation>,
 }
 
 pub(crate) struct ToolResultEntry {
-    output: ToolPayload,
+    pub(crate) output: ToolPayload,
     saved: Option<u64>,
 }
 
@@ -294,18 +295,33 @@ impl ActiveTurn<'_> {
         let turn = self
             .view
             .turn
-            .as_mut()
+            .as_ref()
             .ok_or(ConversationFailure::new("活动任务缺少轮次"))?;
-        turn.request_index = turn
-            .request_index
-            .checked_add(1)
-            .ok_or(ConversationFailure::new("模型请求序号已耗尽"))?;
-        turn.phase = TaskPhase::RequestingModel;
+        let skip_compaction = self
+            .state
+            .continuation
+            .is_some_and(|source| source.request == turn.request_index);
         let context = if !self.state.input_retained {
             self.history.with_user(&turn.input)
         } else {
             self.history.clone()
         };
+        let reserved_result_bytes = if context.has_open_calls() || skip_compaction {
+            self.check_result_capacity(&context, 0, &Default::default(), false)?
+                .wire_reserve()
+        } else {
+            0
+        };
+        let turn = self
+            .view
+            .turn
+            .as_mut()
+            .ok_or_else(|| ConversationFailure::new("活动任务缺少轮次"))?;
+        turn.request_index = turn
+            .request_index
+            .checked_add(1)
+            .ok_or_else(|| ConversationFailure::new("模型请求序号已耗尽"))?;
+        turn.phase = TaskPhase::RequestingModel;
         turn.request_items = context.summary();
         self.view.context.refresh(
             &context,
@@ -314,6 +330,8 @@ impl ActiveTurn<'_> {
         )?;
         Ok(GenerationRequest {
             history_position: self.history.position(),
+            skip_compaction,
+            reserved_result_bytes,
             memory: self.state.memory.as_deref().cloned(),
             selected_skills: turn.selected_skills.clone(),
             skill_catalog: turn
@@ -452,6 +470,7 @@ impl ActiveTurn<'_> {
                 "运行中不能通过补充输入选择 Skill，请排队或开始新任务",
             ));
         }
+        self.check_steer_capacity(Some(&input.text))?;
         let turn = self
             .view
             .turn
@@ -505,6 +524,7 @@ impl ActiveTurn<'_> {
     }
 
     pub fn apply_steers(&mut self) -> Result<Vec<u64>, ConversationFailure> {
+        self.check_steer_capacity(None)?;
         let turn = self
             .view
             .turn
@@ -540,6 +560,90 @@ impl ActiveTurn<'_> {
 
     pub fn catalog(&self) -> Arc<ToolCatalog> {
         self.tools.clone()
+    }
+
+    fn check_steer_capacity(&self, new_input: Option<&str>) -> Result<(), ConversationFailure> {
+        if !self.history.has_open_calls() {
+            return Ok(());
+        }
+        let turn = self
+            .view
+            .turn
+            .as_ref()
+            .ok_or_else(|| ConversationFailure::new("补充输入缺少活动任务"))?;
+        let mut history = if self.state.input_retained {
+            self.history.clone()
+        } else {
+            self.history.with_user(&turn.input)
+        };
+        for text in turn
+            .steers
+            .iter()
+            .filter(|input| matches!(input.state, SteerState::Accepted))
+            .map(|input| input.text.as_str())
+            .chain(new_input)
+        {
+            history = history.with_user(text);
+        }
+        let fixed = turn
+            .requests
+            .last()
+            .and_then(|request| request.projection.fixed_bytes)
+            .unwrap_or_default();
+        self.check_result_capacity(&history, fixed, &Default::default(), false)?;
+        Ok(())
+    }
+
+    pub fn reject_unsafe_compaction(
+        &mut self,
+        result: &GenerationResult,
+    ) -> Result<bool, ConversationFailure> {
+        let turn = self
+            .view
+            .turn
+            .as_mut()
+            .ok_or_else(|| ConversationFailure::new("模型响应缺少活动任务"))?;
+        let request = turn
+            .requests
+            .last()
+            .filter(|request| request.request == turn.request_index)
+            .ok_or_else(|| ConversationFailure::new("完整响应缺少冻结请求"))?;
+        let frozen_open = request
+            .projection
+            .history
+            .as_ref()
+            .is_some_and(|history| !history.pending_calls.is_empty());
+        let skip_once = request.projection.compaction
+            == Some(agentelier_llm_model::RequestCompaction::SkipOnce);
+        if result.compaction.is_none()
+            || (!frozen_open && !skip_once && self.history.accepts_compaction(&result.output))
+        {
+            return Ok(false);
+        }
+        if !skip_once && turn.request_index < crate::MAX_TURN_REQUESTS {
+            turn.compaction_continuation = Some(crate::CompactionContinuation {
+                request: turn.request_index,
+                input: turn.input_id,
+                input_retained: self.state.input_retained,
+            });
+        }
+        Ok(true)
+    }
+
+    pub fn continuation(&self) -> Option<crate::CompactionContinuation> {
+        self.state.continuation
+    }
+
+    pub fn spent_budget(&self) -> Result<(u32, usize), ConversationFailure> {
+        let turn = self
+            .view
+            .turn
+            .as_ref()
+            .ok_or_else(|| ConversationFailure::new("预算缺少活动任务"))?;
+        Ok((
+            turn.request_index,
+            turn.tools.iter().filter(|tool| tool.retained).count(),
+        ))
     }
 
     fn upsert_tool(
@@ -604,7 +708,7 @@ impl ActiveTurn<'_> {
         let turn = self
             .view
             .turn
-            .as_mut()
+            .as_ref()
             .ok_or(ConversationFailure::new("活动任务缺少轮次"))?;
         if result.calls.iter().any(|call| {
             previous_calls.contains(call.call_id.as_str())
@@ -614,6 +718,76 @@ impl ActiveTurn<'_> {
         }) {
             return Err(ConversationFailure::new("会话重复使用已有 call_id"));
         }
+        let append = self
+            .history
+            .response_append(
+                (!self.state.input_retained).then_some(turn.input.as_str()),
+                &result.output,
+            )
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+        let request = turn
+            .requests
+            .last()
+            .filter(|request| request.request == turn.request_index)
+            .ok_or_else(|| ConversationFailure::new("完整响应缺少冻结请求"))?;
+        let history = request
+            .projection
+            .history
+            .as_ref()
+            .ok_or_else(|| ConversationFailure::new("完整响应缺少冻结请求的历史集合"))?;
+        let (registrations, delivery) = self.tasks.prepare(
+            &result.calls,
+            turn.id,
+            turn.request_index,
+            memory_epoch,
+            within_budget,
+            &history.result_calls,
+        )?;
+        if !self.history.accepts_compaction(&result.output)
+            || result.compaction.is_some()
+                && (!history.pending_calls.is_empty()
+                    || request.projection.compaction
+                        == Some(agentelier_llm_model::RequestCompaction::SkipOnce))
+        {
+            return Err(ConversationFailure::new(
+                "压缩响应越过开放调用或不允许的请求边界",
+            ));
+        }
+        if self.history.has_open_calls() || !result.calls.is_empty() {
+            let candidate = self
+                .history
+                .with_response(
+                    (!self.state.input_retained).then_some(turn.input.as_str()),
+                    &result.output,
+                )
+                .map_err(crate::result_budget::model_error)?;
+            let compacted = result.compaction.is_some();
+            let candidate = if compacted {
+                candidate.compacted()
+            } else {
+                candidate
+            };
+            let rejected = if within_budget {
+                delivery.rejected.iter().map(String::as_str).collect()
+            } else {
+                result
+                    .calls
+                    .iter()
+                    .map(|call| call.call_id.as_str())
+                    .collect()
+            };
+            self.check_result_capacity(
+                &candidate,
+                request.projection.fixed_bytes.unwrap_or_default(),
+                &rejected,
+                compacted,
+            )?;
+        }
+        let turn = self
+            .view
+            .turn
+            .as_mut()
+            .ok_or_else(|| ConversationFailure::new("活动任务缺少轮次"))?;
         turn.phase = if result.calls.is_empty() {
             TaskPhase::RequestingModel
         } else {
@@ -629,27 +803,6 @@ impl ActiveTurn<'_> {
         for call in &result.calls {
             Self::upsert_tool(turn, call.clone(), ToolStatus::Pending, self.tools)?;
         }
-        let append = self
-            .history
-            .response_append(
-                (!self.state.input_retained).then_some(turn.input.as_str()),
-                &result.output,
-            )
-            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
-        let history = turn
-            .requests
-            .last()
-            .filter(|request| request.request == turn.request_index)
-            .and_then(|request| request.projection.history.as_ref())
-            .ok_or_else(|| ConversationFailure::new("完整响应缺少冻结请求的历史集合"))?;
-        let (registrations, delivery) = self.tasks.prepare(
-            &result.calls,
-            turn.id,
-            turn.request_index,
-            memory_epoch,
-            within_budget,
-            &history.result_calls,
-        )?;
         Ok((
             registrations,
             crate::ResponseAcceptance { append, delivery },
@@ -802,7 +955,10 @@ impl ActiveTurn<'_> {
             response_id: result.response_id,
             usage,
         });
-        if append.start != self.history.position() || append.end != coverage {
+        if append.start != self.history.position()
+            || append.end.checked_sub(append.start)
+                != Some(result.output.len() + usize::from(!self.state.input_retained))
+        {
             return Err(ConversationFailure::new("响应历史位置与回执不一致"));
         }
         self.history
@@ -812,6 +968,9 @@ impl ActiveTurn<'_> {
             )
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
         self.state.input_retained = true;
+        if let Some(request) = turn.requests.last_mut() {
+            request.response_accepted = Some(true);
+        }
         turn.committed_steps = turn
             .committed_steps
             .checked_add(1)
@@ -823,12 +982,12 @@ impl ActiveTurn<'_> {
         }
         self.view.committed_items = self.history.summary();
         let compacted = result.compaction.is_some();
-        if compacted {
+        if compacted || coverage != append.end {
             self.view.context.anchor = None;
         }
         if let Some(fact) = usage {
             self.view.context.latest = Some(fact.clone());
-            if !compacted && fact.usage.total_tokens > 0 {
+            if !compacted && coverage == append.end && fact.usage.total_tokens > 0 {
                 self.view.context.anchor = Some(crate::UsageAnchor {
                     task_material_tokens: self.view.context.task_material_tokens,
                     fact,

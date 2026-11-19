@@ -78,17 +78,17 @@ ProtocolHistory 按内容估算新增项，不累计 transport ID 或外层 JSON
 
 ## 服务端 Inline 压缩
 
-聊天请求携带 `context_management=[{type: "compaction", compact_threshold: ...}]`。阈值取实际模型自动阈值与有效窗口的较小值，缺失自动阈值时使用有效窗口；低于服务要求的 1,000 token 或能力未知时拒绝启动。当前 API 地址、认证所有者、固定任务身份和请求设置不变，没有独立压缩请求、显式触发项或文本摘要备用路径。
+冻结请求记录精确的开放调用集合。集合为空时，聊天请求携带 `context_management=[{type: "compaction", compact_threshold: ...}]`。开放调用或已接受的单次无压缩继续使本次请求省略该配置，冻结后状态变化不改写请求。已经交付 session_id 的函数调用已闭合，进程是否存活不参与判断。阈值取实际模型自动阈值与有效窗口的较小值，缺失自动阈值时使用有效窗口；低于服务要求的 1,000 token 或能力未知时拒绝启动。当前 API 地址、认证所有者、固定任务身份和请求设置不变，没有独立压缩请求、显式触发项或文本摘要备用路径。
 
-SSE 允许 compaction 与助手、reasoning、function_call 混排，支持一份完整响应包含多个压缩项。每个压缩项验证非空 encrypted_content 及可选身份，并保留原始字段；最终 response.completed 的有序 output 是权威结果，流增量仍只用于展示和身份核对。压缩输出只投影阶段，不将密文显示或写入日志。生成失败、提前断流或无效项不会安装候选历史。
+SSE 允许 compaction 与助手、reasoning、function_call 混排，支持一份完整响应包含多个压缩项。每个压缩项验证非空 encrypted_content 及可选身份，并保留原始字段；最终 response.completed 的有序 output 是权威结果，流增量仍只用于展示和身份核对。压缩输出只投影阶段，密文仅保留在协议存档。冻结时已有未配对调用，或者输出在新调用之后才给出压缩项，都会使整个完整响应在正常接纳前失败。单次无压缩继续中收到压缩项同样失败。
 
-恢复时按原调用身份补齐唯一 output。存在 ToolReturned 时使用其已保存的载荷，缺失结果使用由登记或开始事实确定的中断说明。已开始发送且没有完整响应的请求保留未知结果，后续用户发送可以重放已保存的 output。完整响应先存档再执行工具。响应全部工具结果封闭后，Conversation 为有压缩项的响应准备检查点，Runner 等待同一存储写入者确认后安装。工作历史从最新安全 compaction 边界起保留后续原始顺序；若某压缩项前还有未封闭工具调用，则保留更早的调用前缀，避免结果成为孤项。原始响应、助手正文、工具事实与附件仍完整存档。固定指令和工具声明仍随每次请求提供，不写入工作历史重复累积。
+恢复时按原调用身份补齐唯一 output。存在 ToolReturned 时使用其已保存的载荷，缺失结果使用由登记或开始事实确定的中断说明。已开始发送且没有完整响应的请求保留未知结果，后续用户发送可以重放已保存的 output。完整响应先存档再执行工具。Conversation 在接纳合法响应后为安全压缩准备检查点。Runner 等待单写入者确认后才安装工作窗口和派发该响应的新调用。压缩项之后的开放调用和检查点冻结后的尾部保留原始顺序。原始响应、助手正文、工具事实与附件仍完整存档。固定指令和工具声明仍随每次请求提供，不写入工作历史重复累积。
 
-发生压缩的响应 usage 保留为该次完整请求的用量事实，不作新窗口占用锚点。检查点清除旧锚点并估算当前活跃材料，后续无压缩响应可重新提供服务端锚点。压缩项的密文长度启发式仍只是估算，不等于解密后的 token 数。协议依据见 [Responses server-side compaction](https://developers.openai.com/api/docs/guides/compaction)。
+发生压缩的响应 usage 保留为该次完整请求的用量事实，不作新窗口占用锚点。检查点清除旧锚点并估算当前活跃材料，后续无压缩响应只有在用量覆盖连续历史前缀时才成为服务端锚点。压缩项的密文长度启发式仍只是估算，不等于解密后的 token 数。协议依据见 [Responses server-side compaction](https://developers.openai.com/api/docs/guides/compaction)。
 
 ## 项目指令请求记录
 
-模型层 prepare 是唯一请求构造入口，输出私有冻结字节和 RequestProjection（工具契约、基础摘要、有序协议类型、载荷大小与 SHA-256）。generate 仅消费 PreparedGeneration，认证恢复使用同一字节。类型化项目项序列化为 user，基础保持 developer，完整请求保留 32 MiB 有界序列化。
+模型层 prepare 是唯一请求构造入口，输出私有冻结字节和 RequestProjection（工具契约、基础摘要、有序协议类型、载荷大小与 SHA-256）。generate 仅消费 PreparedGeneration，认证恢复使用同一字节。类型化项目项序列化为 user，基础保持 developer，完整请求保留 32 MiB 有界序列化。冻结时还有开放调用，则把预留结果的协议字节和继续余量一并纳入发送前检查。
 
 generate 在进入 HTTP 发送阶段和取得响应头时分别发布 Sending 与 ResponseReceived，包括非成功 HTTP 状态。Runner 将这些事实交回运行时，Conversation 按当前 Turn 合并并生成待持久化的请求记录。认证内部重发使用同一请求身份与冻结字节，核对界面展示最近一次实际 HTTP 状态。
 

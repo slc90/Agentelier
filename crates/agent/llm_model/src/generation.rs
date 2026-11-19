@@ -8,13 +8,14 @@ use agentelier_account::{AuthenticatedRequest, CredentialClient, ExecutionIdenti
 use agentelier_prompts::InstructionSnapshot;
 use agentelier_tools::{ToolCatalog, ToolContract, ToolMode};
 use reqwest::Client;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 
 const RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 
 struct RequestBytes(Vec<u8>);
 impl std::io::Write for RequestBytes {
@@ -38,6 +39,8 @@ pub struct GenerationRequest {
     pub skill_catalog: Option<String>,
     pub slug: String,
     pub compact_threshold: u64,
+    pub skip_compaction: bool,
+    pub reserved_result_bytes: usize,
     pub effort: Option<String>,
     pub context: ProtocolHistory,
     pub history_position: usize,
@@ -47,6 +50,8 @@ pub struct GenerationRequest {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct RequestProjection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<RequestCompaction>,
     #[serde(default, skip_serializing_if = "ToolContract::is_flat")]
     pub tool_contract: ToolContract,
     #[serde(default)]
@@ -59,12 +64,24 @@ pub struct RequestProjection {
     pub base_hashes: Vec<String>,
     pub payload_hash: String,
     pub payload_bytes: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_bytes: Option<usize>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct RequestHistory {
     pub position: usize,
     pub result_calls: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_calls: Vec<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RequestCompaction {
+    Inline { threshold: u64 },
+    PendingCalls,
+    SkipOnce,
 }
 
 pub struct PreparedGeneration {
@@ -90,6 +107,12 @@ impl RequestProjection {
 
     pub fn validate_request_materials(&self) -> Result<(), ModelFailure> {
         use sha2::{Digest, Sha256};
+        if self
+            .fixed_bytes
+            .is_some_and(|fixed| fixed > self.payload_bytes)
+        {
+            return Err(crate::model::protocol("冻结请求的固定材料超出请求大小"));
+        }
         if let Some(history) = &self.history {
             let covered = self.items.len();
             let results = self.items.iter().filter_map(|item| match item {
@@ -102,6 +125,24 @@ impl RequestProjection {
                 || !results.eq(history.result_calls.iter())
             {
                 return Err(crate::model::protocol("冻结请求的历史范围或结果集合不一致"));
+            }
+            let completed: HashSet<_> = history.result_calls.iter().collect();
+            let pending = self.items.iter().filter_map(|item| match item {
+                crate::ProtocolItemSummary::FunctionCall { call_id, .. }
+                    if !completed.contains(call_id) =>
+                {
+                    Some(call_id)
+                }
+                _ => None,
+            });
+            if self.compaction.is_some()
+                && (!pending.eq(&history.pending_calls)
+                    || matches!(self.compaction, Some(RequestCompaction::Inline { .. }))
+                        && !history.pending_calls.is_empty()
+                    || self.compaction == Some(RequestCompaction::PendingCalls)
+                        && history.pending_calls.is_empty())
+            {
+                return Err(crate::model::protocol("冻结请求的开放调用或压缩策略不一致"));
             }
         }
         let memory_index = usize::from(self.additional_tools_in_input()) + self.base_hashes.len();
@@ -150,14 +191,26 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     if generation.skill_catalog.is_none() && !generation.selected_skills.is_empty() {
         return Err(crate::model::protocol("显式 Skill 缺少任务目录"));
     }
-    if generation.context.has_open_calls() {
-        return Err(crate::model::protocol(
-            "当前执行阶段仍需收齐工具结果再发请求",
-        ));
+    if generation.context.has_open_synchronous_calls() {
+        return Err(crate::model::protocol("仍需收齐同步工具结果再发请求"));
     }
     let history = RequestHistory {
         position: generation.history_position,
         result_calls: generation.context.result_ids().map(str::to_owned).collect(),
+        pending_calls: generation
+            .context
+            .open_calls()
+            .map(|(id, _)| id.to_owned())
+            .collect(),
+    };
+    let compaction = if generation.skip_compaction {
+        RequestCompaction::SkipOnce
+    } else if history.pending_calls.is_empty() {
+        RequestCompaction::Inline {
+            threshold: generation.compact_threshold,
+        }
+    } else {
+        RequestCompaction::PendingCalls
     };
     let items = generation.context.summary();
     let base_hashes = generation
@@ -217,6 +270,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         });
         input.push(serde_json::json!({"role":"developer", "content":catalog}));
     }
+    let history_bytes = generation.context.input_wire_bytes()?;
     input.extend(generation.context.into_input());
     for skill in generation.selected_skills {
         skill
@@ -235,12 +289,15 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     }
     let mut payload = serde_json::json!({
         "model": generation.slug,
-        "context_management": [{"type":"compaction", "compact_threshold":generation.compact_threshold}],
         "input": input,
         "include": ["reasoning.encrypted_content"],
         "store": false,
         "stream": true,
     });
+    if let RequestCompaction::Inline { threshold } = compaction {
+        payload["context_management"] =
+            serde_json::json!([{"type":"compaction", "compact_threshold":threshold}]);
+    }
     if let Some(declarations) = top_level_tools {
         payload["tools"] = declarations;
     }
@@ -256,6 +313,11 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
             format!("模型请求大小或序列化失败：{error}"),
         )
     })?;
+    if generation.reserved_result_bytes > MAX_REQUEST_BYTES.saturating_sub(body.0.len()) {
+        return Err(crate::model::protocol(
+            "需保留待交付工具结果的请求空间，当前请求无法发送",
+        ));
+    }
     for item in payload["input"].as_array().into_iter().flatten() {
         if let Some(content) = item.get("output").and_then(serde_json::Value::as_array) {
             for image in content.iter().filter(|part| part["type"] == "input_image") {
@@ -274,6 +336,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     }
     use sha2::{Digest, Sha256};
     let projection = RequestProjection {
+        compaction: Some(compaction),
         tool_contract: contract,
         skill_materials,
         memory,
@@ -282,6 +345,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         base_hashes,
         payload_hash: format!("{:x}", Sha256::digest(&body.0)),
         payload_bytes: body.0.len(),
+        fixed_bytes: Some(body.0.len().saturating_sub(history_bytes)),
     };
     Ok(PreparedGeneration {
         body: body.0,

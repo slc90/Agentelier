@@ -90,6 +90,10 @@ pub enum RecordEvent {
     Accepted {
         state: StoredState,
     },
+    ContinuedWithoutCompaction {
+        state: StoredState,
+        source: crate::CompactionContinuation,
+    },
     Response {
         state: StoredState,
         output: agentelier_llm_model::ProtocolArchive,
@@ -157,6 +161,7 @@ impl RecordEvent {
             | Self::QueueSuspended { state }
             | Self::Recovered { state, .. }
             | Self::Accepted { state }
+            | Self::ContinuedWithoutCompaction { state, .. }
             | Self::Response { state, .. }
             | Self::ToolStarted { state, .. }
             | Self::ToolReturned { state, .. }

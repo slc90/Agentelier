@@ -8,8 +8,16 @@ use std::sync::Arc;
 use std::{error::Error, fmt};
 
 pub use uuid::Uuid as SessionId;
+pub const MAX_TURN_REQUESTS: u32 = 32;
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TurnId(pub u64);
+
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CompactionContinuation {
+    pub request: u32,
+    pub input: TurnId,
+    pub input_retained: bool,
+}
 
 #[derive(Clone)]
 pub struct SessionSettings {
@@ -22,12 +30,29 @@ pub struct SessionSettings {
     pub working_directory: std::path::PathBuf,
 }
 pub enum ConversationRequest {
-    Open { session: SessionId },
-    Delete { session: SessionId },
+    Open {
+        session: SessionId,
+    },
+    Delete {
+        session: SessionId,
+    },
     Create(SessionSettings),
-    Reset { session: SessionId },
-    Send { session: SessionId, input: String },
-    Retry { session: SessionId, turn: TurnId },
+    Reset {
+        session: SessionId,
+    },
+    Send {
+        session: SessionId,
+        input: String,
+    },
+    Retry {
+        session: SessionId,
+        turn: TurnId,
+    },
+    ContinueWithoutCompaction {
+        session: SessionId,
+        turn: TurnId,
+        failed_request: u32,
+    },
 }
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub enum TurnStatus {
@@ -62,6 +87,8 @@ pub struct ToolView {
 }
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct TurnView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction_continuation: Option<CompactionContinuation>,
     #[serde(default)]
     pub selected_skills: Vec<agentelier_skills::SelectedSkill>,
     #[serde(default)]
@@ -387,17 +414,18 @@ impl Conversation {
                 "会话执行记录不可用，请重置或新建会话",
             ));
         }
-        let request_items = session
+        let history = session
             .history
             .as_ref()
-            .ok_or(ConversationFailure::new("会话缺少历史"))?
-            .with_user(&input)
-            .summary();
+            .ok_or(ConversationFailure::new("会话缺少历史"))?;
+        session.check_pending_input(history, &input)?;
+        let request_items = history.with_user(&input).summary();
         session.view.notice = None;
         if let Some(previous) = session.view.turn.take() {
             session.view.previous_turns.push(*previous);
         }
         session.view.turn = Some(Box::new(TurnView {
+            compaction_continuation: None,
             selected_skills: Vec::new(),
             skills: None,
             requests: Vec::new(),
@@ -426,6 +454,7 @@ impl Conversation {
             input_retained: false,
             accepting_steers: true,
             completion: None,
+            continuation: None,
         });
         Ok(session.view.clone())
     }
@@ -437,6 +466,11 @@ impl Conversation {
     ) -> Result<SessionView, ConversationFailure> {
         match request {
             ConversationRequest::Send { session, input } => self.begin(operation, session, input),
+            ConversationRequest::ContinueWithoutCompaction {
+                session,
+                turn,
+                failed_request,
+            } => self.continue_without_compaction(operation, session, turn, failed_request),
             ConversationRequest::Retry { session, turn } => {
                 let previous = self
                     .session
@@ -445,6 +479,7 @@ impl Conversation {
                     .and_then(|current| current.view.turn.as_ref())
                     .filter(|previous| {
                         previous.id == turn
+                            && previous.compaction_continuation.is_none()
                             && previous.committed_steps == 0
                             && !previous.steers.iter().any(|input| {
                                 matches!(input.state, crate::control::SteerState::Applied)
@@ -478,6 +513,84 @@ impl Conversation {
                 Err(ConversationFailure::new("创建会话不是生成操作"))
             }
         }
+    }
+
+    fn continue_without_compaction(
+        &mut self,
+        operation: u64,
+        session: SessionId,
+        turn: TurnId,
+        failed_request: u32,
+    ) -> Result<SessionView, ConversationFailure> {
+        let current = self
+            .session
+            .as_mut()
+            .filter(|current| current.view.id == session && !current.view.execution_blocked)
+            .ok_or_else(|| ConversationFailure::new("原会话已变化或暂停执行"))?;
+        let turn = current
+            .view
+            .turn
+            .as_mut()
+            .filter(|source| {
+                source.id == turn
+                    && source.request_index == failed_request
+                    && matches!(source.status, TurnStatus::Failed(_))
+            })
+            .ok_or_else(|| ConversationFailure::new("失败请求已变化，不能使用原压缩继续操作"))?;
+        let source = turn
+            .compaction_continuation
+            .filter(|source| {
+                source.request == failed_request
+                    && source.input == turn.input_id
+                    && failed_request < MAX_TURN_REQUESTS
+            })
+            .ok_or_else(|| ConversationFailure::new("压缩继续操作已用完或超出本轮请求预算"))?;
+        let history = current
+            .history
+            .as_ref()
+            .ok_or_else(|| ConversationFailure::new("会话缺少已确认历史"))?;
+        if history.has_open_calls() {
+            return Err(ConversationFailure::new("等待当前批次结果确认后才能继续"));
+        }
+        let history = if source.input_retained {
+            history.clone()
+        } else {
+            history.with_user(&turn.input)
+        };
+        let mut context = (*current.view.context).clone();
+        context.refresh(
+            &history,
+            &current.view.settings.instructions,
+            current.tools.definitions(),
+        )?;
+        let fixed = turn
+            .requests
+            .last()
+            .and_then(|request| request.projection.fixed_bytes)
+            .unwrap_or_default();
+        crate::result_budget::ResultHeadroom::default().ensure(
+            &context,
+            fixed.saturating_add(
+                history
+                    .input_wire_bytes()
+                    .map_err(crate::result_budget::model_error)?,
+            ),
+        )?;
+        turn.status = TurnStatus::Running;
+        turn.operation_id = operation;
+        turn.compaction_continuation = None;
+        current.view.notice = None;
+        current.active = Some(ActiveState {
+            memory: current.memory.clone(),
+            source_sequence: None,
+            response_sequence: None,
+            history_confirmed: true,
+            input_retained: source.input_retained,
+            accepting_steers: true,
+            completion: None,
+            continuation: Some(source),
+        });
+        Ok(current.view.clone())
     }
 
     fn turn(&mut self, operation_id: u64) -> Result<&mut TurnView, ConversationFailure> {

@@ -66,6 +66,9 @@ impl ContextState {
                     .saturating_add(estimated_text_tokens(&tool.name))
                     .saturating_add(estimated_text_tokens(&tool.description))
                     .saturating_add(estimated_text_tokens(&parameters));
+                if tool.mode == agentelier_tools::ToolMode::Asynchronous {
+                    fixed = fixed.saturating_add(estimated_text_tokens("\"async\":true"));
+                }
             }
             (fixed.saturating_add(self.task_material_tokens), 0)
         };

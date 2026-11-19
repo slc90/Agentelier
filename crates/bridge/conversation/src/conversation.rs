@@ -13,12 +13,29 @@ pub struct SessionSettings {
     pub working_directory: std::path::PathBuf,
 }
 pub enum ConversationRequest {
-    Open { session: SessionId },
-    Delete { session: SessionId },
+    Open {
+        session: SessionId,
+    },
+    Delete {
+        session: SessionId,
+    },
     Create(SessionSettings),
-    Reset { session: SessionId },
-    Send { session: SessionId, input: String },
-    Retry { session: SessionId, turn: u64 },
+    Reset {
+        session: SessionId,
+    },
+    Send {
+        session: SessionId,
+        input: String,
+    },
+    Retry {
+        session: SessionId,
+        turn: u64,
+    },
+    ContinueWithoutCompaction {
+        session: SessionId,
+        turn: u64,
+        failed_request: u32,
+    },
 }
 #[derive(Clone)]
 pub enum TurnStatus {
@@ -115,6 +132,7 @@ pub struct RequestMemory {
 
 #[derive(Clone)]
 pub struct RequestView {
+    pub response_accepted: Option<bool>,
     pub additional_tools_in_input: bool,
     pub memory: Option<RequestMemory>,
     pub skills: Vec<(usize, String)>,
@@ -131,6 +149,7 @@ pub struct RequestView {
 
 #[derive(Clone)]
 pub struct TurnView {
+    pub compaction_continuation: Option<u32>,
     pub requests: Vec<RequestView>,
     pub id: u64,
     pub operation_id: u64,
@@ -348,6 +367,15 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
                 turn: agentelier_conversation::TurnId(turn),
             }
         }
+        ConversationRequest::ContinueWithoutCompaction {
+            session,
+            turn,
+            failed_request,
+        } => agentelier_conversation::ConversationRequest::ContinueWithoutCompaction {
+            session,
+            turn: agentelier_conversation::TurnId(turn),
+            failed_request,
+        },
         ConversationRequest::Send { session, input } => {
             agentelier_conversation::ConversationRequest::Send { session, input }
         }
@@ -472,10 +500,12 @@ fn history_item(item: agentelier_conversation::ProtocolItemSummary) -> HistoryIt
 }
 fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
     TurnView {
+        compaction_continuation: turn.compaction_continuation.map(|source| source.request),
         requests: turn
             .requests
             .into_iter()
             .map(|fact| RequestView {
+                response_accepted: fact.response_accepted,
                 additional_tools_in_input: fact.projection.additional_tools_in_input(),
                 memory: fact.projection.memory.map(|material| RequestMemory {
                     publication_id: material.snapshot.publication_id.to_string(),

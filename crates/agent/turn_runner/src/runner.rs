@@ -5,7 +5,9 @@ use crate::{
 };
 use agentelier_account::{CredentialClient, ExecutionIdentity};
 use agentelier_conversation::RecordEvent;
-use agentelier_conversation::{ConversationFailure, InputDecision, SteerInput, TurnStatus};
+use agentelier_conversation::{
+    ConversationFailure, InputDecision, MAX_TURN_REQUESTS, SteerInput, TurnStatus,
+};
 use agentelier_llm_model::{GenerationResult, ModelFailure, ModelFailureKind};
 use agentelier_tools::{ExecutionContext, ToolCatalog, ToolResult, ToolStatus};
 use std::sync::Arc;
@@ -14,7 +16,6 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 const MODEL_PROGRESS_CAPACITY: usize = 32;
-const MAX_MODEL_REQUESTS: u32 = 32;
 const MAX_TOOL_CALLS: usize = 64;
 
 async fn publish(
@@ -37,7 +38,10 @@ async fn request_once(
     steers: &mut mpsc::Receiver<SteerInput>,
 ) -> Result<Option<Result<GenerationResult, ModelFailure>>, ConversationFailure> {
     let (sender, mut events) = mpsc::channel(MODEL_PROGRESS_CAPACITY);
-    let request = active.call(|mut turn| turn.request()).await?;
+    let request = match active.call(|mut turn| turn.request()).await {
+        Ok(request) => request,
+        Err(failure) => return Ok(Some(Err(protocol_failure(failure)))),
+    };
     let prepared = match agentelier_llm_model::prepare(request) {
         Ok(prepared) => prepared,
         Err(failure) => return Ok(Some(Err(failure))),
@@ -150,8 +154,10 @@ pub async fn run(
     let active = TurnAccess::new(progress.clone());
     let event = active
         .call(|turn| {
-            Ok(RecordEvent::Accepted {
-                state: turn.stored_state(),
+            let state = turn.stored_state();
+            Ok(match turn.continuation() {
+                Some(source) => RecordEvent::ContinuedWithoutCompaction { state, source },
+                None => RecordEvent::Accepted { state },
             })
         })
         .await?;
@@ -251,39 +257,49 @@ async fn run_task(
     let (settings, input) = active
         .call(|turn| Ok((turn.settings(), turn.input()?)))
         .await?;
-    let directory = settings.working_directory.clone();
-    let loading_cancel = cancel.clone();
-    let discovered = tokio::task::spawn_blocking(move || {
-        let catalog =
-            agentelier_skills::discover_standard(&directory, &user_skills_root, &loading_cancel)?;
-        let selected = agentelier_skills::select(&catalog, &input, &loading_cancel)?;
-        Ok::<_, agentelier_skills::Failure>((catalog, selected))
-    })
-    .await
-    .map_err(|failure| ConversationFailure::new(format!("Skills 发现工作者异常结束：{failure}")))?;
-    if cancel.is_cancelled() {
-        return Ok(TurnStatus::Cancelled);
-    }
-    match discovered {
-        Ok((catalog, selected)) => {
-            tracing::debug!(
-                skills = catalog.skills.len(),
-                diagnostics = catalog.diagnostics.len(),
-                roots = catalog.roots.len(),
-                "任务 Skills 目录发现完成"
-            );
-            for diagnostic in &catalog.diagnostics {
-                tracing::warn!(path = %diagnostic.path.display(), error = diagnostic.message, "Skills 来源不可用或受限");
-            }
-            if let Err(failure) = active
-                .call(move |mut turn| turn.skills(catalog, selected))
-                .await
-            {
-                return Ok(TurnStatus::Failed(failure.to_string()));
-            }
-            publish(progress, cancel).await?;
+    if !active
+        .call(|turn| Ok(turn.continuation().is_some()))
+        .await?
+    {
+        let directory = settings.working_directory.clone();
+        let loading_cancel = cancel.clone();
+        let discovered = tokio::task::spawn_blocking(move || {
+            let catalog = agentelier_skills::discover_standard(
+                &directory,
+                &user_skills_root,
+                &loading_cancel,
+            )?;
+            let selected = agentelier_skills::select(&catalog, &input, &loading_cancel)?;
+            Ok::<_, agentelier_skills::Failure>((catalog, selected))
+        })
+        .await
+        .map_err(|failure| {
+            ConversationFailure::new(format!("Skills 发现工作者异常结束：{failure}"))
+        })?;
+        if cancel.is_cancelled() {
+            return Ok(TurnStatus::Cancelled);
         }
-        Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())),
+        match discovered {
+            Ok((catalog, selected)) => {
+                tracing::debug!(
+                    skills = catalog.skills.len(),
+                    diagnostics = catalog.diagnostics.len(),
+                    roots = catalog.roots.len(),
+                    "任务 Skills 目录发现完成"
+                );
+                for diagnostic in &catalog.diagnostics {
+                    tracing::warn!(path = %diagnostic.path.display(), error = diagnostic.message, "Skills 来源不可用或受限");
+                }
+                if let Err(failure) = active
+                    .call(move |mut turn| turn.skills(catalog, selected))
+                    .await
+                {
+                    return Ok(TurnStatus::Failed(failure.to_string()));
+                }
+                publish(progress, cancel).await?;
+            }
+            Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())),
+        }
     }
     let identity = tokio::select! { biased;
         _ = cancel.cancelled() => return Ok(TurnStatus::Cancelled),
@@ -298,9 +314,8 @@ async fn run_task(
         return Ok(TurnStatus::Failed(failure.to_string()));
     }
     let catalog = active.call(|turn| Ok(turn.catalog())).await?;
-    let mut tools_used = 0;
-    let mut requests_used = 0;
-    while requests_used < MAX_MODEL_REQUESTS {
+    let (mut requests_used, mut tools_used) = active.call(|turn| turn.spent_budget()).await?;
+    while requests_used < MAX_TURN_REQUESTS {
         append_saved_results(active).await?;
         control::drain(active, steers, progress).await?;
         if cancel.is_cancelled() {
@@ -378,6 +393,11 @@ async fn run_task(
             Arc::new(user_turn),
             requests_used,
         ));
+        if active.call(|turn| Ok(turn.has_open_calls())).await? {
+            return Err(ConversationFailure::new(
+                "本阶段须确认整批工具结果后再发请求",
+            ));
+        }
         let result = match request_once(
             active,
             dispatcher,
@@ -396,6 +416,9 @@ async fn run_task(
         let limited = result.calls.len() > MAX_TOOL_CALLS.saturating_sub(tools_used);
         let (result, calls, registrations, acceptance, event) = match active
             .call(move |mut turn| {
+                if turn.reject_unsafe_compaction(&result)? {
+                    return Ok(None);
+                }
                 let (registrations, acceptance) = turn.accept_response(&result, epoch, !limited)?;
                 let event = RecordEvent::Response {
                     state: turn.stored_state(),
@@ -406,11 +429,19 @@ async fn run_task(
                 turn.begin_history_commit();
                 let mut result = result;
                 let calls = std::mem::take(&mut result.calls);
-                Ok((result, calls, registrations, acceptance, event))
+                Ok(Some((result, calls, registrations, acceptance, event)))
             })
             .await
         {
-            Ok(accepted) => accepted,
+            Ok(Some(accepted)) => accepted,
+            Ok(None) => {
+                let source = context.user_turn();
+                tracing::warn!(session = %source.session, turn = source.turn, request = requests_used,
+                    "拒绝在冻结边界不允许的压缩响应");
+                return Ok(TurnStatus::Failed(
+                    "压缩响应越过开放调用或本次请求禁止压缩，已保留原历史".into(),
+                ));
+            }
             Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())),
         };
         let response_sequence = active.record(event).await?;
@@ -430,9 +461,12 @@ async fn run_task(
             active.publish_tasks().await?;
         }
         publish(progress, cancel).await?;
+        if let Some(metadata) = compaction {
+            checkpoint_response(active, metadata, progress, cancel).await?;
+        }
         control::drain(active, steers, progress).await?;
         if calls.is_empty() {
-            close_response(active, response_sequence, compaction, progress, cancel).await?;
+            close_response(active, response_sequence, progress, cancel).await?;
             if cancel.is_cancelled() {
                 return Ok(TurnStatus::Cancelled);
             }
@@ -459,7 +493,7 @@ async fn run_task(
             steers,
         )
         .await?;
-        close_response(active, response_sequence, compaction, progress, cancel).await?;
+        close_response(active, response_sequence, progress, cancel).await?;
         if cleanup_failed {
             active
                 .call(|mut turn| {
@@ -768,7 +802,6 @@ async fn persist_image(
 async fn close_response(
     active: &TurnAccess,
     response_sequence: u64,
-    compaction: Option<agentelier_llm_model::CompactionMetadata>,
     progress: &mpsc::Sender<RunnerEvent>,
     cancel: &CancellationToken,
 ) -> Result<(), ConversationFailure> {
@@ -788,35 +821,42 @@ async fn close_response(
     active
         .call(move |mut turn| turn.confirm_response_closed(response_sequence, sequence))
         .await?;
-    if let Some(metadata) = compaction {
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-        let candidate = active
-            .call(move |mut turn| turn.compaction_candidate(metadata))
-            .await?;
-        publish(progress, cancel).await?;
-        if cancel.is_cancelled() {
-            return Ok(());
-        }
-        let (candidate, event) = active
-            .call(move |mut turn| {
-                let event = candidate.event(&turn);
-                turn.begin_history_commit();
-                Ok((candidate, event))
-            })
-            .await?;
-        let sequence = active.record(event).await?;
-        let (session, window) = active
-            .call(move |mut turn| {
-                turn.install_compaction(candidate)?;
-                turn.recorded(sequence);
-                Ok((turn.session_id(), turn.context_window()))
-            })
-            .await?;
-        tracing::info!(session = %session, window, sequence, "服务端压缩检查点已提交并安装");
-    }
     publish(progress, cancel).await
+}
+
+async fn checkpoint_response(
+    active: &TurnAccess,
+    metadata: agentelier_llm_model::CompactionMetadata,
+    progress: &mpsc::Sender<RunnerEvent>,
+    cancel: &CancellationToken,
+) -> Result<(), ConversationFailure> {
+    if cancel.is_cancelled() {
+        return Ok(());
+    }
+    let candidate = active
+        .call(move |mut turn| turn.compaction_candidate(metadata))
+        .await?;
+    publish(progress, cancel).await?;
+    if cancel.is_cancelled() {
+        return Ok(());
+    }
+    let (candidate, event) = active
+        .call(move |mut turn| {
+            let event = candidate.event(&turn)?;
+            turn.begin_history_commit();
+            Ok((candidate, event))
+        })
+        .await?;
+    let sequence = active.record(event).await?;
+    let (session, window) = active
+        .call(move |mut turn| {
+            turn.install_compaction(candidate)?;
+            turn.recorded(sequence);
+            Ok((turn.session_id(), turn.context_window()))
+        })
+        .await?;
+    tracing::info!(session = %session, window, sequence, "服务端压缩检查点已提交并安装");
+    Ok(())
 }
 
 async fn collect_project(

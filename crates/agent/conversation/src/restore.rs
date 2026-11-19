@@ -348,6 +348,7 @@ pub fn restore(
     let mut seen_calls = HashSet::new();
     let mut seen_items = HashSet::new();
     let mut completed_requests = HashSet::new();
+    let mut continued = None;
     let mut tasks = crate::tasks::TaskLedger::default();
     let mut retained_input = false;
     let mut covered_sequence = 1;
@@ -359,6 +360,7 @@ pub fn restore(
             return Err(ConversationFailure::new("存档事件属于另一会话"));
         }
         next_turn = next_turn.max(maximum(record.event.state()));
+        let prepared = matches!(&record.event, RecordEvent::RequestPrepared { .. });
         match record.event {
             RecordEvent::ProjectPublished {
                 state: incoming,
@@ -396,6 +398,17 @@ pub fn restore(
                 fact.projection
                     .validate_request_materials()
                     .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+                let skip_once = fact.projection.compaction
+                    == Some(agentelier_llm_model::RequestCompaction::SkipOnce);
+                if skip_once
+                    != continued.is_some_and(|(id, request): (crate::TurnId, u32)| {
+                        id == turn.id && request.checked_add(1) == Some(fact.request)
+                    })
+                {
+                    return Err(ConversationFailure::new(
+                        "单次跳过压缩的请求缺少一致的继续记录",
+                    ));
+                }
                 for selected in &turn.selected_skills {
                     selected
                         .validate()
@@ -428,10 +441,11 @@ pub fn restore(
                     || fact.window != incoming.context.window
                     || fact.publication != publications.last().map(|publication| publication.id)
                     || fact.projection.history.as_ref().is_some_and(|frozen| {
-                        frozen.position != history.len()
-                            || !history
-                                .result_ids()
-                                .eq(frozen.result_calls.iter().map(String::as_str))
+                        (prepared && frozen.position != history.len())
+                            || !history.matches_request_history(
+                                frozen,
+                                fact.projection.compaction.is_some(),
+                            )
                     })
                     || fact.projection.base_hashes
                         != initial
@@ -451,16 +465,22 @@ pub fn restore(
                 checkpoint,
             } => {
                 checkpoint.validate(&incoming)?;
-                if !pending.0.is_empty()
-                    || checkpoint.project_publication
-                        != publications.last().map(|publication| publication.id)
-                    || publications
-                        .last()
-                        .is_some_and(|publication| publication.window > checkpoint.source_window)
+                let new = checkpoint.prefix_hash.is_some();
+                if (!new
+                    && (!pending.0.is_empty()
+                        || checkpoint.project_publication
+                            != publications.last().map(|publication| publication.id)
+                        || checkpoint.source_sequence != covered_sequence
+                        || checkpoint.covered_items != history.len()))
+                    || pending.0.values().any(|response| !response.in_history)
+                    || checkpoint.project_publication.is_some_and(|id| {
+                        !publications.iter().any(|publication| {
+                            publication.id == id && publication.window <= checkpoint.source_window
+                        })
+                    })
                     || checkpoint.source_window != state.context.window
-                    || checkpoint.source_sequence != covered_sequence
+                    || checkpoint.source_sequence > covered_sequence
                     || checkpoint.source_sequence >= record.sequence
-                    || checkpoint.covered_items != history.len()
                     || checkpoint.input_retained != retained_input
                     || checkpoint.model != initial.settings.slug
                     || state
@@ -472,10 +492,21 @@ pub fn restore(
                         "检查点未覆盖当前封闭历史或活动任务",
                     ));
                 }
-                history = checkpoint.history;
+                if let Some(hash) = &checkpoint.prefix_hash {
+                    history = history
+                        .replace_compacted_prefix(
+                            checkpoint.covered_items,
+                            hash,
+                            &checkpoint.history,
+                        )
+                        .map_err(crate::result_budget::model_error)?;
+                    state.context = incoming.context;
+                } else {
+                    history = checkpoint.history;
+                    merge(&mut state, incoming);
+                }
                 retained_input = checkpoint.input_retained;
                 covered_sequence = record.sequence;
-                merge(&mut state, incoming);
             }
             RecordEvent::Accepted { state: incoming } => {
                 notices.clear();
@@ -483,7 +514,37 @@ pub fn restore(
                     return Err(ConversationFailure::new("存档在未封闭响应之后开始另一任务"));
                 }
                 state = incoming;
+                continued = None;
                 retained_input = false;
+                covered_sequence = record.sequence;
+            }
+            RecordEvent::ContinuedWithoutCompaction {
+                state: incoming,
+                source,
+            } => {
+                let (old, next) = state
+                    .turn
+                    .as_ref()
+                    .zip(incoming.turn.as_ref())
+                    .ok_or_else(|| ConversationFailure::new("压缩继续缺少原任务"))?;
+                if old.compaction_continuation != Some(source)
+                    || !matches!(old.status, TurnStatus::Failed(_))
+                    || !matches!(next.status, TurnStatus::Running)
+                    || next.compaction_continuation.is_some()
+                    || old.id != next.id
+                    || old.input_id != source.input
+                    || next.input_id != source.input
+                    || next.input != old.input
+                    || next.request_index != source.request
+                    || source.input_retained != retained_input
+                    || source.request >= crate::MAX_TURN_REQUESTS
+                    || !pending.0.is_empty()
+                {
+                    return Err(ConversationFailure::new("压缩继续与失败请求或原输入不一致"));
+                }
+                continued = Some((next.id, source.request));
+                notices.clear();
+                merge(&mut state, incoming);
                 covered_sequence = record.sequence;
             }
             RecordEvent::Response {
@@ -525,15 +586,30 @@ pub fn restore(
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
                     let settled = if let Some(acceptance) = &acceptance {
-                        let frozen = state
+                        let projection = &state
                             .turn
                             .as_ref()
                             .filter(|source| {
                                 source.id == turn.id && source.request_index == turn.request_index
                             })
                             .and_then(|source| source.requests.last())
-                            .and_then(|request| request.projection.history.as_ref())
                             .ok_or_else(|| ConversationFailure::new("存档响应缺少对应冻结请求"))?;
+                        let frozen = projection
+                            .projection
+                            .history
+                            .as_ref()
+                            .ok_or_else(|| ConversationFailure::new("存档响应缺少冻结历史"))?;
+                        if projection.projection.compaction.is_some()
+                            && output.has_compaction()
+                            && (!frozen.pending_calls.is_empty()
+                                || !history.accepts_compaction(&output)
+                                || projection.projection.compaction
+                                    == Some(agentelier_llm_model::RequestCompaction::SkipOnce))
+                        {
+                            return Err(ConversationFailure::new(
+                                "存档接受了越过开放调用或已禁用的压缩",
+                            ));
+                        }
                         let expected =
                             tasks.plan_delivery(&calls, &frozen.result_calls, !over_budget);
                         if acceptance.delivery != expected {
@@ -559,6 +635,9 @@ pub fn restore(
                         )
                         .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
                     retained_input = true;
+                    if let Some(request) = turn.requests.last_mut() {
+                        request.response_accepted = Some(true);
+                    }
                     covered_sequence = record.sequence;
                     turn.committed_steps = turn
                         .committed_steps

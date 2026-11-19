@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct PreparedRequestFact {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_accepted: Option<bool>,
     #[serde(default)]
     pub sending_started: bool,
     #[serde(default)]
@@ -128,6 +130,7 @@ impl crate::ActiveTurn<'_> {
             .as_mut()
             .ok_or_else(|| crate::ConversationFailure::new("请求记录缺少任务"))?;
         turn.requests.push(PreparedRequestFact {
+            response_accepted: Some(false),
             sending_started: false,
             response_status: None,
             request: turn.request_index,

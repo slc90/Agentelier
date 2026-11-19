@@ -53,7 +53,7 @@ pub fn registrations(client: Option<MemoryClient>) -> Vec<ToolRegistration> {
                     )
                 })
             },
-        ).shared_read(),
+        ).shared_read().text_result(),
         ToolRegistration::new(
             definition(
                 READ,
@@ -81,7 +81,7 @@ pub fn registrations(client: Option<MemoryClient>) -> Vec<ToolRegistration> {
                     )
                 })
             },
-        ).shared_read(),
+        ).shared_read().text_result(),
         ToolRegistration::new(
             definition(
                 REVISE,
@@ -114,7 +114,7 @@ pub fn registrations(client: Option<MemoryClient>) -> Vec<ToolRegistration> {
                     )
                 })
             },
-        ),
+        ).text_result(),
     ]
 }
 

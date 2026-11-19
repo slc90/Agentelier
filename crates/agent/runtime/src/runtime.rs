@@ -582,7 +582,7 @@ impl AgentRuntime {
                                                     }
                                                 }
                                             }
-                                            request @ (ConversationRequest::Send { .. } | ConversationRequest::Retry { .. }) => {
+                                            request @ (ConversationRequest::Send { .. } | ConversationRequest::Retry { .. } | ConversationRequest::ContinueWithoutCompaction { .. }) => {
                                                 if current_subject.is_none() { control.finished.cancel(); emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("请先登录当前账号后再开始任务".into())))?; continue; }
                                                 match conversation.start(id, request) {
                                                     Ok(view) => {

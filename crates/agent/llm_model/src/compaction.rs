@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 // Opaque protocol content must remain unchanged across persistence and replay.
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct CompactionItem(pub(crate) Value);
 impl CompactionItem {

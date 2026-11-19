@@ -139,6 +139,7 @@ pub struct ToolRegistration {
     definition: ToolDefinition,
     executor: Executor,
     access: ToolAccess,
+    image_result: bool,
 }
 
 impl ToolRegistration {
@@ -157,6 +158,7 @@ impl ToolRegistration {
             definition,
             executor: Executor::Function(Arc::new(executor)),
             access: ToolAccess::Exclusive,
+            image_result: true,
         }
     }
 
@@ -165,11 +167,17 @@ impl ToolRegistration {
         self
     }
 
+    pub fn text_result(mut self) -> Self {
+        self.image_result = false;
+        self
+    }
+
     fn process(definition: ToolDefinition, executor: Executor, access: ToolAccess) -> Self {
         Self {
             definition,
             executor,
             access,
+            image_result: false,
         }
     }
 
@@ -209,8 +217,8 @@ impl ToolRegistration {
     }
 
     fn limit_result(&self, result: ToolResult) -> ToolResult {
-        if matches!(self.definition.source, ToolSource::Builtin)
-            || result.output.summary().len() <= crate::MAX_TOOL_BODY_BYTES
+        if result.output.summary().len() <= crate::MAX_TOOL_BODY_BYTES
+            && (self.image_result || result.output.image().is_none())
         {
             return result;
         }
@@ -252,7 +260,7 @@ impl ToolCatalog {
                 output_schema: None,
                 description: format!("Modify UTF-8 text using a JSON object with required patch and workdir (string or null). Null workdir uses {}; relative workdir resolves there. Paths may be absolute or relative to workdir. Example: {{\"patch\":\"*** Begin Patch\\n*** Add File: hello.txt\\n+hello\\n*** End Patch\\n\",\"workdir\":null}}. Supports *** Add File:, *** Delete File:, *** Update File:, optional *** Move to: immediately after Update, @@ or @@ exact-anchor, context lines prefixed by space, - removals, + additions, and *** End of File after a chunk. Context must match exactly and uniquely. Read changed files before retrying. At most 64 actions, 8 MiB per file, 32 MiB prepared text. Preserves existing UTF-8 BOM and uniform LF/CRLF; new files use LF without BOM. Validates the whole patch before writing. Commits files separately, with actual action and temporary-file reports; errors or Stop preserve completed changes and never roll back. Does not overwrite existing add/move destinations.", directory.display()),
                 parameters: json!({"type":"object","properties":{"patch":{"type":"string"},"workdir":{"type":["string","null"]}},"required":["patch","workdir"],"additionalProperties":false}),
-            }, patch),
+            }, patch).text_result(),
             ToolRegistration::process(ToolDefinition {
                 name: "exec_command".into(),
                 mode: ToolMode::Asynchronous,
@@ -360,6 +368,7 @@ impl ToolCatalog {
                 definition: definition.clone(),
                 executor: registration.executor.clone(),
                 access: registration.access,
+                image_result: registration.image_result,
             });
         }
         if self
@@ -377,6 +386,11 @@ impl ToolCatalog {
     pub fn access(&self, name: &str) -> ToolAccess {
         self.find(name)
             .map_or(ToolAccess::Exclusive, |registration| registration.access)
+    }
+
+    pub fn may_return_image(&self, name: &str) -> bool {
+        self.find(name)
+            .is_some_and(|registration| registration.image_result)
     }
 
     pub fn display_source(&self, name: &str) -> Option<&str> {
