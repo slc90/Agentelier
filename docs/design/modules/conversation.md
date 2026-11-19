@@ -1,6 +1,6 @@
 # 聊天会话与协议历史
 
-`agentelier_conversation` 管理当前内存会话。内部 ChatSession 持有固定模型与推理设置、展示快照，以及空闲时的 ProtocolHistory。运行时签出 ActiveTurn，Turn Runner 独占活动记录和协议历史，消费模型增量并处理受控取消。Runtime 保管业务对象和任务句柄，回收后归还记录，LLM Model 负责协议解析；UI 只持有可重建的展示投影与未发送草稿。
+`agentelier_conversation` 管理当前内存会话。ChatSession 始终持有固定设置、会话历史、活动状态、队列和工具任务登记。Runtime 在同一个会话所有者上串行应用 Runner 请求。ActiveTurn 是一次同步操作期间对状态的借用。Runner 驱动当前任务并持有冻结材料，UI 消费可重建的展示投影。
 
 ## 一轮记录怎样提交
 
@@ -35,7 +35,7 @@ SessionSettings 还持有已解析的完整 InstructionSnapshot，创建时核�
 
 ## 取消控制
 
-Runtime 为每次生成保留独立取消令牌，并在接纳后绑定 Session、Turn 和 operation 身份。Connection 与共享 Host 直接提交控制，不等待普通命令或正文通道。UI 只记录停止中意图；执行所有者结束任务、收割 JoinHandle、排空最后增量后发布唯一终态。Runner 接收取消并结束网络、凭据等待和增量发送等待，工具执行返回实际取消结果后归还活动记录；Account 已开始的凭据旋转与持久化由其所有者独立完成。
+Runtime 为每次生成保留独立取消令牌，并在接纳后绑定 Session、Turn 和 operation 身份。Connection 与共享 Host 直接提交控制。Runner 接收取消并结束网络与凭据等待，工具返回实际结果后收尾。Runtime 等待 JoinHandle、排空增量并确认 Finished 提交后发布终态。Account 已开始的凭据旋转与持久化由其所有者独立完成。
 
 ## 输入与尝试身份
 
@@ -49,11 +49,11 @@ Create 接受准备区快照；Reset 核对当前 Session 身份并从执行侧�
 
 ## 活动记录与异常回收
 
-活动记录包含会话、轮次、操作和输入身份，以及固定设置、已有协议历史和展示内容。执行期间 Conversation 不持有可写历史副本；它只校验并接收安全累计快照。Runner 收到取消后结束模型等待，归还记录；Runtime 在 JoinHandle 真实回收后发布终态。异常退出或无法归还可信记录时，会话阻止发送和重试，重置或新建会话才恢复。
+活动状态记录会话、轮次、操作和输入身份。Conversation 持有唯一可写历史，Runtime 从当前状态生成展示快照。Runner 仅提交本轮操作并返回执行结果。异常退出或历史提交未确认时，会话阻止发送与重试，可重新加载存档恢复已确认事实。
 
 ## 工具步骤的保留
 
-会话固定工具目录。每个任务记录模型请求序号、工具输出项 ID、`call_id`、参数、结果和提交步数。完整响应先校验调用身份与冻结声明，持久保存原始调用项后才派发工具。同一会话的后续响应不得复用已提交的 `call_id`，包括已离开工作上下文的历史调用。工具成功、普通错误、超时、取消和未执行都通过匹配 `call_id` 的 `function_call_output` 封闭。全部结果收齐后才能组装下一模型请求。原输入仅在首次提交点写入，未完成响应不进入协议历史。已有提交点的任务通过新消息继续，以免原样重试重复执行。协议见 [Responses function calling](https://developers.openai.com/api/docs/guides/function-calling)。
+会话固定工具目录。完整响应校验调用身份和冻结声明后，把额度内的异步调用和应用分配的任务 ID 一并持久保存。任务原始关联包括 Session、Turn、请求序号、输出项 ID 和 `call_id`。开始与结果还校验执行实例，调度与投影均在回执后推进。会话任务投影按 Session 和提交修订接纳，前台文本继续按 operation 关联。所有调用结果仍使用原 `call_id` 封闭，全部结果收齐才发下一模型请求。相同会话的后续响应不得重用已提交的 `call_id`。协议见 [Responses function calling](https://developers.openai.com/api/docs/guides/function-calling)。
 
 工具时间线由 chat_ui 内部 tool_timeline 模块构造，卡片持有展示数据及展开状态，详情通过 WidgetryReadOnlyTextField 的公开 API 更新。正文与工具按 Session/Turn/请求序号/输出项身份复用行实体，并按协议输出顺序排列；UI 不据此重建协议历史。卡片展开选择保存于持久 ChatState，切页回来恢复；切换或新建时保存原 Session 的选择，回到原会话后恢复。
 
@@ -61,13 +61,13 @@ Create 接受准备区快照；Reset 核对当前 Session 身份并从执行侧�
 
 Runner 在模型或工具等待期间消费有界 Steer 输入，并通过独立于累计快照的可靠回执确认接纳。活动记录分别保存 Accepted、Applied、NotApplied 及实际请求序号。每个步骤边界排空已到达的输入，有待应用补充时跳过旧批次余项并封闭其结果。下一次请求前将原始输入与补充用户消息保留到历史，输入身份与顺序不合并；没有完整响应但已经应用补充的任务也不能原样重试。
 
-完成裁定由 Runner 关闭接纳通道，迟到但尚未接纳的消息可靠拒绝；已接纳而来不及应用的消息保留为未生效。Stop 不经过该通道。Runtime 在收尾等待任务时仍排空进度和可靠回执，避免取消回收被满通道阻塞。Connection 关联独立输入 ID，回执不释放活动任务占用。
+Conversation 在同一个操作中检查待应用补充并关闭输入接纳。已接纳的输入继续应用或留下未生效记录，迟到输入收到明确拒绝。Stop 走独立取消令牌。Runtime 收尾期间仍消费进度和回执，Connection 按输入 ID 关联回执。
 
 ## 会话待办与跨任务交接
 
-Conversation 管理最多 8 条 FIFO 待办及暂停状态。排队时保存独立输入 ID、原始输入与 Connection 预留的未来操作 ID；开始时才签出新 ActiveTurn。Runner 只推进已开始任务，返回的旧展示快照不能覆盖会话所有者新接纳的队列。
+Conversation 管理最多 8 条 FIFO 待办及暂停状态。排队时保存独立输入 ID、原始输入与 Connection 预留的未来操作 ID。正式开始时才建立活动状态。队列与前台推进分别更新自身的字段并持久提交。
 
-Runtime 在旧 JoinHandle 回收和活动历史归还后，才申请下一条并启动。非正常终态暂停队列，普通对话不会清除既有暂停。自动启动的控制身份发布到共享活动槽，使 Stop 和 Steer 总能匹配实际任务；旧操作和迟到拒绝不会释放新占用。Connection 在 Started 回执后关联预留操作，每个终态前显式交付对应最终快照，较新任务进度保留到其开始回执之后再消费。
+Runtime 在旧 JoinHandle 回收和终态确认后才启动下一条。非正常终态暂停队列。自动启动的控制身份发布到共享活动槽。Connection 在 Started 回执后关联预留操作，每个终态前交付对应最终快照。
 
 排队、移除和继续通过独立有界会话控制入口交给执行侧串行裁定；满队列拒绝，不替换旧输入。重置创建新会话并清空待办，关闭前停止接纳与自动出队，账号主体变化保留会话与待办，并持久记录 QueueSuspended。准备中的 Resume 保存暂停修订，迟到回执不能解除账号变化后的较新暂停。没有当前账号时执行侧拒绝开始任务或继续队列，不消费待办。
 
@@ -151,9 +151,9 @@ Compacted 保存 replacement history、Session/Turn/请求身份、原窗口与�
 
 ## 项目指令请求记录
 
-ActiveTurn 独占项目发布与原始历史；ProjectPublished 确认后才安装候选，项目项不算封闭步骤、不保留待发送用户输入。Turn 保存每次请求的窗口、项目引用及模型 prepare 的安全投影。自动项目类型与普通 User 区分，Retry 继续依据 committed_steps 与 Steer 判断。
+Conversation 持有项目发布与原始历史。ProjectPublished 确认后才安装候选，项目项不算封闭步骤、不保留待发送用户输入。Turn 保存每次请求的窗口、项目引用及模型 prepare 的安全投影。自动项目类型与普通 User 区分，Retry 继续依据 committed_steps 与 Steer 判断。
 
-项目变更依据最后确认发布的确定性正文比较。完整替换与清除只撤销自动项目来源，旧项留在原位置；A→B→A 每次改变均追加。文件读取失败作为普通可修复终态归还历史，旧材料保留核对，失败文本保存但不把旧材料当作当前磁盘规则。Queue 在执行时采集，Stop 等待阻塞工作真实结束。
+项目变更依据最后确认发布的确定性正文比较。完整替换与清除只撤销自动项目来源，旧项留在原位置；A→B→A 每次改变均追加。文件读取失败以普通可修复终态收束，保留已有历史，旧材料保留核对，失败文本保存但不把旧材料当作当前磁盘规则。Queue 在执行时采集，Stop 等待阻塞工作真实结束。
 
 成功压缩检查点保存覆盖的项目发布身份，确认安装后 ContextState.window 与最后发布的 window 不同，表示新窗口尚待明确发布。下一请求采集并只追加一份当前规则或清除通知；来源材料在工作历史之外保存，裁剪不删除旧请求材料。
 

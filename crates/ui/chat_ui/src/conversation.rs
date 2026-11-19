@@ -167,6 +167,8 @@ pub struct ChatState {
     pub inspection_sources_expanded: bool,
     pub project_rules_expanded: bool,
     pub session: Option<ChatSession>,
+    pub task_revision: Option<u64>,
+    pub tasks: Vec<ChatTask>,
     pub operation: Option<u64>,
     pub cancelling: bool,
     pub replacement: Option<ChatReplacement>,
@@ -176,6 +178,17 @@ pub struct ChatState {
     pub draft_revision: u64,
     pub(crate) pending_inputs: Vec<PendingDraft>,
     pub input_feedback: Option<String>,
+}
+
+#[derive(Clone, Reflect)]
+pub struct ChatTask {
+    pub id: String,
+    pub instance: Option<String>,
+    pub turn: u64,
+    pub request: u32,
+    pub call_id: String,
+    pub tool: String,
+    pub status: String,
 }
 impl ChatState {
     fn can_send(
@@ -368,6 +381,8 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
             };
             state.pending_inputs.clear();
             state.input_feedback = None;
+            state.task_revision = None;
+            state.tasks.clear();
             saved
         };
         let restored = {
@@ -1100,6 +1115,33 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         .drain()
         .collect();
     for event in events {
+        if let ConversationEvent::Tasks(update) = event.kind {
+            let mut state = world.resource_mut::<ChatState>();
+            if state
+                .session
+                .as_ref()
+                .is_some_and(|session| session.id == update.session)
+                && state
+                    .task_revision
+                    .is_none_or(|revision| update.revision > revision)
+            {
+                state.tasks = update
+                    .tasks
+                    .into_iter()
+                    .map(|task| ChatTask {
+                        id: task.id,
+                        instance: task.instance,
+                        turn: task.turn,
+                        request: task.request,
+                        call_id: task.call_id,
+                        tool: task.tool,
+                        status: task.status,
+                    })
+                    .collect();
+                state.task_revision = Some(update.revision);
+            }
+            continue;
+        }
         if let ConversationEvent::ArchiveCleanup(errors) = event.kind {
             world.resource_mut::<crate::ArchiveState>().cleanup_errors = errors;
             continue;
@@ -1158,6 +1200,8 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             switch_view(world, view)?;
             if event.operation_id != 0 {
                 let mut state = world.resource_mut::<ChatState>();
+                state.task_revision = None;
+                state.tasks.clear();
                 state.operation = None;
                 state.replacement = None;
                 state.error = None;
@@ -1308,7 +1352,8 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 error = reason,
                 "聊天操作未被接纳"
             ),
-            ConversationEvent::Updated(_)
+            ConversationEvent::Tasks(_)
+            | ConversationEvent::Updated(_)
             | ConversationEvent::Archives(_)
             | ConversationEvent::Opened(_)
             | ConversationEvent::ArchiveFailed(_)
@@ -1350,7 +1395,8 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 world.resource_mut::<InputIntents>().clear_accepted = clear;
                 world.resource_mut::<ChatState>().session = Some(project(view)?);
             }
-            ConversationEvent::InputReceipt(_)
+            ConversationEvent::Tasks(_)
+            | ConversationEvent::InputReceipt(_)
             | ConversationEvent::Archives(_)
             | ConversationEvent::Opened(_)
             | ConversationEvent::ArchiveFailed(_)

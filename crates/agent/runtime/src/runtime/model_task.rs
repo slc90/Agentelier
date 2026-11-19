@@ -1,9 +1,8 @@
 use super::{AgentEvent, AgentEventKind, ModelControl, RuntimeFailure, SharedModel, emit};
 use agentelier_account::{CredentialClient, DeliveryFailure};
-use agentelier_conversation::{
-    ActiveTurn, Conversation, ConversationEvent, ConversationFailure, RunnerEvent, SteerInput,
-};
+use agentelier_conversation::{Conversation, ConversationEvent, ConversationFailure, SteerInput};
 use agentelier_llm_model::{ModelFailure, ModelFailureKind, ModelRequest, ModelResult};
+use agentelier_turn_runner::RunnerEvent;
 use tokio::sync::mpsc;
 use tracing::debug;
 
@@ -11,12 +10,11 @@ pub(super) const PROGRESS_CAPACITY: usize = 32;
 pub(super) type ModelJoin = Result<Option<TaskResult>, tokio::task::JoinError>;
 pub(super) enum TaskResult {
     Model(Result<ModelResult, ModelFailure>),
-    Chat(Result<Box<ActiveTurn>, ConversationFailure>),
+    Chat(Result<(), ConversationFailure>),
 }
 pub(super) enum TaskRequest {
     Model(ModelRequest),
     Chat(
-        Box<ActiveTurn>,
         mpsc::Sender<RunnerEvent>,
         mpsc::Receiver<SteerInput>,
         std::path::PathBuf,
@@ -34,7 +32,6 @@ impl ModelTask {
         id: u64,
         control: ModelControl,
         credentials: CredentialClient,
-        store: agentelier_session_store::SessionStoreClient,
         request: TaskRequest,
     ) -> Self {
         let cancel = control.cancel.clone();
@@ -46,20 +43,17 @@ impl ModelTask {
                     result = agentelier_llm_model::execute(credentials, request) => Some(TaskResult::Model(result)),
                     _ = cancel.cancelled() => None,
                 },
-                TaskRequest::Chat(active, progress, steers, user_skills_root, memory) => {
+                TaskRequest::Chat(progress, steers, user_skills_root, memory) => {
                     Some(TaskResult::Chat(
                         agentelier_turn_runner::run(
-                            *active,
                             credentials,
                             cancel,
                             progress,
                             steers,
-                            store,
                             user_skills_root,
                             memory,
                         )
-                        .await
-                        .map(Box::new),
+                        .await,
                     ))
                 }
             };
@@ -79,16 +73,83 @@ pub(super) fn progress(
     conversation: &mut Conversation,
     id: u64,
     event: RunnerEvent,
+    store: &agentelier_session_store::SessionStore,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
     match event {
-        RunnerEvent::Progress(view) => {
-            let view = conversation.update(id, *view)?;
+        RunnerEvent::Edit(edit) => {
+            edit.apply(conversation, id);
+            Ok(())
+        }
+        RunnerEvent::Record(record) => {
+            let agentelier_turn_runner::TurnRecord { event, reply } = *record;
+            let session = event.state().session;
+            if let Err(failure) = conversation
+                .active_turn(id)
+                .and_then(|turn| turn.validate_record(&event))
+            {
+                drop(reply.send(Err(failure)));
+                return Ok(());
+            }
+            let store = store.client();
+            tokio::spawn(async move {
+                let result = store
+                    .append(event)
+                    .await
+                    .map_err(|failure| {
+                        ConversationFailure::new(format!("会话记录保存失败：{failure}"))
+                    })
+                    .and_then(|commit| {
+                        if commit.session == session {
+                            Ok(commit.sequence)
+                        } else {
+                            Err(ConversationFailure::new("会话记录提交身份不一致"))
+                        }
+                    });
+                drop(reply.send(result));
+            });
+            Ok(())
+        }
+        RunnerEvent::Image(attachment) => {
+            let agentelier_turn_runner::TurnImage {
+                session,
+                summary,
+                image,
+                reply,
+            } = attachment;
+            let valid = conversation
+                .active_turn(id)
+                .is_ok_and(|turn| turn.session_id() == session);
+            if !valid {
+                drop(reply.send(Err(ConversationFailure::new("图片附件不属于当前任务"))));
+                return Ok(());
+            }
+            let store = store.client();
+            tokio::spawn(async move {
+                let result = match store.save_image(session, summary, image).await {
+                    Ok(reference) => store.read_image(reference).await,
+                    Err(failure) => Err(failure),
+                };
+                drop(
+                    reply.send(
+                        result.map_err(|failure| ConversationFailure::new(failure.to_string())),
+                    ),
+                );
+            });
+            Ok(())
+        }
+        RunnerEvent::Progress => {
+            conversation.active_turn(id)?;
+            let view = conversation.current().ok_or(RuntimeFailure::ModelState)?;
             emit(
                 publish,
                 id,
                 AgentEventKind::Conversation(ConversationEvent::Updated(view)),
             )
+        }
+        RunnerEvent::TaskProgress => {
+            conversation.active_turn(id)?;
+            publish_tasks(conversation, publish)
         }
         RunnerEvent::Receipt(receipt) => emit(
             publish,
@@ -98,15 +159,31 @@ pub(super) fn progress(
     }
 }
 
+pub(super) fn publish_tasks(
+    conversation: &Conversation,
+    publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
+) -> Result<(), RuntimeFailure> {
+    if let Some(tasks) = conversation.tasks() {
+        debug!(session = %tasks.session, revision = tasks.revision, count = tasks.tasks.len(), "已发布会话任务状态");
+        emit(
+            publish,
+            0,
+            AgentEventKind::Conversation(ConversationEvent::Tasks(tasks)),
+        )?;
+    }
+    Ok(())
+}
+
 pub(super) fn drain_progress(
     conversation: &mut Conversation,
     id: u64,
     incoming: &mut Option<mpsc::Receiver<RunnerEvent>>,
+    store: &agentelier_session_store::SessionStore,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
     if let Some(receiver) = incoming {
         while let Ok(event) = receiver.try_recv() {
-            progress(conversation, id, event, publish)?;
+            progress(conversation, id, event, store, publish)?;
         }
     }
     *incoming = None;
@@ -133,9 +210,9 @@ pub(super) fn complete(
 ) -> Result<AgentEventKind, RuntimeFailure> {
     if chat {
         let view = match result {
-            Ok(Some(TaskResult::Chat(Ok(active)))) => conversation.finish(id, *active)?,
+            Ok(Some(TaskResult::Chat(Ok(())))) => conversation.finish(id)?,
             Ok(Some(TaskResult::Chat(Err(failure)))) => {
-                tracing::error!(operation_id = id, error = %failure, "聊天执行记录无法归还");
+                tracing::error!(operation_id = id, error = %failure, "聊天执行记录未确认");
                 conversation.interrupt(id)?
             }
             Err(_) => conversation.interrupt(id)?,
@@ -173,7 +250,7 @@ pub(super) async fn stop_model(
                     Some(receiver) => receiver.recv().await,
                     None => std::future::pending().await,
                 }} => match event {
-                    Some(event) => if let Err(failure) = progress(conversation,task.id,event,publish) {
+                    Some(event) => if let Err(failure) = progress(conversation,task.id,event,store,publish) {
                         tracing::error!(error=%failure,"取消收尾时状态交付失败，继续回收任务");
                         progress_failure=progress_failure.or(Some(failure));
                     },
@@ -182,7 +259,7 @@ pub(super) async fn stop_model(
             }
         };
         task.control.finished.cancel();
-        if let Err(failure) = drain_progress(conversation, task.id, incoming, publish) {
+        if let Err(failure) = drain_progress(conversation, task.id, incoming, store, publish) {
             tracing::error!(error=%failure,"取消收尾时末次进度交付失败");
             progress_failure = progress_failure.or(Some(failure));
         }
@@ -191,17 +268,24 @@ pub(super) async fn stop_model(
         let mut storage_failure = None;
         if task.chat {
             let (state, history) = conversation.archive().ok_or(RuntimeFailure::ModelState)?;
-            if let Err(failure) = store
+            match store
                 .client()
                 .append(agentelier_conversation::RecordEvent::Finished { state, history })
                 .await
             {
-                if let Some(view) =
-                    conversation.fail_storage(format!("任务已回收，但终态保存失败：{failure}"))
-                {
-                    event = AgentEventKind::Conversation(ConversationEvent::Finished(view));
+                Ok(commit) => {
+                    if conversation.settle_tasks(commit.sequence) {
+                        publish_tasks(conversation, publish)?;
+                    }
                 }
-                storage_failure = Some(RuntimeFailure::Store(failure));
+                Err(failure) => {
+                    if let Some(view) =
+                        conversation.fail_storage(format!("任务已回收，但终态保存失败：{failure}"))
+                    {
+                        event = AgentEventKind::Conversation(ConversationEvent::Finished(view));
+                    }
+                    storage_failure = Some(RuntimeFailure::Store(failure));
+                }
             }
         }
         let delivery = emit(publish, task.id, event);
@@ -222,7 +306,6 @@ pub(super) fn start_queued(
     incoming: &mut Option<mpsc::Receiver<RunnerEvent>>,
     shared: &SharedModel,
     credentials: &CredentialClient,
-    store: &agentelier_session_store::SessionStore,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
     user_skills_root: &std::path::Path,
     memory: Option<agentelier_memory::MemoryClient>,
@@ -230,7 +313,7 @@ pub(super) fn start_queued(
     if model.is_some() {
         return Ok(());
     }
-    let Some((id, view, active)) = conversation.start_queued()? else {
+    let Some((id, view)) = conversation.start_queued()? else {
         return Ok(());
     };
     let (control, steers) = ModelControl::new(id);
@@ -251,14 +334,7 @@ pub(super) fn start_queued(
         id,
         control,
         credentials.clone(),
-        store.client(),
-        TaskRequest::Chat(
-            Box::new(active),
-            sender,
-            steers,
-            user_skills_root.to_owned(),
-            memory,
-        ),
+        TaskRequest::Chat(sender, steers, user_skills_root.to_owned(), memory),
     ));
     Ok(())
 }

@@ -137,19 +137,30 @@ impl ProtocolArchive {
         contract: agentelier_tools::ToolContract,
         tools: &[agentelier_tools::ToolDefinition],
     ) -> Result<(), crate::ModelFailure> {
-        for (index, item) in self.items.iter().enumerate() {
-            if let ArchivedItem::FunctionCall { raw, call_id, name } = item {
-                let call = crate::stream::function_call(raw, index)?;
+        for call in self.function_calls() {
+            let call = call?;
+            call.validate_declaration(contract, tools.iter().find(|tool| tool.name == call.name))?;
+        }
+        Ok(())
+    }
+
+    pub fn function_calls(
+        &self,
+    ) -> impl Iterator<Item = Result<crate::FunctionCall, crate::ModelFailure>> {
+        self.items.iter().enumerate().filter_map(|(index, item)| {
+            let ArchivedItem::FunctionCall { raw, call_id, name } = item else {
+                return None;
+            };
+            Some(crate::stream::function_call(raw, index).and_then(|call| {
                 if raw.get("type").and_then(Value::as_str) != Some("function_call")
                     || &call.call_id != call_id
                     || &call.name != name
                 {
                     return Err(crate::model::protocol("历史函数调用身份或协议不一致"));
                 }
-                call.validate_declaration(contract, tools.iter().find(|tool| &tool.name == name))?;
-            }
-        }
-        Ok(())
+                Ok(call)
+            }))
+        })
     }
 
     pub fn seal_interrupted(

@@ -4,10 +4,11 @@ use agentelier_account::{
 use agentelier_conversation::SessionId;
 use agentelier_conversation::{
     Conversation, ConversationEvent, ConversationFailure, ConversationRequest, MAX_PENDING_STEERS,
-    RunnerEvent, SessionCommand, SteerInput,
+    SessionCommand, SteerInput,
 };
 use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
 use agentelier_memory::Memory;
+use agentelier_turn_runner::RunnerEvent;
 mod creation;
 mod deleting;
 mod loading;
@@ -429,6 +430,7 @@ impl AgentRuntime {
                                         let event = pending.complete(*result, &operations, &mut conversation, &mcp_connections);
                                         let opened = matches!(&event, ConversationEvent::Opened(_));
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
+                                        if opened { model_task::publish_tasks(&conversation, &publish)?; }
                                         if opened && catalog.is_none() {
                                             match store.client().scan() {
                                                 Ok(reply) => catalog = Some(reply),
@@ -442,7 +444,7 @@ impl AgentRuntime {
                                         match applied.kind { recording::AppliedKind::Suspended => suspending = suspending.checked_sub(1).ok_or(RuntimeFailure::ModelState)?, recording::AppliedKind::Queue => pending_queue = false, recording::AppliedKind::Finished => finalizing = false }
                                         if applied.failed && let Some(control) = owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.as_ref() { control.cancel.cancel(); }
                                         if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && !pending_queue && !finalizing && !runtime_shutdown.is_cancelled() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client))?;
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client))?;
                                         }
                                     }
                                     Command::Created(result) => {
@@ -466,7 +468,6 @@ impl AgentRuntime {
                                             id,
                                             control,
                                             owner_credentials.clone(),
-                                            store.client(),
                                             TaskRequest::Model(request),
                                         ));
                                     }
@@ -474,7 +475,7 @@ impl AgentRuntime {
                                         let task =
                                             model.take().ok_or(RuntimeFailure::ModelState)?;
                                         debug!(operation_id = task.id, "模型操作已真实结束并回收");
-                                        drain_progress(&mut conversation, task.id, &mut progress_events, &publish)?;
+                                        drain_progress(&mut conversation, task.id, &mut progress_events, &store, &publish)?;
                                         let event = complete(&mut conversation, task.id, task.chat, result)?;
                                         if task.chat {
                                             let (state, history) = conversation.archive().ok_or(RuntimeFailure::ModelState)?;
@@ -486,7 +487,7 @@ impl AgentRuntime {
                                             capture_delivery(emit(&publish, task.id, event), &mut delivery_failure);
                                         }
                                         if !finalizing && !pending_queue && suspending == 0 && delivery_failure.is_none() && !runtime_shutdown.is_cancelled() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&store,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client))?;
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client))?;
                                         }
                                     }
                                     Command::Session(command) => {
@@ -517,7 +518,7 @@ impl AgentRuntime {
                                                 .as_ref()
                                                 .filter(|task| task.chat)
                                                 .ok_or(RuntimeFailure::ModelState)?;
-                                            progress(&mut conversation, task.id, event, &publish)?;
+                                            progress(&mut conversation, task.id, event, &store, &publish)?;
                                         } else {
                                             progress_events = None;
                                         }
@@ -576,7 +577,7 @@ impl AgentRuntime {
                                             request @ (ConversationRequest::Send { .. } | ConversationRequest::Retry { .. }) => {
                                                 if current_subject.is_none() { control.finished.cancel(); emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("请先登录当前账号后再开始任务".into())))?; continue; }
                                                 match conversation.start(id, request) {
-                                                    Ok((view, request)) => {
+                                                    Ok(view) => {
                                                         let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
                                                         control.turn.set((view.id, turn.id.0)).map_err(|_| RuntimeFailure::ModelState)?;
                                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?=Some(control.clone());
@@ -594,8 +595,7 @@ impl AgentRuntime {
                                                             id,
                                                             control,
                                                             owner_credentials.clone(),
-                                                            store.client(),
-                                                            TaskRequest::Chat(Box::new(request), sender, steers, data_root.join("skills"), memory.as_ref().ok().map(Memory::client)),
+                                                            TaskRequest::Chat(sender, steers, data_root.join("skills"), memory.as_ref().ok().map(Memory::client)),
                                                         ));
                                                     }
                                                     Err(failure) => {

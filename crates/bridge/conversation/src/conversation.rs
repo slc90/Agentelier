@@ -60,6 +60,22 @@ pub struct ToolView {
     pub output: Option<String>,
     pub retained: bool,
 }
+
+pub struct SessionTask {
+    pub id: String,
+    pub instance: Option<String>,
+    pub turn: u64,
+    pub request: u32,
+    pub call_id: String,
+    pub tool: String,
+    pub status: String,
+}
+
+pub struct SessionTasks {
+    pub session: SessionId,
+    pub revision: u64,
+    pub tasks: Vec<SessionTask>,
+}
 #[derive(Clone, Copy)]
 pub enum SteerState {
     Accepted,
@@ -251,6 +267,7 @@ fn project_context(state: agentelier_conversation::ProjectContextState) -> Proje
 }
 
 pub enum ConversationEvent {
+    Tasks(SessionTasks),
     ArchiveCleanup(Vec<String>),
     Deleted {
         session: SessionId,
@@ -537,18 +554,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
                 arguments_truncated: tool.arguments_truncated,
                 output: tool.output,
                 retained: tool.retained,
-                status: match tool.status {
-                    agentelier_conversation::ToolStatus::Unconfirmed => "unconfirmed",
-                    agentelier_conversation::ToolStatus::Receiving => "receiving",
-                    agentelier_conversation::ToolStatus::Pending => "pending",
-                    agentelier_conversation::ToolStatus::Running => "running",
-                    agentelier_conversation::ToolStatus::Succeeded => "succeeded",
-                    agentelier_conversation::ToolStatus::Failed => "failed",
-                    agentelier_conversation::ToolStatus::TimedOut => "timed_out",
-                    agentelier_conversation::ToolStatus::Cancelled => "cancelled",
-                    agentelier_conversation::ToolStatus::NotExecuted => "not_executed",
-                }
-                .into(),
+                status: tool_status(tool.status).into(),
             })
             .collect(),
         id: turn.id.0,
@@ -593,8 +599,42 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
     }
 }
 
+fn tool_status(status: agentelier_conversation::ToolStatus) -> &'static str {
+    use agentelier_conversation::ToolStatus;
+    match status {
+        ToolStatus::Unconfirmed => "unconfirmed",
+        ToolStatus::Receiving => "receiving",
+        ToolStatus::Pending => "pending",
+        ToolStatus::Running => "running",
+        ToolStatus::Succeeded => "succeeded",
+        ToolStatus::Failed => "failed",
+        ToolStatus::TimedOut => "timed_out",
+        ToolStatus::Cancelled => "cancelled",
+        ToolStatus::NotExecuted => "not_executed",
+    }
+}
+
 pub fn convert(event: agentelier_conversation::ConversationEvent) -> ConversationEvent {
     match event {
+        agentelier_conversation::ConversationEvent::Tasks(update) => {
+            ConversationEvent::Tasks(SessionTasks {
+                session: update.session,
+                revision: update.revision,
+                tasks: update
+                    .tasks
+                    .into_iter()
+                    .map(|task| SessionTask {
+                        id: task.task.0.to_string(),
+                        instance: task.instance.map(|instance| instance.to_string()),
+                        turn: task.turn.0,
+                        request: task.request,
+                        call_id: task.call_id,
+                        tool: task.tool,
+                        status: tool_status(task.status).into(),
+                    })
+                    .collect(),
+            })
+        }
         agentelier_conversation::ConversationEvent::ArchiveCleanup(errors) => {
             ConversationEvent::ArchiveCleanup(errors)
         }

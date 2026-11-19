@@ -81,7 +81,6 @@ flowchart TD
     Runner --> Memory
     Runner --> Account
     Runner --> Tools["Agent · tools"]
-    Runner --> SessionStore
     SessionStore --> Tools
     Model --> Skills
     Model --> ProjectContext
@@ -176,11 +175,11 @@ flowchart LR
 
 ## 内存聊天与流式投影
 
-Conversation 固定 Session 的模型与推理设置，分配独立 Session/Turn 身份并管理稳定会话；开始任务时签出 ActiveTurn 和协议历史，由 Turn Runner 独占推进，Conversation 只保留占用身份和展示快照。Runtime 拥有业务对象及唯一网络任务、取消和 JoinHandle，回收后归还记录。Runner 每任务通过同一 CredentialClient 捕获当前执行身份，模型请求核对该任务的账号与认证生命周期，不重新读取认证文件，也不按创建账号限制会话。账号变化保留本地记录并持久暂停队列。当前支持一个内存 Session 的连续多轮交流，空闲时可确认新建或重置为全新身份与空历史。成功输入与完整协议输出由该 Session 原子提交，失败和取消只保留展示记录。
+Conversation 固定 Session 的模型与推理设置，始终持有会话历史、前台状态和任务账本。Runtime 串行处理 Runner 对当前 Turn 的操作，并持有任务句柄、取消令牌与回收信号。Runner 获取冻结材料、驱动模型和工具，并等待实际保存回执。Runner 每任务通过同一 CredentialClient 捕获当前凭据身份，模型请求核对账号与认证生命周期。账号变化保留本地记录并持久暂停队列。当前支持一个内存 Session 的连续多轮交流，空闲时可确认新建或重置为全新身份与空历史。
 
 LLM Model 解析 Responses 输出项、内容段、公开 phase 和文本增量；只有 response.completed 及可接受完整输出才成功。聊天无总生成时长限制，合法 SSE 活动维持 120 秒空闲期限；连接验证仍保留原总超时。聊天启用固定 Direct function tools；LLM Model 只解析调用和映射结果，Runner 在完整响应和身份检查后执行。普通拒绝正文正常展示。任务 join 后才释放操作占用，失败/取消保留已经显示的部分回复。
 
-网络任务经容量为 32 的有界 Tokio 通道传递文本变化，发送等待可被任务取消。Runner 消费模型增量并发布累计展示快照，Runtime 校验所属身份并转交；Bridge 保留单个可替换快照，原先的有界控制/终态队列保持独立。每个快照包含此前全部消息和文本，合并不丢片段或跨轮次混接；终态返回前先交付最后快照。AgentHost 每次更新最多消费 32 项，仍有消息时继续唤醒，避免高频文本长期占用一个界面更新。
+网络任务经容量为 32 的有界 Tokio 通道传递文本变化。Runner 将增量交给运行时的会话所有者，Runtime 从最新状态生成累计展示快照。Bridge 合并可替换快照，并通过可靠队列送达任务回执和终态。任务账本另按会话 UUID 和修订投影，独立于当前前台操作。AgentHost 每次更新最多消费 32 项，仍有消息时继续唤醒。
 
 chat_ui 仅管理展示投影与草稿，通过 BSN 和 Widgetry 多行 TextField、ScrollArea 构造消息列表。接纳前保留草稿；Accepted 后只清空尚未被继续编辑的原内容。消息更新复用既有行实体，切换设置页不改变后台任务，返回时按投影恢复。会话与历史边界见[内存会话与协议历史](modules/conversation.md)，正文投影见[Markdown 展示](modules/markdown.md)。
 
@@ -190,7 +189,7 @@ Markdown 的原文、解析块和原生布局由独立 UI crate 管理，不依�
 
 ## 提示词库与固定指令
 
-项目文件发现独立于固定提示词库：Runner 在每个逻辑模型请求准备时调用 Project Context，在可等待回收的阻塞工作中采集；ActiveTurn 独占最近结果，Bridge 将来源及状态转成只读投影，Chat UI 在现有会话核对入口展示。项目正文首次发布为独立的 user 协议项，经持久确认后进入冻结请求；基础保持 developer。完整来源和逐请求安全投影随会话存档保存。读取失败阻止本任务请求，可修复后重试；详见[项目上下文](modules/project-context.md)。
+项目文件发现独立于固定提示词库：Runner 在每个逻辑模型请求准备时调用 Project Context，在可等待回收的阻塞工作中采集；Conversation 保管最近结果，Bridge 将来源及状态转成只读投影，Chat UI 在现有会话核对入口展示。项目正文首次发布为独立的 user 协议项，经持久确认后进入冻结请求；基础保持 developer。完整来源和逐请求安全投影随会话存档保存。读取失败阻止本任务请求，可修复后重试；详见[项目上下文](modules/project-context.md)。
 
 会话核对可按 Turn 和实际请求序号选择保存材料，显示固定基础、项目发布与来源、包装正文和协议顺序，并区分准备、进入发送阶段及收到 HTTP 响应的事实。最近采集状态独立展示；切页与切会话仅维护各自的选择和控件状态，不重新读取源文件，不公开推理／压缩密文或认证信息。
 
@@ -198,9 +197,9 @@ Prompts 是无 Bevy、网络和线程依赖的业务库，管理来源与派生�
 
 Chat UI 管理提示词库、组合预览和会话核对界面，并在创建 Session 时提交解析后的完整 InstructionSnapshot。Conversation 固定快照；重置复制当前设置，重试沿用原快照。LLM Model 在每次请求中将快照转换为有序 `developer` 消息，置于已提交协议历史和本轮输入之前，避免把指令重复写入历史。Bridge 传递快照与请求指令安全投影；UI 可核对文本、来源版本、哈希、角色及顺序，不公开凭据或加密推理内容。详见[提示词管理](modules/prompts.md)。
 
-任务取消由 Runner 接收并结束当前模型等待，随后归还已有活动记录；Runtime 不在外层丢弃整个 Runner。普通网络失败和停止保留既有展示与历史语义；异常退出不能归还可信记录时，当前会话禁止继续发送或重试，用户必须重置或新建会话。
+Runner 接收取消并结束网络等待，工具按实际结果收尾。Runtime 等待真实回收，Conversation 保留已确认的历史和最新展示。异常退出或提交不确定时阻止发送与重试，用户可重新加载存档。
 
-任务输入、完整协议响应、工具开始与返回、封闭步骤、Steer、Queue 和终态经同一个 Session Store 工作者追加到会话日志。Runner 等待副作用前的记录确认，并在保存失败后保留实际结果、停止后续执行；Runtime 准备并确认队列变更，在真实回收及 Finished 提交后才发布终态和自动出队。磁盘记录不含账号所有权，不从 UI 摘要构造请求。启动扫描并打开最近会话，UI 的本地选择器可打开其他存档；读取不依赖认证或模型目录，不自动执行任务。
+任务输入、完整协议响应和异步任务登记、工具开始与返回、封闭步骤、Steer、Queue 和终态经 Runtime 交给同一个 Session Store 工作者。完整响应与任务 ID 一并追加，确认后才公布任务或派发工具。Runtime 等待实际回执期间仍能接纳控制与普通凭据操作。在真实回收及 Finished 提交后才发布前台终态和自动出队。启动扫描并打开最近会话，UI 可打开其他本地存档。
 
 Connection 创建本次运行共享的 OperationSequence；普通请求与恢复待办的重新绑定都从同一原子序列取得身份，避免新旧控制混用。过去的任务句柄、取消令牌和进程会话不恢复。Conversation 重建业务状态及独立队列，LLM Model 验证原始协议并为缺失结果生成 aborted 请求投影，Store 负责附件校验和保留原件后的尾部修复。恢复失败只影响目标会话，当前内容继续保留。
 
@@ -210,11 +209,11 @@ Connection 创建本次运行共享的 OperationSequence；普通请求与恢复
 
 会话创建时固定只读工具目录，请求声明与分发共用它。新建 `gpt-6.2-sol` 会话把冻结工具目录作为每个请求的 developer `additional_tools` 首项。其他模型和旧平铺会话继续使用同步契约。Tools 不依赖模型、账号、Bridge 或 Bevy。四项内置工具提供任务级 PowerShell 进程会话、标准输入、UTF-8 文件补丁和静态 PNG/JPEG 图片结果。编译进程序的提供者可通过 ToolRegistration 配对声明和执行器，恢复时由 Conversation 按工具来源和保存的声明重新绑定。Runner 每任务最多发送 32 次模型请求并接纳 64 次工具调用。完整响应持久确认后按输出顺序串行执行，超额整批写入未执行结果后触限。每个完整模型输出及其全部匹配工具结果形成封闭步骤，失败或停止仍归还已封闭历史。已有提交点的任务禁用原样重试。调用和正文按任务内请求序号区分，接收中的参数仅用于展示。
 
-Steer 由同一个 Runner 接纳与应用，通过容量 8 的任务输入通道进入，Stop 仍走取消令牌。可靠回执与累计快照共用 Runner 到 Runtime 的有界传递，但在 Connection 中进入容量 32 的可靠结果队列，容纳边界上的接纳和应用回执；正文快照仍可合并。Runtime 收尾期间持续排空事件至真实回收。UI 用草稿修订和输入身份关联回执，跨请求消息身份仍由 Conversation 管理。
+Steer 通过容量 8 的任务输入通道交给 Runner，由 Conversation 裁决接纳、应用和最终关门。Stop 仍走取消令牌。Connection 的容量 32 可靠结果队列承载接纳、应用和任务投影，正文快照可合并。Runtime 收尾期间持续排空事件至真实回收，UI 用草稿修订和输入身份关联回执。
 
 ## 会话队列与唯一活动任务
 
-Conversation 保存 FIFO 待办和暂停状态。Connection 从统一操作序列预留待办任务身份；容量 16 的会话控制通道传递排队、移除与继续，绕过普通发送要求空闲的入口但不启动并行任务。Runtime 回收旧任务并归还历史后，按队列状态串行启动下一条，Stop/Steer 使用共享活动控制槽核对新身份。
+Conversation 保存 FIFO 待办和暂停状态。Connection 从统一操作序列预留待办任务身份。容量 16 的会话控制通道传递排队、移除与继续。Runtime 在回收旧任务并确认终态后按队列状态串行启动下一条，Stop 和 Steer 使用共享活动控制槽核对新身份。
 
 队列控制回执和自动 Started 走可靠路径；Connection 区分待接纳操作、未来预留身份和当前活动操作。跨任务快照允许合并，旧任务的 Finished 前交付该任务最终 Updated，较新任务快照不被旧终态丢弃。UI 待办投影与聊天内容流分开，不重建输入框；排队输入启动前不进入模型上下文。失败、停止与触限使队列暂停，普通消息完成不自动恢复暂停。
 
@@ -228,7 +227,7 @@ chat_ui 在模型准备区保留内存目录候选并复用 Widgetry 目录选�
 
 Tools 的 process 模块拥有 PowerShell、Windows Job 与输出读取任务，output 模块负责 UTF-8 增量解码及有界开头/尾部缓冲。Runner 提供固定目录及取消令牌，进度交付失败也先请求取消并等待工具收尾，不丢弃执行 Future。process-wrap 负责挂起后入 Job、恢复及进程树终止；win32job 在恢复前登记外层观察 Job，以 active_processes 确认整个进程组结束，再调用一次 wait。这样不以根 Shell 退出或 process-wrap 的缓存状态作为子进程回收证据。两层 Job 均只服务生命周期，不设置访问隔离；源码保持 unsafe 禁令。Tokio 增加 process feature，依赖由 Workspace 统一管理。
 
-Runner 为每个用户任务独占 Tools ExecutionContext，按 UUID 管理最多 8 个 Process。process 模块负责单进程组的启动与回收，sessions 模块处理等待、输入、EOF、终止、ID 归属和统一收尾；输出读取在工具调用返回后仍持续运行。exec_command 与 write_stdin 均采用 0–30000 毫秒等待窗口，没有命令全生命周期的 15 秒终止器。Runner 的所有结果路径都先等待 context.cleanup，再归还 ActiveTurn；Runtime 继续只负责真实任务句柄回收，不接管进程细节。自动收尾记录通过 Conversation、Bridge 与 UI 安全投影，TaskPhase 增加进程回收阶段，原始工具输出不被改写。旧诊断登记、实现与专属执行包装已移除；旧名称返回 unknown_tool。
+Runner 为每个用户任务独占 Tools ExecutionContext，按 UUID 管理最多 8 个 Process。process 模块负责单进程组的启动与回收，sessions 模块处理等待、输入、EOF、终止、ID 归属和统一收尾；输出读取在工具调用返回后仍持续运行。exec_command 与 write_stdin 均采用 0–30000 毫秒等待窗口，没有命令全生命周期的 15 秒终止器。Runner 的所有结果路径都先等待 context.cleanup，再结束执行。Runtime 继续只负责真实任务句柄回收，不接管进程细节。自动收尾记录通过 Conversation、Bridge 与 UI 安全投影，TaskPhase 增加进程回收阶段，原始工具输出不被改写。旧诊断登记、实现与专属执行包装已移除；旧名称返回 unknown_tool。
 
 补丁由 Tools 的 patch 模块按解析、准备与文件提交拆分。全补丁完成精确匹配、路径冲突和资源预算校验后才写入；已有 UTF-8 BOM 与统一行尾保留。单文件通过同目录临时文件替换，跨文件不回滚，动作日志区分目标写入、源删除、目录创建及临时文件清理。blocking 模块始终等待工作线程，Stop 和 15 秒期限仅停止后续动作，当前提交取得真实结果后才返回。工具详情保存有界动作报告，卡片概括文件完成数量；凭据与完整文件内容不进入日志。
 

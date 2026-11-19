@@ -1,4 +1,4 @@
-use crate::{SessionId, SessionView, TurnId};
+use crate::{SessionId, TurnId};
 
 pub const MAX_PENDING_STEERS: usize = 8;
 
@@ -30,8 +30,4 @@ pub enum InputDecision {
 pub struct InputReceipt {
     pub id: u64,
     pub decision: InputDecision,
-}
-pub enum RunnerEvent {
-    Progress(Box<SessionView>),
-    Receipt(InputReceipt),
 }

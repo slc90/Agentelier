@@ -1,22 +1,13 @@
-use crate::control;
+use crate::{
+    access::{RunnerEvent, TurnAccess},
+    control,
+};
 use agentelier_account::{CredentialClient, ExecutionIdentity};
 use agentelier_conversation::RecordEvent;
-use agentelier_conversation::{
-    ActiveTurn, ConversationFailure, InputDecision, RunnerEvent, SteerInput, TurnStatus,
-};
+use agentelier_conversation::{ConversationFailure, InputDecision, SteerInput, TurnStatus};
 use agentelier_llm_model::{GenerationResult, ModelFailure, ModelFailureKind};
 use agentelier_tools::ToolResult;
 
-async fn record(
-    store: &agentelier_session_store::SessionStoreClient,
-    event: RecordEvent,
-) -> Result<u64, ConversationFailure> {
-    store
-        .append(event)
-        .await
-        .map(|commit| commit.sequence)
-        .map_err(|failure| ConversationFailure::new(format!("会话记录保存失败：{failure}")))
-}
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -25,43 +16,43 @@ const MAX_MODEL_REQUESTS: usize = 32;
 const MAX_TOOL_CALLS: usize = 64;
 
 async fn publish(
-    active: &ActiveTurn,
     progress: &mpsc::Sender<RunnerEvent>,
     cancel: &CancellationToken,
 ) -> Result<(), ConversationFailure> {
     tokio::select! { biased;
         _ = cancel.cancelled() => Ok(()),
-        result = progress.send(RunnerEvent::Progress(Box::new(active.view()))) => result.map_err(|_| ConversationFailure::new("任务进度接收端已关闭")),
+        result = progress.send(RunnerEvent::Progress) => result.map_err(|_| ConversationFailure::new("任务进度接收端已关闭")),
     }
 }
 
 async fn request_once(
-    active: &mut ActiveTurn,
+    active: &TurnAccess,
     credentials: CredentialClient,
     identity: &ExecutionIdentity,
     cancel: &CancellationToken,
     progress: &mpsc::Sender<RunnerEvent>,
     steers: &mut mpsc::Receiver<SteerInput>,
-    store: &agentelier_session_store::SessionStoreClient,
 ) -> Result<Option<Result<GenerationResult, ModelFailure>>, ConversationFailure> {
     let (sender, mut events) = mpsc::channel(MODEL_PROGRESS_CAPACITY);
-    let request = active.request()?;
+    let request = active.call(|mut turn| turn.request()).await?;
     let prepared = match agentelier_llm_model::prepare(request) {
         Ok(prepared) => prepared,
         Err(failure) => return Ok(Some(Err(failure))),
     };
-    active.request_prepared(prepared.projection().clone())?;
-    record(
-        store,
-        RecordEvent::RequestPrepared {
-            state: active.stored_state(),
-        },
-    )
-    .await?;
+    let projection = prepared.projection().clone();
+    let event = active
+        .call(move |mut turn| {
+            turn.request_prepared(projection)?;
+            Ok(RecordEvent::RequestPrepared {
+                state: turn.stored_state(),
+            })
+        })
+        .await?;
+    active.record(event).await?;
     if cancel.is_cancelled() {
         return Ok(None);
     }
-    publish(active, progress, cancel).await?;
+    publish(progress, cancel).await?;
     let outcome = {
         let generation = agentelier_llm_model::generate(credentials, prepared, identity, sender);
         tokio::pin!(generation);
@@ -70,43 +61,52 @@ async fn request_once(
                 result = &mut generation => break Some(result),
                 _ = cancel.cancelled() => break None,
                 input = steers.recv(), if !steers.is_closed() => {
-                    if let Some(input) = input {control::accept(active,input,progress,store).await?;publish(active,progress,cancel).await?;}
+                    if let Some(input) = input {control::accept(active,input,progress).await?;publish(progress,cancel).await?;}
                 }
                 event = events.recv() => {
                     if let Some(event) = event {
-                        let request_progress = matches!(event, agentelier_llm_model::StreamEvent::Sending | agentelier_llm_model::StreamEvent::ResponseReceived { .. });
-                        if let Err(failure) = active.update(event) {
-                            break Some(Err(protocol_failure(failure)));
+                        if let Err(failure) = apply_stream_event(active, event).await? {
+                            break Some(Err(failure));
                         }
-                        if request_progress {
-                            record(store, RecordEvent::RequestProgress { state: active.stored_state() }).await?;
-                        }
-                        publish(active, progress, cancel).await?;
+                        publish(progress, cancel).await?;
                     }
                 }
             }
         }
     };
     while let Ok(event) = events.try_recv() {
-        let request_progress = matches!(
-            event,
-            agentelier_llm_model::StreamEvent::Sending
-                | agentelier_llm_model::StreamEvent::ResponseReceived { .. }
-        );
-        if let Err(failure) = active.update(event) {
-            return Ok(Some(Err(protocol_failure(failure))));
-        }
-        if request_progress {
-            record(
-                store,
-                RecordEvent::RequestProgress {
-                    state: active.stored_state(),
-                },
-            )
-            .await?;
+        if let Err(failure) = apply_stream_event(active, event).await? {
+            return Ok(Some(Err(failure)));
         }
     }
     Ok(outcome)
+}
+
+async fn apply_stream_event(
+    active: &TurnAccess,
+    event: agentelier_llm_model::StreamEvent,
+) -> Result<Result<(), ModelFailure>, ConversationFailure> {
+    let progress = matches!(
+        event,
+        agentelier_llm_model::StreamEvent::Sending
+            | agentelier_llm_model::StreamEvent::ResponseReceived { .. }
+    );
+    match active
+        .call(move |mut turn| {
+            turn.update(event)?;
+            Ok(progress.then(|| RecordEvent::RequestProgress {
+                state: turn.stored_state(),
+            }))
+        })
+        .await
+    {
+        Ok(Some(event)) => {
+            active.record(event).await?;
+        }
+        Ok(None) => {}
+        Err(failure) => return Ok(Err(protocol_failure(failure))),
+    }
+    Ok(Ok(()))
 }
 fn protocol_failure(failure: ConversationFailure) -> ModelFailure {
     ModelFailure {
@@ -121,38 +121,41 @@ fn protocol_failure(failure: ConversationFailure) -> ModelFailure {
 }
 
 pub async fn run(
-    mut active: ActiveTurn,
     credentials: CredentialClient,
     cancel: CancellationToken,
     progress: mpsc::Sender<RunnerEvent>,
     mut steers: mpsc::Receiver<SteerInput>,
-    store: agentelier_session_store::SessionStoreClient,
     user_skills_root: std::path::PathBuf,
     memory: Option<agentelier_memory::MemoryClient>,
-) -> Result<ActiveTurn, ConversationFailure> {
-    let mut context = agentelier_tools::ExecutionContext::new(
-        active.view().settings.working_directory,
-        active.view().settings.image_input,
-    );
-    let admitted = record(
-        &store,
-        RecordEvent::Accepted {
-            state: active.stored_state(),
-        },
-    )
-    .await;
+) -> Result<(), ConversationFailure> {
+    let active = TurnAccess::new(progress.clone());
+    let settings = active.call(|turn| Ok(turn.settings())).await?;
+    let mut context =
+        agentelier_tools::ExecutionContext::new(settings.working_directory, settings.image_input);
+    let event = active
+        .call(|turn| {
+            Ok(RecordEvent::Accepted {
+                state: turn.stored_state(),
+            })
+        })
+        .await?;
+    let admitted = active.record(event).await;
     if let Ok(sequence) = admitted {
-        active.recorded(sequence);
+        active
+            .call(move |mut turn| {
+                turn.recorded(sequence);
+                Ok(())
+            })
+            .await?;
     }
     let outcome = if admitted.is_ok() {
         run_task(
-            &mut active,
+            &active,
             &mut context,
             credentials,
             &cancel,
             &progress,
             &mut steers,
-            &store,
             user_skills_root,
             memory,
         )
@@ -160,9 +163,9 @@ pub async fn run(
     } else {
         admitted.map(|_| TurnStatus::Cancelled)
     };
-    let phase = active.reaping();
+    let phase = active.call(|mut turn| turn.reaping()).await;
     let projection = if phase.is_ok() {
-        publish(&active, &progress, &cancel).await
+        publish(&progress, &cancel).await
     } else {
         phase
     };
@@ -174,59 +177,65 @@ pub async fn run(
     };
     let report = context.cleanup(reason).await;
     let cleanup_failed = report.failed;
-    active.process_cleanup(report)?;
+    active
+        .call(move |mut turn| turn.process_cleanup(report))
+        .await?;
     control::close(&mut steers, &progress).await?;
     let status = match outcome.and_then(|status| projection.map(|()| status)) {
         Ok(_) if cleanup_failed => TurnStatus::Failed("任务进程清理失败，执行已暂停".into()),
         Ok(status) => status,
         Err(failure) => {
-            active.block_execution();
+            active
+                .call(|mut turn| {
+                    turn.block_execution();
+                    Ok(())
+                })
+                .await?;
             TurnStatus::Failed(failure.to_string())
         }
     };
-    active.finish(status)?;
-    if !active.history_confirmed() {
-        return Err(ConversationFailure::new(
-            "压缩检查点的提交结果未确认，请从存档重新加载后继续",
-        ));
+    let finalized = active
+        .call(move |mut turn| {
+            turn.finish(status)?;
+            if !turn.history_confirmed() {
+                return Err(ConversationFailure::new(
+                    "压缩检查点的提交结果未确认，请从存档重新加载后继续",
+                ));
+            }
+            Ok(RecordEvent::Finalized {
+                state: turn.stored_state(),
+                history: turn.archive(),
+            })
+        })
+        .await?;
+    if let Err(failure) = active.record(finalized).await {
+        active
+            .call(move |mut turn| {
+                turn.block_execution();
+                turn.finish(TurnStatus::Failed(failure.to_string()))
+            })
+            .await?;
     }
-    if let Err(failure) = record(
-        &store,
-        RecordEvent::Finalized {
-            state: active.stored_state(),
-            history: active.archive(),
-        },
-    )
-    .await
-    {
-        active.block_execution();
-        active.finish(TurnStatus::Failed(failure.to_string()))?;
-    }
-    Ok(active)
+    Ok(())
 }
 
 async fn run_task(
-    active: &mut ActiveTurn,
+    active: &TurnAccess,
     context: &mut agentelier_tools::ExecutionContext,
     credentials: CredentialClient,
     cancel: &CancellationToken,
     progress: &mpsc::Sender<RunnerEvent>,
     steers: &mut mpsc::Receiver<SteerInput>,
-    store: &agentelier_session_store::SessionStoreClient,
     user_skills_root: std::path::PathBuf,
     memory: Option<agentelier_memory::MemoryClient>,
 ) -> Result<TurnStatus, ConversationFailure> {
     if cancel.is_cancelled() {
         return Ok(TurnStatus::Cancelled);
     }
-    let directory = active.view().settings.working_directory;
-    let input = active
-        .view()
-        .turn
-        .as_ref()
-        .ok_or_else(|| ConversationFailure::new("Skills 选择缺少任务输入"))?
-        .input
-        .clone();
+    let (settings, input, session) = active
+        .call(|turn| Ok((turn.settings(), turn.input()?, turn.session_id())))
+        .await?;
+    let directory = settings.working_directory;
     let loading_cancel = cancel.clone();
     let discovered = tokio::task::spawn_blocking(move || {
         let catalog =
@@ -250,10 +259,13 @@ async fn run_task(
             for diagnostic in &catalog.diagnostics {
                 tracing::warn!(path = %diagnostic.path.display(), error = diagnostic.message, "Skills 来源不可用或受限");
             }
-            if let Err(failure) = active.skills(catalog, selected) {
+            if let Err(failure) = active
+                .call(move |mut turn| turn.skills(catalog, selected))
+                .await
+            {
                 return Ok(TurnStatus::Failed(failure.to_string()));
             }
-            publish(active, progress, cancel).await?;
+            publish(progress, cancel).await?;
         }
         Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())),
     }
@@ -261,57 +273,86 @@ async fn run_task(
         _ = cancel.cancelled() => return Ok(TurnStatus::Cancelled),
         result = credentials.execution() => match result { Ok(identity) => identity, Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())) },
     };
-    let slug = active.view().settings.slug;
+    let slug = settings.slug;
     let model = tokio::select! { biased;
         _ = cancel.cancelled() => return Ok(TurnStatus::Cancelled),
         result = agentelier_llm_model::task_model(credentials.clone(), &identity, &slug) => match result { Ok(model) => model, Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())) },
     };
-    if let Err(failure) = active.model_context(model) {
+    if let Err(failure) = active.call(move |mut turn| turn.model_context(model)).await {
         return Ok(TurnStatus::Failed(failure.to_string()));
     }
-    let catalog = active.catalog();
+    let catalog = active.call(|turn| Ok(turn.catalog())).await?;
     let mut cleanup_failed = false;
     let mut tools_used = 0;
     let mut requests_used = 0;
     while requests_used < MAX_MODEL_REQUESTS {
-        control::drain(active, steers, progress, store).await?;
+        control::drain(active, steers, progress).await?;
         if cancel.is_cancelled() {
             return Ok(TurnStatus::Cancelled);
         }
         if let Some(status) = collect_project(active, cancel, progress).await? {
             return Ok(status);
         }
-        if let Some(candidate) = active.project_candidate()? {
-            let changes_history = candidate.changes_history();
-            let event = candidate.event(active);
-            active.committing_checkpoint();
-            let sequence = record(store, event).await?;
-            active.install_project(candidate);
-            if changes_history {
-                active.recorded(sequence);
-            }
-        }
-        let applied = active.apply_steers()?;
-        if !applied.is_empty() {
-            let sequence = record(
-                store,
-                RecordEvent::SteerApplied {
-                    state: active.stored_state(),
-                    history: active.archive(),
-                },
-            )
+        let project = active
+            .call(|mut turn| {
+                let Some(candidate) = turn.project_candidate()? else {
+                    return Ok(None);
+                };
+                let event = candidate.event(&turn);
+                turn.committing_checkpoint();
+                Ok(Some((candidate, event)))
+            })
             .await?;
-            active.recorded(sequence);
+        if let Some((candidate, event)) = project {
+            let sequence = active.record(event).await?;
+            active
+                .call(move |mut turn| {
+                    let changes_history = candidate.changes_history();
+                    turn.install_project(candidate);
+                    if changes_history {
+                        turn.recorded(sequence);
+                    }
+                    Ok(())
+                })
+                .await?;
         }
-        for id in applied {
-            control::receipt(progress, id, InputDecision::Applied).await?;
+        let applied = active
+            .call(|mut turn| {
+                let ids = turn.apply_steers()?;
+                if ids.is_empty() {
+                    return Ok(None);
+                }
+                let event = RecordEvent::SteerApplied {
+                    state: turn.stored_state(),
+                    history: turn.archive(),
+                };
+                Ok(Some((ids, event)))
+            })
+            .await?;
+        if let Some((ids, event)) = applied {
+            let sequence = active.record(event).await?;
+            active
+                .call(move |mut turn| {
+                    turn.recorded(sequence);
+                    Ok(())
+                })
+                .await?;
+            for id in ids {
+                control::receipt(progress, id, InputDecision::Applied).await?;
+            }
         }
         requests_used += 1;
         let epoch = memory
             .as_ref()
             .and_then(agentelier_memory::MemoryClient::epoch);
-        active.use_memory_epoch(epoch);
-        context.set_user_turn(active.tool_user_turn(epoch)?);
+        context.set_user_turn(
+            active
+                .call(move |mut turn| {
+                    turn.use_memory_epoch(epoch);
+                    turn.tool_user_turn(epoch)
+                })
+                .await?,
+        );
         let result = match request_once(
             active,
             credentials.clone(),
@@ -319,7 +360,6 @@ async fn run_task(
             cancel,
             progress,
             steers,
-            store,
         )
         .await?
         {
@@ -327,52 +367,88 @@ async fn run_task(
             Some(Err(failure)) => return Ok(TurnStatus::Failed(failure.to_string())),
             None => return Ok(TurnStatus::Cancelled),
         };
-        if let Err(failure) = active.accept_response(&result) {
-            return Ok(TurnStatus::Failed(failure.to_string()));
+        let limited = result.calls.len() > MAX_TOOL_CALLS.saturating_sub(tools_used);
+        let (result, registrations, event) = match active
+            .call(move |mut turn| {
+                let registrations = turn.accept_response(&result, epoch, !limited)?;
+                let event = RecordEvent::Response {
+                    state: turn.stored_state(),
+                    output: result.output.archive(),
+                    registrations: Some(registrations.clone()),
+                };
+                Ok((result, registrations, event))
+            })
+            .await
+        {
+            Ok(accepted) => accepted,
+            Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())),
+        };
+        let sequence = active.record(event).await?;
+        if active
+            .call(move |mut turn| turn.confirm_tasks(registrations, sequence))
+            .await?
+        {
+            active.publish_tasks().await?;
         }
-        record(
-            store,
-            RecordEvent::Response {
-                state: active.stored_state(),
-                output: result.output.archive(),
-            },
-        )
-        .await?;
-        publish(active, progress, cancel).await?;
-        control::drain(active, steers, progress, store).await?;
+        publish(progress, cancel).await?;
+        control::drain(active, steers, progress).await?;
         if result.calls.is_empty() {
-            seal_response(active, result, progress, cancel, store).await?;
+            seal_response(active, result, progress, cancel).await?;
             if cancel.is_cancelled() {
                 return Ok(TurnStatus::Cancelled);
             }
-            if active.has_pending_steer() {
+            control::drain(active, steers, progress).await?;
+            if !active
+                .call(|mut turn| Ok(turn.close_steers_if_idle()))
+                .await?
+            {
                 continue;
             }
             return Ok(TurnStatus::Completed);
         }
-        let limited = result.calls.len() > MAX_TOOL_CALLS.saturating_sub(tools_used);
         tools_used += result.calls.len();
         for call in &result.calls {
-            control::drain(active, steers, progress, store).await?;
+            control::drain(active, steers, progress).await?;
+            let call_id = call.call_id.clone();
+            let execution = active
+                .call(move |turn| Ok(turn.task_execution(&call_id)))
+                .await?;
             let outcome = if cleanup_failed {
                 ToolResult::not_executed("cleanup_failed", "工具资源清理未确认，后续调用未执行")
             } else if limited {
                 ToolResult::not_executed("tool_budget", "本批调用超过任务限额，整批未执行")
             } else if cancel.is_cancelled() {
                 ToolResult::not_executed("stopped", "用户已停止，工具未执行")
-            } else if active.has_pending_steer() {
+            } else if active.call(|turn| Ok(turn.has_pending_steer())).await? {
                 ToolResult::not_executed("steered", "补充输入已接纳，旧调用未执行")
             } else {
-                active.tool_started(&call.call_id)?;
-                record(
-                    store,
-                    RecordEvent::ToolStarted {
-                        state: active.stored_state(),
-                        call_id: call.call_id.clone(),
-                    },
-                )
-                .await?;
-                publish(active, progress, cancel).await?;
+                let call_id = call.call_id.clone();
+                let event = active
+                    .call(move |mut turn| {
+                        turn.tool_started(&call_id)?;
+                        Ok(RecordEvent::ToolStarted {
+                            state: turn.stored_state(),
+                            call_id,
+                            execution,
+                        })
+                    })
+                    .await?;
+                let sequence = active.record(event).await?;
+                let call_id = call.call_id.clone();
+                if active
+                    .call(move |mut turn| {
+                        turn.confirm_task_status(
+                            &call_id,
+                            execution,
+                            agentelier_tools::ToolStatus::Running,
+                            sequence,
+                        )
+                    })
+                    .await?
+                {
+                    active.publish_tasks().await?;
+                }
+                publish(progress, cancel).await?;
                 let started = std::time::Instant::now();
                 tracing::debug!(
                     request_index = requests_used,
@@ -399,8 +475,8 @@ async fn run_task(
                             result = &mut execution => break result,
                             input = steers.recv(), if !steers.is_closed() && delivery_failure.is_none() => {
                                 if let Some(input) = input {
-                                    let delivered = match control::accept(active,input,progress,store).await {
-                                        Ok(()) => publish(active,progress,&tool_cancel).await,
+                                    let delivered = match control::accept(active,input,progress).await {
+                                        Ok(()) => publish(progress,&tool_cancel).await,
                                         Err(failure) => Err(failure),
                                     };
                                     if let Err(failure) = delivered { delivery_failure = Some(failure); tool_cancel.cancel(); }
@@ -428,29 +504,47 @@ async fn run_task(
                 );
                 outcome
             };
-            let (outcome, storage_failure) = persist_image(active.view().id, outcome, store).await;
+            let (outcome, storage_failure) = persist_image(active, session, outcome).await;
             cleanup_failed |= outcome.cleanup_failed;
-            let (status, output) = active.tool_result(&call.call_id, outcome)?;
+            let call_id = call.call_id.clone();
+            let (event, status) = active
+                .call(move |mut turn| {
+                    let (status, output) = turn.tool_result(&call_id, outcome)?;
+                    let event = RecordEvent::ToolReturned {
+                        state: turn.stored_state(),
+                        call_id,
+                        status,
+                        output: agentelier_llm_model::ArchivedPayload::capture(&output),
+                        execution,
+                    };
+                    Ok((event, status))
+                })
+                .await?;
             if let Some(failure) = storage_failure {
                 return Err(ConversationFailure::new(format!(
                     "图片已读取，附件保存失败，停止后续执行：{failure}"
                 )));
             }
-            record(
-                store,
-                RecordEvent::ToolReturned {
-                    state: active.stored_state(),
-                    call_id: call.call_id.clone(),
-                    status,
-                    output: agentelier_llm_model::ArchivedPayload::capture(&output),
-                },
-            )
-            .await?;
-            publish(active, progress, cancel).await?;
+            let sequence = active.record(event).await?;
+            let call_id = call.call_id.clone();
+            if active
+                .call(move |mut turn| {
+                    turn.confirm_task_status(&call_id, execution, status, sequence)
+                })
+                .await?
+            {
+                active.publish_tasks().await?;
+            }
+            publish(progress, cancel).await?;
         }
-        seal_response(active, result, progress, cancel, store).await?;
+        seal_response(active, result, progress, cancel).await?;
         if cleanup_failed {
-            active.block_execution();
+            active
+                .call(|mut turn| {
+                    turn.block_execution();
+                    Ok(())
+                })
+                .await?;
             return Ok(TurnStatus::Failed(
                 "工具资源清理未确认，请检查运行环境后新建会话".into(),
             ));
@@ -466,20 +560,16 @@ async fn run_task(
 }
 
 async fn persist_image(
+    active: &TurnAccess,
     session: agentelier_conversation::SessionId,
     mut result: ToolResult,
-    store: &agentelier_session_store::SessionStoreClient,
 ) -> (ToolResult, Option<String>) {
     let agentelier_tools::ToolPayload::Image { summary, image } = &result.output else {
         return (result, None);
     };
-    let stored = match store
-        .save_image(session, summary.clone(), image.clone())
-        .await
-    {
-        Ok(reference) => store.read_image(reference).await,
-        Err(failure) => Err(failure),
-    };
+    let stored = active
+        .persist_image(session, summary.clone(), image.clone())
+        .await;
     match stored {
         Ok(image) => {
             result.output = agentelier_tools::ToolPayload::Image {
@@ -495,50 +585,71 @@ async fn persist_image(
 }
 
 async fn seal_response(
-    active: &mut ActiveTurn,
+    active: &TurnAccess,
     result: GenerationResult,
     progress: &mpsc::Sender<RunnerEvent>,
     cancel: &CancellationToken,
-    store: &agentelier_session_store::SessionStoreClient,
 ) -> Result<(), ConversationFailure> {
     let compaction = result.compaction.clone();
-    active.seal(result)?;
-    let sequence = record(
-        store,
-        RecordEvent::Sealed {
-            state: active.stored_state(),
-            history: active.archive(),
-        },
-    )
-    .await?;
-    active.recorded(sequence);
+    let event = active
+        .call(move |mut turn| {
+            turn.seal(result)?;
+            Ok(RecordEvent::Sealed {
+                state: turn.stored_state(),
+                history: turn.archive(),
+            })
+        })
+        .await?;
+    let sequence = active.record(event).await?;
+    active
+        .call(move |mut turn| {
+            turn.recorded(sequence);
+            Ok(())
+        })
+        .await?;
     if let Some(metadata) = compaction {
         if cancel.is_cancelled() {
             return Ok(());
         }
-        let candidate = active.compaction_candidate(metadata)?;
-        publish(active, progress, cancel).await?;
-        let event = candidate.event(active);
+        let candidate = active
+            .call(move |mut turn| turn.compaction_candidate(metadata))
+            .await?;
+        publish(progress, cancel).await?;
         if cancel.is_cancelled() {
             return Ok(());
         }
-        active.committing_checkpoint();
-        let sequence = record(store, event).await?;
-        active.install_compaction(candidate)?;
-        active.recorded(sequence);
-        tracing::info!(session = %active.view().id, window = active.view().context.window, sequence, "服务端压缩检查点已提交并安装");
+        let (candidate, event) = active
+            .call(move |mut turn| {
+                let event = candidate.event(&turn);
+                turn.committing_checkpoint();
+                Ok((candidate, event))
+            })
+            .await?;
+        let sequence = active.record(event).await?;
+        let (session, window) = active
+            .call(move |mut turn| {
+                turn.install_compaction(candidate)?;
+                turn.recorded(sequence);
+                Ok((turn.session_id(), turn.context_window()))
+            })
+            .await?;
+        tracing::info!(session = %session, window, sequence, "服务端压缩检查点已提交并安装");
     }
-    publish(active, progress, cancel).await
+    publish(progress, cancel).await
 }
 
 async fn collect_project(
-    active: &mut ActiveTurn,
+    active: &TurnAccess,
     cancel: &CancellationToken,
     progress: &mpsc::Sender<RunnerEvent>,
 ) -> Result<Option<TurnStatus>, ConversationFailure> {
-    active.loading_project();
-    publish(active, progress, cancel).await?;
-    let directory = active.view().settings.working_directory;
+    let directory = active
+        .call(|mut turn| {
+            turn.loading_project();
+            Ok(turn.settings().working_directory)
+        })
+        .await?;
+    publish(progress, cancel).await?;
     let loading_cancel = cancel.clone();
     // Join the worker even after Stop so no file operation outlives its owning task.
     let collected = tokio::task::spawn_blocking(move || {
@@ -554,7 +665,12 @@ async fn collect_project(
     match collected {
         Ok(snapshot) => {
             tracing::debug!(sources = snapshot.sources.len(), source_bytes = snapshot.source_bytes, hash = %snapshot.hash, "项目规则采集完成");
-            active.project_context(Ok(snapshot));
+            active
+                .call(move |mut turn| {
+                    turn.project_context(Ok(snapshot));
+                    Ok(())
+                })
+                .await?;
         }
         Err(agentelier_project_context::ProjectContextFailure::Cancelled) => {
             return Ok(Some(TurnStatus::Cancelled));
@@ -562,11 +678,17 @@ async fn collect_project(
         Err(failure) => {
             tracing::error!(error = %failure, "项目规则采集失败，本次模型请求未启动");
             let message = failure.to_string();
-            active.project_context(Err(message.clone()));
-            publish(active, progress, cancel).await?;
+            let error = message.clone();
+            active
+                .call(move |mut turn| {
+                    turn.project_context(Err(error));
+                    Ok(())
+                })
+                .await?;
+            publish(progress, cancel).await?;
             return Ok(Some(TurnStatus::Failed(message)));
         }
     }
-    publish(active, progress, cancel).await?;
+    publish(progress, cancel).await?;
     Ok(None)
 }

@@ -10,7 +10,7 @@
 | --- | --- |
 | `crates/agent/prompts/src/snapshot.rs` | 基础覆盖与有序补充形成固定快照；`messages()` 输出 developer 消息；默认空配置不自动生成基础文本 |
 | `docs/design/modules/prompts.md`、`docs/design/modules/conversation.md` | 基础快照、会话目录、输入与重试身份的既有生命周期 |
-| `crates/agent/conversation/src/active.rs` | ActiveTurn 独占活动协议历史，在请求处计量并准备当前输入 |
+| `crates/agent/conversation/src/active.rs` | ActiveTurn 借用会话持有的活动协议历史，在请求处计量并准备当前输入 |
 | `crates/agent/turn_runner/src/runner.rs` | 请求、响应存档、串行工具批次、Steer、取消和进程回收的顺序 |
 | `crates/agent/llm_model/src/generation.rs` | store=false、完整输入重放、固定工具声明、32 MiB 序列化限制及同次认证恢复复用载荷 |
 | `crates/agent/llm_model/src/protocol.rs` | 类型化协议项、工具调用与结果封闭，以及安全的 compaction 截取边界 |

@@ -1,5 +1,6 @@
+use crate::access::{RunnerEvent, TurnAccess};
 use agentelier_conversation::{
-    ActiveTurn, ConversationFailure, InputDecision, InputReceipt, RunnerEvent, SteerInput,
+    ConversationFailure, InputDecision, InputReceipt, RecordEvent, SteerInput,
 };
 use tokio::sync::mpsc;
 
@@ -14,20 +15,22 @@ pub(crate) async fn receipt(
         .map_err(|_| ConversationFailure::new("补充输入回执接收端已关闭"))
 }
 pub(crate) async fn accept(
-    active: &mut ActiveTurn,
+    active: &TurnAccess,
     input: SteerInput,
     progress: &mpsc::Sender<RunnerEvent>,
-    store: &agentelier_session_store::SessionStoreClient,
 ) -> Result<(), ConversationFailure> {
     let id = input.id;
-    let decision = match active.accept_steer(input) {
-        Ok(()) => {
-            if let Err(failure) = store
-                .append(agentelier_conversation::RecordEvent::SteerAccepted {
-                    state: active.stored_state(),
-                })
-                .await
-            {
+    let accepted = active
+        .call(move |mut turn| {
+            turn.accept_steer(input)?;
+            Ok(RecordEvent::SteerAccepted {
+                state: turn.stored_state(),
+            })
+        })
+        .await;
+    let decision = match accepted {
+        Ok(event) => {
+            if let Err(failure) = active.record(event).await {
                 receipt(
                     progress,
                     id,
@@ -45,13 +48,12 @@ pub(crate) async fn accept(
     receipt(progress, id, decision).await
 }
 pub(crate) async fn drain(
-    active: &mut ActiveTurn,
+    active: &TurnAccess,
     incoming: &mut mpsc::Receiver<SteerInput>,
     progress: &mpsc::Sender<RunnerEvent>,
-    store: &agentelier_session_store::SessionStoreClient,
 ) -> Result<(), ConversationFailure> {
     while let Ok(input) = incoming.try_recv() {
-        accept(active, input, progress, store).await?;
+        accept(active, input, progress).await?;
     }
     Ok(())
 }

@@ -1,0 +1,328 @@
+use crate::{ConversationFailure, SessionId, TurnId};
+use agentelier_llm_model::FunctionCall;
+use agentelier_tools::{ToolMode, ToolStatus};
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use uuid::Uuid;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TaskId(pub Uuid);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskExecution {
+    pub task: TaskId,
+    pub instance: Uuid,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TaskRegistration {
+    pub execution: TaskExecution,
+    pub turn: TurnId,
+    pub request: u32,
+    pub call_id: String,
+    pub item_id: String,
+    pub tool: String,
+    pub memory_epoch: Option<i64>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "tasks", rename_all = "snake_case")]
+pub enum ResponseTasks {
+    Registered(Vec<TaskRegistration>),
+    OverBudget,
+}
+
+impl ResponseTasks {
+    pub(crate) fn validate(
+        &self,
+        calls: &[FunctionCall],
+        turn: TurnId,
+        request: u32,
+    ) -> Result<(), ConversationFailure> {
+        let Self::Registered(registrations) = self else {
+            return Ok(());
+        };
+        let asynchronous: Vec<_> = calls
+            .iter()
+            .filter(|call| call.mode() == ToolMode::Asynchronous)
+            .collect();
+        if asynchronous.len() != registrations.len() {
+            return Err(ConversationFailure::new("异步调用缺少唯一任务登记"));
+        }
+        for (registration, call) in registrations.iter().zip(asynchronous) {
+            if registration.turn != turn
+                || registration.request != request
+                || registration.call_id != call.call_id
+                || registration.item_id != call.id
+                || registration.tool != call.name
+            {
+                return Err(ConversationFailure::new("工具任务登记与原始调用不一致"));
+            }
+        }
+        Ok(())
+    }
+}
+
+struct Task {
+    registration: TaskRegistration,
+    status: ToolStatus,
+    live: bool,
+}
+
+impl Task {
+    fn recover_interrupted(&mut self) -> bool {
+        self.live = false;
+        self.status = match self.status {
+            ToolStatus::Pending => ToolStatus::NotExecuted,
+            ToolStatus::Running => ToolStatus::Unconfirmed,
+            _ => return false,
+        };
+        true
+    }
+}
+
+#[derive(Clone)]
+pub struct SessionTaskView {
+    pub task: TaskId,
+    pub instance: Option<Uuid>,
+    pub turn: TurnId,
+    pub request: u32,
+    pub call_id: String,
+    pub tool: String,
+    pub status: ToolStatus,
+}
+
+pub struct SessionTasks {
+    pub session: SessionId,
+    pub revision: u64,
+    pub tasks: Vec<SessionTaskView>,
+}
+
+#[derive(Default)]
+pub(crate) struct TaskLedger {
+    tasks: Vec<Task>,
+    revision: u64,
+}
+
+impl TaskLedger {
+    pub(crate) fn prepare(
+        &self,
+        calls: &[FunctionCall],
+        turn: TurnId,
+        request: u32,
+        memory_epoch: Option<i64>,
+        within_budget: bool,
+    ) -> Result<ResponseTasks, ConversationFailure> {
+        if !within_budget {
+            return Ok(ResponseTasks::OverBudget);
+        }
+        let registrations: Vec<_> = calls
+            .iter()
+            .filter(|call| call.mode() == ToolMode::Asynchronous)
+            .map(|call| TaskRegistration {
+                execution: TaskExecution {
+                    task: TaskId(Uuid::new_v4()),
+                    instance: Uuid::new_v4(),
+                },
+                turn,
+                request,
+                call_id: call.call_id.clone(),
+                item_id: call.id.clone(),
+                tool: call.name.clone(),
+                memory_epoch,
+            })
+            .collect();
+        self.validate_identities(&registrations)?;
+        Ok(ResponseTasks::Registered(registrations))
+    }
+
+    pub(crate) fn install(
+        &mut self,
+        mapping: ResponseTasks,
+        sequence: u64,
+        live: bool,
+    ) -> Result<bool, ConversationFailure> {
+        let ResponseTasks::Registered(registrations) = mapping else {
+            return Ok(false);
+        };
+        if registrations.is_empty() {
+            return Ok(false);
+        }
+        if sequence <= self.revision {
+            return Err(ConversationFailure::new("异步任务登记序号无效"));
+        }
+        self.validate_identities(&registrations)?;
+        self.tasks
+            .extend(registrations.into_iter().map(|registration| Task {
+                registration,
+                status: ToolStatus::Pending,
+                live,
+            }));
+        self.revision = sequence;
+        Ok(true)
+    }
+
+    fn validate_identities(
+        &self,
+        registrations: &[TaskRegistration],
+    ) -> Result<(), ConversationFailure> {
+        if registrations.is_empty() {
+            return Ok(());
+        }
+        let mut ids: HashSet<_> = self
+            .tasks
+            .iter()
+            .map(|task| task.registration.execution.task)
+            .collect();
+        let mut calls: HashSet<_> = self
+            .tasks
+            .iter()
+            .map(|task| task.registration.call_id.as_str())
+            .collect();
+        if registrations.iter().any(|registration| {
+            registration.execution.task.0.is_nil()
+                || registration.execution.instance.is_nil()
+                || !ids.insert(registration.execution.task)
+                || !calls.insert(registration.call_id.as_str())
+        }) {
+            return Err(ConversationFailure::new("异步任务登记身份重复或无效"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn execution(&self, call_id: &str) -> Option<TaskExecution> {
+        self.tasks
+            .iter()
+            .find(|task| task.registration.call_id == call_id && task.live)
+            .map(|task| task.registration.execution)
+    }
+
+    pub(crate) fn transition(
+        &mut self,
+        turn: TurnId,
+        request: u32,
+        call_id: &str,
+        execution: Option<TaskExecution>,
+        status: ToolStatus,
+        sequence: u64,
+        replay: bool,
+    ) -> Result<bool, ConversationFailure> {
+        let Some(index) =
+            self.matching_transition(turn, request, call_id, execution, status, replay)?
+        else {
+            return Ok(false);
+        };
+        if sequence <= self.revision {
+            return Err(ConversationFailure::new("异步任务状态序号过期"));
+        }
+        let task = self
+            .tasks
+            .get_mut(index)
+            .ok_or_else(|| ConversationFailure::new("异步任务索引不存在"))?;
+        task.status = status;
+        task.live = status == ToolStatus::Running && !replay;
+        self.revision = sequence;
+        Ok(true)
+    }
+
+    pub(crate) fn matching_transition(
+        &self,
+        turn: TurnId,
+        request: u32,
+        call_id: &str,
+        execution: Option<TaskExecution>,
+        status: ToolStatus,
+        replay: bool,
+    ) -> Result<Option<usize>, ConversationFailure> {
+        let Some((index, task)) = self
+            .tasks
+            .iter()
+            .enumerate()
+            .find(|(_, task)| task.registration.call_id == call_id)
+        else {
+            return if execution.is_none() {
+                Ok(None)
+            } else {
+                Err(ConversationFailure::new("工具状态缺少对应异步任务"))
+            };
+        };
+        if Some(task.registration.execution) != execution
+            || task.registration.turn != turn
+            || task.registration.request != request
+            || (!replay && !task.live)
+        {
+            return Err(ConversationFailure::new("异步任务状态不属于当前执行实例"));
+        }
+        let allowed = match status {
+            ToolStatus::Running => task.status == ToolStatus::Pending,
+            ToolStatus::NotExecuted => {
+                matches!(task.status, ToolStatus::Pending | ToolStatus::Running)
+            }
+            ToolStatus::Succeeded
+            | ToolStatus::Failed
+            | ToolStatus::TimedOut
+            | ToolStatus::Cancelled => task.status == ToolStatus::Running,
+            _ => false,
+        };
+        if !allowed {
+            return Err(ConversationFailure::new("异步任务状态转换无效"));
+        }
+        Ok(Some(index))
+    }
+
+    pub(crate) fn recover_interrupted(&mut self) {
+        for task in &mut self.tasks {
+            task.recover_interrupted();
+        }
+    }
+
+    pub(crate) fn close_execution(&mut self, turn: TurnId) {
+        for task in self
+            .tasks
+            .iter_mut()
+            .filter(|task| task.registration.turn == turn)
+        {
+            task.live = false;
+        }
+    }
+
+    pub(crate) fn settle_turn(&mut self, turn: TurnId, sequence: u64) -> bool {
+        let mut changed = false;
+        for task in self
+            .tasks
+            .iter_mut()
+            .filter(|task| task.registration.turn == turn)
+        {
+            changed |= task.recover_interrupted();
+        }
+        if changed {
+            self.revision = sequence;
+        }
+        changed
+    }
+
+    pub(crate) fn view(&self, session: SessionId) -> SessionTasks {
+        let tasks = self
+            .tasks
+            .iter()
+            .map(|task| {
+                let registration = &task.registration;
+                SessionTaskView {
+                    task: registration.execution.task,
+                    instance: task.live.then_some(registration.execution.instance),
+                    turn: registration.turn,
+                    request: registration.request,
+                    call_id: registration.call_id.clone(),
+                    tool: registration.tool.clone(),
+                    status: task.status,
+                }
+            })
+            .collect();
+        SessionTasks {
+            session,
+            revision: self.revision,
+            tasks,
+        }
+    }
+}

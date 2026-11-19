@@ -1,4 +1,4 @@
-use crate::active::ActiveTurn;
+use crate::active::{ActiveState, ActiveTurn};
 use crate::control::SteerView;
 use crate::queue::QueuedInput;
 use agentelier_llm_model::{OutputMessage, ProtocolHistory, ProtocolItemSummary};
@@ -114,6 +114,7 @@ pub enum ConversationEvent {
     Archives(Vec<crate::ArchiveEntry>),
     Opened(SessionView),
     ArchiveFailed(String),
+    Tasks(crate::SessionTasks),
     Created(SessionView),
     Accepted(SessionView),
     Updated(SessionView),
@@ -138,13 +139,14 @@ impl fmt::Display for ConversationFailure {
 }
 impl Error for ConversationFailure {}
 
-#[derive(Clone)]
 pub(crate) struct ChatSession {
     pub(crate) memory: Option<Arc<agentelier_llm_model::MemorySnapshot>>,
     pub(crate) view: SessionView,
     pub(crate) history: Option<ProtocolHistory>,
     pub(crate) tools: Arc<ToolCatalog>,
     pub(crate) pending_results: std::collections::BTreeMap<String, agentelier_tools::ToolPayload>,
+    pub(crate) active: Option<ActiveState>,
+    pub(crate) tasks: crate::tasks::TaskLedger,
 }
 
 pub struct PreparedSession {
@@ -152,7 +154,7 @@ pub struct PreparedSession {
     pub initial: crate::InitialSession,
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct Conversation {
     pub(crate) session: Option<ChatSession>,
     pub(crate) next_turn: u64,
@@ -180,6 +182,22 @@ impl Conversation {
     }
     pub fn current(&self) -> Option<SessionView> {
         self.session.as_ref().map(|session| session.view.clone())
+    }
+
+    pub fn tasks(&self) -> Option<crate::SessionTasks> {
+        self.session
+            .as_ref()
+            .map(|session| session.tasks.view(session.view.id))
+    }
+
+    pub fn settle_tasks(&mut self, sequence: u64) -> bool {
+        self.session.as_mut().is_some_and(|session| {
+            session
+                .view
+                .turn
+                .as_ref()
+                .is_some_and(|turn| session.tasks.settle_turn(turn.id, sequence))
+        })
     }
 
     pub fn archive(
@@ -306,6 +324,8 @@ impl Conversation {
                 history: Some(ProtocolHistory::default()),
                 tools,
                 pending_results: Default::default(),
+                active: None,
+                tasks: Default::default(),
             },
         })
     }
@@ -339,7 +359,7 @@ impl Conversation {
         operation_id: u64,
         session_id: SessionId,
         input: String,
-    ) -> Result<(SessionView, ActiveTurn), ConversationFailure> {
+    ) -> Result<SessionView, ConversationFailure> {
         if input.trim().is_empty() {
             return Err(ConversationFailure::new("不能发送空白消息"));
         }
@@ -398,27 +418,22 @@ impl Conversation {
             process_cleanup: Vec::new(),
         }));
         self.next_turn = id;
-        let active = ActiveTurn {
+        session.active = Some(ActiveState {
             memory: session.memory.clone(),
             source_sequence: None,
             history_confirmed: true,
-            view: session.view.clone(),
-            tools: session.tools.clone(),
             input_retained: false,
-            results: std::mem::take(&mut session.pending_results),
-            history: session
-                .history
-                .take()
-                .ok_or(ConversationFailure::new("会话缺少历史"))?,
-        };
-        Ok((session.view.clone(), active))
+            accepting_steers: true,
+            completion: None,
+        });
+        Ok(session.view.clone())
     }
 
     pub fn start(
         &mut self,
         operation: u64,
         request: ConversationRequest,
-    ) -> Result<(SessionView, ActiveTurn), ConversationFailure> {
+    ) -> Result<SessionView, ConversationFailure> {
         match request {
             ConversationRequest::Send { session, input } => self.begin(operation, session, input),
             ConversationRequest::Retry { session, turn } => {
@@ -441,7 +456,7 @@ impl Conversation {
                     .ok_or(ConversationFailure::new("只有最近失败或取消的输入可以重试"))?;
                 let input = previous.input.clone();
                 let input_id = previous.input_id;
-                let (_, mut active) = self.begin(operation, session, input)?;
+                self.begin(operation, session, input)?;
                 let current = self
                     .session
                     .as_mut()
@@ -453,8 +468,7 @@ impl Conversation {
                     .ok_or(ConversationFailure::new("重试缺少轮次"))?;
                 turn.input_id = input_id;
                 turn.is_retry = true;
-                active.view = current.view.clone();
-                Ok((current.view.clone(), active))
+                Ok(current.view.clone())
             }
             ConversationRequest::Create(_)
             | ConversationRequest::Reset { .. }
@@ -475,70 +489,66 @@ impl Conversation {
             .ok_or(ConversationFailure::new("模型结果不属于当前运行轮次"))
     }
 
-    pub fn update(
+    pub fn active_turn(
         &mut self,
         operation_id: u64,
-        mut view: SessionView,
-    ) -> Result<SessionView, ConversationFailure> {
-        let turn = self.turn(operation_id)?;
-        if view
-            .turn
-            .as_ref()
-            .is_none_or(|incoming| incoming.id != turn.id || incoming.operation_id != operation_id)
-            || self
-                .session
-                .as_ref()
-                .is_none_or(|session| session.view.id != view.id)
-        {
-            return Err(ConversationFailure::new("任务快照身份不匹配"));
-        }
+    ) -> Result<ActiveTurn<'_>, ConversationFailure> {
+        self.turn(operation_id)?;
         let session = self
             .session
             .as_mut()
             .ok_or(ConversationFailure::new("任务缺少会话"))?;
-        view.queue = std::mem::take(&mut session.view.queue);
-        view.execution_blocked |= session.view.execution_blocked;
-        view.queue_paused = session.view.queue_paused;
-        session.view = view;
+        Ok(ActiveTurn {
+            state: session
+                .active
+                .as_mut()
+                .ok_or_else(|| ConversationFailure::new("当前任务缺少活动状态"))?,
+            view: &mut session.view,
+            history: session
+                .history
+                .as_mut()
+                .ok_or_else(|| ConversationFailure::new("当前任务缺少会话历史"))?,
+            tools: &session.tools,
+            results: &mut session.pending_results,
+            tasks: &mut session.tasks,
+        })
+    }
+
+    pub fn finish(&mut self, operation_id: u64) -> Result<SessionView, ConversationFailure> {
+        let active = self.active_turn(operation_id)?;
+        let completion = active
+            .state
+            .completion
+            .take()
+            .ok_or_else(|| ConversationFailure::new("任务回收时缺少终态"))?;
+        let turn = self.turn(operation_id)?;
+        turn.status = completion.clone();
+        let turn_id = turn.id;
+        let session = self
+            .session
+            .as_mut()
+            .ok_or(ConversationFailure::new("任务缺少会话"))?;
+        session.active = None;
+        session.tasks.close_execution(turn_id);
+        if !matches!(completion, TurnStatus::Completed) {
+            session.view.queue_paused = true;
+        }
         Ok(session.view.clone())
     }
 
-    pub fn finish(
-        &mut self,
-        operation_id: u64,
-        active: ActiveTurn,
-    ) -> Result<SessionView, ConversationFailure> {
-        let mut view = active.view;
-        if view
-            .turn
-            .as_ref()
-            .is_some_and(|turn| !matches!(turn.status, TurnStatus::Completed))
-        {
-            self.session
-                .as_mut()
-                .ok_or(ConversationFailure::new("任务缺少会话"))?
-                .view
-                .queue_paused = true;
-        }
-        view = self.update(operation_id, view)?;
-        let session = self
-            .session
-            .as_mut()
-            .ok_or(ConversationFailure::new("任务缺少会话"))?;
-        session.history = Some(active.history);
-        session.pending_results = active.results;
-        Ok(view)
-    }
-
     pub fn interrupt(&mut self, operation_id: u64) -> Result<SessionView, ConversationFailure> {
-        self.turn(operation_id)?.status =
-            TurnStatus::Failed("任务异常结束，无法归还执行记录，请重置或新建会话".into());
+        let turn = self.turn(operation_id)?;
+        turn.status = TurnStatus::Failed("任务异常结束，执行记录未确认，请重新加载存档".into());
+        let turn_id = turn.id;
         let session = self
             .session
             .as_mut()
             .ok_or(ConversationFailure::new("任务缺少会话"))?;
         session.view.execution_blocked = true;
         session.view.queue_paused = true;
+        session.history = None;
+        session.active = None;
+        session.tasks.close_execution(turn_id);
         Ok(session.view.clone())
     }
 }

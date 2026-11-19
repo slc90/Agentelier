@@ -69,16 +69,22 @@ pub enum RecordEvent {
     Response {
         state: StoredState,
         output: agentelier_llm_model::ProtocolArchive,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        registrations: Option<crate::ResponseTasks>,
     },
     ToolStarted {
         state: StoredState,
         call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution: Option<crate::TaskExecution>,
     },
     ToolReturned {
         state: StoredState,
         call_id: String,
         status: agentelier_tools::ToolStatus,
         output: agentelier_llm_model::ArchivedPayload,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        execution: Option<crate::TaskExecution>,
     },
     Sealed {
         state: StoredState,

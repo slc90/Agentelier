@@ -10,17 +10,25 @@ use agentelier_tools::{
 };
 use std::sync::Arc;
 
-pub struct ActiveTurn {
+pub(crate) struct ActiveState {
     pub(crate) memory: Option<Arc<agentelier_llm_model::MemorySnapshot>>,
     pub(crate) source_sequence: Option<u64>,
     pub(crate) history_confirmed: bool,
-    pub(crate) view: SessionView,
-    pub(crate) history: ProtocolHistory,
-    pub(crate) tools: Arc<ToolCatalog>,
     pub(crate) input_retained: bool,
-    pub(crate) results: std::collections::BTreeMap<String, ToolPayload>,
+    pub(crate) accepting_steers: bool,
+    pub(crate) completion: Option<TurnStatus>,
 }
-impl ActiveTurn {
+
+pub struct ActiveTurn<'a> {
+    pub(crate) state: &'a mut ActiveState,
+    pub(crate) view: &'a mut SessionView,
+    pub(crate) history: &'a mut ProtocolHistory,
+    pub(crate) tools: &'a Arc<ToolCatalog>,
+    pub(crate) results: &'a mut std::collections::BTreeMap<String, ToolPayload>,
+    pub(crate) tasks: &'a mut crate::tasks::TaskLedger,
+}
+
+impl ActiveTurn<'_> {
     pub fn skills(
         &mut self,
         catalog: agentelier_skills::Catalog,
@@ -33,7 +41,8 @@ impl ActiveTurn {
             agentelier_llm_model::estimated_text_tokens(&rendered)
                 .saturating_add(agentelier_llm_model::estimated_text_tokens("developer"))
                 .saturating_add(
-                    self.memory
+                    self.state
+                        .memory
                         .as_ref()
                         .map_or(0, |memory| memory.estimated_tokens()),
                 );
@@ -87,7 +96,13 @@ impl ActiveTurn {
         Ok(())
     }
     pub fn stored_state(&self) -> crate::StoredState {
-        crate::StoredState::from(&self.view)
+        let mut state = crate::StoredState::from(&*self.view);
+        if let Some(status) = &self.state.completion
+            && let Some(turn) = &mut state.turn
+        {
+            turn.status = status.clone();
+        }
+        state
     }
 
     pub fn archive(&self) -> agentelier_llm_model::ProtocolArchive {
@@ -124,10 +139,11 @@ impl ActiveTurn {
 
     pub fn use_memory_epoch(&mut self, epoch: Option<i64>) {
         if self
+            .state
             .memory
             .as_ref()
             .is_some_and(|memory| Some(memory.epoch) != epoch)
-            && let Some(memory) = self.memory.take()
+            && let Some(memory) = self.state.memory.take()
         {
             self.view.context.task_material_tokens = self
                 .view
@@ -163,8 +179,61 @@ impl ActiveTurn {
         })
     }
 
-    pub fn view(&self) -> SessionView {
-        self.view.clone()
+    pub fn settings(&self) -> crate::SessionSettings {
+        self.view.settings.clone()
+    }
+
+    pub fn session_id(&self) -> crate::SessionId {
+        self.view.id
+    }
+
+    pub fn validate_record(&self, event: &crate::RecordEvent) -> Result<(), ConversationFailure> {
+        let state = event.state();
+        let (stored, live) = state
+            .turn
+            .as_ref()
+            .zip(self.view.turn.as_ref())
+            .ok_or_else(|| ConversationFailure::new("会话记录缺少任务身份"))?;
+        if state.session != self.view.id
+            || stored.id != live.id
+            || stored.operation_id != live.operation_id
+            || stored.request_index != live.request_index
+        {
+            return Err(ConversationFailure::new("会话记录不属于当前任务"));
+        }
+        let (call_id, execution, status) = match event {
+            crate::RecordEvent::ToolStarted {
+                call_id, execution, ..
+            } => (call_id, *execution, ToolStatus::Running),
+            crate::RecordEvent::ToolReturned {
+                call_id,
+                execution,
+                status,
+                ..
+            } => (call_id, *execution, *status),
+            _ => return Ok(()),
+        };
+        self.tasks.matching_transition(
+            live.id,
+            live.request_index,
+            call_id,
+            execution,
+            status,
+            false,
+        )?;
+        Ok(())
+    }
+
+    pub fn input(&self) -> Result<String, ConversationFailure> {
+        self.view
+            .turn
+            .as_ref()
+            .map(|turn| turn.input.clone())
+            .ok_or_else(|| ConversationFailure::new("活动任务缺少用户输入"))
+    }
+
+    pub fn context_window(&self) -> u64 {
+        self.view.context.window
     }
 
     pub fn request(&mut self) -> Result<GenerationRequest, ConversationFailure> {
@@ -178,7 +247,7 @@ impl ActiveTurn {
             .checked_add(1)
             .ok_or(ConversationFailure::new("模型请求序号已耗尽"))?;
         turn.phase = TaskPhase::RequestingModel;
-        let context = if !self.input_retained {
+        let context = if !self.state.input_retained {
             self.history.with_user(&turn.input)
         } else {
             self.history.clone()
@@ -190,7 +259,7 @@ impl ActiveTurn {
             self.tools.definitions(),
         )?;
         Ok(GenerationRequest {
-            memory: self.memory.as_deref().cloned(),
+            memory: self.state.memory.as_deref().cloned(),
             selected_skills: turn.selected_skills.clone(),
             skill_catalog: turn
                 .skills
@@ -212,7 +281,7 @@ impl ActiveTurn {
         })
     }
 
-    pub fn update(&mut self, event: StreamEvent) -> Result<SessionView, ConversationFailure> {
+    pub fn update(&mut self, event: StreamEvent) -> Result<(), ConversationFailure> {
         let turn = self
             .view
             .turn
@@ -242,7 +311,7 @@ impl ActiveTurn {
             }
 
             StreamEvent::FunctionCall(call) => {
-                Self::upsert_tool(turn, call, ToolStatus::Receiving, &self.tools)?;
+                Self::upsert_tool(turn, call, ToolStatus::Receiving, self.tools)?;
             }
             StreamEvent::Item(mut message) => {
                 turn.phase = TaskPhase::RequestingModel;
@@ -316,10 +385,13 @@ impl ActiveTurn {
                 }
             }
         }
-        Ok(self.view.clone())
+        Ok(())
     }
 
     pub fn accept_steer(&mut self, input: SteerInput) -> Result<(), ConversationFailure> {
+        if !self.state.accepting_steers {
+            return Err(ConversationFailure::new("任务已结束，补充输入未接纳"));
+        }
         if !agentelier_skills::mentions(&input.text).is_empty() {
             return Err(ConversationFailure::new(
                 "运行中不能通过补充输入选择 Skill，请排队或开始新任务",
@@ -369,6 +441,14 @@ impl ActiveTurn {
         })
     }
 
+    pub fn close_steers_if_idle(&mut self) -> bool {
+        if self.has_pending_steer() {
+            return false;
+        }
+        self.state.accepting_steers = false;
+        true
+    }
+
     pub fn apply_steers(&mut self) -> Result<Vec<u64>, ConversationFailure> {
         let turn = self
             .view
@@ -386,14 +466,14 @@ impl ActiveTurn {
             .request_index
             .checked_add(1)
             .ok_or(ConversationFailure::new("请求序号已耗尽"))?;
-        if !self.input_retained {
-            self.history = self.history.with_user(&turn.input);
-            self.input_retained = true;
+        if !self.state.input_retained {
+            *self.history = self.history.with_user(&turn.input);
+            self.state.input_retained = true;
         }
         let mut applied = Vec::new();
         for input in &mut turn.steers {
             if matches!(input.state, SteerState::Accepted) {
-                self.history = self.history.with_user(&input.text);
+                *self.history = self.history.with_user(&input.text);
                 input.state = SteerState::Applied;
                 input.applied_request = Some(request_index);
                 applied.push(input.id);
@@ -455,7 +535,9 @@ impl ActiveTurn {
     pub fn accept_response(
         &mut self,
         result: &GenerationResult,
-    ) -> Result<(), ConversationFailure> {
+        memory_epoch: Option<i64>,
+        within_budget: bool,
+    ) -> Result<crate::ResponseTasks, ConversationFailure> {
         let previous_calls: std::collections::HashSet<_> = self
             .view
             .previous_turns
@@ -486,9 +568,50 @@ impl ActiveTurn {
                 message
             }));
         for call in &result.calls {
-            Self::upsert_tool(turn, call.clone(), ToolStatus::Pending, &self.tools)?;
+            Self::upsert_tool(turn, call.clone(), ToolStatus::Pending, self.tools)?;
         }
-        Ok(())
+        self.tasks.prepare(
+            &result.calls,
+            turn.id,
+            turn.request_index,
+            memory_epoch,
+            within_budget,
+        )
+    }
+
+    pub fn confirm_tasks(
+        &mut self,
+        registrations: crate::ResponseTasks,
+        sequence: u64,
+    ) -> Result<bool, ConversationFailure> {
+        self.tasks.install(registrations, sequence, true)
+    }
+
+    pub fn task_execution(&self, call_id: &str) -> Option<crate::TaskExecution> {
+        self.tasks.execution(call_id)
+    }
+
+    pub fn confirm_task_status(
+        &mut self,
+        call_id: &str,
+        execution: Option<crate::TaskExecution>,
+        status: ToolStatus,
+        sequence: u64,
+    ) -> Result<bool, ConversationFailure> {
+        let turn = self
+            .view
+            .turn
+            .as_ref()
+            .ok_or_else(|| ConversationFailure::new("工具状态更新缺少活动轮次"))?;
+        self.tasks.transition(
+            turn.id,
+            turn.request_index,
+            call_id,
+            execution,
+            status,
+            sequence,
+            false,
+        )
     }
 
     pub fn tool_started(&mut self, call_id: &str) -> Result<(), ConversationFailure> {
@@ -572,12 +695,12 @@ impl ActiveTurn {
         });
         self.history
             .seal(
-                (!self.input_retained).then_some(turn.input.as_str()),
+                (!self.state.input_retained).then_some(turn.input.as_str()),
                 result.output,
                 results,
             )
             .map_err(|_| ConversationFailure::new("工具历史关系损坏"))?;
-        self.input_retained = true;
+        self.state.input_retained = true;
         self.results.clear();
         turn.committed_steps += 1;
         for tool in &mut turn.tools {
@@ -601,7 +724,7 @@ impl ActiveTurn {
             }
         }
         self.view.context.refresh(
-            &self.history,
+            self.history,
             &self.view.settings.instructions,
             self.tools.definitions(),
         )?;
@@ -629,9 +752,9 @@ impl ActiveTurn {
                 input.state = SteerState::NotApplied;
             }
         }
-        turn.status = status;
+        self.state.completion = Some(status);
         self.view.context.refresh(
-            &self.history,
+            self.history,
             &self.view.settings.instructions,
             self.tools.definitions(),
         )?;

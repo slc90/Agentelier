@@ -10,8 +10,12 @@ mod control;
 mod conversation;
 mod queue;
 mod restore;
+mod tasks;
 pub use archive::ArchiveEntry;
 pub use restore::{RestoredSession, restore};
+pub use tasks::{
+    ResponseTasks, SessionTaskView, SessionTasks, TaskExecution, TaskId, TaskRegistration,
+};
 
 pub use archive::{
     InitialSession, RecordEvent, SessionRecord, SessionSummary, StoredImage, StoredSettings,
@@ -30,7 +34,7 @@ pub use agentelier_tools::ToolStatus;
 
 pub use active::ActiveTurn;
 pub use control::{
-    InputDecision, InputReceipt, MAX_PENDING_STEERS, RunnerEvent, SteerInput, SteerState, SteerView,
+    InputDecision, InputReceipt, MAX_PENDING_STEERS, SteerInput, SteerState, SteerView,
 };
 
 pub use queue::PreparedQueue;

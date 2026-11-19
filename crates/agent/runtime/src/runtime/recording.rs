@@ -127,7 +127,12 @@ pub(super) fn apply(
                 .is_some_and(|view| view.id == expected)
             {
                 match result {
-                    Ok(_) => conversation.current(),
+                    Ok(commit) => {
+                        if conversation.settle_tasks(commit.sequence) {
+                            super::model_task::publish_tasks(conversation, publish)?;
+                        }
+                        conversation.current()
+                    }
                     Err(failure) => conversation
                         .fail_storage(format!("任务已真实结束，但终态保存失败：{failure}")),
                 }

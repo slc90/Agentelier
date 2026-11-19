@@ -24,7 +24,7 @@ impl ProjectCandidate {
         self.publication.item.is_some()
     }
 
-    pub fn event(&self, active: &crate::ActiveTurn) -> crate::RecordEvent {
+    pub fn event(&self, active: &crate::ActiveTurn<'_>) -> crate::RecordEvent {
         let mut state = active.stored_state();
         state.committed_items = self.history.summary();
         crate::RecordEvent::ProjectPublished {
@@ -46,7 +46,7 @@ pub enum ProjectContextState {
     },
 }
 
-impl crate::ActiveTurn {
+impl crate::ActiveTurn<'_> {
     pub fn project_candidate(
         &self,
     ) -> Result<Option<ProjectCandidate>, crate::ConversationFailure> {
@@ -112,10 +112,10 @@ impl crate::ActiveTurn {
     }
 
     pub fn install_project(&mut self, candidate: ProjectCandidate) {
-        self.history = candidate.history;
+        *self.history = candidate.history;
         Arc::make_mut(&mut self.view.project_publications).push(Arc::new(candidate.publication));
         self.view.committed_items = self.history.summary();
-        self.history_confirmed = true;
+        self.state.history_confirmed = true;
     }
 
     pub fn request_prepared(

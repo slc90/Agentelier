@@ -16,6 +16,7 @@ pub struct RestoredSession {
     pub state: StoredState,
     initial: InitialSession,
     history: ProtocolHistory,
+    tasks: crate::tasks::TaskLedger,
     publications: Vec<Arc<agentelier_llm_model::ProjectPublication>>,
     next_turn: u64,
     notice: Option<String>,
@@ -50,6 +51,7 @@ struct PendingResponse {
     results: BTreeMap<String, ArchivedPayload>,
     started: HashSet<String>,
     request_index: u32,
+    over_budget: bool,
 }
 
 fn model_failure(message: impl ToString) -> ModelFailure {
@@ -112,6 +114,7 @@ pub fn restore(
     }
     let mut pending: Option<PendingResponse> = None;
     let mut seen_calls = HashSet::new();
+    let mut tasks = crate::tasks::TaskLedger::default();
     let mut retained_input = false;
     let mut covered_sequence = 1;
     let mut next_turn = 0;
@@ -245,6 +248,7 @@ pub fn restore(
             RecordEvent::Response {
                 state: incoming,
                 output,
+                registrations,
             } => {
                 if pending.is_some() {
                     return Err(ConversationFailure::new("存档完整响应没有封闭边界"));
@@ -267,26 +271,51 @@ pub fn restore(
                     .turn
                     .as_ref()
                     .ok_or_else(|| ConversationFailure::new("完整响应缺少任务身份"))?;
+                let over_budget = matches!(&registrations, Some(crate::ResponseTasks::OverBudget));
+                if let Some(registrations) = registrations {
+                    let calls = output
+                        .function_calls()
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+                    registrations.validate(&calls, turn.id, turn.request_index)?;
+                    tasks.install(registrations, record.sequence, false)?;
+                }
                 pending = Some(PendingResponse {
                     output,
                     results: BTreeMap::new(),
                     started: HashSet::new(),
                     request_index: turn.request_index,
+                    over_budget,
                 });
                 merge(&mut state, incoming);
             }
             RecordEvent::ToolStarted {
                 state: incoming,
                 call_id,
+                execution,
             } => {
                 let response = pending
                     .as_mut()
                     .ok_or_else(|| ConversationFailure::new("工具开始缺少完整响应"))?;
-                if !response.output.call_ids().any(|id| id == call_id)
-                    || !response.started.insert(call_id)
+                if response.over_budget
+                    || !response.output.call_ids().any(|id| id == call_id)
+                    || !response.started.insert(call_id.clone())
                 {
                     return Err(ConversationFailure::new("工具开始身份未知或重复"));
                 }
+                let turn = incoming
+                    .turn
+                    .as_ref()
+                    .ok_or_else(|| ConversationFailure::new("工具开始缺少来源任务"))?;
+                tasks.transition(
+                    turn.id,
+                    turn.request_index,
+                    &call_id,
+                    execution,
+                    ToolStatus::Running,
+                    record.sequence,
+                    true,
+                )?;
                 merge(&mut state, incoming);
             }
             RecordEvent::ToolReturned {
@@ -294,18 +323,33 @@ pub fn restore(
                 call_id,
                 status,
                 output,
+                execution,
             } => {
                 let response = pending
                     .as_mut()
                     .ok_or_else(|| ConversationFailure::new("工具结果缺少完整响应"))?;
-                if !response.output.call_ids().any(|id| id == call_id)
+                if (response.over_budget && status != ToolStatus::NotExecuted)
+                    || !response.output.call_ids().any(|id| id == call_id)
                     || (status != ToolStatus::NotExecuted && !response.started.contains(&call_id))
-                    || response.results.insert(call_id, output).is_some()
+                    || response.results.insert(call_id.clone(), output).is_some()
                 {
                     return Err(ConversationFailure::new(
                         "工具结果身份未知、重复或缺少开始事实",
                     ));
                 }
+                let turn = incoming
+                    .turn
+                    .as_ref()
+                    .ok_or_else(|| ConversationFailure::new("工具结果缺少来源任务"))?;
+                tasks.transition(
+                    turn.id,
+                    turn.request_index,
+                    &call_id,
+                    execution,
+                    status,
+                    record.sequence,
+                    true,
+                )?;
                 merge(&mut state, incoming);
             }
             RecordEvent::Sealed {
@@ -357,6 +401,9 @@ pub fn restore(
                 state: mut incoming,
                 history: finished,
             } => {
+                if let Some(turn) = &incoming.turn {
+                    tasks.settle_turn(turn.id, record.sequence);
+                }
                 if let Some(finished) = finished {
                     history = finished;
                 } else {
@@ -372,6 +419,9 @@ pub fn restore(
                 history: recovered,
                 notice,
             } => {
+                if let Some(turn) = &incoming.turn {
+                    tasks.settle_turn(turn.id, record.sequence);
+                }
                 state = incoming;
                 covered_sequence = record.sequence;
                 history = recovered;
@@ -514,10 +564,12 @@ pub fn restore(
         &initial.settings.instructions,
         &initial.settings.tools,
     )?;
+    tasks.recover_interrupted();
     Ok(RestoredSession {
         state,
         initial,
         history,
+        tasks,
         publications,
         next_turn,
         notice: (!notices.is_empty()).then(|| notices.join("\n")),
@@ -625,6 +677,8 @@ impl Conversation {
             history: Some(restored.history),
             tools: Arc::new(tools),
             pending_results: BTreeMap::new(),
+            active: None,
+            tasks: restored.tasks,
         });
         view
     }

@@ -28,7 +28,7 @@ pub struct CompactionCandidate {
     context: Box<ContextState>,
 }
 impl CompactionCandidate {
-    pub fn event(&self, active: &ActiveTurn) -> RecordEvent {
+    pub fn event(&self, active: &ActiveTurn<'_>) -> RecordEvent {
         let mut state = active.stored_state();
         state.context = self.context.clone();
         state.committed_items = self.history.summary();
@@ -38,21 +38,22 @@ impl CompactionCandidate {
         }
     }
 }
-impl ActiveTurn {
+impl ActiveTurn<'_> {
     pub fn recorded(&mut self, sequence: u64) {
-        self.source_sequence = Some(sequence);
+        self.state.source_sequence = Some(sequence);
     }
     pub fn history_confirmed(&self) -> bool {
-        self.history_confirmed
+        self.state.history_confirmed
     }
     pub fn committing_checkpoint(&mut self) {
-        self.history_confirmed = false;
+        self.state.history_confirmed = false;
     }
     pub fn compaction_candidate(
         &mut self,
         result: CompactionMetadata,
     ) -> Result<CompactionCandidate, ConversationFailure> {
         let source_sequence = self
+            .state
             .source_sequence
             .ok_or_else(|| ConversationFailure::new("压缩缺少已提交的历史边界"))?;
         let turn = self
@@ -60,7 +61,7 @@ impl ActiveTurn {
             .turn
             .as_mut()
             .ok_or_else(|| ConversationFailure::new("压缩缺少活动任务"))?;
-        if !self.results.is_empty() || !self.input_retained {
+        if !self.results.is_empty() || !self.state.input_retained {
             return Err(ConversationFailure::new("压缩不处于有效封闭边界"));
         }
         turn.phase = crate::TaskPhase::CompactingContext;
@@ -96,7 +97,7 @@ impl ActiveTurn {
             window,
             source_sequence,
             covered_items: self.history.len(),
-            input_retained: self.input_retained,
+            input_retained: self.state.input_retained,
             model: self.view.settings.slug.clone(),
             comp_hash: context.limits.comp_hash.clone(),
             response_id: result.response_id,
@@ -129,9 +130,9 @@ impl ActiveTurn {
             || checkpoint.turn != current.id
             || checkpoint.request != current.request_index
             || checkpoint.source_window != self.view.context.window
-            || Some(checkpoint.source_sequence) != self.source_sequence
+            || Some(checkpoint.source_sequence) != self.state.source_sequence
             || checkpoint.covered_items != self.history.len()
-            || checkpoint.input_retained != self.input_retained
+            || checkpoint.input_retained != self.state.input_retained
             || checkpoint.model != self.view.settings.slug
             || checkpoint.comp_hash != self.view.context.limits.comp_hash
             || !matches!(current.phase, crate::TaskPhase::CompactingContext)
@@ -140,10 +141,10 @@ impl ActiveTurn {
                 "已提交压缩检查点与当前任务不一致，请重新加载存档",
             ));
         }
-        self.history = candidate.history;
+        *self.history = candidate.history;
         self.view.context = candidate.context;
         self.view.committed_items = self.history.summary();
-        self.history_confirmed = true;
+        self.state.history_confirmed = true;
         Ok(())
     }
 }
