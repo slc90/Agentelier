@@ -261,6 +261,11 @@ impl Conversation {
             ToolCatalog::with_extensions(
                 &settings.working_directory,
                 settings.image_input,
+                if settings.slug == "gpt-6.2-sol" {
+                    agentelier_tools::ToolContract::AdditionalTools
+                } else {
+                    agentelier_tools::ToolContract::Flat
+                },
                 self.extensions.iter().chain(discovered),
             )
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?,
@@ -292,11 +297,7 @@ impl Conversation {
             &session.settings.instructions,
             tools.definitions(),
         )?;
-        let initial = crate::InitialSession::from_view(
-            &session,
-            tools.definitions().cloned().collect(),
-            memory.clone(),
-        )?;
+        let initial = crate::InitialSession::from_view(&session, &tools, memory.clone())?;
         Ok(PreparedSession {
             initial,
             session: ChatSession {

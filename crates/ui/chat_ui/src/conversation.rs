@@ -91,6 +91,7 @@ pub struct ChatRequestMemory {
 
 #[derive(Clone, Reflect)]
 pub struct ChatRequest {
+    pub additional_tools_in_input: bool,
     pub memory: Option<ChatRequestMemory>,
     pub skills: Vec<(usize, String)>,
     pub sending_started: bool,
@@ -914,6 +915,7 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
             .requests
             .into_iter()
             .map(|fact| ChatRequest {
+                additional_tools_in_input: fact.additional_tools_in_input,
                 memory: fact.memory.map(|memory| ChatRequestMemory {
                     publication_id: memory.publication_id,
                     hash: memory.hash,

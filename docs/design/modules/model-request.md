@@ -52,7 +52,9 @@ LLM Model 以 ModelRequest::Catalog 读取全部可显示模型，以 Verify 携
 
 聊天 GenerationRequest 额外携带固定的 InstructionSnapshot。生成前核对快照，并通过其统一 `messages()` 映射将基础覆盖及有序补充文本构造成 `developer` 输入消息，再追加 ProtocolHistory 和当前用户输入；基础与补充槽位不对应不同协议优先级。默认空配置保持原有请求行为。指令材料解析与保存归 Prompts，LLM Model 不读提示词文件，不在模型连接验证中自动注入准备区指令。
 
-聊天 prepare 在请求中附带会话固定的 strict function tools、自动选择及 parallel_tool_calls=true（仅允许模型提出多项调用，实际执行仍串行）；独立的目录/连接验证操作不附带工具。SSE 接收函数参数增量只发布展示，最终 response.completed 校验身份、完整输出及 reasoning 后返回完整调用。协议历史按原顺序重放 function_call，并以 call_id 关联 function_call_output：普通工具使用有界 JSON 字符串，图片结果使用 input_text/input_image 内容数组。
+聊天请求携带会话冻结的 Function Tool 声明、自动选择和 `parallel_tool_calls: true`。新建 `gpt-6.2-sol` 会话把目录作为 `input` 首个 developer `additional_tools` 项，具备异步资格的叶子带 `async: true`。顶层 `tools` 字段省略。固定指令、记忆、技能、协议历史和本轮输入随原顺序排列，材料索引记录实际位置。其他模型和旧平铺会话沿用同步声明。HTTP 聊天使用 `store: false`、`stream: true` 和完整的 `input`，省略 `previous_response_id`。独立的目录与连接验证不附带工具。
+
+SSE 函数参数增量只更新展示。模型层核对完整流项与 `response.completed.output` 的身份、名称、namespace、参数和异步模式。原生路径按无 namespace 的工具名称匹配冻结目录。返回 `async: true` 的调用需要相应声明，省略标志或返回 `false` 按同步处理。请求拒绝沿用实际服务错误。协议历史原样重放 `function_call`，并以 `call_id` 关联 `function_call_output`。普通工具使用有界 JSON 字符串，图片结果使用 `input_text` 和 `input_image` 内容数组。
 
 图片 data URL 由协议适配根据不可变载荷的实际 MIME 与编码生成，detail 固定 high。完整请求通过 32 MiB 有界 Writer 序列化，预算计入 Base64、工具声明、指令与全部历史；超限为任务协议错误，不裁剪历史。发送使用已校验的序列化字节，不把内容数组二次转成字符串。DEBUG 只保留 call_id、MIME、尺寸、摘要、字节数和结构检查，禁止完整 Base64 或请求正文。
 
@@ -84,7 +86,7 @@ SSE 允许 compaction 与助手、reasoning、function_call 混排，支持一�
 
 ## 项目指令请求记录
 
-模型层 prepare 是唯一请求构造入口，输出私有冻结字节和 RequestProjection（基础摘要、有序协议类型、载荷大小与 SHA-256）。generate 仅消费 PreparedGeneration，认证恢复使用同一字节。类型化项目项序列化为 user，基础保持 developer，完整请求保留 32 MiB 有界序列化。
+模型层 prepare 是唯一请求构造入口，输出私有冻结字节和 RequestProjection（工具契约、基础摘要、有序协议类型、载荷大小与 SHA-256）。generate 仅消费 PreparedGeneration，认证恢复使用同一字节。类型化项目项序列化为 user，基础保持 developer，完整请求保留 32 MiB 有界序列化。
 
 generate 在进入 HTTP 发送阶段和取得响应头时分别发布 Sending 与 ResponseReceived；响应状态包含非成功 HTTP 状态。Runner 将这些事实保存到对应已准备请求，不用流文本或最终回答推断是否发送。认证内部重发仍使用同一请求身份与字节，展示最近一次实际 HTTP 状态；不表示模型已完成或遵守规则。
 

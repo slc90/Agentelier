@@ -6,7 +6,9 @@ use crate::{
 use agentelier_llm_model::{
     ArchivedPayload, ModelFailure, ModelFailureKind, ProtocolArchive, ProtocolHistory,
 };
-use agentelier_tools::{ImagePayload, MAX_SESSION_IMAGE_BYTES, ToolCatalog, ToolStatus};
+use agentelier_tools::{
+    ImagePayload, MAX_SESSION_IMAGE_BYTES, ToolCatalog, ToolContract, ToolStatus,
+};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -109,6 +111,7 @@ pub fn restore(
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
     }
     let mut pending: Option<PendingResponse> = None;
+    let mut seen_calls = HashSet::new();
     let mut retained_input = false;
     let mut covered_sequence = 1;
     let mut next_turn = 0;
@@ -179,6 +182,7 @@ pub fn restore(
                     ));
                 }
                 if pending.is_some()
+                    || fact.projection.tool_contract != initial.settings.tool_contract
                     || fact.projection.memory.as_ref().is_some_and(|material| {
                         Some(&material.snapshot) != initial.settings.memory.as_ref()
                     })
@@ -244,6 +248,20 @@ pub fn restore(
             } => {
                 if pending.is_some() {
                     return Err(ConversationFailure::new("存档完整响应没有封闭边界"));
+                }
+                if !initial.settings.tool_contract.is_flat() {
+                    output
+                        .validate_tool_contract(
+                            initial.settings.tool_contract,
+                            &initial.settings.tools,
+                        )
+                        .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+                    if output
+                        .call_ids()
+                        .any(|id| !seen_calls.insert(id.to_owned()))
+                    {
+                        return Err(ConversationFailure::new("存档重复使用已有 call_id"));
+                    }
                 }
                 let turn = incoming
                     .turn
@@ -462,6 +480,11 @@ pub fn restore(
     state.queue_paused |= !state.queue.is_empty();
     state.execution_blocked = false;
     let mut images = HashMap::<String, Arc<ImagePayload>>::new();
+    if !initial.settings.tool_contract.is_flat() {
+        history
+            .validate_tool_contract(initial.settings.tool_contract, &initial.settings.tools)
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+    }
     let history = ProtocolHistory::from_archive(history, |descriptor, summary| {
         if let Some(image) = images.get(&descriptor.digest) {
             if image.descriptor() != *descriptor {
@@ -520,10 +543,18 @@ impl Conversation {
         let tools = ToolCatalog::with_extensions(
             &settings.working_directory,
             settings.image_input,
+            settings.tool_contract,
             self.extensions.iter().chain(tools),
         )
         .and_then(|available| available.rebind(&settings.tools));
         let tools = match tools {
+            _ if settings.tool_contract == ToolContract::ExperimentalNamespace => {
+                restored.state.execution_blocked = true;
+                restored.add_recovery_notice(
+                    "此会话使用已结束的 namespace 实验契约，历史可查看。请新建会话继续聊天。",
+                );
+                ToolCatalog::default()
+            }
             Ok(tools) if settings.working_directory.is_absolute() => {
                 if let Err(failure) =
                     agentelier_tools::WorkingDirectory::validate(&settings.working_directory)

@@ -99,6 +99,7 @@ pub struct RequestMemory {
 
 #[derive(Clone)]
 pub struct RequestView {
+    pub additional_tools_in_input: bool,
     pub memory: Option<RequestMemory>,
     pub skills: Vec<(usize, String)>,
     pub sending_started: bool,
@@ -458,6 +459,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
             .requests
             .into_iter()
             .map(|fact| RequestView {
+                additional_tools_in_input: fact.projection.additional_tools_in_input(),
                 memory: fact.projection.memory.map(|material| RequestMemory {
                     publication_id: material.snapshot.publication_id.to_string(),
                     hash: material.snapshot.hash,

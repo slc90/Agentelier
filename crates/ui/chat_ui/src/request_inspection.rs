@@ -134,11 +134,16 @@ fn toggle(_: On<Activate>, mut state: ResMut<ChatState>) {
     state.inspection_sources_expanded = !state.inspection_sources_expanded;
 }
 fn order(request: &ChatRequest) -> String {
-    let mut lines = request
-        .base_hashes
-        .iter()
-        .map(|hash| format!("developer · 基础/supplement · {hash}"))
-        .collect::<Vec<_>>();
+    let mut lines = Vec::new();
+    if request.additional_tools_in_input {
+        lines.push("developer · additional_tools · 会话工具目录".into());
+    }
+    lines.extend(
+        request
+            .base_hashes
+            .iter()
+            .map(|hash| format!("developer · 基础/supplement · {hash}")),
+    );
     for item in &request.items {
         let description = match item {
             ChatHistoryItem::Project { publication } => format!("user · 自动项目 P{publication}"),

@@ -270,7 +270,7 @@ async fn request_text(
         let outcome = if response.status().is_success() {
             let status = response.status().as_u16();
             let id = request_id(&response);
-            crate::stream::consume(response, &mut request, None, false)
+            crate::stream::consume(response, &mut request, None, None)
                 .await
                 .map_err(|failure| with_response(failure, status, id))
         } else {

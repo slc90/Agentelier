@@ -132,6 +132,26 @@ impl ProtocolArchive {
         })
     }
 
+    pub fn validate_tool_contract(
+        &self,
+        contract: agentelier_tools::ToolContract,
+        tools: &[agentelier_tools::ToolDefinition],
+    ) -> Result<(), crate::ModelFailure> {
+        for (index, item) in self.items.iter().enumerate() {
+            if let ArchivedItem::FunctionCall { raw, call_id, name } = item {
+                let call = crate::stream::function_call(raw, index)?;
+                if raw.get("type").and_then(Value::as_str) != Some("function_call")
+                    || &call.call_id != call_id
+                    || &call.name != name
+                {
+                    return Err(crate::model::protocol("历史函数调用身份或协议不一致"));
+                }
+                call.validate_declaration(contract, tools.iter().find(|tool| &tool.name == name))?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn seal_interrupted(
         &mut self,
         output: ProtocolArchive,

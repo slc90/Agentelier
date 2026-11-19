@@ -456,17 +456,26 @@ impl ActiveTurn {
         &mut self,
         result: &GenerationResult,
     ) -> Result<(), ConversationFailure> {
+        let previous_calls: std::collections::HashSet<_> = self
+            .view
+            .previous_turns
+            .iter()
+            .flat_map(|turn| &turn.tools)
+            .filter(|tool| tool.retained)
+            .map(|tool| tool.call_id.as_str())
+            .collect();
         let turn = self
             .view
             .turn
             .as_mut()
             .ok_or(ConversationFailure::new("活动任务缺少轮次"))?;
         if result.calls.iter().any(|call| {
-            turn.tools
-                .iter()
-                .any(|tool| tool.request_index < turn.request_index && tool.call_id == call.call_id)
+            previous_calls.contains(call.call_id.as_str())
+                || turn.tools.iter().any(|tool| {
+                    tool.request_index < turn.request_index && tool.call_id == call.call_id
+                })
         }) {
-            return Err(ConversationFailure::new("任务重复使用已有 call_id"));
+            return Err(ConversationFailure::new("会话重复使用已有 call_id"));
         }
         turn.phase = TaskPhase::RequestingModel;
         turn.messages

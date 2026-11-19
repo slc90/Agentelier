@@ -162,6 +162,11 @@ pub struct StoredSettings {
     pub image_input: Option<bool>,
     pub instructions: InstructionSnapshot,
     pub working_directory: PathBuf,
+    #[serde(
+        default,
+        skip_serializing_if = "agentelier_tools::ToolContract::is_flat"
+    )]
+    pub tool_contract: agentelier_tools::ToolContract,
     pub tools: Vec<StoredTool>,
 }
 
@@ -188,7 +193,7 @@ pub struct SessionSummary {
 impl InitialSession {
     pub(crate) fn from_view(
         view: &SessionView,
-        tools: Vec<StoredTool>,
+        tools: &agentelier_tools::ToolCatalog,
         memory: Option<agentelier_llm_model::MemorySnapshot>,
     ) -> Result<Self, crate::ConversationFailure> {
         let created_at_ms = std::time::SystemTime::now()
@@ -210,7 +215,8 @@ impl InitialSession {
                 image_input: view.settings.image_input,
                 instructions: (*view.settings.instructions).clone(),
                 working_directory: view.settings.working_directory.clone(),
-                tools,
+                tool_contract: tools.contract(),
+                tools: tools.definitions().cloned().collect(),
             },
         })
     }

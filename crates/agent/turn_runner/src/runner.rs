@@ -378,6 +378,9 @@ async fn run_task(
                     request_index = requests_used,
                     call_id = call.call_id,
                     tool = call.name,
+                    namespace = call.namespace.as_deref(),
+                    returned_async = call.async_flag,
+                    mode = ?call.mode(),
                     "工具执行开始"
                 );
                 let tool_cancel = cancel.child_token();

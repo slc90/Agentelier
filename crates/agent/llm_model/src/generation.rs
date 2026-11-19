@@ -6,6 +6,7 @@ use crate::protocol::ProtocolHistory;
 use crate::stream::{GenerationResult, STREAM_IDLE_TIMEOUT, StreamEvent, consume};
 use agentelier_account::{AuthenticatedRequest, CredentialClient, ExecutionIdentity};
 use agentelier_prompts::InstructionSnapshot;
+use agentelier_tools::{ToolCatalog, ToolContract, ToolMode};
 use reqwest::Client;
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,11 +41,13 @@ pub struct GenerationRequest {
     pub effort: Option<String>,
     pub context: ProtocolHistory,
     pub instructions: Arc<InstructionSnapshot>,
-    pub tools: Arc<agentelier_tools::ToolCatalog>,
+    pub tools: Arc<ToolCatalog>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct RequestProjection {
+    #[serde(default, skip_serializing_if = "ToolContract::is_flat")]
+    pub tool_contract: ToolContract,
     #[serde(default)]
     pub skill_materials: Vec<SkillMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -58,6 +61,7 @@ pub struct RequestProjection {
 pub struct PreparedGeneration {
     body: Vec<u8>,
     projection: RequestProjection,
+    tools: Arc<ToolCatalog>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -71,11 +75,16 @@ pub struct SkillMaterial {
 }
 
 impl RequestProjection {
+    pub fn additional_tools_in_input(&self) -> bool {
+        self.tool_contract == ToolContract::AdditionalTools
+    }
+
     pub fn validate_request_materials(&self) -> Result<(), ModelFailure> {
         use sha2::{Digest, Sha256};
-        let catalog_index = self.base_hashes.len() + usize::from(self.memory.is_some());
+        let memory_index = usize::from(self.additional_tools_in_input()) + self.base_hashes.len();
+        let catalog_index = memory_index + usize::from(self.memory.is_some());
         if let Some(memory) = &self.memory {
-            memory.validate(self.base_hashes.len())?;
+            memory.validate(memory_index)?;
         }
         let selected_start = self
             .skill_materials
@@ -129,12 +138,32 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         .instructions
         .validate()
         .map_err(|_| ModelFailure::new(ModelFailureKind::Protocol, "会话指令快照无效"))?;
-    let mut input: Vec<_> = generation
-        .instructions
-        .messages()
-        .into_iter()
-        .map(|message| serde_json::json!({"role": message.role, "content": message.text}))
-        .collect();
+    let contract = generation.tools.contract();
+    let declarations = tool_declarations(&generation.tools);
+    let mut input = Vec::new();
+    let top_level_tools = match contract {
+        ToolContract::Flat => Some(declarations),
+        ToolContract::AdditionalTools => {
+            input.push(serde_json::json!({
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": declarations,
+            }));
+            None
+        }
+        ToolContract::ExperimentalNamespace => {
+            return Err(crate::model::protocol(
+                "已结束的 namespace 实验会话仅可查看",
+            ));
+        }
+    };
+    input.extend(
+        generation
+            .instructions
+            .messages()
+            .into_iter()
+            .map(|message| serde_json::json!({"role": message.role, "content": message.text})),
+    );
     let memory = generation
         .memory
         .map(|snapshot| {
@@ -180,9 +209,9 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         "store": false,
         "stream": true,
     });
-    payload["tools"] = serde_json::Value::Array(generation.tools.definitions().map(|tool| serde_json::json!({
-        "type":"function", "name":tool.name, "description":tool.description, "parameters":tool.parameters, "strict":tool.strict
-    })).collect());
+    if let Some(declarations) = top_level_tools {
+        payload["tools"] = declarations;
+    }
     payload["tool_choice"] = serde_json::json!("auto");
     payload["parallel_tool_calls"] = serde_json::json!(true);
     if let Some(effort) = &generation.effort {
@@ -213,6 +242,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     }
     use sha2::{Digest, Sha256};
     let projection = RequestProjection {
+        tool_contract: contract,
         skill_materials,
         memory,
         items,
@@ -223,7 +253,28 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     Ok(PreparedGeneration {
         body: body.0,
         projection,
+        tools: generation.tools,
     })
+}
+
+fn tool_declarations(catalog: &ToolCatalog) -> serde_json::Value {
+    let declarations = catalog
+        .definitions()
+        .map(|tool| {
+            let mut declaration = serde_json::json!({
+                "type": "function",
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+                "strict": tool.strict,
+            });
+            if tool.mode == ToolMode::Asynchronous {
+                declaration["async"] = serde_json::Value::Bool(true);
+            }
+            declaration
+        })
+        .collect();
+    serde_json::Value::Array(declarations)
 }
 
 pub async fn generate(
@@ -246,6 +297,7 @@ pub async fn generate(
     tracing::debug!(
         request_bytes = generation.body.len(),
         payload_hash = generation.projection.payload_hash,
+        tool_contract = ?generation.projection.tool_contract,
         "开始流式模型请求"
     );
     let mut request = AuthenticatedRequest::new(&current);
@@ -279,9 +331,14 @@ pub async fn generate(
         let outcome = if response.status().is_success() {
             let status = response.status().as_u16();
             let id = request_id(&response);
-            consume(response, &mut request, Some(&progress), true)
-                .await
-                .map_err(|failure| with_response(failure, status, id))
+            consume(
+                response,
+                &mut request,
+                Some(&progress),
+                Some(&generation.tools),
+            )
+            .await
+            .map_err(|failure| with_response(failure, status, id))
         } else {
             let failure = http_failure(response).await;
             if let Some(usage) = failure.usage.clone() {

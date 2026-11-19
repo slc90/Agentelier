@@ -4,6 +4,7 @@ use crate::model::{
 };
 use crate::protocol::{ProtocolItem, ProtocolOutput};
 use agentelier_account::AuthenticatedRequest;
+use agentelier_tools::{ToolCatalog, ToolContract, ToolDefinition, ToolMode};
 use reqwest::Response;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -28,13 +29,60 @@ pub struct OutputMessage {
     pub phase: Option<String>,
     pub content: Vec<OutputText>,
 }
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FunctionCall {
     pub id: String,
     pub output_index: usize,
     pub call_id: String,
     pub name: String,
     pub arguments: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub async_flag: Option<bool>,
+}
+
+impl FunctionCall {
+    pub fn mode(&self) -> ToolMode {
+        if self.async_flag == Some(true) {
+            ToolMode::Asynchronous
+        } else {
+            ToolMode::Synchronous
+        }
+    }
+
+    pub(crate) fn validate_declaration(
+        &self,
+        contract: ToolContract,
+        definition: Option<&ToolDefinition>,
+    ) -> Result<(), ModelFailure> {
+        if self.namespace.as_deref() != contract.namespace() {
+            return Err(protocol("工具调用 namespace 与请求声明不匹配"));
+        }
+        if !contract.is_flat() && definition.is_none() {
+            return Err(protocol("工具调用名称未在冻结的请求目录中声明"));
+        }
+        if self.mode() == ToolMode::Asynchronous
+            && (contract.is_flat()
+                || definition.is_none_or(|definition| definition.mode != ToolMode::Asynchronous))
+        {
+            return Err(protocol("同步工具的调用返回了 async:true"));
+        }
+        Ok(())
+    }
+
+    fn validate_complete_item(&self, complete: &Self) -> Result<(), ModelFailure> {
+        if self.namespace != complete.namespace {
+            return Err(protocol("完整工具调用 namespace 冲突"));
+        }
+        if self.arguments != complete.arguments {
+            return Err(protocol("完整工具调用参数冲突"));
+        }
+        if self.mode() != complete.mode() {
+            return Err(protocol("完整工具调用异步模式冲突"));
+        }
+        Ok(())
+    }
 }
 pub struct GenerationResult {
     pub compaction: Option<crate::CompactionMetadata>,
@@ -118,13 +166,26 @@ fn message(item: &Value, output_index: usize) -> Result<OutputMessage, ModelFail
         content,
     })
 }
-fn function_call(item: &Value, output_index: usize) -> Result<FunctionCall, ModelFailure> {
+pub(crate) fn function_call(
+    item: &Value,
+    output_index: usize,
+) -> Result<FunctionCall, ModelFailure> {
     let call = FunctionCall {
         id: field(item, "id")?.to_owned(),
         output_index,
         call_id: field(item, "call_id")?.to_owned(),
         name: field(item, "name")?.to_owned(),
         arguments: field(item, "arguments")?.to_owned(),
+        namespace: match item.get("namespace") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(namespace)) if !namespace.is_empty() => Some(namespace.clone()),
+            _ => return Err(protocol("工具调用 namespace 无效")),
+        },
+        async_flag: match item.get("async") {
+            None => None,
+            Some(Value::Bool(mode)) => Some(*mode),
+            _ => return Err(protocol("工具调用 async 字段无效")),
+        },
     };
     if call.id.is_empty() || call.call_id.is_empty() || call.name.is_empty() {
         return Err(protocol("工具调用缺少有效身份或名称"));
@@ -136,6 +197,9 @@ fn completed(
     response: &Value,
     completed_reasoning: &HashMap<String, Value>,
     observed: &HashMap<usize, Value>,
+    completed_calls: &HashSet<usize>,
+    completed_arguments: &HashSet<usize>,
+    tools: Option<&ToolCatalog>,
 ) -> Result<GenerationResult, ModelFailure> {
     if field(response, "status")? != "completed" {
         return Err(protocol("完成事件的响应状态不一致"));
@@ -202,6 +266,18 @@ fn completed(
                 if !call_ids.insert(call.call_id.clone()) {
                     return Err(protocol("模型重复使用调用身份"));
                 }
+                let tools =
+                    tools.ok_or_else(|| protocol("连接验证未声明工具，不能处理工具输出"))?;
+                if let Some(previous) = observed.get(&index) {
+                    if completed_calls.contains(&index) {
+                        function_call(previous, index)?.validate_complete_item(&call)?;
+                    } else if completed_arguments.contains(&index)
+                        && field(previous, "arguments")? != call.arguments
+                    {
+                        return Err(protocol("完成工具调用与已完成的流式参数冲突"));
+                    }
+                }
+                call.validate_declaration(tools.contract(), tools.definition(&call.name))?;
                 protocol_items.push(ProtocolItem::FunctionCall {
                     raw: item.clone(),
                     call_id: call.call_id.clone(),
@@ -323,7 +399,7 @@ pub(crate) async fn consume(
     mut response: Response,
     request: &mut AuthenticatedRequest,
     progress: Option<&Sender<StreamEvent>>,
-    idle_timeout: bool,
+    tools: Option<&ToolCatalog>,
 ) -> Result<GenerationResult, ModelFailure> {
     let id = request_id(&response);
     let content_type = response
@@ -347,10 +423,12 @@ pub(crate) async fn consume(
     let mut parser = Sse::default();
     let mut completed_reasoning = HashMap::new();
     let mut observed: HashMap<usize, Value> = HashMap::new();
+    let mut completed_calls = HashSet::new();
+    let mut completed_arguments = HashSet::new();
     let mut received = 0usize;
     let mut deadline = Instant::now() + STREAM_IDLE_TIMEOUT;
     loop {
-        let chunk = if idle_timeout {
+        let chunk = if progress.is_some() {
             timeout_at(deadline, response.chunk())
                 .await
                 .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "模型事件流空闲超时"))?
@@ -409,6 +487,9 @@ pub(crate) async fn consume(
                             .ok_or_else(|| protocol("完成事件缺少响应对象"))?,
                         &completed_reasoning,
                         &observed,
+                        &completed_calls,
+                        &completed_arguments,
+                        tools,
                     );
                 }
                 "response.failed" => {
@@ -457,11 +538,43 @@ pub(crate) async fn consume(
                     {
                         return Err(protocol("工具调用身份在接收期间变化"));
                     }
-                    if progress.is_none() && field(item, "type")? == "function_call" {
-                        return Err(protocol("连接验证未声明工具，不能处理工具输出"));
+                    let item_kind = field(item, "type")?;
+                    if item_kind == "function_call" {
+                        if tools.is_none() {
+                            return Err(protocol("连接验证未声明工具，不能处理工具输出"));
+                        }
+                        let call = function_call(item, output_index)?;
+                        if let Some(previous) = observed.get(&output_index) {
+                            let previous = function_call(previous, output_index)?;
+                            if previous.namespace.is_some()
+                                && call.namespace.is_some()
+                                && previous.namespace != call.namespace
+                            {
+                                return Err(protocol("工具调用 namespace 在接收期间变化"));
+                            }
+                            if kind == "response.output_item.added" {
+                                continue;
+                            }
+                            if completed_calls.contains(&output_index) {
+                                previous.validate_complete_item(&call)?;
+                                continue;
+                            }
+                            if completed_arguments.contains(&output_index)
+                                && previous.arguments != call.arguments
+                            {
+                                return Err(protocol("完整工具调用与已完成的流式参数冲突"));
+                            }
+                        }
+                        if kind == "response.output_item.done" {
+                            completed_calls.insert(output_index);
+                            completed_arguments.insert(output_index);
+                        }
+                        observed.insert(output_index, item.clone());
+                        publish(progress, StreamEvent::FunctionCall(call)).await?;
+                        continue;
                     }
                     observed.insert(output_index, item.clone());
-                    match field(item, "type")? {
+                    match item_kind {
                         "compaction" => {
                             if kind == "response.output_item.done" {
                                 crate::CompactionItem::parse(item.clone())?;
@@ -481,13 +594,6 @@ pub(crate) async fn consume(
                                     .insert(field(item, "id")?.to_owned(), item.clone());
                             }
                         }
-                        "function_call" => {
-                            publish(
-                                progress,
-                                StreamEvent::FunctionCall(function_call(item, output_index)?),
-                            )
-                            .await?
-                        }
                         _ => return Err(protocol("不支持该模型输出类型")),
                     }
                 }
@@ -503,9 +609,18 @@ pub(crate) async fn consume(
                     {
                         return Err(protocol("工具参数身份不匹配"));
                     }
+                    if completed_arguments.contains(&output_index) {
+                        if kind.ends_with(".done")
+                            && field(&event, "arguments")? == field(item, "arguments")?
+                        {
+                            continue;
+                        }
+                        return Err(protocol("已完成的工具参数在接收期间变化"));
+                    }
                     let arguments = if kind.ends_with(".delta") {
                         format!("{}{}", field(item, "arguments")?, field(&event, "delta")?)
                     } else {
+                        completed_arguments.insert(output_index);
                         field(&event, "arguments")?.to_owned()
                     };
                     item["arguments"] = Value::String(arguments);

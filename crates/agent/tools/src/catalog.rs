@@ -6,6 +6,43 @@ use tokio_util::sync::CancellationToken;
 
 const MAX_MODEL_NAME_BYTES: usize = 64;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolContract {
+    #[default]
+    Flat,
+    AdditionalTools,
+    #[serde(rename = "native_async")]
+    ExperimentalNamespace,
+}
+
+impl ToolContract {
+    pub fn is_flat(&self) -> bool {
+        *self == Self::Flat
+    }
+
+    pub fn namespace(self) -> Option<&'static str> {
+        match self {
+            Self::Flat | Self::AdditionalTools => None,
+            Self::ExperimentalNamespace => Some("agentelier"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolMode {
+    #[default]
+    Synchronous,
+    Asynchronous,
+}
+
+impl ToolMode {
+    fn is_synchronous(&self) -> bool {
+        *self == Self::Synchronous
+    }
+}
+
 #[derive(Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolSource {
@@ -31,6 +68,8 @@ pub struct ToolDefinition {
     pub source: ToolSource,
     #[serde(default = "strict_by_default")]
     pub strict: bool,
+    #[serde(default, skip_serializing_if = "ToolMode::is_synchronous")]
+    pub mode: ToolMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -39,6 +78,10 @@ pub struct ToolDefinition {
 
 impl ToolDefinition {
     pub fn same_declaration(&self, other: &Self) -> bool {
+        self.mode == other.mode && self.same_executor_contract(other)
+    }
+
+    fn same_executor_contract(&self, other: &Self) -> bool {
         self.name == other.name
             && self.description == other.description
             && self.parameters == other.parameters
@@ -127,13 +170,17 @@ impl ToolRegistration {
 }
 
 #[derive(Default)]
-pub struct ToolCatalog(Vec<ToolRegistration>);
+pub struct ToolCatalog {
+    contract: ToolContract,
+    tools: Vec<ToolRegistration>,
+}
 
 impl ToolCatalog {
     fn builtins(directory: &std::path::Path, image_input: Option<bool>) -> Vec<ToolRegistration> {
         vec![
             ToolRegistration::new(ToolDefinition {
                 name: "view_image".into(),
+                mode: ToolMode::Asynchronous,
                 source: ToolSource::Builtin,
                 strict: true,
                 display_source: None,
@@ -143,6 +190,7 @@ impl ToolCatalog {
             }, move |context, arguments, cancel| Box::pin(execution::image(context, arguments, cancel, image_input))),
             ToolRegistration::new(ToolDefinition {
                 name: "apply_patch".into(),
+                mode: ToolMode::Synchronous,
                 source: ToolSource::Builtin,
                 strict: true,
                 display_source: None,
@@ -152,6 +200,7 @@ impl ToolCatalog {
             }, patch),
             ToolRegistration::new(ToolDefinition {
                 name: "exec_command".into(),
+                mode: ToolMode::Asynchronous,
                 source: ToolSource::Builtin,
                 strict: true,
                 display_source: None,
@@ -164,6 +213,7 @@ impl ToolCatalog {
             }, exec),
             ToolRegistration::new(ToolDefinition {
                 name: "write_stdin".into(),
+                mode: ToolMode::Synchronous,
                 source: ToolSource::Builtin,
                 strict: true,
                 display_source: None,
@@ -181,6 +231,7 @@ impl ToolCatalog {
     pub fn with_extensions<'a>(
         directory: &std::path::Path,
         image_input: Option<bool>,
+        contract: ToolContract,
         extensions: impl IntoIterator<Item = &'a ToolRegistration>,
     ) -> Result<Self, ToolFailure> {
         let mut tools = Self::builtins(directory, image_input);
@@ -195,8 +246,11 @@ impl ToolCatalog {
         }
         let mut names = HashSet::new();
         let mut sources = HashSet::new();
-        for tool in &tools {
-            let definition = &tool.definition;
+        for tool in &mut tools {
+            let definition = &mut tool.definition;
+            if contract.is_flat() {
+                definition.mode = ToolMode::Synchronous;
+            }
             validate_definition(definition)?;
             if !names.insert(&definition.name) {
                 return Err(ToolFailure::new(
@@ -213,11 +267,19 @@ impl ToolCatalog {
                 ));
             }
         }
-        Ok(Self(tools))
+        Ok(Self { contract, tools })
+    }
+
+    pub fn contract(&self) -> ToolContract {
+        self.contract
+    }
+
+    pub fn definition(&self, name: &str) -> Option<&ToolDefinition> {
+        Some(&self.find(name)?.definition)
     }
 
     pub fn definitions(&self) -> impl ExactSizeIterator<Item = &ToolDefinition> {
-        self.0.iter().map(|tool| &tool.definition)
+        self.tools.iter().map(|tool| &tool.definition)
     }
 
     pub fn rebind(&self, saved: &[ToolDefinition]) -> Result<Self, ToolFailure> {
@@ -232,14 +294,21 @@ impl ToolCatalog {
             }
             let registration = self
                 .find(&definition.name)
-                .filter(|tool| tool.definition.same_declaration(definition))
+                .filter(|tool| {
+                    tool.definition.same_executor_contract(definition)
+                        && (definition.mode == ToolMode::Synchronous
+                            || definition.mode == tool.definition.mode)
+                })
                 .ok_or_else(|| {
                     ToolFailure::new(
                         "tool_contract",
                         format!("工具来源或声明与存档不匹配：{}", definition.name),
                     )
                 })?;
-            tools.push(registration.clone());
+            tools.push(ToolRegistration {
+                definition: definition.clone(),
+                executor: registration.executor.clone(),
+            });
         }
         if self
             .definitions()
@@ -247,7 +316,10 @@ impl ToolCatalog {
         {
             return Err(ToolFailure::new("tool_contract", "存档缺少内置工具契约"));
         }
-        Ok(Self(tools))
+        Ok(Self {
+            contract: self.contract,
+            tools,
+        })
     }
 
     pub fn display_source(&self, name: &str) -> Option<&str> {
@@ -255,7 +327,7 @@ impl ToolCatalog {
     }
 
     pub(crate) fn find(&self, name: &str) -> Option<&ToolRegistration> {
-        self.0.iter().find(|tool| tool.definition.name == name)
+        self.tools.iter().find(|tool| tool.definition.name == name)
     }
 }
 
