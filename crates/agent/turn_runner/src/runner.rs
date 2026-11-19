@@ -1,3 +1,4 @@
+use crate::dispatch::{ToolBatch, ToolCommand, ToolDispatcher, ToolEvent};
 use crate::{
     access::{RunnerEvent, TurnAccess},
     control,
@@ -6,13 +7,14 @@ use agentelier_account::{CredentialClient, ExecutionIdentity};
 use agentelier_conversation::RecordEvent;
 use agentelier_conversation::{ConversationFailure, InputDecision, SteerInput, TurnStatus};
 use agentelier_llm_model::{GenerationResult, ModelFailure, ModelFailureKind};
-use agentelier_tools::ToolResult;
+use agentelier_tools::{ExecutionContext, ToolCatalog, ToolResult, ToolStatus};
+use std::sync::Arc;
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 const MODEL_PROGRESS_CAPACITY: usize = 32;
-const MAX_MODEL_REQUESTS: usize = 32;
+const MAX_MODEL_REQUESTS: u32 = 32;
 const MAX_TOOL_CALLS: usize = 64;
 
 async fn publish(
@@ -27,6 +29,7 @@ async fn publish(
 
 async fn request_once(
     active: &TurnAccess,
+    dispatcher: &ToolDispatcher,
     credentials: CredentialClient,
     identity: &ExecutionIdentity,
     cancel: &CancellationToken,
@@ -52,12 +55,22 @@ async fn request_once(
     if cancel.is_cancelled() {
         return Ok(None);
     }
+    if dispatcher.is_blocked() {
+        return Err(ConversationFailure::new(
+            "工具资源回收未确认，当前会话已暂停执行",
+        ));
+    }
     publish(progress, cancel).await?;
+    let mut stopped_by_resources = false;
     let outcome = {
         let generation = agentelier_llm_model::generate(credentials, prepared, identity, sender);
         tokio::pin!(generation);
         loop {
             tokio::select! { biased;
+                _ = dispatcher.blocked() => {
+                    stopped_by_resources = true;
+                    break None;
+                },
                 result = &mut generation => break Some(result),
                 _ = cancel.cancelled() => break None,
                 input = steers.recv(), if !steers.is_closed() => {
@@ -78,6 +91,11 @@ async fn request_once(
         if let Err(failure) = apply_stream_event(active, event).await? {
             return Ok(Some(Err(failure)));
         }
+    }
+    if stopped_by_resources {
+        return Err(ConversationFailure::new(
+            "工具资源回收未确认，当前会话已暂停执行",
+        ));
     }
     Ok(outcome)
 }
@@ -127,11 +145,9 @@ pub async fn run(
     mut steers: mpsc::Receiver<SteerInput>,
     user_skills_root: std::path::PathBuf,
     memory: Option<agentelier_memory::MemoryClient>,
+    dispatcher: ToolDispatcher,
 ) -> Result<(), ConversationFailure> {
     let active = TurnAccess::new(progress.clone());
-    let settings = active.call(|turn| Ok(turn.settings())).await?;
-    let mut context =
-        agentelier_tools::ExecutionContext::new(settings.working_directory, settings.image_input);
     let event = active
         .call(|turn| {
             Ok(RecordEvent::Accepted {
@@ -151,7 +167,7 @@ pub async fn run(
     let outcome = if admitted.is_ok() {
         run_task(
             &active,
-            &mut context,
+            &dispatcher,
             credentials,
             &cancel,
             &progress,
@@ -175,7 +191,7 @@ pub async fn run(
         Ok(TurnStatus::Limited) => "task_budget_exhausted",
         _ => "task_failed",
     };
-    let report = context.cleanup(reason).await;
+    let report = dispatcher.cleanup(reason).await?;
     let cleanup_failed = report.failed;
     active
         .call(move |mut turn| turn.process_cleanup(report))
@@ -221,7 +237,7 @@ pub async fn run(
 
 async fn run_task(
     active: &TurnAccess,
-    context: &mut agentelier_tools::ExecutionContext,
+    dispatcher: &ToolDispatcher,
     credentials: CredentialClient,
     cancel: &CancellationToken,
     progress: &mpsc::Sender<RunnerEvent>,
@@ -232,10 +248,10 @@ async fn run_task(
     if cancel.is_cancelled() {
         return Ok(TurnStatus::Cancelled);
     }
-    let (settings, input, session) = active
-        .call(|turn| Ok((turn.settings(), turn.input()?, turn.session_id())))
+    let (settings, input) = active
+        .call(|turn| Ok((turn.settings(), turn.input()?)))
         .await?;
-    let directory = settings.working_directory;
+    let directory = settings.working_directory.clone();
     let loading_cancel = cancel.clone();
     let discovered = tokio::task::spawn_blocking(move || {
         let catalog =
@@ -282,7 +298,6 @@ async fn run_task(
         return Ok(TurnStatus::Failed(failure.to_string()));
     }
     let catalog = active.call(|turn| Ok(turn.catalog())).await?;
-    let mut cleanup_failed = false;
     let mut tools_used = 0;
     let mut requests_used = 0;
     while requests_used < MAX_MODEL_REQUESTS {
@@ -290,6 +305,11 @@ async fn run_task(
         control::drain(active, steers, progress).await?;
         if cancel.is_cancelled() {
             return Ok(TurnStatus::Cancelled);
+        }
+        if dispatcher.is_blocked() {
+            return Err(ConversationFailure::new(
+                "工具资源回收未确认，当前会话已暂停执行",
+            ));
         }
         if let Some(status) = collect_project(active, cancel, progress).await? {
             return Ok(status);
@@ -346,16 +366,21 @@ async fn run_task(
         let epoch = memory
             .as_ref()
             .and_then(agentelier_memory::MemoryClient::epoch);
-        context.set_user_turn(
-            active
-                .call(move |mut turn| {
-                    turn.use_memory_epoch(epoch);
-                    turn.tool_user_turn(epoch)
-                })
-                .await?,
-        );
+        let user_turn = active
+            .call(move |mut turn| {
+                turn.use_memory_epoch(epoch);
+                turn.tool_user_turn(epoch)
+            })
+            .await?;
+        let context = Arc::new(ExecutionContext::new(
+            settings.working_directory.clone(),
+            settings.image_input,
+            Arc::new(user_turn),
+            requests_used,
+        ));
         let result = match request_once(
             active,
+            dispatcher,
             credentials.clone(),
             &identity,
             cancel,
@@ -421,149 +446,19 @@ async fn run_task(
             return Ok(TurnStatus::Completed);
         }
         tools_used += calls.len();
-        for call in &calls {
-            control::drain(active, steers, progress).await?;
-            let call_id = call.call_id.clone();
-            let execution = active
-                .call(move |turn| Ok(turn.task_execution(&call_id)))
-                .await?;
-            let outcome = if cleanup_failed {
-                ToolResult::not_executed("cleanup_failed", "工具资源清理未确认，后续调用未执行")
-            } else if limited {
-                ToolResult::not_executed("tool_budget", "本批调用超过任务限额，整批未执行")
-            } else if rejected.contains(&call.call_id) {
-                ToolResult::not_executed(
-                    "session_delivery_budget",
-                    "会话异步任务交付额度已满，此调用未执行",
-                )
-            } else if cancel.is_cancelled() {
-                ToolResult::not_executed("stopped", "用户已停止，工具未执行")
-            } else if active.call(|turn| Ok(turn.has_pending_steer())).await? {
-                ToolResult::not_executed("steered", "补充输入已接纳，旧调用未执行")
-            } else {
-                let call_id = call.call_id.clone();
-                let event = active
-                    .call(move |mut turn| {
-                        turn.tool_started(&call_id)?;
-                        Ok(RecordEvent::ToolStarted {
-                            state: turn.stored_state(),
-                            call_id,
-                            execution,
-                        })
-                    })
-                    .await?;
-                let sequence = active.record(event).await?;
-                let call_id = call.call_id.clone();
-                if active
-                    .call(move |mut turn| {
-                        turn.confirm_task_status(
-                            &call_id,
-                            execution,
-                            agentelier_tools::ToolStatus::Running,
-                            sequence,
-                        )
-                    })
-                    .await?
-                {
-                    active.publish_tasks().await?;
-                }
-                publish(progress, cancel).await?;
-                let started = std::time::Instant::now();
-                tracing::debug!(
-                    request_index = requests_used,
-                    call_id = call.call_id,
-                    tool = call.name,
-                    namespace = call.namespace.as_deref(),
-                    returned_async = call.async_flag,
-                    mode = ?call.mode(),
-                    "工具执行开始"
-                );
-                let tool_cancel = cancel.child_token();
-                let mut delivery_failure = None;
-                let outcome = {
-                    let execution = agentelier_tools::execute(
-                        &catalog,
-                        context,
-                        &call.name,
-                        &call.arguments,
-                        &tool_cancel,
-                    );
-                    tokio::pin!(execution);
-                    loop {
-                        tokio::select! {biased;
-                            result = &mut execution => break result,
-                            input = steers.recv(), if !steers.is_closed() && delivery_failure.is_none() => {
-                                if let Some(input) = input {
-                                    let delivered = match control::accept(active,input,progress).await {
-                                        Ok(()) => publish(progress,&tool_cancel).await,
-                                        Err(failure) => Err(failure),
-                                    };
-                                    if let Err(failure) = delivered { delivery_failure = Some(failure); tool_cancel.cancel(); }
-                                }
-                            }
-                        }
-                    }
-                };
-                if let Some(failure) = delivery_failure {
-                    return Err(failure);
-                }
-                tracing::debug!(
-                    request_index = requests_used,
-                    call_id = call.call_id,
-                    tool = call.name,
-                    elapsed_ms = started.elapsed().as_millis(),
-                    outcome = match outcome.status {
-                        agentelier_tools::ToolStatus::Succeeded => "succeeded",
-                        agentelier_tools::ToolStatus::TimedOut => "timed_out",
-                        agentelier_tools::ToolStatus::Cancelled => "cancelled",
-                        agentelier_tools::ToolStatus::NotExecuted => "not_executed",
-                        _ => "failed",
-                    },
-                    "工具执行已结束"
-                );
-                outcome
-            };
-            let (outcome, storage_failure) = persist_image(active, session, outcome).await;
-            cleanup_failed |= outcome.cleanup_failed;
-            let call_id = call.call_id.clone();
-            let returned = active
-                .call(move |mut turn| {
-                    Ok(turn
-                        .tool_result(&call_id, outcome)?
-                        .map(|(status, output)| {
-                            let event = RecordEvent::ToolReturned {
-                                state: turn.stored_state(),
-                                call_id,
-                                status,
-                                output: agentelier_llm_model::ArchivedPayload::capture(&output),
-                                execution,
-                            };
-                            (event, status)
-                        }))
-                })
-                .await?;
-            if let Some(failure) = storage_failure {
-                return Err(ConversationFailure::new(format!(
-                    "图片已读取，附件保存失败，停止后续执行：{failure}"
-                )));
-            }
-            let Some((event, status)) = returned else {
-                append_saved_results(active).await?;
-                continue;
-            };
-            let saved_sequence = active.record(event).await?;
-            let call_id = call.call_id.clone();
-            if active
-                .call(move |mut turn| {
-                    turn.confirm_result_saved(&call_id, execution, status, saved_sequence)
-                })
-                .await?
-            {
-                active.publish_tasks().await?;
-            }
-            append_saved_results(active).await?;
-            publish(progress, cancel).await?;
-        }
+        let cleanup_failed = execute_batch(
+            active,
+            dispatcher,
+            catalog.clone(),
+            context,
+            calls,
+            limited,
+            &rejected,
+            cancel,
+            progress,
+            steers,
+        )
+        .await?;
         close_response(active, response_sequence, compaction, progress, cancel).await?;
         if cleanup_failed {
             active
@@ -584,6 +479,237 @@ async fn run_task(
         }
     }
     Ok(TurnStatus::Limited)
+}
+
+async fn execute_batch(
+    active: &TurnAccess,
+    dispatcher: &ToolDispatcher,
+    catalog: Arc<ToolCatalog>,
+    context: Arc<ExecutionContext>,
+    calls: Vec<agentelier_llm_model::FunctionCall>,
+    limited: bool,
+    rejected: &[String],
+    cancel: &CancellationToken,
+    progress: &mpsc::Sender<RunnerEvent>,
+    steers: &mut mpsc::Receiver<SteerInput>,
+) -> Result<bool, ConversationFailure> {
+    let session = context.user_turn().session;
+    let mut eligible = Vec::new();
+    for call in calls {
+        let skip = if limited {
+            Some(ToolResult::not_executed(
+                "tool_budget",
+                "本批调用超过任务限额，整批未执行",
+            ))
+        } else if rejected.contains(&call.call_id) {
+            Some(ToolResult::not_executed(
+                "session_delivery_budget",
+                "会话异步任务交付额度已满，此调用未执行",
+            ))
+        } else {
+            None
+        };
+        if let Some(result) = skip {
+            save_call(
+                active,
+                dispatcher,
+                session,
+                &call.call_id,
+                None,
+                result,
+                progress,
+                cancel,
+            )
+            .await?;
+        } else {
+            eligible.push(call);
+        }
+    }
+    if eligible.is_empty() {
+        return Ok(false);
+    }
+    let ids: Vec<_> = eligible.iter().map(|call| call.call_id.clone()).collect();
+    let lookup = ids.clone();
+    let executions = active
+        .call(move |turn| {
+            Ok(lookup
+                .iter()
+                .map(|id| turn.task_execution(id))
+                .collect::<Vec<_>>())
+        })
+        .await?;
+    let admission = cancel.child_token();
+    if active.call(|turn| Ok(turn.has_pending_steer())).await? {
+        admission.cancel();
+    }
+    let (events, mut incoming) = mpsc::unbounded_channel();
+    dispatcher
+        .send(ToolCommand::Batch(ToolBatch {
+            calls: eligible,
+            catalog,
+            context,
+            admission: admission.clone(),
+            events,
+        }))
+        .await?;
+    let mut remaining = ids.len();
+    let mut failure = None;
+    let mut cleanup_failed = false;
+    while remaining > 0 {
+        let result = tokio::select! {
+            biased;
+            event = incoming.recv() => {
+                match event {
+                    Some(ToolEvent::Ready { index, begin }) => {
+                        let started = match ids.get(index).zip(executions.get(index)) {
+                            Some((id, execution)) if !admission.is_cancelled() && !dispatcher.is_blocked() => {
+                                start_call(active, id.clone(), *execution).await
+                            }
+                            Some(_) => Ok(false),
+                            None => Err(ConversationFailure::new("工具准入不属于当前批次")),
+                        };
+                        let should_begin = matches!(&started, Ok(true));
+                        if begin.send(should_begin).is_err() && should_begin {
+                            Err(ConversationFailure::new("工具句柄无法接收已确认的开始记录"))
+                        } else if should_begin {
+                            publish(progress, cancel).await
+                        } else {
+                            started.map(|_| ())
+                        }
+                    }
+                    Some(ToolEvent::Finished { index, result }) => {
+                        remaining -= 1;
+                        cleanup_failed |= result.cleanup_failed || result.status == ToolStatus::Unconfirmed;
+                        if cleanup_failed {
+                            admission.cancel();
+                        }
+                        match ids.get(index).zip(executions.get(index)) {
+                            Some((id, execution)) => {
+                                if failure.is_some() {
+                                    retain_call(active, dispatcher, id.clone(), result).await.map(|_| ())
+                                } else {
+                                    save_call(active, dispatcher, session, id, *execution, result, progress, cancel).await
+                                }
+                            }
+                            None => Err(ConversationFailure::new("工具终态不属于当前批次")),
+                        }
+                    }
+                    None => return Err(failure.unwrap_or_else(|| ConversationFailure::new("工具批次结束前仍有调用未回收"))),
+                }
+            }
+            input = steers.recv(), if !steers.is_closed() && failure.is_none() => match input {
+                Some(input) => {
+                    match control::accept(active, input, progress).await {
+                        Ok(()) => {
+                            match active.call(|turn| Ok(turn.has_pending_steer())).await {
+                                Ok(true) => { admission.cancel(); publish(progress, cancel).await }
+                                Ok(false) => Ok(()),
+                                Err(failure) => Err(failure),
+                            }
+                        }
+                        Err(failure) => Err(failure),
+                    }
+                }
+                None => Ok(()),
+            }
+        };
+        if let Err(error) = result {
+            admission.cancel();
+            failure = failure.or(Some(error));
+        }
+    }
+    failure.map_or(Ok(cleanup_failed || dispatcher.is_blocked()), Err)
+}
+
+async fn start_call(
+    active: &TurnAccess,
+    call_id: String,
+    execution: Option<agentelier_conversation::TaskExecution>,
+) -> Result<bool, ConversationFailure> {
+    let source = call_id.clone();
+    let event = active
+        .call(move |mut turn| {
+            if turn.has_pending_steer() {
+                return Ok(None);
+            }
+            turn.tool_started(&source)?;
+            Ok(Some(RecordEvent::ToolStarted {
+                state: turn.stored_state(),
+                call_id: source,
+                execution,
+            }))
+        })
+        .await?;
+    let Some(event) = event else {
+        return Ok(false);
+    };
+    let sequence = active.record(event).await?;
+    if active
+        .call(move |mut turn| {
+            turn.confirm_task_status(&call_id, execution, ToolStatus::Running, sequence)
+        })
+        .await?
+    {
+        active.publish_tasks().await?;
+    }
+    Ok(true)
+}
+
+async fn retain_call(
+    active: &TurnAccess,
+    dispatcher: &ToolDispatcher,
+    call_id: String,
+    result: ToolResult,
+) -> Result<Option<(ToolStatus, agentelier_tools::ToolPayload)>, ConversationFailure> {
+    let id = call_id.clone();
+    let outcome = active
+        .call(move |mut turn| turn.tool_result(&id, result))
+        .await?;
+    dispatcher.send(ToolCommand::Accepted(call_id)).await?;
+    Ok(outcome)
+}
+
+async fn save_call(
+    active: &TurnAccess,
+    dispatcher: &ToolDispatcher,
+    session: agentelier_conversation::SessionId,
+    call_id: &str,
+    execution: Option<agentelier_conversation::TaskExecution>,
+    result: ToolResult,
+    progress: &mpsc::Sender<RunnerEvent>,
+    cancel: &CancellationToken,
+) -> Result<(), ConversationFailure> {
+    let (result, storage_failure) = persist_image(active, session, result).await;
+    let outcome = retain_call(active, dispatcher, call_id.to_owned(), result).await?;
+    if let Some(failure) = storage_failure {
+        return Err(ConversationFailure::new(format!(
+            "图片已读取，附件保存失败，停止后续执行：{failure}"
+        )));
+    }
+    if let Some((status, output)) = outcome {
+        let id = call_id.to_owned();
+        let event = active
+            .call(move |turn| {
+                Ok(RecordEvent::ToolReturned {
+                    state: turn.stored_state(),
+                    call_id: id,
+                    status,
+                    output: agentelier_llm_model::ArchivedPayload::capture(&output),
+                    execution,
+                })
+            })
+            .await?;
+        let sequence = active.record(event).await?;
+        let id = call_id.to_owned();
+        if active
+            .call(move |mut turn| turn.confirm_result_saved(&id, execution, status, sequence))
+            .await?
+        {
+            active.publish_tasks().await?;
+        }
+    }
+    append_saved_results(active).await?;
+    publish(progress, cancel).await
 }
 
 async fn append_saved_results(active: &TurnAccess) -> Result<(), ConversationFailure> {

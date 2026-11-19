@@ -70,7 +70,7 @@ impl Gateway {
             .catalog
             .tools
             .iter()
-            .any(|current| current.same_declaration(definition))
+            .any(|current| current.can_bind(definition))
         {
             return fail("mcp_contract", "当前 MCP 服务器或工具声明与会话快照不匹配");
         }

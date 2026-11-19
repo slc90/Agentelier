@@ -183,6 +183,11 @@ impl ActiveTurn<'_> {
             turn: turn.id.0,
             input: turn.input_id.0,
             statements,
+            selected_skills: turn
+                .selected_skills
+                .iter()
+                .map(|selected| (selected.skill.path.clone(), selected.hash.clone()))
+                .collect(),
         })
     }
 
@@ -609,7 +614,11 @@ impl ActiveTurn<'_> {
         }) {
             return Err(ConversationFailure::new("会话重复使用已有 call_id"));
         }
-        turn.phase = TaskPhase::RequestingModel;
+        turn.phase = if result.calls.is_empty() {
+            TaskPhase::RequestingModel
+        } else {
+            TaskPhase::ExecutingTool
+        };
         turn.messages
             .retain(|message| message.request_index != turn.request_index);
         turn.messages

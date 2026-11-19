@@ -109,13 +109,27 @@ impl MemoryClient {
         &self,
         operation: impl FnOnce(&mut Connection, &Path) -> io::Result<T> + Send + 'static,
     ) -> io::Result<T> {
-        let paused = || {
+        let epoch = self.epoch().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "长期记忆重置进行中或清理尚未完成",
             )
+        })?;
+        self.with_epoch(Some(epoch), operation).await
+    }
+
+    pub(crate) async fn with_epoch<T: Send + 'static>(
+        &self,
+        expected: Option<i64>,
+        operation: impl FnOnce(&mut Connection, &Path) -> io::Result<T> + Send + 'static,
+    ) -> io::Result<T> {
+        let paused = || {
+            io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "工具接纳时的长期记忆纪元已不可用",
+            )
         };
-        let epoch = self.epoch().ok_or_else(paused)?;
+        let epoch = expected.ok_or_else(paused)?;
         let current = self.active_epoch.clone();
         self.with_store(move |connection, workspace| {
             if current.load(Ordering::Acquire) != epoch {

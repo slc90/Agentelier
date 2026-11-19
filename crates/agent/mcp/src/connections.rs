@@ -284,10 +284,7 @@ impl Connections {
                 if let Some(entry) = self.active.get(server)
                     && matches!(entry.state, ConnectionState::Ready(_))
                     && let Some(Ok(catalog)) = &entry.catalog
-                    && !catalog
-                        .tools
-                        .iter()
-                        .any(|current| current.same_declaration(tool))
+                    && !catalog.tools.iter().any(|current| current.can_bind(tool))
                 {
                     return None;
                 }

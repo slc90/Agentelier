@@ -10,7 +10,10 @@ pub(super) const PROGRESS_CAPACITY: usize = 32;
 pub(super) type ModelJoin = Result<Option<TaskResult>, tokio::task::JoinError>;
 pub(super) enum TaskResult {
     Model(Result<ModelResult, ModelFailure>),
-    Chat(Result<(), ConversationFailure>),
+    Chat {
+        outcome: Result<(), ConversationFailure>,
+        retained: super::tool_jobs::RetainedResults,
+    },
 }
 pub(super) enum TaskRequest {
     Model(ModelRequest),
@@ -19,6 +22,7 @@ pub(super) enum TaskRequest {
         mpsc::Receiver<SteerInput>,
         std::path::PathBuf,
         Option<agentelier_memory::MemoryClient>,
+        super::tool_jobs::SessionTools,
     ),
 }
 pub(super) struct ModelTask {
@@ -43,18 +47,26 @@ impl ModelTask {
                     result = agentelier_llm_model::execute(credentials, request) => Some(TaskResult::Model(result)),
                     _ = cancel.cancelled() => None,
                 },
-                TaskRequest::Chat(progress, steers, user_skills_root, memory) => {
-                    Some(TaskResult::Chat(
-                        agentelier_turn_runner::run(
-                            credentials,
-                            cancel,
-                            progress,
-                            steers,
-                            user_skills_root,
-                            memory,
-                        )
-                        .await,
-                    ))
+                TaskRequest::Chat(progress, steers, user_skills_root, memory, tools) => {
+                    let (dispatcher, commands) =
+                        agentelier_turn_runner::ToolDispatcher::channel(tools.admission.clone());
+                    let runner = tokio::spawn(agentelier_turn_runner::run(
+                        credentials,
+                        cancel.clone(),
+                        progress,
+                        steers,
+                        user_skills_root,
+                        memory,
+                        dispatcher,
+                    ));
+                    let (outcome, retained) =
+                        tokio::join!(runner, super::tool_jobs::run(commands, cancel, tools));
+                    let outcome = outcome.unwrap_or_else(|failure| {
+                        Err(ConversationFailure::new(format!(
+                            "聊天执行体异常结束：{failure}"
+                        )))
+                    });
+                    Some(TaskResult::Chat { outcome, retained })
                 }
             };
             debug!(operation_id = id, chat, "模型操作执行体已结束");
@@ -210,10 +222,25 @@ pub(super) fn complete(
 ) -> Result<AgentEventKind, RuntimeFailure> {
     if chat {
         let view = match result {
-            Ok(Some(TaskResult::Chat(Ok(())))) => conversation.finish(id)?,
-            Ok(Some(TaskResult::Chat(Err(failure)))) => {
-                tracing::error!(operation_id = id, error = %failure, "聊天执行记录未确认");
-                conversation.interrupt(id)?
+            Ok(Some(TaskResult::Chat { outcome, retained })) => {
+                let has_retained = !retained.is_empty();
+                if has_retained {
+                    let mut turn = conversation.active_turn(id)?;
+                    for (call_id, result) in retained {
+                        if let Err(failure) = turn.tool_result(&call_id, result) {
+                            tracing::error!(operation_id = id, call_id, %failure, "工具终态无法安装到当前会话");
+                        }
+                    }
+                }
+                match outcome {
+                    Ok(()) if !has_retained => conversation.finish(id)?,
+                    outcome => {
+                        if let Err(failure) = outcome {
+                            tracing::error!(operation_id = id, error = %failure, "聊天执行记录未确认");
+                        }
+                        conversation.interrupt(id)?
+                    }
+                }
             }
             Err(_) => conversation.interrupt(id)?,
             _ => return Err(RuntimeFailure::ModelState),
@@ -309,6 +336,10 @@ pub(super) fn start_queued(
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
     user_skills_root: &std::path::Path,
     memory: Option<agentelier_memory::MemoryClient>,
+    session_tools: &mut Option<(
+        agentelier_conversation::SessionId,
+        super::tool_jobs::SessionTools,
+    )>,
 ) -> Result<(), RuntimeFailure> {
     if model.is_some() {
         return Ok(());
@@ -317,6 +348,7 @@ pub(super) fn start_queued(
         return Ok(());
     };
     let (control, steers) = ModelControl::new(id);
+    let tools = super::tool_jobs::SessionTools::for_session(session_tools, view.id);
     let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
     control
         .turn
@@ -334,7 +366,7 @@ pub(super) fn start_queued(
         id,
         control,
         credentials.clone(),
-        TaskRequest::Chat(sender, steers, user_skills_root.to_owned(), memory),
+        TaskRequest::Chat(sender, steers, user_skills_root.to_owned(), memory, tools),
     ));
     Ok(())
 }

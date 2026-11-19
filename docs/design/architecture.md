@@ -116,7 +116,7 @@ Account 的可克隆 CredentialClient 管理接纳、会话失效令牌和在途
 
 LLM Model 通过 Account 获取凭据，不读写认证文件，也不建立第二份账号缓存。它负责模型目录、显式模型请求配置、Responses HTTP 请求、一次有界认证恢复、SSE 完成判定及错误分类。协议见[单次模型请求](modules/model-request.md)。
 
-Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模型任务和独立 Turn Runner。Runtime 拥有线程、队列、取消令牌、JoinHandle 及真实回收信号；账号处理期间模型任务仍可并发等待网络。它不包含 OAuth、认证文件实现或模型网络协议。依赖为 Runtime → Account → Login、Runtime → LLM Model → Account，以及 Runtime → Turn Runner → Conversation / LLM Model / Account，无循环。
+Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模型任务和独立 Turn Runner。Runtime 拥有线程、队列、取消令牌、JoinHandle 及真实回收信号；账号处理期间模型任务仍可并发等待网络。它不包含 OAuth、认证文件实现或模型网络协议。依赖为 Runtime → Account → Login、Runtime → LLM Model → Account，以及 Runtime → Tools，以及 Runtime → Turn Runner → Conversation / LLM Model / Account，无循环。
 
 用户请求退出时，共享门控先停止新凭据请求和旧等待者交付；独立控制队列优先处理退出。Runtime 取消并回收模型任务、结束旧排队命令，再让 Account 等待当前更新收敛并调用 Login 执行撤销和本地提交。取消、退出请求与实际完成分别表达。普通关闭不退出账号。详见[认证运行与凭据管理](modules/authentication.md)。
 
@@ -207,7 +207,7 @@ Connection 创建本次运行共享的 OperationSequence；普通请求与恢复
 
 ## Direct 工具往返
 
-会话创建时固定只读工具目录，请求声明与分发共用它。新建 `gpt-6.2-sol` 会话把冻结工具目录作为每个请求的 developer `additional_tools` 首项。其他模型和旧平铺会话继续使用同步契约。Tools 不依赖模型、账号、Bridge 或 Bevy。四项内置工具提供任务级 PowerShell 进程会话、标准输入、UTF-8 文件补丁和静态 PNG/JPEG 图片结果。编译进程序的提供者可通过 ToolRegistration 配对声明和执行器，恢复时由 Conversation 按工具来源和保存的声明重新绑定。Runner 每任务最多发送 32 次模型请求并接纳 64 次工具调用。完整响应持久确认后按输出顺序串行执行，超额整批写入未执行结果后触限。完整响应和逐项工具结果分别确认进入历史。当前续发等待整批结果。失败或停止保留已确认历史，已有响应提交的任务禁用原样重试。调用和正文按任务内请求序号区分，接收中的参数仅用于展示。
+会话创建时固定只读工具目录，请求声明与分发共用它。新建 `gpt-6.2-sol` 会话把冻结工具目录作为每个请求的 developer `additional_tools` 首项。其他模型和旧平铺会话继续使用同步契约。Tools 不依赖模型、账号、Bridge 或 Bevy。四项内置工具提供任务级 PowerShell 进程会话、标准输入、UTF-8 文件补丁和静态 PNG/JPEG 图片结果。编译进程序的提供者可通过 ToolRegistration 配对声明和执行器，恢复时由 Conversation 按工具来源和保存的声明重新绑定。Runner 每任务最多发送 32 次模型请求并接纳 64 次工具调用。完整响应持久确认后，Runtime 按会话许可准入各调用，最多 8 个普通执行；经登记的异步只读可并行，副作用调用按接纳顺序独占。超出单轮预算时整批写入未执行结果后触限。完整响应和逐项工具结果分别确认进入历史。当前续发等待整批结果。失败或停止保留已确认历史，已有响应提交的任务禁用原样重试。调用和正文按任务内请求序号区分，接收中的参数仅用于展示。
 
 Steer 通过容量 8 的任务输入通道交给 Runner，由 Conversation 裁决接纳、应用和最终关门。Stop 仍走取消令牌。Connection 的容量 32 可靠结果队列承载接纳、应用和任务投影，正文快照可合并。Runtime 收尾期间持续排空事件至真实回收，UI 用草稿修订和输入身份关联回执。
 
@@ -219,15 +219,15 @@ Conversation 保存 FIFO 待办和暂停状态。Connection 从统一操作序�
 
 ## MCP 服务器配置
 
-Runtime 在启动数据根下打开独立的 `mcp_servers.json`；配置 Crate 管理工作副本及原子保存。Chat UI 通过唯一 Connection 提交编辑并等待保存回执。stdio 记录程序和参数、启动目录及允许继承的环境变量名称；HTTP 记录端点与可选 Bearer 环境变量名称。账号凭据由 Account 独立持有。Agent MCP 客户端在同一 Tokio Runtime 连接启用的 stdio 与 Streamable HTTP 服务器，并通过 rmcp 协商版本及能力。每项连接的状态和能力经 Bridge 投影，独立于模型任务；禁用、替换或应用退出触发协议回收；stdio 同时回收 Windows Job。客户端对就绪服务器分页发现 Tools，Runtime 在创建会话时合并其经校验的非严格声明，存档保存服务器 UUID、传输配置摘要和原始工具名。执行器用同一来源和声明核对当前连接，经 rmcp 调用真实工具；Runner 继续记录模型 call_id、串行结果以及取消后的封闭历史。Resources 和 Prompts 通过同一 Connection 读取分页清单及实际预览。文本资源或单条纯文本 user 模板确认后复制到当前聊天草稿，再按原有用户输入路径提交。
+Runtime 在启动数据根下打开独立的 `mcp_servers.json`；配置 Crate 管理工作副本及原子保存。Chat UI 通过唯一 Connection 提交编辑并等待保存回执。stdio 记录程序和参数、启动目录及允许继承的环境变量名称；HTTP 记录端点与可选 Bearer 环境变量名称。账号凭据由 Account 独立持有。Agent MCP 客户端在同一 Tokio Runtime 连接启用的 stdio 与 Streamable HTTP 服务器，并通过 rmcp 协商版本及能力。每项连接的状态和能力经 Bridge 投影，独立于模型任务；禁用、替换或应用退出触发协议回收；stdio 同时回收 Windows Job。客户端对就绪服务器分页发现 Tools，Runtime 在创建会话时合并其经校验的非严格声明，存档保存服务器 UUID、传输配置摘要和原始工具名。执行器用同一来源和声明核对当前连接，经 rmcp 调用真实工具；具备异步资格，按未知副作用走独占许可。Runner 以模型 call_id 记录实际结果以及取消后的封闭历史。Resources 和 Prompts 通过同一 Connection 读取分页清单及实际预览。文本资源或单条纯文本 user 模板确认后复制到当前聊天草稿，再按原有用户输入路径提交。
 
 ## 本地工具的工作环境
 
 chat_ui 在模型准备区保留内存目录候选并复用 Widgetry 目录选择器；Conversation 在创建时校验并固定本地工作目录，Bridge 传递 PathBuf 与安全展示。Tools 提供 WorkingDirectory 的校验和相对路径解析，已接入任务级持续 PowerShell 进程会话与标准输入；已接入 JSON 文件补丁及静态 PNG/JPEG 图片结果。目录选择与账号数据目录相互独立，不改变登录环境或进程全局 cwd。
 
-Tools 的 process 模块拥有 PowerShell、Windows Job 与输出读取任务，output 模块负责 UTF-8 增量解码及有界开头/尾部缓冲。Runner 提供固定目录及取消令牌，进度交付失败也先请求取消并等待工具收尾，不丢弃执行 Future。process-wrap 负责挂起后入 Job、恢复及进程树终止；win32job 在恢复前登记外层观察 Job，以 active_processes 确认整个进程组结束，再调用一次 wait。这样不以根 Shell 退出或 process-wrap 的缓存状态作为子进程回收证据。两层 Job 均只服务生命周期，不设置访问隔离；源码保持 unsafe 禁令。Tokio 增加 process feature，依赖由 Workspace 统一管理。
+Tools 的 process 模块拥有 PowerShell、Windows Job 与输出读取任务，output 模块负责 UTF-8 增量解码及有界开头/尾部缓冲。Runner 为每批保存固定来源，Runtime 以独立执行句柄可靠收集结果及清理状态。process-wrap 负责挂起后入 Job、恢复及进程树终止；win32job 在恢复前登记外层观察 Job，以 active_processes 确认整个进程组结束，再调用一次 wait。这样不以根 Shell 退出或 process-wrap 的缓存状态作为子进程回收证据。两层 Job 均只服务生命周期，不设置访问隔离；源码保持 unsafe 禁令。Tokio 增加 process feature，依赖由 Workspace 统一管理。
 
-Runner 为每个用户任务独占 Tools ExecutionContext，按 UUID 管理最多 8 个 Process。process 模块负责单进程组的启动与回收，sessions 模块处理等待、输入、EOF、终止、ID 归属和统一收尾；输出读取在工具调用返回后仍持续运行。exec_command 与 write_stdin 均采用 0–30000 毫秒等待窗口，没有命令全生命周期的 15 秒终止器。Runner 的所有结果路径都先等待 context.cleanup，再结束执行。Runtime 继续只负责真实任务句柄回收，不接管进程细节。自动收尾记录通过 Conversation、Bridge 与 UI 安全投影，TaskPhase 增加进程回收阶段，原始工具输出不被改写。旧诊断登记、实现与专属执行包装已移除；旧名称返回 unknown_tool。
+Runtime 持有会话许可、进程表和独立工具句柄。Tools 的 sessions 模块处理等待、输入、EOF、终止、ID 归属和统一收尾。任意 shell 在返回可继续的进程 ID 时将独占许可转给该进程，释放工作槽。进程组确认退出及回收时释放许可，出口记录保留到读取或本 Turn 收尾。write_stdin 走进程独有入口，终止信号可打断在途轮询。两个工具均采用 0–30000 毫秒等待窗口，没有命令全生命周期的 15 秒终止器。Runtime 在前台结束前确认真实句柄和进程清理。自动收尾记录通过 Conversation、Bridge 与 UI 安全投影，TaskPhase 增加进程回收阶段，原始工具输出不被改写。旧诊断登记、实现与专属执行包装已移除；旧名称返回 unknown_tool。
 
 补丁由 Tools 的 patch 模块按解析、准备与文件提交拆分。全补丁完成精确匹配、路径冲突和资源预算校验后才写入；已有 UTF-8 BOM 与统一行尾保留。单文件通过同目录临时文件替换，跨文件不回滚，动作日志区分目标写入、源删除、目录创建及临时文件清理。blocking 模块始终等待工作线程，Stop 和 15 秒期限仅停止后续动作，当前提交取得真实结果后才返回。工具详情保存有界动作报告，卡片概括文件完成数量；凭据与完整文件内容不进入日志。
 

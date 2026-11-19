@@ -131,6 +131,7 @@ dependencies = [
  "agentelier_mcp",
  "agentelier_memory",
  "agentelier_session_store",
+ "agentelier_tools",
  "agentelier_turn_runner",
  "serde_json",
  "tokio",

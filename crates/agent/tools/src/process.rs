@@ -16,7 +16,7 @@ use win32job::{ExtendedLimitInfo, Job};
 use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 
 const REAP_DEADLINE: Duration = Duration::from_secs(10);
-const PROCESS_POLL: Duration = Duration::from_millis(40);
+pub(crate) const PROCESS_POLL: Duration = Duration::from_millis(40);
 const RESULT_STREAM_BYTES: usize = 16 * 1024;
 
 #[derive(Debug)]

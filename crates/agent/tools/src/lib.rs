@@ -21,7 +21,10 @@ pub use catalog::{
 };
 pub use execution::{MAX_TOOL_BODY_BYTES, ToolFailure, ToolResult, ToolStatus, execute};
 
+pub use admission::{ToolAccess, ToolAdmission, ToolPermit};
+pub use execution::{ExecutionContext, ToolUserTurn};
 pub use payload::{
     ImageDescriptor, ImagePayload, MAX_ENCODED_IMAGE_BYTES, MAX_SESSION_IMAGE_BYTES, ToolPayload,
 };
-pub use sessions::{CleanupReport, ExecutionContext, ProcessCleanup, ToolUserTurn};
+pub use sessions::{CleanupReport, ProcessCleanup, ProcessSessions};
+mod admission;

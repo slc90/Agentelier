@@ -147,7 +147,7 @@ fn normalize(
         })
         .collect();
     Ok(ToolDefinition {
-        mode: agentelier_tools::ToolMode::Synchronous,
+        mode: agentelier_tools::ToolMode::Asynchronous,
         name: format!("mcp_{readable}_{}", &digest[..32]),
         description: description.into(),
         parameters,

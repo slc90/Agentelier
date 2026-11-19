@@ -17,6 +17,7 @@ pub use memory::{MemoryReply, MemoryRequest};
 mod model_task;
 mod recording;
 mod renaming;
+mod tool_jobs;
 use model_task::{
     ModelJoin, ModelTask, PROGRESS_CAPACITY, TaskRequest, complete, drain_progress, progress,
     stop_model,
@@ -251,6 +252,7 @@ impl AgentRuntime {
                         let mut account = Account::new(credentials_path, owner_credentials.clone());
                         let mut delivery_failure = None;
                         let mut model: Option<ModelTask> = None;
+                        let mut session_tools = None;
                         let mut conversation = Conversation::with_extensions(agentelier_memory::registrations(
                             memory.as_ref().ok().map(Memory::client),
                         ));
@@ -395,7 +397,9 @@ impl AgentRuntime {
                                     Command::Deleted(result) => {
                                         let pending = deleting.take().ok_or(RuntimeFailure::ModelState)?;
                                         let id = pending.id;
-                                        emit(&publish, id, AgentEventKind::Conversation(pending.complete(result, &mut conversation)))?;
+                                        let event = pending.complete(result, &mut conversation);
+                                        if matches!(&event, ConversationEvent::Deleted { was_open: true, .. }) { session_tools = None; }
+                                        emit(&publish, id, AgentEventKind::Conversation(event))?;
                                     }
                                     Command::Scan => {
                                         if catalog.is_none() {
@@ -430,7 +434,10 @@ impl AgentRuntime {
                                         let event = pending.complete(*result, &operations, &mut conversation, &mcp_connections);
                                         let opened = matches!(&event, ConversationEvent::Opened(_));
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
-                                        if opened { model_task::publish_tasks(&conversation, &publish)?; }
+                                        if opened {
+                                            session_tools = None;
+                                            model_task::publish_tasks(&conversation, &publish)?;
+                                        }
                                         if opened && catalog.is_none() {
                                             match store.client().scan() {
                                                 Ok(reply) => catalog = Some(reply),
@@ -444,13 +451,14 @@ impl AgentRuntime {
                                         match applied.kind { recording::AppliedKind::Suspended => suspending = suspending.checked_sub(1).ok_or(RuntimeFailure::ModelState)?, recording::AppliedKind::Queue => pending_queue = false, recording::AppliedKind::Finished => finalizing = false }
                                         if applied.failed && let Some(control) = owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.as_ref() { control.cancel.cancel(); }
                                         if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && !pending_queue && !finalizing && !runtime_shutdown.is_cancelled() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client))?;
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools)?;
                                         }
                                     }
                                     Command::Created(result) => {
                                         let pending = creating.take().ok_or(RuntimeFailure::ModelState)?;
                                         let id = pending.id;
                                         let event = pending.complete(result, &mut conversation);
+                                        if matches!(&event, ConversationEvent::Created(_)) { session_tools = None; }
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
                                     }
                                     Command::Model {
@@ -487,7 +495,7 @@ impl AgentRuntime {
                                             capture_delivery(emit(&publish, task.id, event), &mut delivery_failure);
                                         }
                                         if !finalizing && !pending_queue && suspending == 0 && delivery_failure.is_none() && !runtime_shutdown.is_cancelled() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client))?;
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools)?;
                                         }
                                     }
                                     Command::Session(command) => {
@@ -579,6 +587,7 @@ impl AgentRuntime {
                                                 match conversation.start(id, request) {
                                                     Ok(view) => {
                                                         let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
+                                                        let tools = tool_jobs::SessionTools::for_session(&mut session_tools, view.id);
                                                         control.turn.set((view.id, turn.id.0)).map_err(|_| RuntimeFailure::ModelState)?;
                                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?=Some(control.clone());
                                                         emit(
@@ -595,7 +604,7 @@ impl AgentRuntime {
                                                             id,
                                                             control,
                                                             owner_credentials.clone(),
-                                                            TaskRequest::Chat(sender, steers, data_root.join("skills"), memory.as_ref().ok().map(Memory::client)),
+                                                            TaskRequest::Chat(sender, steers, data_root.join("skills"), memory.as_ref().ok().map(Memory::client), tools),
                                                         ));
                                                     }
                                                     Err(failure) => {

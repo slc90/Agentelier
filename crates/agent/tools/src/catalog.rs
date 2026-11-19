@@ -1,4 +1,6 @@
-use crate::{ExecutionContext, ToolFailure, ToolResult, execution};
+use crate::{
+    ExecutionContext, ProcessSessions, ToolAccess, ToolFailure, ToolPermit, ToolResult, execution,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::HashSet, future::Future, pin::Pin, sync::Arc};
@@ -81,12 +83,18 @@ impl ToolDefinition {
         self.mode == other.mode && self.same_executor_contract(other)
     }
 
+    pub fn can_bind(&self, saved: &Self) -> bool {
+        self.same_executor_contract(saved)
+            && (saved.mode == ToolMode::Synchronous || saved.mode == self.mode)
+    }
+
     fn same_executor_contract(&self, other: &Self) -> bool {
         self.name == other.name
             && self.description == other.description
             && self.parameters == other.parameters
             && self.source == other.source
             && self.strict == other.strict
+            && self.output_schema == other.output_schema
     }
 
     pub fn catalog_description(&self) -> String {
@@ -115,21 +123,29 @@ fn strict_by_default() -> bool {
 }
 
 pub type ToolExecution<'a> = Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>>;
-type Executor = dyn for<'a> Fn(&'a mut ExecutionContext, &'a str, &'a CancellationToken) -> ToolExecution<'a>
+type ToolExecutor = dyn for<'a> Fn(&'a ExecutionContext, &'a str, &'a CancellationToken) -> ToolExecution<'a>
     + Send
     + Sync;
 
 #[derive(Clone)]
+enum Executor {
+    Function(Arc<ToolExecutor>),
+    Shell,
+    Stdin,
+}
+
+#[derive(Clone)]
 pub struct ToolRegistration {
     definition: ToolDefinition,
-    executor: Arc<Executor>,
+    executor: Executor,
+    access: ToolAccess,
 }
 
 impl ToolRegistration {
     pub fn new(
         definition: ToolDefinition,
         executor: impl for<'a> Fn(
-            &'a mut ExecutionContext,
+            &'a ExecutionContext,
             &'a str,
             &'a CancellationToken,
         ) -> ToolExecution<'a>
@@ -139,33 +155,72 @@ impl ToolRegistration {
     ) -> Self {
         Self {
             definition,
-            executor: Arc::new(executor),
+            executor: Executor::Function(Arc::new(executor)),
+            access: ToolAccess::Exclusive,
+        }
+    }
+
+    pub fn shared_read(mut self) -> Self {
+        self.access = ToolAccess::SharedRead;
+        self
+    }
+
+    fn process(definition: ToolDefinition, executor: Executor, access: ToolAccess) -> Self {
+        Self {
+            definition,
+            executor,
+            access,
         }
     }
 
     pub(crate) fn execute<'a>(
         &'a self,
-        context: &'a mut ExecutionContext,
+        context: &'a ExecutionContext,
+        processes: &'a ProcessSessions,
         arguments: &'a str,
         cancel: &'a CancellationToken,
+        mut permit: ToolPermit,
     ) -> ToolExecution<'a> {
-        let execution = (self.executor)(context, arguments, cancel);
-        if matches!(self.definition.source, ToolSource::Builtin) {
-            return execution;
-        }
-        Box::pin(async move {
-            let result = execution.await;
-            if result.output.summary().len() <= crate::MAX_TOOL_BODY_BYTES {
-                return result;
+        match &self.executor {
+            Executor::Shell => Box::pin(async move {
+                let Some(lease) = permit.exclusive.take() else {
+                    return ToolResult::error(
+                        crate::ToolStatus::Unconfirmed,
+                        "process_admission",
+                        "命令缺少独占许可",
+                    );
+                };
+                let result = processes
+                    .exec(context.working_directory(), arguments, cancel, lease)
+                    .await;
+                drop(permit);
+                result
+            }),
+            Executor::Stdin => Box::pin(async move { processes.stdin(arguments, cancel).await }),
+            Executor::Function(execute) => {
+                let execution = execute(context, arguments, cancel);
+                Box::pin(async move {
+                    let result = execution.await;
+                    drop(permit);
+                    self.limit_result(result)
+                })
             }
-            let mut failure = ToolResult::error(
-                crate::ToolStatus::Failed,
-                "result_too_large",
-                "工具结果超过大小限制",
-            );
-            failure.cleanup_failed = result.cleanup_failed;
-            failure
-        })
+        }
+    }
+
+    fn limit_result(&self, result: ToolResult) -> ToolResult {
+        if matches!(self.definition.source, ToolSource::Builtin)
+            || result.output.summary().len() <= crate::MAX_TOOL_BODY_BYTES
+        {
+            return result;
+        }
+        let mut failure = ToolResult::error(
+            crate::ToolStatus::Failed,
+            "result_too_large",
+            "工具结果超过大小限制",
+        );
+        failure.cleanup_failed = result.cleanup_failed;
+        failure
     }
 }
 
@@ -187,7 +242,7 @@ impl ToolCatalog {
                 output_schema: None,
                 description: format!("Read one existing local static PNG or JPEG and return its actual image content to the model, with safe metadata. Required JSON: {{\"path\":\"image.png\"}}. Relative paths resolve in fixed session directory {}; absolute paths use local Windows rules. Detects format from bytes, not extension. Does not capture screenshots, click, edit, generate or OCR images. At most 10 MiB input, 25 million pixels, longest sent edge 2048 px (proportional resize), 4 MiB encoded result, 16 MiB retained images per session and 32 MiB serialized model request. Immutable image bytes remain in history even if the original file changes or is deleted; use a new call to read new content. Model image capability from catalog: {}. Errors preserve existing history, without changing model or account.", directory.display(), match image_input { Some(true)=>"supported", Some(false)=>"unsupported", None=>"unknown; actual request determines support" }),
                 parameters: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
-            }, move |context, arguments, cancel| Box::pin(execution::image(context, arguments, cancel, image_input))),
+            }, move |context, arguments, cancel| Box::pin(execution::image(context, arguments, cancel, image_input))).shared_read(),
             ToolRegistration::new(ToolDefinition {
                 name: "apply_patch".into(),
                 mode: ToolMode::Synchronous,
@@ -198,7 +253,7 @@ impl ToolCatalog {
                 description: format!("Modify UTF-8 text using a JSON object with required patch and workdir (string or null). Null workdir uses {}; relative workdir resolves there. Paths may be absolute or relative to workdir. Example: {{\"patch\":\"*** Begin Patch\\n*** Add File: hello.txt\\n+hello\\n*** End Patch\\n\",\"workdir\":null}}. Supports *** Add File:, *** Delete File:, *** Update File:, optional *** Move to: immediately after Update, @@ or @@ exact-anchor, context lines prefixed by space, - removals, + additions, and *** End of File after a chunk. Context must match exactly and uniquely. Read changed files before retrying. At most 64 actions, 8 MiB per file, 32 MiB prepared text. Preserves existing UTF-8 BOM and uniform LF/CRLF; new files use LF without BOM. Validates the whole patch before writing. Commits files separately, with actual action and temporary-file reports; errors or Stop preserve completed changes and never roll back. Does not overwrite existing add/move destinations.", directory.display()),
                 parameters: json!({"type":"object","properties":{"patch":{"type":"string"},"workdir":{"type":["string","null"]}},"required":["patch","workdir"],"additionalProperties":false}),
             }, patch),
-            ToolRegistration::new(ToolDefinition {
+            ToolRegistration::process(ToolDefinition {
                 name: "exec_command".into(),
                 mode: ToolMode::Asynchronous,
                 source: ToolSource::Builtin,
@@ -210,8 +265,8 @@ impl ToolCatalog {
                     "cmd":{"type":"string"},"workdir":{"type":["string","null"]},
                     "yield_time_ms":{"type":["integer","null"],"minimum":0,"maximum":30000}
                 },"required":["cmd","workdir","yield_time_ms"],"additionalProperties":false}),
-            }, exec),
-            ToolRegistration::new(ToolDefinition {
+            }, Executor::Shell, ToolAccess::Exclusive),
+            ToolRegistration::process(ToolDefinition {
                 name: "write_stdin".into(),
                 mode: ToolMode::Synchronous,
                 source: ToolSource::Builtin,
@@ -224,7 +279,7 @@ impl ToolCatalog {
                     "yield_time_ms":{"type":["integer","null"],"minimum":0,"maximum":30000},
                     "close_stdin":{"type":"boolean"},"terminate":{"type":"boolean"}
                 },"required":["session_id","chars","yield_time_ms","close_stdin","terminate"],"additionalProperties":false}),
-            }, stdin),
+            }, Executor::Stdin, ToolAccess::ProcessControl),
         ]
     }
 
@@ -294,11 +349,7 @@ impl ToolCatalog {
             }
             let registration = self
                 .find(&definition.name)
-                .filter(|tool| {
-                    tool.definition.same_executor_contract(definition)
-                        && (definition.mode == ToolMode::Synchronous
-                            || definition.mode == tool.definition.mode)
-                })
+                .filter(|tool| tool.definition.can_bind(definition))
                 .ok_or_else(|| {
                     ToolFailure::new(
                         "tool_contract",
@@ -308,6 +359,7 @@ impl ToolCatalog {
             tools.push(ToolRegistration {
                 definition: definition.clone(),
                 executor: registration.executor.clone(),
+                access: registration.access,
             });
         }
         if self
@@ -320,6 +372,11 @@ impl ToolCatalog {
             contract: self.contract,
             tools,
         })
+    }
+
+    pub fn access(&self, name: &str) -> ToolAccess {
+        self.find(name)
+            .map_or(ToolAccess::Exclusive, |registration| registration.access)
     }
 
     pub fn display_source(&self, name: &str) -> Option<&str> {
@@ -382,24 +439,8 @@ fn validate_definition(definition: &ToolDefinition) -> Result<(), ToolFailure> {
     Ok(())
 }
 
-fn exec<'a>(
-    context: &'a mut ExecutionContext,
-    arguments: &'a str,
-    cancel: &'a CancellationToken,
-) -> ToolExecution<'a> {
-    Box::pin(context.exec(arguments, cancel))
-}
-
-fn stdin<'a>(
-    context: &'a mut ExecutionContext,
-    arguments: &'a str,
-    cancel: &'a CancellationToken,
-) -> ToolExecution<'a> {
-    Box::pin(context.stdin(arguments, cancel))
-}
-
 fn patch<'a>(
-    context: &'a mut ExecutionContext,
+    context: &'a ExecutionContext,
     arguments: &'a str,
     cancel: &'a CancellationToken,
 ) -> ToolExecution<'a> {

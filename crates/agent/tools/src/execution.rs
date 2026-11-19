@@ -1,12 +1,66 @@
 use crate::ToolCatalog;
 use serde_json::json;
-use std::{error::Error, fmt};
+use std::{
+    error::Error,
+    fmt,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio_util::sync::CancellationToken;
 
 pub const MAX_TOOL_BODY_BYTES: usize = 64 * 1024;
 const ERROR_MESSAGE_BYTES: usize = 8192;
 
-#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone)]
+pub struct ToolUserTurn {
+    pub memory_epoch: Option<i64>,
+    pub session: uuid::Uuid,
+    pub turn: u64,
+    pub input: u64,
+    pub statements: Vec<String>,
+    pub selected_skills: Vec<(PathBuf, String)>,
+}
+
+pub struct ExecutionContext {
+    pub(crate) directory: PathBuf,
+    image_input: Option<bool>,
+    user_turn: Arc<ToolUserTurn>,
+    request: u32,
+}
+
+impl ExecutionContext {
+    pub fn new(
+        directory: PathBuf,
+        image_input: Option<bool>,
+        user_turn: Arc<ToolUserTurn>,
+        request: u32,
+    ) -> Self {
+        Self {
+            directory,
+            image_input,
+            user_turn,
+            request,
+        }
+    }
+
+    pub fn user_turn(&self) -> &ToolUserTurn {
+        &self.user_turn
+    }
+
+    pub fn image_input(&self) -> Option<bool> {
+        self.image_input
+    }
+
+    pub fn request(&self) -> u32 {
+        self.request
+    }
+
+    pub fn working_directory(&self) -> &Path {
+        &self.directory
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ToolStatus {
     Unconfirmed,
     Receiving,
@@ -74,10 +128,12 @@ impl ToolResult {
 
 pub async fn execute(
     catalog: &ToolCatalog,
-    context: &mut crate::ExecutionContext,
+    context: &ExecutionContext,
+    processes: &crate::ProcessSessions,
     name: &str,
     arguments: &str,
     cancel: &CancellationToken,
+    permit: crate::ToolPermit,
 ) -> ToolResult {
     if cancel.is_cancelled() {
         return ToolResult::not_executed("stopped", "任务已停止，工具未执行");
@@ -92,11 +148,12 @@ pub async fn execute(
     let Some(tool) = catalog.find(name) else {
         return ToolResult::error(ToolStatus::Failed, "unknown_tool", "未登记的工具名称");
     };
-    tool.execute(context, arguments, cancel).await
+    tool.execute(context, processes, arguments, cancel, permit)
+        .await
 }
 
 pub(crate) async fn image(
-    context: &mut crate::ExecutionContext,
+    context: &ExecutionContext,
     arguments: &str,
     cancel: &CancellationToken,
     supported: Option<bool>,

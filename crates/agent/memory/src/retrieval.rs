@@ -129,6 +129,7 @@ impl MemoryClient {
 
     pub(crate) async fn search(
         &self,
+        epoch: Option<i64>,
         directory: PathBuf,
         query: String,
         cancel: CancellationToken,
@@ -140,7 +141,7 @@ impl MemoryClient {
                 "记忆查询需为 1 至 256 字节",
             ));
         }
-        self.with_active_store(move |connection, _| {
+        self.with_epoch(epoch, move |connection, _| {
             check_cancel(&cancel)?;
             let words: Vec<_> = query.split_whitespace().collect();
             let mut matches = Vec::new();
@@ -180,11 +181,12 @@ impl MemoryClient {
 
     pub(crate) async fn read_for_task(
         &self,
+        epoch: Option<i64>,
         directory: PathBuf,
         record: String,
         cancel: CancellationToken,
     ) -> io::Result<MemoryDetail> {
-        self.with_active_store(move |connection, workspace| {
+        self.with_epoch(epoch, move |connection, workspace| {
             check_cancel(&cancel)?;
             let indexed = source(connection, &record)?;
             if indexed.scope.as_deref() != Some(directory.as_path()) {

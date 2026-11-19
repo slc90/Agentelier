@@ -37,6 +37,7 @@ pub fn registrations(client: Option<MemoryClient>) -> Vec<ToolRegistration> {
             move |context, arguments, cancel| {
                 let client = search_client.clone();
                 let directory = context.working_directory().to_owned();
+                let epoch = context.user_turn().memory_epoch;
                 Box::pin(async move {
                     let Some(client) = client else {
                         return unavailable();
@@ -46,13 +47,13 @@ pub fn registrations(client: Option<MemoryClient>) -> Vec<ToolRegistration> {
                     };
                     result(
                         client
-                            .search(directory, arguments.query, cancel.clone())
+                            .search(epoch, directory, arguments.query, cancel.clone())
                             .await,
                         SEARCH,
                     )
                 })
             },
-        ),
+        ).shared_read(),
         ToolRegistration::new(
             definition(
                 READ,
@@ -64,6 +65,7 @@ pub fn registrations(client: Option<MemoryClient>) -> Vec<ToolRegistration> {
             move |context, arguments, cancel| {
                 let client = read_client.clone();
                 let directory = context.working_directory().to_owned();
+                let epoch = context.user_turn().memory_epoch;
                 Box::pin(async move {
                     let Some(client) = client else {
                         return unavailable();
@@ -73,13 +75,13 @@ pub fn registrations(client: Option<MemoryClient>) -> Vec<ToolRegistration> {
                     };
                     result(
                         client
-                            .read_for_task(directory, arguments.record, cancel.clone())
+                            .read_for_task(epoch, directory, arguments.record, cancel.clone())
                             .await,
                         READ,
                     )
                 })
             },
-        ),
+        ).shared_read(),
         ToolRegistration::new(
             definition(
                 REVISE,
@@ -103,13 +105,7 @@ pub fn registrations(client: Option<MemoryClient>) -> Vec<ToolRegistration> {
                     let Ok(arguments) = serde_json::from_str(arguments) else {
                         return invalid_arguments();
                     };
-                    let Some(turn) = context.user_turn() else {
-                        return ToolResult::error(
-                            ToolStatus::Failed,
-                            "user_authorization",
-                            "修订缺少当前已提交的用户任务",
-                        );
-                    };
+                    let turn = context.user_turn();
                     result(
                         client
                             .revise(turn, context.working_directory(), arguments, cancel.clone())

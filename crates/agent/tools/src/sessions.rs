@@ -1,11 +1,15 @@
+use crate::ToolAdmission;
 use crate::execution::{ToolFailure, ToolResult, ToolStatus};
-use crate::process::{Process, arguments};
+use crate::process::{PROCESS_POLL, Process, arguments};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::{Mutex, OwnedRwLockWriteGuard};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 const MAX_PROCESS_SESSIONS: usize = 8;
@@ -22,19 +26,24 @@ pub struct CleanupReport {
     pub processes: Vec<ProcessCleanup>,
     pub failed: bool,
 }
-pub struct ToolUserTurn {
-    pub memory_epoch: Option<i64>,
-    pub session: uuid::Uuid,
-    pub turn: u64,
-    pub input: u64,
-    pub statements: Vec<String>,
+pub struct ProcessSessions {
+    processes: Mutex<BTreeMap<String, Arc<ProcessEntry>>>,
+    watchers: Mutex<Vec<JoinHandle<()>>>,
+    admission: ToolAdmission,
 }
 
-pub struct ExecutionContext {
-    user_turn: Option<ToolUserTurn>,
-    pub(crate) directory: PathBuf,
-    processes: BTreeMap<String, Process>,
-    image_input: Option<bool>,
+struct ProcessEntry {
+    state: Mutex<ProcessState>,
+    terminate: CancellationToken,
+}
+
+enum ProcessState {
+    Running {
+        process: Box<Process>,
+        _lease: OwnedRwLockWriteGuard<()>,
+    },
+    Exited(ToolResult),
+    Consumed,
 }
 
 #[derive(Deserialize)]
@@ -76,33 +85,22 @@ fn failure(error: ToolFailure) -> ToolResult {
     )
 }
 
-impl ExecutionContext {
-    pub fn new(directory: PathBuf, image_input: Option<bool>) -> Self {
+impl ProcessSessions {
+    pub fn new(admission: ToolAdmission) -> Self {
         Self {
-            directory,
-            user_turn: None,
-            image_input,
-            processes: BTreeMap::new(),
+            processes: Mutex::default(),
+            watchers: Mutex::default(),
+            admission,
         }
     }
 
-    pub fn set_user_turn(&mut self, turn: ToolUserTurn) {
-        self.user_turn = Some(turn);
-    }
-
-    pub fn user_turn(&self) -> Option<&ToolUserTurn> {
-        self.user_turn.as_ref()
-    }
-
-    pub fn image_input(&self) -> Option<bool> {
-        self.image_input
-    }
-
-    pub fn working_directory(&self) -> &std::path::Path {
-        &self.directory
-    }
-
-    pub(crate) async fn exec(&mut self, text: &str, cancel: &CancellationToken) -> ToolResult {
+    pub(crate) async fn exec(
+        &self,
+        directory: &Path,
+        text: &str,
+        cancel: &CancellationToken,
+        lease: OwnedRwLockWriteGuard<()>,
+    ) -> ToolResult {
         let input: ExecArguments = match arguments(text, &["cmd", "workdir", "yield_time_ms"]) {
             Ok(value) => value,
             Err(error) => return failure(error),
@@ -114,33 +112,57 @@ impl ExecutionContext {
         if input.cmd.trim().is_empty() {
             return ToolResult::error(ToolStatus::Failed, "invalid_arguments", "命令不能为空");
         }
-        if self.processes.len() >= MAX_PROCESS_SESSIONS {
+        if self.processes.lock().await.len() >= MAX_PROCESS_SESSIONS {
             return ToolResult::error(
                 ToolStatus::Failed,
                 "session_limit",
                 "任务最多持有 8 个未回收进程会话，请先结束已有会话",
             );
         }
-        let process = match Process::start(&input.cmd, input.workdir, &self.directory, cancel).await
-        {
+        let mut process = match Process::start(&input.cmd, input.workdir, directory, cancel).await {
             Ok(process) => process,
             Err(error) => return failure(error),
         };
         let id = uuid::Uuid::new_v4().to_string();
         tracing::debug!(session_id = id, "本地进程会话已启动");
-        self.processes.insert(id.clone(), process);
-        self.poll(
+        let (result, completed) = poll(
+            &mut process,
             &id,
-            wait,
-            false,
-            None,
-            json!({"written_bytes":0,"write_complete":true,"close_stdin":false,"terminate":false}),
+            PollInput {
+                wait,
+                terminate: false,
+                error: None,
+                evidence: json!({"written_bytes":0,"write_complete":true,"close_stdin":false,"terminate":false}),
+            },
             cancel,
+            &CancellationToken::new(),
         )
-        .await
+        .await;
+        if result.cleanup_failed {
+            self.admission.block();
+        }
+        if !completed {
+            let entry = Arc::new(ProcessEntry {
+                state: Mutex::new(ProcessState::Running {
+                    process: Box::new(process),
+                    _lease: lease,
+                }),
+                terminate: CancellationToken::new(),
+            });
+            self.processes
+                .lock()
+                .await
+                .insert(id.clone(), entry.clone());
+            self.watchers.lock().await.push(tokio::spawn(watch_exit(
+                Arc::downgrade(&entry),
+                id,
+                self.admission.clone(),
+            )));
+        }
+        result
     }
 
-    pub(crate) async fn stdin(&mut self, text: &str, cancel: &CancellationToken) -> ToolResult {
+    pub(crate) async fn stdin(&self, text: &str, cancel: &CancellationToken) -> ToolResult {
         let input: StdinArguments = match arguments(
             text,
             &[
@@ -165,12 +187,30 @@ impl ExecutionContext {
                 "terminate 不能与非空 chars 或 close_stdin 同时使用",
             );
         }
-        let Some(process) = self.processes.get_mut(&input.session_id) else {
-            return ToolResult::error(
-                ToolStatus::Failed,
-                "unknown_session",
-                "进程会话不属于当前任务、已回收或不存在，命令未重放",
-            );
+        let entry = self.processes.lock().await.get(&input.session_id).cloned();
+        let Some(entry) = entry else {
+            return unknown();
+        };
+        if input.terminate {
+            entry.terminate.cancel();
+        }
+        let mut locked = entry.state.lock().await;
+        let process = match &mut *locked {
+            ProcessState::Running { process, .. } => process,
+            ProcessState::Exited(result) => {
+                if !input.chars.is_empty() {
+                    return ToolResult::error(
+                        ToolStatus::Failed,
+                        "process_exited",
+                        "进程已退出，未写入标准输入；空轮询可查看退出结果",
+                    );
+                }
+                let result = result.clone();
+                *locked = ProcessState::Consumed;
+                self.processes.lock().await.remove(&input.session_id);
+                return result;
+            }
+            ProcessState::Consumed => return unknown(),
         };
         let mut written = 0;
         let mut write_error = None;
@@ -186,6 +226,10 @@ impl ExecutionContext {
             let bytes = input.chars.as_bytes();
             while written < bytes.len() {
                 let next = tokio::select! {biased;
+                    _ = entry.terminate.cancelled() => {
+                        write_error = Some("进程终止已请求；仅保留已确认写入的字节".into());
+                        break;
+                    },
                     result = stdin.write(&bytes[written..]) => result,
                     _ = cancel.cancelled() => { write_cancelled = true; write_error = Some("输入已取消；只报告已确认的写入字节数，不自动重放输入，不能确认对端处理进度".into()); break; },
                 };
@@ -206,112 +250,197 @@ impl ExecutionContext {
             process.stdin.take();
         }
         let state = json!({"written_bytes":written,"write_complete":written == input.chars.len(),"close_stdin":input.close_stdin && write_error.is_none(),"terminate":input.terminate});
-        if write_cancelled {
-            let result = complete(
+        let (result, completed) = if write_cancelled {
+            (
+                complete(
+                    process,
+                    &input.session_id,
+                    true,
+                    ToolStatus::Cancelled,
+                    write_error,
+                    state,
+                )
+                .await,
+                true,
+            )
+        } else {
+            poll(
                 process,
                 &input.session_id,
-                true,
-                ToolStatus::Cancelled,
-                write_error,
-                state,
-            )
-            .await;
-            self.processes.remove(&input.session_id);
-            return result;
-        }
-        self.poll(
-            &input.session_id,
-            wait,
-            input.terminate,
-            write_error,
-            state,
-            cancel,
-        )
-        .await
-    }
-
-    async fn poll(
-        &mut self,
-        id: &str,
-        wait: Duration,
-        terminate: bool,
-        mut error: Option<String>,
-        input: Value,
-        cancel: &CancellationToken,
-    ) -> ToolResult {
-        let Some(process) = self.processes.get_mut(id) else {
-            return ToolResult::error(ToolStatus::Failed, "unknown_session", "进程会话已回收");
-        };
-        let mut status = if error.is_some() {
-            ToolStatus::Failed
-        } else {
-            ToolStatus::Succeeded
-        };
-        let mut completed = terminate;
-        if !terminate {
-            let outcome = tokio::select! {biased;
-                result = tokio::time::timeout(wait, process.wait_empty()) => result,
-                _ = cancel.cancelled() => {
-                    status = ToolStatus::Cancelled; completed = true;
-                    error = Some(format!("{}；任务停止，关联进程组已请求终止",error.unwrap_or_default()));
-                    Ok(Ok(()))
+                PollInput {
+                    wait,
+                    terminate: input.terminate,
+                    error: write_error,
+                    evidence: state,
                 },
-            };
-            match outcome {
-                Ok(Ok(())) => completed = true,
-                Ok(Err(failure)) => {
-                    status = ToolStatus::Failed;
-                    error = Some(failure.to_string());
-                    completed = true;
-                }
-                Err(_) => {}
-            }
-        }
-        if !completed {
-            match process.empty() {
-                Ok(empty) => completed = empty,
-                Err(failure) => {
-                    status = ToolStatus::Failed;
-                    error = Some(failure.to_string());
-                    completed = true;
-                }
-            }
-        }
-        let result = if completed {
-            complete(process, id, terminate, status, error, input).await
-        } else {
-            process.result(status, None, error, false, id, input, false)
+                cancel,
+                &entry.terminate,
+            )
+            .await
         };
+        if result.cleanup_failed {
+            self.admission.block();
+        }
         if completed {
-            self.processes.remove(id);
+            *locked = ProcessState::Consumed;
+            self.processes.lock().await.remove(&input.session_id);
         }
         result
     }
 
-    pub async fn cleanup(&mut self, reason: &str) -> CleanupReport {
+    pub async fn cleanup(&self, reason: &str) -> CleanupReport {
         let mut report = CleanupReport {
             processes: Vec::new(),
             failed: false,
         };
-        for (id, mut process) in std::mem::take(&mut self.processes) {
-            let result = complete(
-                &mut process,
-                &id,
-                true,
-                ToolStatus::Succeeded,
-                None,
-                json!({"automatic_cleanup":true,"reason":reason}),
-            )
-            .await;
-            report.failed |= result.cleanup_failed || result.status == ToolStatus::Failed;
+        let processes = std::mem::take(&mut *self.processes.lock().await);
+        for (id, entry) in processes {
+            entry.terminate.cancel();
+            let mut locked = entry.state.lock().await;
+            let result = match &mut *locked {
+                ProcessState::Running { process, .. } => {
+                    complete(
+                        process,
+                        &id,
+                        true,
+                        ToolStatus::Succeeded,
+                        None,
+                        json!({"automatic_cleanup":true,"reason":reason}),
+                    )
+                    .await
+                }
+                ProcessState::Exited(result) => result.clone(),
+                ProcessState::Consumed => continue,
+            };
+            report.failed |= result.cleanup_failed;
             report.processes.push(ProcessCleanup {
                 session_id: id,
                 cleanup_confirmed: !result.cleanup_failed,
                 output: result.output.summary().to_owned(),
             });
+            *locked = ProcessState::Consumed;
+        }
+        let watchers = std::mem::take(&mut *self.watchers.lock().await);
+        for watcher in watchers {
+            if let Err(failure) = watcher.await {
+                report.failed = true;
+                tracing::error!(%failure, "进程回收观察者异常结束");
+            }
         }
         report
     }
+}
+
+fn unknown() -> ToolResult {
+    ToolResult::error(
+        ToolStatus::Failed,
+        "unknown_session",
+        "进程会话不属于当前任务、已回收或不存在，命令未重放",
+    )
+}
+
+async fn watch_exit(entry: Weak<ProcessEntry>, id: String, admission: ToolAdmission) {
+    loop {
+        tokio::time::sleep(PROCESS_POLL).await;
+        let Some(entry) = entry.upgrade() else {
+            return;
+        };
+        if entry.terminate.is_cancelled() {
+            return;
+        }
+        let mut locked = entry.state.lock().await;
+        let ProcessState::Running { process, .. } = &mut *locked else {
+            return;
+        };
+        let (status, error) = match process.empty() {
+            Ok(false) => continue,
+            Ok(true) => (ToolStatus::Succeeded, None),
+            Err(failure) => (ToolStatus::Failed, Some(failure.to_string())),
+        };
+        let result = complete(
+            process,
+            &id,
+            false,
+            status,
+            error,
+            json!({"process_exit_observed":true}),
+        )
+        .await;
+        if result.cleanup_failed {
+            admission.block();
+        }
+        *locked = ProcessState::Exited(result);
+        return;
+    }
+}
+
+struct PollInput {
+    wait: Duration,
+    terminate: bool,
+    error: Option<String>,
+    evidence: Value,
+}
+
+async fn poll(
+    process: &mut Process,
+    id: &str,
+    input: PollInput,
+    cancel: &CancellationToken,
+    terminate_requested: &CancellationToken,
+) -> (ToolResult, bool) {
+    let PollInput {
+        wait,
+        terminate,
+        mut error,
+        evidence,
+    } = input;
+    let mut status = if error.is_some() {
+        ToolStatus::Failed
+    } else {
+        ToolStatus::Succeeded
+    };
+    let mut completed = terminate;
+    if !terminate {
+        let outcome = tokio::select! { biased;
+            _ = terminate_requested.cancelled() => {
+                return (process.result(ToolStatus::Cancelled, None,
+                    error.or_else(|| Some("轮询被该进程的终止请求打断".into())),
+                    false, id, evidence, false), false);
+            },
+            result = tokio::time::timeout(wait, process.wait_empty()) => result,
+            _ = cancel.cancelled() => {
+                status = ToolStatus::Cancelled;
+                completed = true;
+                error = Some(format!("{}；任务停止，关联进程组已请求终止",error.unwrap_or_default()));
+                Ok(Ok(()))
+            },
+        };
+        match outcome {
+            Ok(Ok(())) => completed = true,
+            Ok(Err(failure)) => {
+                status = ToolStatus::Failed;
+                error = Some(failure.to_string());
+                completed = true;
+            }
+            Err(_) => {}
+        }
+    }
+    if !completed {
+        match process.empty() {
+            Ok(empty) => completed = empty,
+            Err(failure) => {
+                status = ToolStatus::Failed;
+                error = Some(failure.to_string());
+                completed = true;
+            }
+        }
+    }
+    let result = if completed {
+        complete(process, id, terminate, status, error, evidence).await
+    } else {
+        process.result(status, None, error, false, id, evidence, false)
+    };
+    (result, completed)
 }
 
 async fn complete(

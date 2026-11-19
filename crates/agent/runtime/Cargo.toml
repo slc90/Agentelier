@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 agentelier_mcp = { path = "../mcp" }
+agentelier_tools = { path = "../tools" }
 agentelier_session_store = { path = "../session_store" }
 agentelier_memory = { path = "../memory" }
 agentelier_turn_runner = { path = "../turn_runner" }
