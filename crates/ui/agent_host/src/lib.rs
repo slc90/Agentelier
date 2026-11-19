@@ -3,9 +3,13 @@ compile_error!("This application supports Windows x64 only");
 
 mod host;
 
+pub use agentelier_bridge_connection::{
+    MemoryDetail, MemoryInspection, MemoryReply, MemoryRequest, MemorySource,
+};
+
 pub use host::{
     AccountEvent, AgentHost, AgentHostPlugin, ConversationEvent, HostActivity, HostFailed,
-    McpConfigEvent, McpMaterialEvent, McpStatusEvent, ModelEvent, ReceiveAgentEvents,
+    McpConfigEvent, McpMaterialEvent, McpStatusEvent, MemoryEvent, ModelEvent, ReceiveAgentEvents,
 };
 
 pub use agentelier_bridge_connection::{ConfigChange, Server, ServerId, ServerSettings, Transport};

@@ -26,6 +26,7 @@ bevy_widgetry = { workspace = true, features = [
   "job",
 ] }
 tracing.workspace = true
+time.workspace = true
 
 [lints]
 workspace = true

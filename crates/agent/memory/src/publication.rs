@@ -15,21 +15,37 @@ use uuid::Uuid;
 
 impl crate::MemoryClient {
     pub async fn snapshot(&self) -> io::Result<Option<MemorySnapshot>> {
-        self.with_store(|connection, workspace| {
-            let record: Option<(String, String, i64)> = connection.query_row(
-                "SELECT publication_id, summary_hash, epoch FROM publication CROSS JOIN memory_state",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            ).optional().map_err(io::Error::other)?;
-            let Some((publication_id, hash, epoch)) = record else { return Ok(None) };
-            check_path(workspace, true)?;
-            let publication_id = Uuid::parse_str(&publication_id).map_err(io::Error::other)?;
-            let summary = read_checked(&workspace.join(SUMMARY), MAX_MEMORY_SUMMARY_BYTES, &hash)?;
-            let snapshot = MemorySnapshot { publication_id, hash, epoch, summary };
-            snapshot.validate().map_err(io::Error::other)?;
-            Ok(Some(snapshot))
-        }).await
+        self.with_store(|connection, workspace| snapshot(connection, workspace))
+            .await
     }
+}
+
+pub(crate) fn snapshot(
+    connection: &Connection,
+    workspace: &Path,
+) -> io::Result<Option<MemorySnapshot>> {
+    let record: Option<(String, String, i64)> = connection
+        .query_row(
+            "SELECT publication_id, summary_hash, epoch FROM publication CROSS JOIN memory_state",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(io::Error::other)?;
+    let Some((publication_id, hash, epoch)) = record else {
+        return Ok(None);
+    };
+    check_path(workspace, true)?;
+    let publication_id = Uuid::parse_str(&publication_id).map_err(io::Error::other)?;
+    let summary = read_checked(&workspace.join(SUMMARY), MAX_MEMORY_SUMMARY_BYTES, &hash)?;
+    let snapshot = MemorySnapshot {
+        publication_id,
+        hash,
+        epoch,
+        summary,
+    };
+    snapshot.validate().map_err(io::Error::other)?;
+    Ok(Some(snapshot))
 }
 
 pub(crate) fn read_checked(path: &Path, limit: usize, hash: &str) -> io::Result<String> {

@@ -12,6 +12,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 const MAX_QUERY_BYTES: usize = 256;
 const MAX_MATCHES: usize = 5;
@@ -28,26 +29,40 @@ const SOURCE_QUERY: &str = "SELECT p.session_id, p.revision, p.content_hash, p.f
     WHERE (?1 IS NULL OR p.file_name = ?1)
     ORDER BY COALESCE(m.activity_ms, s.activity_ms) DESC, p.session_id";
 
-#[derive(Serialize)]
-pub(crate) struct MemorySource {
-    pub(crate) session_id: SessionId,
-    pub(crate) record: String,
-    pub(crate) revision: String,
-    pub(crate) directory: Option<String>,
-    pub(crate) sequence: Option<i64>,
-    pub(crate) activity_ms: Option<i64>,
+#[derive(Clone, Serialize)]
+pub struct MemorySource {
+    pub session_id: SessionId,
+    pub record: String,
+    pub revision: String,
+    pub directory: Option<String>,
+    pub sequence: Option<i64>,
+    pub activity_ms: Option<i64>,
 }
 
 #[derive(Serialize)]
-pub(crate) struct MemoryMatch {
+pub struct MemoryMatch {
     source: MemorySource,
     excerpt: String,
 }
 
-#[derive(Serialize)]
-pub(crate) struct MemoryDetail {
-    pub(crate) source: MemorySource,
-    pub(crate) text: String,
+#[derive(Clone, Serialize)]
+pub struct MemoryDetail {
+    pub source: MemorySource,
+    pub text: String,
+}
+
+#[derive(Clone)]
+pub struct PublishedSummary {
+    pub id: String,
+    pub text: String,
+    pub published_at_ms: i64,
+}
+
+#[derive(Clone)]
+pub struct MemoryInspection {
+    pub summary: Option<PublishedSummary>,
+    pub sources: Vec<MemorySource>,
+    pub processing: bool,
 }
 
 struct IndexedSource {
@@ -58,6 +73,60 @@ struct IndexedSource {
 }
 
 impl MemoryClient {
+    pub async fn inspect(&self, processing: bool) -> io::Result<MemoryInspection> {
+        self.with_store(move |connection, workspace| {
+            let snapshot = crate::publication::snapshot(connection, workspace)?;
+            let processing = processing || (snapshot.is_none() && connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sources WHERE status = 'summary'
+                    AND NOT EXISTS (SELECT 1 FROM consolidation_inputs WHERE session_id = sources.session_id))",
+                [],
+                |row| row.get(0),
+            ).map_err(io::Error::other)?);
+            let Some(snapshot) = snapshot else {
+                return Ok(MemoryInspection { summary: None, sources: Vec::new(), processing });
+            };
+            let published_at_ms = connection.query_row("SELECT published_at_ms FROM publication", [], |row| row.get(0)).map_err(io::Error::other)?;
+            let sources = sources(connection, None)?.into_iter().map(|source| source.source).collect();
+            Ok(MemoryInspection {
+                summary: Some(PublishedSummary { id: snapshot.publication_id.to_string(), text: snapshot.summary, published_at_ms }),
+                sources,
+                processing,
+            })
+        }).await
+    }
+
+    pub async fn inspect_detail(
+        &self,
+        publication: String,
+        record: String,
+    ) -> io::Result<MemoryDetail> {
+        let publication_id = Uuid::parse_str(&publication)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "记忆发布标识无效"))?;
+        if publication_id.to_string() != publication {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "记忆发布标识无效",
+            ));
+        }
+        self.with_store(move |connection, workspace| {
+            let current: bool = connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM publication WHERE publication_id = ?1)",
+                    [&publication],
+                    |row| row.get(0),
+                )
+                .map_err(io::Error::other)?;
+            if !current {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "记忆已重新发布，请刷新后查看来源",
+                ));
+            }
+            detail(workspace, source(connection, &record)?)
+        })
+        .await
+    }
+
     pub(crate) async fn search(
         &self,
         directory: PathBuf,

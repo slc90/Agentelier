@@ -6,9 +6,13 @@ mod runtime;
 pub use agentelier_mcp::{
     ConfigChange, ConfigSnapshot, Server, ServerId, ServerSettings, Transport,
 };
+pub use agentelier_memory::{MemoryDetail, MemoryInspection, MemorySource};
 pub use operations::OperationSequence;
 
-pub use runtime::{AgentEvent, AgentEventKind, AgentRuntime, DeliveryFailure, RuntimeFailure};
+pub use runtime::{
+    AgentEvent, AgentEventKind, AgentRuntime, DeliveryFailure, MemoryReply, MemoryRequest,
+    RuntimeFailure,
+};
 
 pub use agentelier_mcp::{ConnectionState, ConnectionStatus};
 

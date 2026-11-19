@@ -1,5 +1,5 @@
 mod view;
-pub(crate) use view::{entry, mcp_entry, render};
+pub(crate) use view::{entry, mcp_entry, memory_entry, render};
 
 use agentelier_login_ui::DataDirectoryReady;
 use agentelier_prompts::{
@@ -51,6 +51,7 @@ enum Page {
     Config,
     Session,
     Mcp,
+    Memory,
 }
 
 #[derive(Resource)]
@@ -110,6 +111,7 @@ enum Field {
 enum Action {
     Open,
     Mcp,
+    Memory,
     Close,
     Library,
     Config,
@@ -178,6 +180,10 @@ fn data_ready(event: On<DataDirectoryReady>, mut commands: Commands) {
 
 fn mount(_event: On<Add<PromptWorkspace>>, mut commands: Commands) {
     commands.queue(refresh);
+}
+
+pub(super) fn memory_visible(world: &World) -> bool {
+    world.resource::<PromptState>().opened && world.resource::<PromptStore>().page == Page::Memory
 }
 
 pub(super) fn mcp_visible(world: &World) -> bool {
@@ -412,15 +418,26 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
 
 fn apply(world: &mut World, action: Action) -> Result {
     if world.resource::<PromptState>().busy
-        && !matches!(action, Action::Open | Action::Mcp | Action::Close)
+        && !matches!(
+            action,
+            Action::Open | Action::Mcp | Action::Memory | Action::Close
+        )
     {
         return Ok(());
     }
+    if memory_visible(world) && matches!(action, Action::Open | Action::Mcp | Action::Close) {
+        crate::memory::close(world);
+    }
     match action {
+        Action::Memory => {
+            world.resource_mut::<PromptState>().opened = true;
+            world.resource_mut::<PromptStore>().page = Page::Memory;
+            crate::memory::open(world);
+        }
         Action::Open => {
             world.resource_mut::<PromptState>().opened = true;
             let mut store = world.resource_mut::<PromptStore>();
-            if store.page == Page::Mcp {
+            if matches!(store.page, Page::Mcp | Page::Memory) {
                 store.page = Page::Config;
             }
         }

@@ -52,6 +52,12 @@ pub struct ConversationEvent {
 }
 
 #[derive(Message)]
+pub struct MemoryEvent {
+    pub operation_id: u64,
+    pub result: std::result::Result<agentelier_bridge_connection::MemoryReply, String>,
+}
+
+#[derive(Message)]
 pub struct McpConfigEvent {
     pub operation_id: u64,
     pub result: std::result::Result<agentelier_bridge_connection::ConfigSnapshot, String>,
@@ -94,6 +100,7 @@ impl Plugin for AgentHostPlugin {
             .add_message::<ConversationEvent>()
             .add_message::<HostFailed>()
             .add_message::<McpConfigEvent>()
+            .add_message::<MemoryEvent>()
             .add_message::<McpStatusEvent>()
             .add_message::<McpMaterialEvent>()
             .add_systems(Update, receive.in_set(ReceiveAgentEvents));
@@ -167,6 +174,13 @@ impl AgentHost {
         self.state()?.model_busy = false;
         Ok(id)
     }
+    pub fn request_memory(
+        &self,
+        request: agentelier_bridge_connection::MemoryRequest,
+    ) -> Result<u64> {
+        self.submit(|connection| connection.request_memory(request))
+    }
+
     pub fn mcp_config(&self, change: agentelier_bridge_connection::ConfigChange) -> Result<u64> {
         self.submit(|connection| connection.mcp_config(change))
     }
@@ -314,6 +328,12 @@ fn receive(world: &mut World) -> Result {
             }
             BridgeEventKind::McpMaterial(result) => {
                 world.write_message(McpMaterialEvent {
+                    operation_id: event.operation_id,
+                    result,
+                });
+            }
+            BridgeEventKind::Memory(result) => {
+                world.write_message(MemoryEvent {
                     operation_id: event.operation_id,
                     result,
                 });

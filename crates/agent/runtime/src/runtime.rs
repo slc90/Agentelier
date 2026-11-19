@@ -12,6 +12,7 @@ mod creation;
 mod deleting;
 mod loading;
 mod memory;
+pub use memory::{MemoryReply, MemoryRequest};
 mod model_task;
 mod recording;
 mod renaming;
@@ -45,6 +46,7 @@ pub enum AgentEventKind {
     McpConfig(io::Result<agentelier_mcp::ConfigSnapshot>),
     McpStatus(Vec<agentelier_mcp::ConnectionStatus>),
     McpMaterial(Result<agentelier_mcp::MaterialReply, String>),
+    Memory(Result<MemoryReply, String>),
 }
 #[derive(Debug)]
 pub enum RuntimeFailure {
@@ -102,6 +104,7 @@ struct PendingMaterial {
 enum Command {
     McpMaterial(u64, agentelier_mcp::MaterialRequest),
     CancelMcpMaterial(u64),
+    Memory(u64, MemoryRequest),
     McpMaterialFinished(Result<agentelier_mcp::MaterialReply, String>),
     McpConfig(u64, agentelier_mcp::ConfigChange),
     McpStatus(Vec<agentelier_mcp::ConnectionStatus>),
@@ -225,8 +228,9 @@ impl AgentRuntime {
                             Err(failure) => error!(path = %data_root.display(), error = %failure, "记忆存储不可用"),
                         }
                         let memory_cancel = runtime_shutdown.child_token();
+                        let memory_processing = Arc::new(std::sync::atomic::AtomicBool::new(false));
                         let memory_worker = memory.as_ref().ok().map(|memory| tokio::spawn(memory::Worker::new(
-                            memory.client(), store.client(), owner_credentials.clone(), memory_cancel.clone(),
+                            memory.client(), store.client(), owner_credentials.clone(), memory_cancel.clone(), memory_processing.clone(),
                         ).run()));
                         let mut mcp_settings = agentelier_mcp::ConfigStore::open(&data_root);
                         let mut material: Option<PendingMaterial> = None;
@@ -303,6 +307,18 @@ impl AgentRuntime {
                                     },
                                 };
                                 match command {
+                                    Command::Memory(id, request) => {
+                                        let result = memory::inspect(memory.as_ref().ok(), memory_processing.load(std::sync::atomic::Ordering::Relaxed), request).await;
+                                        match &result {
+                                            Ok(_) => tracing::info!(operation_id = id, "已读取长期记忆展示材料"),
+                                            Err(failure) => error!(operation_id = id, error = %failure, "读取长期记忆展示材料失败"),
+                                        }
+                                        let reply = result.map_err(|failure| match failure.kind() {
+                                            io::ErrorKind::InvalidInput | io::ErrorKind::NotFound => "找不到所选长期记忆材料，请刷新后重试".into(),
+                                            _ => "读取长期记忆失败，详见应用日志".into(),
+                                        });
+                                        emit(&publish, id, AgentEventKind::Memory(reply))?;
+                                    }
                                     Command::McpMaterial(id, request) => {
                                         let cancel = CancellationToken::new();
                                         let result = if material.is_some() {
@@ -603,6 +619,9 @@ impl AgentRuntime {
                                             );
                                             while let Ok(queued) = incoming.try_recv() {
                                                 match queued {
+                                                    Command::Memory(id, _) => {
+                                                        emit(&publish, id, AgentEventKind::Memory(Err("账号正在退出，请刷新后重试".into())))?;
+                                                    }
                                                     Command::McpMaterial(id, _) => {
                                                         emit(&publish, id, AgentEventKind::McpMaterial(Err("账号操作开始前尚未接纳 MCP 材料操作，请重新提交".into())))?;
                                                     }
@@ -786,6 +805,10 @@ impl AgentRuntime {
             model: shared_model,
             session_commands,
         })
+    }
+
+    pub fn request_memory(&self, id: u64, request: MemoryRequest) -> Result<(), RuntimeFailure> {
+        self.send(Command::Memory(id, request))
     }
 
     pub fn mcp_material(

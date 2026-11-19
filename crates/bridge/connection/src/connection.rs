@@ -20,6 +20,7 @@ pub enum BridgeEventKind {
     Conversation(agentelier_conversation_bridge::ConversationEvent),
     McpConfig(Result<crate::ConfigSnapshot, String>),
     McpStatus(Vec<crate::ConnectionStatus>),
+    Memory(Result<crate::MemoryReply, String>),
     McpMaterial(Result<crate::MaterialReply, String>),
 }
 #[derive(Clone, Debug)]
@@ -92,6 +93,7 @@ pub struct Connection {
     reserved_queue: HashSet<u64>,
     pending_requests: HashSet<u64>,
     pending_mcp: HashSet<u64>,
+    pending_memory: HashSet<u64>,
 }
 impl Connection {
     pub fn start(
@@ -123,6 +125,7 @@ impl Connection {
                         AgentEventKind::ModelCancelled => {
                             BridgeEventKind::Model(agentelier_llm_model_bridge::convert(None))
                         }
+                        AgentEventKind::Memory(reply) => BridgeEventKind::Memory(reply),
                         AgentEventKind::McpMaterial(reply) => BridgeEventKind::McpMaterial(reply),
                         AgentEventKind::McpStatus(status) => BridgeEventKind::McpStatus(status),
                         AgentEventKind::McpConfig(result) => {
@@ -172,8 +175,24 @@ impl Connection {
             reserved_queue: HashSet::new(),
             pending_requests: HashSet::new(),
             pending_mcp: HashSet::new(),
+            pending_memory: HashSet::new(),
         })
     }
+    pub fn request_memory(&mut self, request: crate::MemoryRequest) -> Result<u64, BridgeFailure> {
+        if self.stopping || self.failure.is_some() {
+            return Err(BridgeFailure("执行连接已经关闭".into()));
+        }
+        let id = self
+            .operations
+            .allocate()
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.runtime
+            .request_memory(id, request)
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.pending_memory.insert(id);
+        Ok(id)
+    }
+
     pub fn mcp_config(&mut self, change: crate::ConfigChange) -> Result<u64, BridgeFailure> {
         if self.stopping || self.failure.is_some() {
             return Err(BridgeFailure("执行连接已经关闭".into()));
@@ -583,6 +602,12 @@ impl Connection {
                             return Ok(Some(event));
                         }
                     }
+                    if matches!(event.kind, BridgeEventKind::Memory(_)) {
+                        if !self.pending_memory.remove(&event.operation_id) {
+                            return self.protocol_failure();
+                        }
+                        return Ok(Some(event));
+                    }
                     if matches!(event.kind, BridgeEventKind::McpStatus(_)) {
                         return Ok(Some(event));
                     }
@@ -612,6 +637,7 @@ impl Connection {
                     }
                     let kind = match &event.kind {
                         BridgeEventKind::McpStatus(_)
+                        | BridgeEventKind::Memory(_)
                         | BridgeEventKind::McpConfig(_)
                         | BridgeEventKind::McpMaterial(_) => {
                             return self.protocol_failure();

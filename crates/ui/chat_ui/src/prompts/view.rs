@@ -19,6 +19,10 @@ pub(crate) fn entry() -> impl Scene {
     button("提示词管理", "OpenPromptManager", Action::Open, false)
 }
 
+pub(crate) fn memory_entry() -> impl Scene {
+    button("长期记忆", "OpenMemoryInspection", Action::Memory, false)
+}
+
 pub(crate) fn mcp_entry() -> impl Scene {
     button("MCP 服务器", "OpenMcpSettings", Action::Mcp, false)
 }
@@ -118,7 +122,8 @@ pub(crate) fn render(world: &mut World) -> Result {
                 reference.version
             ),
         };
-        let prompt_navigation = (page != Page::Mcp).then(|| {
+        let prompt_page = !matches!(page, Page::Mcp | Page::Memory);
+        let prompt_navigation = prompt_page.then(|| {
             bsn_list! {
                 @button("提示词库", "PromptLibraryTab", Action::Library, busy)--
                 @button("组合与预览", "PromptConfigTab", Action::Config, busy)--
@@ -126,11 +131,14 @@ pub(crate) fn render(world: &mut World) -> Result {
                 @button("重新加载库", "ReloadPromptLibrary", Action::Reload, busy)
             }
         });
-        let prompt_status = (page != Page::Mcp).then(|| bsn! {
+        let prompt_status = prompt_page.then(|| bsn! {
             Text(status) WidgetryText Name("PromptManagerStatus") TextLayout::linebreak(LineBreak::AnyCharacter)
         });
         let body: Box<dyn Scene> = match page {
             Page::Mcp => crate::mcp::panel(world),
+            Page::Memory => Box::new(crate::memory::panel(
+                world.resource::<crate::memory::MemoryPane>(),
+            )),
             Page::Library => Box::new(bsn! {
                 Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(GAP), flex_shrink: 0.0 }
                 Children [
