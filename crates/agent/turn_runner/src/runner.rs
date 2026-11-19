@@ -304,6 +304,7 @@ async fn run_task(
             control::receipt(progress, id, InputDecision::Applied).await?;
         }
         requests_used += 1;
+        context.set_user_turn(active.tool_user_turn()?);
         let result = match request_once(
             active,
             credentials.clone(),

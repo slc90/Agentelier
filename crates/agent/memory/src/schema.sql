@@ -22,6 +22,12 @@ CREATE TABLE IF NOT EXISTS sources (
     CHECK ((status = 'failed') = (retry_at_ms IS NOT NULL))
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS consolidation_inputs (
+    session_id TEXT PRIMARY KEY,
+    revision TEXT NOT NULL,
+    content_hash TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS publication (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     publication_id TEXT NOT NULL,

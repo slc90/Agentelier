@@ -19,7 +19,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录与窗口能力、Responses/SSE、响应使用量和模型错误语义 |
 | `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的聊天会话、Turn 身份、工作窗口计量、压缩检查点及恢复、展示记录与结果收敛 |
 | `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话日志、恢复读取、执行事件追加、独立名称与删除元数据、受控会话清理、不可变图片附件、单写入者、提交确认与存储收尾 |
-| `crates/agent/memory/` | `agentelier_memory` | 数据目录级 SQLite、会话提取证据及状态、全局记忆候选选择、Markdown 发布与恢复、受控历史记忆查询及详情工具 |
+| `crates/agent/memory/` | `agentelier_memory` | 数据目录级 SQLite、会话提取证据及状态、全局记忆候选选择、Markdown 发布与恢复、历史记忆检索、详情读取与显式修订工具 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
 | `crates/agent/project_context/` | `agentelier_project_context` | 会话适用的项目规则发现、有界 UTF-8 读取、来源快照与确定性表示 |
 | `crates/agent/skills/` | `agentelier_skills` | 本地 Skills 来源发现、有界元数据解析、任务目录快照与来源诊断 |

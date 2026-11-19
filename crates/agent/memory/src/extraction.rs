@@ -168,7 +168,11 @@ fn turn_evidence(turn: &TurnView, redactor: &Redactor) -> Vec<Evidence> {
             item(role, &steer.text),
         ));
     }
-    for tool in turn.tools.iter().filter(|tool| tool.retained) {
+    for tool in turn
+        .tools
+        .iter()
+        .filter(|tool| tool.retained && !crate::tools::is_memory_tool(&tool.name))
+    {
         let text = format!("{} {}", tool.name, tool.output.as_deref().unwrap_or(""));
         ordered.push((
             tool.request_index,

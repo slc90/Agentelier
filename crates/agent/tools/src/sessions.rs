@@ -22,7 +22,15 @@ pub struct CleanupReport {
     pub processes: Vec<ProcessCleanup>,
     pub failed: bool,
 }
+pub struct ToolUserTurn {
+    pub session: uuid::Uuid,
+    pub turn: u64,
+    pub input: u64,
+    pub statements: Vec<String>,
+}
+
 pub struct ExecutionContext {
+    user_turn: Option<ToolUserTurn>,
     pub(crate) directory: PathBuf,
     processes: BTreeMap<String, Process>,
     image_input: Option<bool>,
@@ -71,9 +79,18 @@ impl ExecutionContext {
     pub fn new(directory: PathBuf, image_input: Option<bool>) -> Self {
         Self {
             directory,
+            user_turn: None,
             image_input,
             processes: BTreeMap::new(),
         }
+    }
+
+    pub fn set_user_turn(&mut self, turn: ToolUserTurn) {
+        self.user_turn = Some(turn);
+    }
+
+    pub fn user_turn(&self) -> Option<&ToolUserTurn> {
+        self.user_turn.as_ref()
     }
 
     pub fn image_input(&self) -> Option<bool> {

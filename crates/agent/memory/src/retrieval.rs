@@ -134,7 +134,7 @@ impl MemoryClient {
     }
 }
 
-fn check_cancel(cancel: &CancellationToken) -> io::Result<()> {
+pub(crate) fn check_cancel(cancel: &CancellationToken) -> io::Result<()> {
     if cancel.is_cancelled() {
         return Err(io::Error::new(io::ErrorKind::Interrupted, "记忆操作已取消"));
     }

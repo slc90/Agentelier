@@ -5,7 +5,7 @@ use crate::{
 use agentelier_conversation::SessionId;
 use agentelier_llm_model::{MAX_MEMORY_SUMMARY_BYTES, MemorySnapshot};
 use rusqlite::{Connection, OptionalExtension, params};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
@@ -33,6 +33,14 @@ impl crate::MemoryClient {
 }
 
 pub(crate) fn read_checked(path: &Path, limit: usize, hash: &str) -> io::Result<String> {
+    let text = read_bounded(path, limit)?;
+    if sha256(&text) != hash {
+        return Err(io::Error::other("已发布记忆文件校验值无效"));
+    }
+    Ok(text)
+}
+
+pub(crate) fn read_bounded(path: &Path, limit: usize) -> io::Result<String> {
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     let file = fs::OpenOptions::new()
         .read(true)
@@ -44,8 +52,8 @@ pub(crate) fn read_checked(path: &Path, limit: usize, hash: &str) -> io::Result<
     }
     let mut text = String::new();
     file.take(limit as u64 + 1).read_to_string(&mut text)?;
-    if text.len() > limit || sha256(&text) != hash {
-        return Err(io::Error::other("已发布记忆文件大小或校验值无效"));
+    if text.len() > limit {
+        return Err(io::Error::other("记忆文件超过大小限制"));
     }
     Ok(text)
 }
@@ -116,6 +124,23 @@ pub(crate) fn restore(connection: &Connection, workspace: &Path) -> io::Result<P
         published.id = Some(id);
         published.summary = summary.clone();
     }
+    let mut inputs = connection
+        .prepare("SELECT session_id, revision, content_hash FROM consolidation_inputs")
+        .map_err(io::Error::other)?;
+    let rows = inputs
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                (row.get::<_, String>(1)?, row.get::<_, String>(2)?),
+            ))
+        })
+        .map_err(io::Error::other)?;
+    let inputs = rows
+        .collect::<rusqlite::Result<BTreeMap<_, _>>>()
+        .map_err(io::Error::other)?;
+    if !inputs.is_empty() {
+        published.sources = inputs;
+    }
     if pending || published.id.is_some() {
         install(workspace, &artifacts)?;
         if pending {
@@ -132,6 +157,7 @@ pub(crate) fn publish(
     workspace: &Path,
     work: Consolidation,
     summary: Option<String>,
+    excluded: BTreeSet<String>,
     published_at_ms: i64,
 ) -> io::Result<bool> {
     let current = restore(connection, workspace)?;
@@ -142,13 +168,27 @@ pub(crate) fn publish(
             |row| row.get(0),
         )
         .map_err(io::Error::other)?;
-    if work.previous_id != current.id || work.epoch != epoch {
+    let notes = crate::revision::revisions(workspace)?;
+    if work.previous_id != current.id
+        || work.epoch != epoch
+        || !notes
+            .iter()
+            .map(|note| &note.id)
+            .eq(work.revisions.iter().map(|note| &note.id))
+    {
         return Ok(false);
     }
     connection
         .execute("INSERT INTO pending_publication (singleton) VALUES (1)", [])
         .map_err(io::Error::other)?;
-    match commit(connection, workspace, work, summary, published_at_ms) {
+    match commit(
+        connection,
+        workspace,
+        work,
+        summary,
+        excluded,
+        published_at_ms,
+    ) {
         Ok(()) => Ok(true),
         Err(failure) => match restore(connection, workspace) {
             Ok(_) => Err(failure),
@@ -164,6 +204,7 @@ fn commit(
     workspace: &Path,
     work: Consolidation,
     summary: Option<String>,
+    excluded: BTreeSet<String>,
     published_at_ms: i64,
 ) -> io::Result<()> {
     let tx = connection.transaction().map_err(io::Error::other)?;
@@ -171,12 +212,28 @@ fn commit(
         "DELETE FROM published_artifacts; DELETE FROM published_sources; DELETE FROM published_source_metadata; DELETE FROM publication;",
     )
     .map_err(io::Error::other)?;
+    tx.execute_batch("DELETE FROM consolidation_inputs; DELETE FROM revisions;")
+        .map_err(io::Error::other)?;
+    for (id, detail) in &work.details {
+        tx.execute("INSERT INTO consolidation_inputs (session_id, revision, content_hash) VALUES (?1, ?2, ?3)",
+            params![id, detail.revision, detail.hash]).map_err(io::Error::other)?;
+    }
+    for note in &work.revisions {
+        tx.execute(
+            "INSERT INTO revisions (revision_id, published) VALUES (?1, 1)",
+            [&note.id],
+        )
+        .map_err(io::Error::other)?;
+    }
     let mut artifacts = Artifacts::new();
     if let Some(summary) = summary {
         let publication_id = Uuid::new_v4().to_string();
         tx.execute("INSERT INTO publication (singleton, publication_id, summary_hash, published_at_ms) VALUES (1, ?1, ?2, ?3)",
             params![publication_id, sha256(&summary), published_at_ms]).map_err(io::Error::other)?;
         for (id, detail) in work.details {
+            if excluded.contains(&id) {
+                continue;
+            }
             tx.execute("INSERT INTO published_sources (session_id, revision, content_hash, file_name) VALUES (?1, ?2, ?3, ?4)",
                 params![id, detail.revision, detail.hash, detail.name]).map_err(io::Error::other)?;
             tx.execute("INSERT INTO published_source_metadata (session_id, work_directory, sequence, activity_ms) VALUES (?1, ?2, ?3, ?4)",

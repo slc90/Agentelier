@@ -1,4 +1,8 @@
-use crate::{MemoryClient, publication, redaction::Redactor};
+use crate::{
+    MemoryClient, publication,
+    redaction::Redactor,
+    revision::{self, Revision},
+};
 use agentelier_conversation::SessionId;
 use rusqlite::Connection;
 use serde::Deserialize;
@@ -20,6 +24,7 @@ pub struct Consolidation {
     pub(crate) deleted: Vec<String>,
     previous_summary: String,
     changes: Changes,
+    pub(crate) revisions: Vec<Revision>,
 }
 
 pub(crate) struct Detail {
@@ -46,6 +51,7 @@ struct Changes {
 #[serde(deny_unknown_fields)]
 struct ConsolidatedText {
     summary: String,
+    excluded_sources: BTreeSet<String>,
 }
 
 impl MemoryClient {
@@ -60,6 +66,17 @@ impl MemoryClient {
         self.with_store(move |connection, workspace| {
             let baseline = publication::restore(connection, workspace)?;
             let details = select(connection, &sessions)?;
+            let revisions = revision::revisions(workspace)?;
+            let mut statement = connection
+                .prepare("SELECT revision_id FROM revisions WHERE published = 1")
+                .map_err(io::Error::other)?;
+            let published = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(io::Error::other)?
+                .collect::<rusqlite::Result<BTreeSet<_>>>()
+                .map_err(io::Error::other)?;
+            let all_revisions_published = revisions.len() == published.len()
+                && revisions.iter().all(|note| published.contains(&note.id));
             let mut changes = Changes::default();
             for (session_id, detail) in &details {
                 match baseline.sources.get(session_id) {
@@ -79,7 +96,10 @@ impl MemoryClient {
                     .filter(|id| !details.contains_key(*id))
                     .cloned(),
             );
-            if changes.added.is_empty() && changes.updated.is_empty() && changes.removed.is_empty()
+            if all_revisions_published
+                && changes.added.is_empty()
+                && changes.updated.is_empty()
+                && changes.removed.is_empty()
             {
                 return Ok(None);
             }
@@ -103,6 +123,7 @@ impl MemoryClient {
                 deleted,
                 previous_summary: baseline.summary,
                 changes,
+                revisions,
             }))
         })
         .await
@@ -114,10 +135,17 @@ impl MemoryClient {
         output: Option<String>,
         published_at_ms: u64,
     ) -> io::Result<bool> {
-        let summary = work.summary(output.as_deref())?;
+        let (summary, excluded) = work.summary(output.as_deref())?;
         let published_at_ms = i64::try_from(published_at_ms).map_err(io::Error::other)?;
         self.with_store(move |connection, workspace| {
-            publication::publish(connection, workspace, work, summary, published_at_ms)
+            publication::publish(
+                connection,
+                workspace,
+                work,
+                summary,
+                excluded,
+                published_at_ms,
+            )
         })
         .await
     }
@@ -126,6 +154,16 @@ impl MemoryClient {
 impl Consolidation {
     pub fn source_count(&self) -> usize {
         self.details.len()
+    }
+
+    pub fn needs_model(&self) -> bool {
+        !self.details.is_empty() || !self.revisions.is_empty()
+    }
+
+    fn corrective_revision_applies(&self, detail: &Detail) -> bool {
+        self.revisions
+            .iter()
+            .any(|note| note.affects_details(&detail.directory))
     }
 
     pub fn model_input(&self) -> String {
@@ -138,7 +176,10 @@ impl Consolidation {
                     "project": detail.project,
                     "date": detail.date.to_string(),
                     "record": detail.name,
-                    "evidence": detail.excerpt,
+                    "evidence": if self.corrective_revision_applies(detail) { &detail.content } else { &detail.excerpt },
+                    "work_directory": if self.corrective_revision_applies(detail) {
+                        Some(&detail.directory)
+                    } else { None },
                 })
             })
             .collect::<Vec<_>>();
@@ -146,13 +187,13 @@ impl Consolidation {
             "previous_summary": &self.previous_summary[..self.previous_summary.floor_char_boundary(MAX_PREVIOUS_EXCERPT_BYTES)],
             "changes": self.changes,
             "sources": sources,
-            "revision_notes": [],
+            "revision_notes": self.revisions,
         }).to_string()
     }
 
-    fn summary(&self, output: Option<&str>) -> io::Result<Option<String>> {
-        if self.details.is_empty() && output.is_none() {
-            return Ok(None);
+    fn summary(&self, output: Option<&str>) -> io::Result<(Option<String>, BTreeSet<String>)> {
+        if !self.needs_model() && output.is_none() {
+            return Ok((None, BTreeSet::new()));
         }
         let output = output.ok_or_else(|| io::Error::other("整合结果缺少模型正文"))?;
         if output.len() > MAX_MEMORY_SUMMARY_BYTES * 2 {
@@ -161,11 +202,37 @@ impl Consolidation {
         let result: ConsolidatedText = serde_json::from_str(output)
             .map_err(|_| io::Error::other("全局记忆模型返回无效结构"))?;
         let body = result.summary.trim();
-        if body.is_empty() || body.len() > MAX_MEMORY_SUMMARY_BYTES {
-            return Err(io::Error::other("全局记忆摘要为空或超出大小限制"));
+        if body.len() > MAX_MEMORY_SUMMARY_BYTES {
+            return Err(io::Error::other("全局记忆摘要超出大小限制"));
         }
-        let mut index = String::from("\n\n## 来源会话\n\n");
+        let mut excluded = result.excluded_sources;
+        if excluded.iter().any(|id| {
+            self.details
+                .get(id)
+                .is_none_or(|detail| !self.corrective_revision_applies(detail))
+        }) {
+            return Err(io::Error::other("整合结果排除了修订范围外的来源"));
+        }
         for (id, detail) in &self.details {
+            let contents = detail.content.to_lowercase();
+            if self.revisions.iter().any(|note| {
+                note.affects_details(&detail.directory)
+                    && contents.contains(&note.target.to_lowercase())
+            }) {
+                excluded.insert(id.clone());
+            }
+        }
+        if body.is_empty() && self.details.len() == excluded.len() {
+            return Ok((None, excluded));
+        }
+        let mut index = String::new();
+        if self.details.len() > excluded.len() {
+            index.push_str("\n\n## 来源会话\n\n");
+        }
+        for (id, detail) in &self.details {
+            if excluded.contains(id) {
+                continue;
+            }
             writeln!(
                 index,
                 "- [{}](rollout_summaries/{}) · {} · {}",
@@ -178,7 +245,7 @@ impl Consolidation {
         if summary.len() > MAX_MEMORY_SUMMARY_BYTES {
             return Err(io::Error::other("全局记忆摘要与来源导航合计超过 10 KiB"));
         }
-        Ok(Some(summary))
+        Ok((Some(summary), excluded))
     }
 }
 

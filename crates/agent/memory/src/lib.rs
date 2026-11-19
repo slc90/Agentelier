@@ -6,6 +6,7 @@ mod extraction;
 mod publication;
 mod redaction;
 mod retrieval;
+mod revision;
 mod store;
 mod tools;
 

@@ -15,6 +15,7 @@ pub struct Memory {
 pub struct MemoryClient {
     connection: Arc<Mutex<Connection>>,
     workspace: Arc<PathBuf>,
+    pub(crate) revision_signal: Arc<tokio::sync::Notify>,
 }
 
 impl Memory {
@@ -53,6 +54,7 @@ impl Memory {
             client: MemoryClient {
                 connection: Arc::new(Mutex::new(connection)),
                 workspace: Arc::new(workspace),
+                revision_signal: Arc::default(),
             },
         })
     }

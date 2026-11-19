@@ -122,6 +122,28 @@ impl ActiveTurn {
         self.view.execution_blocked = true;
     }
 
+    pub fn tool_user_turn(&self) -> Result<agentelier_tools::ToolUserTurn, ConversationFailure> {
+        let turn = self
+            .view
+            .turn
+            .as_ref()
+            .ok_or_else(|| ConversationFailure::new("工具调用缺少当前用户任务"))?;
+        let statements = std::iter::once(turn.input.clone())
+            .chain(
+                turn.steers
+                    .iter()
+                    .filter(|steer| matches!(steer.state, SteerState::Applied))
+                    .map(|steer| steer.text.clone()),
+            )
+            .collect();
+        Ok(agentelier_tools::ToolUserTurn {
+            session: self.view.id,
+            turn: turn.id.0,
+            input: turn.input_id.0,
+            statements,
+        })
+    }
+
     pub fn view(&self) -> SessionView {
         self.view.clone()
     }
