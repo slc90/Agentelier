@@ -1,6 +1,6 @@
 # 文档导航
 
-`docs/` 记录当前架构、模块设计与跨模块机制。具体实现以当前源码和工程配置为准；尚未实施的方案保存在 `plans/`，不得提前写成当前实现事实。
+`docs/` 记录架构、模块设计与跨模块机制。具体实现以当前源码和工程配置为准；待实施的目标设计须明确标注状态，对应执行方案保存在 `plans/`，不得提前写成当前实现事实。
 
 - [总体架构](design/architecture.md)：Workspace、程序入口、宿主与内部 Crate 的职责及依赖。
 - [数据目录与启动](design/mechanisms/application-data.md)：配置、目录占用、启动检查及关闭边界。
@@ -17,3 +17,7 @@
 - [已知问题](known_issues.md)：已确认但尚未解决的上游限制及影响。
 
 `design/modules/` 与 `design/mechanisms/` 分别保存模块与跨模块机制设计。按任务需要查阅相关内容，不另建 Feature 文档、功能目录或逐项功能使用说明。阶段目标设计应明确区分已实现的起点与待实施部分。
+
+## 待实施的目标设计
+
+- [原生异步工具与跨 Turn 结果交付](design/native-async-tools/README.md)：以现有 Direct 工具和会话结构为起点，说明跨 Turn 多任务、历史交付、取消、恢复与验收边界；当前实现状态仍以现有模块文档和源码为准。对应[执行方案](../plans/native-async-tools/00-overview.md)。
