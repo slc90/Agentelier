@@ -939,29 +939,44 @@ pub fn restore(
             }
         }
     }
-    let normalized_response = !pending.0.is_empty();
-    let mut normalized = normalized_response;
+    let mut normalized = !pending.0.is_empty();
     let recovered_results = pending.recover(&mut history, &mut state, retained_input)?;
-    if normalized {
+    let missing_results = recovered_results
+        .iter()
+        .any(|result| !matches!(result.evidence, RecoveryEvidence::Saved { .. }));
+    if missing_results {
         notices.push("已恢复确认的模型输出，缺失的工具结果已按开始事实补充说明".into());
     }
+    let mut saved_material = None;
     if let Some(turn) = &mut state.turn {
         if matches!(turn.status, TurnStatus::Running) {
-            turn.status = TurnStatus::Failed("上次运行在响应完成前中断".into());
             normalized = true;
-            if turn.requests.last().is_some_and(|request| {
-                request.sending_started
-                    && !completed_requests.contains(&(turn.id.0, request.request))
-            }) && !normalized_response
-            {
-                notices.push("上次请求已开始发送，服务结果未知；已保存的工具结果保留".into());
-            } else if !normalized_response {
-                if completed_requests.contains(&(turn.id.0, turn.request_index)) {
-                    notices.push("已保留完整响应及保存的工具结果，等待用户继续".into());
+            let response_saved = completed_requests.contains(&(turn.id.0, turn.request_index));
+            let interruption = if response_saved {
+                if !missing_results {
+                    let saved_tools = turn.tools.iter().any(|tool| {
+                        tool.request_index == turn.request_index
+                            && tool.retained
+                            && tool.output.is_some()
+                    });
+                    saved_material = Some(if saved_tools {
+                        "工具结果已保存"
+                    } else {
+                        "已保留完整响应"
+                    });
+                }
+                "上次运行在完整响应接纳后中断"
+            } else {
+                if turn.requests.last().is_some_and(|request| {
+                    request.request == turn.request_index && request.sending_started
+                }) {
+                    notices.push("上次请求已开始发送，服务结果未知；已保存的工具结果保留".into());
                 } else {
                     notices.push("未完成的模型输出没有进入工作上下文".into());
                 }
-            }
+                "上次运行在响应完成前中断"
+            };
+            turn.status = TurnStatus::Failed(interruption.into());
         }
         for steer in &mut turn.steers {
             if matches!(steer.state, crate::SteerState::Accepted) {
@@ -1014,6 +1029,13 @@ pub fn restore(
                         && !is_read_only(&initial.settings.tools, &tool.name)
                 })
         });
+    if let Some(material) = saved_material {
+        notices.push(if state.execution_blocked {
+            material.into()
+        } else {
+            format!("{material}，等待用户继续")
+        });
+    }
     if state.execution_blocked {
         state.queue_paused = true;
         let notice = "上次工具的外部效果或清理未确认，当前会话已暂停执行";
