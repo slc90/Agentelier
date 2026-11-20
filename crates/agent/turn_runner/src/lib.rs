@@ -5,6 +5,7 @@ mod access;
 mod control;
 mod dispatch;
 mod runner;
+mod tool_events;
 
 pub use access::{RunnerEvent, TurnImage, TurnRecord};
 pub use dispatch::{ToolBatch, ToolCommand, ToolDispatcher, ToolEvent};

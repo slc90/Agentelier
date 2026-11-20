@@ -96,6 +96,15 @@ impl PendingResponses {
         })
     }
 
+    fn call_source(&mut self, state: &StoredState, call_id: &str) -> Option<&mut PendingResponse> {
+        let turn = state.turn.as_ref()?;
+        self.0.values_mut().find(|response| {
+            response.turn == turn.id
+                && response.request_index <= turn.request_index
+                && response.output.call_ids().any(|id| id == call_id)
+        })
+    }
+
     fn recover(
         &mut self,
         history: &mut ProtocolArchive,
@@ -103,7 +112,57 @@ impl PendingResponses {
         retained_input: bool,
     ) -> Result<Vec<RecoveredResult>, ConversationFailure> {
         let mut facts = Vec::new();
-        for response in std::mem::take(&mut self.0).into_values() {
+        let mut responses = std::mem::take(&mut self.0);
+        // Older logs only had one accepted response at a time and retain their recovery order.
+        if responses
+            .values()
+            .filter(|response| response.in_history)
+            .count()
+            > 1
+        {
+            let mut saved = responses
+                .values()
+                .filter(|response| response.in_history)
+                .flat_map(|response| {
+                    response
+                        .results
+                        .iter()
+                        .filter(|(id, _)| !response.appended.contains(*id))
+                        .map(|(id, saved)| {
+                            (
+                                saved.sequence,
+                                response.sequence,
+                                id.clone(),
+                                saved.output.clone(),
+                            )
+                        })
+                })
+                .collect::<Vec<_>>();
+            saved.sort_by_key(|(sequence, ..)| *sequence);
+            for (sequence, response_sequence, call_id, output) in saved {
+                let response = responses
+                    .get_mut(&response_sequence)
+                    .ok_or_else(|| ConversationFailure::new("已保存的工具结果缺少来源响应"))?;
+                response.appended.insert(call_id.clone());
+                facts.push(RecoveredResult {
+                    response_sequence,
+                    call_id: call_id.clone(),
+                    evidence: RecoveryEvidence::Saved { sequence },
+                });
+                let start = history.len();
+                history
+                    .append_result(
+                        call_id,
+                        output,
+                        HistoryAppend {
+                            start,
+                            end: start + 1,
+                        },
+                    )
+                    .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+            }
+        }
+        for response in responses.into_values() {
             recover_response(history, state, response, retained_input, &mut facts)?;
         }
         Ok(facts)
@@ -675,7 +734,7 @@ pub fn restore(
                 execution,
             } => {
                 let response = pending
-                    .source(&incoming)
+                    .call_source(&incoming, &call_id)
                     .ok_or_else(|| ConversationFailure::new("工具开始缺少完整响应"))?;
                 if response.over_budget
                     || response.rejected.contains(&call_id)
@@ -688,12 +747,9 @@ pub fn restore(
                     .turn
                     .as_ref()
                     .ok_or_else(|| ConversationFailure::new("工具开始缺少来源任务"))?;
-                if turn.id != response.turn || turn.request_index != response.request_index {
-                    return Err(ConversationFailure::new("工具开始不属于来源请求"));
-                }
                 tasks.transition(
                     turn.id,
-                    turn.request_index,
+                    response.request_index,
                     &call_id,
                     execution,
                     ToolStatus::Running,
@@ -731,7 +787,7 @@ pub fn restore(
                     }
                 }
                 let response = pending
-                    .source(&incoming)
+                    .call_source(&incoming, &call_id)
                     .ok_or_else(|| ConversationFailure::new("工具结果缺少完整响应"))?;
                 if ((response.over_budget || response.rejected.contains(&call_id))
                     && status != ToolStatus::NotExecuted)
@@ -757,14 +813,11 @@ pub fn restore(
                     .turn
                     .as_ref()
                     .ok_or_else(|| ConversationFailure::new("工具结果缺少来源任务"))?;
-                if turn.id != response.turn || turn.request_index != response.request_index {
-                    return Err(ConversationFailure::new("工具结果不属于来源请求"));
-                }
                 let tool = turn
                     .tools
                     .iter()
                     .find(|tool| {
-                        tool.call_id == call_id && tool.request_index == turn.request_index
+                        tool.call_id == call_id && tool.request_index == response.request_index
                     })
                     .ok_or_else(|| ConversationFailure::new("工具结果缺少展示身份"))?;
                 if matches!(
@@ -780,7 +833,7 @@ pub fn restore(
                 }
                 tasks.transition(
                     turn.id,
-                    turn.request_index,
+                    response.request_index,
                     &call_id,
                     execution,
                     status,
@@ -796,13 +849,10 @@ pub fn restore(
                 append,
             } => {
                 let response = pending
-                    .source(&incoming)
+                    .call_source(&incoming, &call_id)
                     .filter(|response| response.in_history)
                     .ok_or_else(|| ConversationFailure::new("追加工具结果缺少已接纳的原始响应"))?;
-                if !incoming.turn.as_ref().is_some_and(|turn| {
-                    turn.id == response.turn && turn.request_index == response.request_index
-                }) || !response.appended.insert(call_id.clone())
-                {
+                if !response.appended.insert(call_id.clone()) {
                     return Err(ConversationFailure::new("工具结果追加身份重复或过期"));
                 }
                 let saved = response
@@ -831,7 +881,7 @@ pub fn restore(
                     })
                     .ok_or_else(|| ConversationFailure::new("批次结束前工具结果尚未全部追加"))?;
                 if !incoming.turn.as_ref().is_some_and(|turn| {
-                    turn.id == response.turn && turn.request_index == response.request_index
+                    turn.id == response.turn && turn.request_index >= response.request_index
                 }) {
                     return Err(ConversationFailure::new("批次结束不属于已接纳的请求"));
                 }

@@ -42,36 +42,35 @@ impl SessionTools {
 }
 
 struct JobIdentity {
-    index: usize,
     call_id: String,
     started: Arc<AtomicBool>,
-    events: mpsc::UnboundedSender<ToolEvent>,
     following: Option<oneshot::Sender<()>>,
 }
 
 struct Execution {
     calls: JoinSet<ToolResult>,
+    events: mpsc::UnboundedSender<ToolEvent>,
     identities: HashMap<Id, JobIdentity>,
     processes: Arc<ProcessSessions>,
     admission: ToolAdmission,
     cancel: CancellationToken,
+    ordinary: Option<oneshot::Receiver<()>>,
+    controls: Option<oneshot::Receiver<()>>,
 }
 
 impl Execution {
     fn enqueue(&mut self, batch: ToolBatch) {
         let serial = batch.catalog.contract().is_flat();
-        let mut ordinary = None;
-        let mut controls = None;
-        for (index, call) in batch.calls.into_iter().enumerate() {
+        for call in batch.calls {
             let policy = batch.catalog.access(&call.name);
             let policy = match (policy, call.mode()) {
                 (ToolAccess::SharedRead, ToolMode::Synchronous) => ToolAccess::Exclusive,
                 _ => policy,
             };
             let order = if policy == ToolAccess::ProcessControl {
-                &mut controls
+                &mut self.controls
             } else {
-                &mut ordinary
+                &mut self.ordinary
             };
             let (following, wait) = oneshot::channel();
             let previous = order.replace(wait);
@@ -81,19 +80,15 @@ impl Execution {
                 (Some(following), None)
             };
             let identity = JobIdentity {
-                index,
                 call_id: call.call_id.clone(),
                 started: Arc::default(),
-                events: batch.events.clone(),
                 following: finished,
             };
             let job = Job {
-                index,
                 call,
                 policy,
                 context: batch.context.clone(),
                 catalog: batch.catalog.clone(),
-                events: batch.events.clone(),
                 started: identity.started.clone(),
                 previous,
                 admitted,
@@ -102,9 +97,10 @@ impl Execution {
             let admission_stop = batch.admission.clone();
             let admission = self.admission.clone();
             let processes = self.processes.clone();
-            let handle = self
-                .calls
-                .spawn(job.run(admission, processes, admission_stop, cancel));
+            let events = self.events.clone();
+            let handle =
+                self.calls
+                    .spawn(job.run(admission, processes, admission_stop, cancel, events));
             self.identities.insert(handle.id(), identity);
         }
     }
@@ -143,9 +139,9 @@ impl Execution {
         if result.cleanup_failed || result.status == ToolStatus::Unconfirmed {
             self.admission.block();
         }
-        retained.insert(job.call_id, result.clone());
-        drop(job.events.send(ToolEvent::Finished {
-            index: job.index,
+        retained.insert(job.call_id.clone(), result.clone());
+        drop(self.events.send(ToolEvent::Finished {
+            call_id: job.call_id,
             result,
         }));
         drop(job.following);
@@ -153,12 +149,10 @@ impl Execution {
 }
 
 struct Job {
-    index: usize,
     call: FunctionCall,
     policy: ToolAccess,
     context: Arc<ExecutionContext>,
     catalog: Arc<ToolCatalog>,
-    events: mpsc::UnboundedSender<ToolEvent>,
     started: Arc<AtomicBool>,
     previous: Option<oneshot::Receiver<()>>,
     admitted: Option<oneshot::Sender<()>>,
@@ -184,6 +178,7 @@ impl Job {
         processes: Arc<ProcessSessions>,
         admission_stop: CancellationToken,
         cancel: CancellationToken,
+        events: mpsc::UnboundedSender<ToolEvent>,
     ) -> ToolResult {
         if let Some(previous) = self.previous {
             drop(previous.await);
@@ -207,10 +202,9 @@ impl Job {
             return skipped();
         };
         let (begin, confirmation) = oneshot::channel();
-        if self
-            .events
+        if events
             .send(ToolEvent::Ready {
-                index: self.index,
+                call_id: self.call.call_id.clone(),
                 begin,
             })
             .is_err()
@@ -265,15 +259,19 @@ impl Job {
 
 pub(super) async fn run(
     mut incoming: mpsc::Receiver<ToolCommand>,
+    events: mpsc::UnboundedSender<ToolEvent>,
     cancel: CancellationToken,
     tools: SessionTools,
 ) -> RetainedResults {
     let mut execution = Execution {
         calls: JoinSet::new(),
+        events,
         identities: HashMap::new(),
         processes: tools.processes,
         admission: tools.admission,
         cancel: cancel.child_token(),
+        ordinary: None,
+        controls: None,
     };
     let mut retained = RetainedResults::new();
     let mut cleanup = None;
@@ -290,6 +288,13 @@ pub(super) async fn run(
             command = incoming.recv(), if cleanup.is_none() => match command {
                 Some(ToolCommand::Batch(batch)) => execution.enqueue(batch),
                 Some(ToolCommand::Accepted(call_id)) => { retained.remove(&call_id); }
+                Some(ToolCommand::ReapProcesses { reason, reply }) => {
+                    let report = execution.processes.cleanup(reason).await;
+                    if report.failed {
+                        execution.admission.block();
+                    }
+                    drop(reply.send(report));
+                }
                 Some(ToolCommand::Cleanup { reason, reply }) => {
                     cleanup = Some((reason, Some(reply)));
                     execution.cancel.cancel();

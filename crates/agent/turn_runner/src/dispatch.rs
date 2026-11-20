@@ -10,16 +10,15 @@ pub struct ToolBatch {
     pub catalog: Arc<ToolCatalog>,
     pub context: Arc<ExecutionContext>,
     pub admission: CancellationToken,
-    pub events: mpsc::UnboundedSender<ToolEvent>,
 }
 
 pub enum ToolEvent {
     Ready {
-        index: usize,
+        call_id: String,
         begin: oneshot::Sender<bool>,
     },
     Finished {
-        index: usize,
+        call_id: String,
         result: ToolResult,
     },
 }
@@ -27,6 +26,10 @@ pub enum ToolEvent {
 pub enum ToolCommand {
     Batch(ToolBatch),
     Accepted(String),
+    ReapProcesses {
+        reason: &'static str,
+        reply: oneshot::Sender<CleanupReport>,
+    },
     Cleanup {
         reason: &'static str,
         reply: oneshot::Sender<CleanupReport>,
@@ -39,9 +42,17 @@ pub struct ToolDispatcher {
 }
 
 impl ToolDispatcher {
-    pub fn channel(admission: ToolAdmission) -> (Self, mpsc::Receiver<ToolCommand>) {
+    pub fn channel(
+        admission: ToolAdmission,
+    ) -> (
+        Self,
+        mpsc::Receiver<ToolCommand>,
+        mpsc::UnboundedSender<ToolEvent>,
+        mpsc::UnboundedReceiver<ToolEvent>,
+    ) {
         let (sender, receiver) = mpsc::channel(1);
-        (Self { sender, admission }, receiver)
+        let (events, incoming) = mpsc::unbounded_channel();
+        (Self { sender, admission }, receiver, events, incoming)
     }
 
     pub(crate) fn is_blocked(&self) -> bool {
@@ -57,6 +68,18 @@ impl ToolDispatcher {
             .send(command)
             .await
             .map_err(|_| ConversationFailure::new("工具执行所有者已关闭"))
+    }
+
+    pub(crate) async fn reap_processes(
+        &self,
+        reason: &'static str,
+    ) -> Result<CleanupReport, ConversationFailure> {
+        let (reply, result) = oneshot::channel();
+        self.send(ToolCommand::ReapProcesses { reason, reply })
+            .await?;
+        result
+            .await
+            .map_err(|_| ConversationFailure::new("进程资源回收未返回结果"))
     }
 
     pub(crate) async fn cleanup(

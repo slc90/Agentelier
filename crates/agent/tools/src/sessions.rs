@@ -27,9 +27,14 @@ pub struct CleanupReport {
     pub failed: bool,
 }
 pub struct ProcessSessions {
-    processes: Mutex<BTreeMap<String, Arc<ProcessEntry>>>,
-    watchers: Mutex<Vec<JoinHandle<()>>>,
+    registry: Mutex<ProcessRegistry>,
     admission: ToolAdmission,
+}
+
+#[derive(Default)]
+struct ProcessRegistry {
+    processes: BTreeMap<String, Arc<ProcessEntry>>,
+    watchers: Vec<JoinHandle<()>>,
 }
 
 struct ProcessEntry {
@@ -88,8 +93,7 @@ fn failure(error: ToolFailure) -> ToolResult {
 impl ProcessSessions {
     pub fn new(admission: ToolAdmission) -> Self {
         Self {
-            processes: Mutex::default(),
-            watchers: Mutex::default(),
+            registry: Mutex::default(),
             admission,
         }
     }
@@ -112,7 +116,7 @@ impl ProcessSessions {
         if input.cmd.trim().is_empty() {
             return ToolResult::error(ToolStatus::Failed, "invalid_arguments", "命令不能为空");
         }
-        if self.processes.lock().await.len() >= MAX_PROCESS_SESSIONS {
+        if self.registry.lock().await.processes.len() >= MAX_PROCESS_SESSIONS {
             return ToolResult::error(
                 ToolStatus::Failed,
                 "session_limit",
@@ -149,11 +153,9 @@ impl ProcessSessions {
                 }),
                 terminate: CancellationToken::new(),
             });
-            self.processes
-                .lock()
-                .await
-                .insert(id.clone(), entry.clone());
-            self.watchers.lock().await.push(tokio::spawn(watch_exit(
+            let mut registry = self.registry.lock().await;
+            registry.processes.insert(id.clone(), entry.clone());
+            registry.watchers.push(tokio::spawn(watch_exit(
                 Arc::downgrade(&entry),
                 id,
                 self.admission.clone(),
@@ -187,7 +189,13 @@ impl ProcessSessions {
                 "terminate 不能与非空 chars 或 close_stdin 同时使用",
             );
         }
-        let entry = self.processes.lock().await.get(&input.session_id).cloned();
+        let entry = self
+            .registry
+            .lock()
+            .await
+            .processes
+            .get(&input.session_id)
+            .cloned();
         let Some(entry) = entry else {
             return unknown();
         };
@@ -207,7 +215,11 @@ impl ProcessSessions {
                 }
                 let result = result.clone();
                 *locked = ProcessState::Consumed;
-                self.processes.lock().await.remove(&input.session_id);
+                self.registry
+                    .lock()
+                    .await
+                    .processes
+                    .remove(&input.session_id);
                 return result;
             }
             ProcessState::Consumed => return unknown(),
@@ -283,7 +295,11 @@ impl ProcessSessions {
         }
         if completed {
             *locked = ProcessState::Consumed;
-            self.processes.lock().await.remove(&input.session_id);
+            self.registry
+                .lock()
+                .await
+                .processes
+                .remove(&input.session_id);
         }
         result
     }
@@ -293,7 +309,10 @@ impl ProcessSessions {
             processes: Vec::new(),
             failed: false,
         };
-        let processes = std::mem::take(&mut *self.processes.lock().await);
+        let ProcessRegistry {
+            processes,
+            watchers,
+        } = std::mem::take(&mut *self.registry.lock().await);
         for (id, entry) in processes {
             entry.terminate.cancel();
             let mut locked = entry.state.lock().await;
@@ -320,7 +339,6 @@ impl ProcessSessions {
             });
             *locked = ProcessState::Consumed;
         }
-        let watchers = std::mem::take(&mut *self.watchers.lock().await);
         for watcher in watchers {
             if let Err(failure) = watcher.await {
                 report.failed = true;

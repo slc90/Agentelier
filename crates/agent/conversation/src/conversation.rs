@@ -449,7 +449,7 @@ impl Conversation {
         session.active = Some(ActiveState {
             memory: session.memory.clone(),
             source_sequence: None,
-            response_sequence: None,
+            responses: Default::default(),
             history_confirmed: true,
             input_retained: false,
             accepting_steers: true,
@@ -583,7 +583,7 @@ impl Conversation {
         current.active = Some(ActiveState {
             memory: current.memory.clone(),
             source_sequence: None,
-            response_sequence: None,
+            responses: Default::default(),
             history_confirmed: true,
             input_retained: source.input_retained,
             accepting_steers: true,

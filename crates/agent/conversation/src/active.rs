@@ -14,7 +14,7 @@ use std::sync::Arc;
 pub(crate) struct ActiveState {
     pub(crate) memory: Option<Arc<agentelier_llm_model::MemorySnapshot>>,
     pub(crate) source_sequence: Option<u64>,
-    pub(crate) response_sequence: Option<u64>,
+    pub(crate) responses: std::collections::BTreeMap<u64, u32>,
     pub(crate) history_confirmed: bool,
     pub(crate) input_retained: bool,
     pub(crate) accepting_steers: bool,
@@ -122,6 +122,7 @@ impl ActiveTurn<'_> {
             .as_mut()
             .ok_or(ConversationFailure::new("活动任务缺少轮次"))?
             .phase = TaskPhase::ReapingProcesses;
+        self.state.accepting_steers = false;
         Ok(())
     }
 
@@ -221,7 +222,11 @@ impl ActiveTurn<'_> {
                 ..
             } => {
                 let append = acceptance.append;
-                if self.state.response_sequence.is_some()
+                if self
+                    .state
+                    .responses
+                    .values()
+                    .any(|request| *request == live.request_index)
                     || append.start != self.history.position()
                     || append.end.checked_sub(append.start)
                         != Some(output.len() + usize::from(!self.state.input_retained))
@@ -233,8 +238,7 @@ impl ActiveTurn<'_> {
             crate::RecordEvent::ResponseClosed {
                 response_sequence, ..
             } => {
-                if self.state.response_sequence != Some(*response_sequence) || self.has_open_calls()
-                {
+                if !self.response_can_close(*response_sequence) {
                     return Err(ConversationFailure::new("批次仍有未确认的工具结果"));
                 }
                 return Ok(());
@@ -261,21 +265,19 @@ impl ActiveTurn<'_> {
             } => (call_id, *execution, *status),
             _ => return Ok(()),
         };
+        let tool = live
+            .tools
+            .iter()
+            .find(|tool| tool.retained && tool.call_id == *call_id && tool.status == status)
+            .ok_or_else(|| ConversationFailure::new("工具记录不属于已接纳的调用"))?;
         self.tasks.matching_transition(
             live.id,
-            live.request_index,
+            tool.request_index,
             call_id,
             execution,
             status,
             false,
         )?;
-        if !live.tools.iter().any(|tool| {
-            tool.request_index == live.request_index
-                && &tool.call_id == call_id
-                && tool.status == status
-        }) {
-            return Err(ConversationFailure::new("工具记录不属于当前响应的调用状态"));
-        }
         Ok(())
     }
 
@@ -301,6 +303,9 @@ impl ActiveTurn<'_> {
             .state
             .continuation
             .is_some_and(|source| source.request == turn.request_index);
+        if self.history.has_open_synchronous_calls() {
+            return Err(ConversationFailure::new("同步调用的结果尚未进入历史"));
+        }
         let context = if !self.state.input_retained {
             self.history.with_user(&turn.input)
         } else {
@@ -838,9 +843,14 @@ impl ActiveTurn<'_> {
             .turn
             .as_ref()
             .ok_or_else(|| ConversationFailure::new("工具状态更新缺少活动轮次"))?;
+        let source = turn
+            .tools
+            .iter()
+            .find(|tool| tool.retained && tool.call_id == call_id)
+            .ok_or_else(|| ConversationFailure::new("工具状态缺少来源调用"))?;
         self.tasks.transition(
             turn.id,
-            turn.request_index,
+            source.request_index,
             call_id,
             execution,
             status,
@@ -871,11 +881,10 @@ impl ActiveTurn<'_> {
             .turn
             .as_mut()
             .ok_or(ConversationFailure::new("活动任务缺少轮次"))?;
-        turn.phase = TaskPhase::ExecutingTool;
         let tool = turn
             .tools
             .iter_mut()
-            .find(|tool| tool.request_index == turn.request_index && tool.call_id == call_id)
+            .find(|tool| tool.retained && tool.call_id == call_id)
             .ok_or(ConversationFailure::new("执行工具缺少调用记录"))?;
         tool.status = ToolStatus::Running;
         Ok(())
@@ -894,7 +903,7 @@ impl ActiveTurn<'_> {
         let tool = turn
             .tools
             .iter_mut()
-            .find(|tool| tool.request_index == turn.request_index && tool.call_id == call_id)
+            .find(|tool| tool.retained && tool.call_id == call_id)
             .ok_or_else(|| ConversationFailure::new("工具结果缺少调用记录"))?;
         let previous = self
             .results
@@ -1000,9 +1009,30 @@ impl ActiveTurn<'_> {
             &self.view.settings.instructions,
             self.tools.definitions(),
         )?;
+        self.state.responses.insert(sequence, turn.request_index);
         self.confirm_history_commit(sequence);
-        self.state.response_sequence = Some(sequence);
         Ok(result.compaction)
+    }
+
+    fn response_can_close(&self, sequence: u64) -> bool {
+        let Some(request) = self.state.responses.get(&sequence) else {
+            return false;
+        };
+        self.view.turn.as_ref().is_some_and(|turn| {
+            let open: std::collections::HashSet<_> =
+                self.history.open_calls().map(|(id, _)| id).collect();
+            turn.tools
+                .iter()
+                .all(|tool| tool.request_index != *request || !open.contains(tool.call_id.as_str()))
+        })
+    }
+
+    pub fn next_closed_response(&self) -> Option<u64> {
+        self.state
+            .responses
+            .keys()
+            .copied()
+            .find(|sequence| self.response_can_close(*sequence))
     }
 
     pub fn confirm_response_closed(
@@ -1010,10 +1040,10 @@ impl ActiveTurn<'_> {
         response_sequence: u64,
         sequence: u64,
     ) -> Result<(), ConversationFailure> {
-        if self.state.response_sequence != Some(response_sequence) || self.has_open_calls() {
+        if !self.response_can_close(response_sequence) {
             return Err(ConversationFailure::new("批次关闭回执与当前响应不一致"));
         }
-        self.state.response_sequence = None;
+        self.state.responses.remove(&response_sequence);
         self.confirm_history_commit(sequence);
         Ok(())
     }

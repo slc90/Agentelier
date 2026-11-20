@@ -54,7 +54,7 @@ LLM Model 以 ModelRequest::Catalog 读取全部可显示模型，以 Verify 携
 
 聊天请求携带会话冻结的 Function Tool 声明、自动选择和 `parallel_tool_calls: true`。新建 `gpt-6.2-sol` 会话把目录作为 `input` 首个 developer `additional_tools` 项，具备异步资格的叶子带 `async: true`。顶层 `tools` 字段省略。固定指令、记忆、技能、协议历史和本轮输入随原顺序排列，材料索引记录实际位置。其他模型和旧平铺会话沿用同步声明。HTTP 聊天使用 `store: false`、`stream: true` 和完整的 `input`，省略 `previous_response_id`。独立的目录与连接验证不附带工具。
 
-SSE 函数参数增量只更新展示。模型层核对完整流项与 `response.completed.output` 的身份、名称、namespace、参数和异步模式。原生路径按无 namespace 的工具名称匹配冻结目录。返回 `async: true` 的调用需要相应声明，省略标志或返回 `false` 按同步处理。请求拒绝沿用实际服务错误。协议历史原样重放 `function_call`，并以 `call_id` 关联 `function_call_output`。普通工具使用有界 JSON 字符串，图片结果使用 `input_text` 和 `input_image` 内容数组。
+SSE 函数参数增量只更新展示。模型层核对完整流项与 `response.completed.output` 的身份、名称、namespace、参数和异步模式。原生路径按无 namespace 的工具名称匹配冻结目录。返回 `async: true` 的调用需要相应声明，省略标志或返回 `false` 按同步处理。请求拒绝沿用实际服务错误。协议历史原样重放 `function_call`，并以 `call_id` 关联 `function_call_output`。普通工具使用有界 JSON 字符串，图片结果使用 `input_text` 和 `input_image` 内容数组。同步调用结果确认追加后才能构建下一次请求；未配对的异步调用保留在冻结请求中。请求在途期间到达的结果只确认保存，待响应接纳或请求停止后按保存序号追加。
 
 历史允许完整响应和工具结果分开追加，并用原始调用身份校验结果的唯一性。准备请求时固定持久历史的位置、实际覆盖项和所含结果的 `call_id`。这些材料和已序列化的请求字节随本次请求保持固定。只有接纳本次完整合法响应才确认其中的结果已经用于成功请求。当前发送入口仍要求批次结果全部收齐。
 

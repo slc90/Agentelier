@@ -48,7 +48,7 @@ impl ModelTask {
                     _ = cancel.cancelled() => None,
                 },
                 TaskRequest::Chat(progress, steers, user_skills_root, memory, tools) => {
-                    let (dispatcher, commands) =
+                    let (dispatcher, commands, events, incoming) =
                         agentelier_turn_runner::ToolDispatcher::channel(tools.admission.clone());
                     let runner = tokio::spawn(agentelier_turn_runner::run(
                         credentials,
@@ -58,9 +58,12 @@ impl ModelTask {
                         user_skills_root,
                         memory,
                         dispatcher,
+                        incoming,
                     ));
-                    let (outcome, retained) =
-                        tokio::join!(runner, super::tool_jobs::run(commands, cancel, tools));
+                    let (outcome, retained) = tokio::join!(
+                        runner,
+                        super::tool_jobs::run(commands, events, cancel, tools)
+                    );
                     let outcome = outcome.unwrap_or_else(|failure| {
                         Err(ConversationFailure::new(format!(
                             "聊天执行体异常结束：{failure}"

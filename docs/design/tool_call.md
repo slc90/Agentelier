@@ -65,7 +65,7 @@ Direct Mode 使用 Responses 的结构化 `function_call`。`llm_model` 在现�
 
 ### 当前模型的兼容性在哪里确认
 
-新建 `gpt-6.2-sol` 会话在每次请求的 `input` 首项用 `additional_tools` 提供冻结目录。`exec_command`、`view_image`、`search_memory` 和 `read_memory` 声明 `async: true`。补丁、进程输入和记忆修改保持同步，已适配的 MCP 调用可以声明异步并使用独占许可。Extension 默认按同步声明，提供者可以显式声明异步资格。其他模型及旧平铺会话使用同步声明。运行时使用完整调用返回的模式和已登记的并发策略，收齐整批结果以后才发送下一请求。
+新建 `gpt-6.2-sol` 会话在每次请求的 `input` 首项用 `additional_tools` 提供冻结目录。`exec_command`、`view_image`、`search_memory` 和 `read_memory` 声明 `async: true`。补丁、进程输入和记忆修改保持同步，已适配的 MCP 调用可以声明异步并使用独占许可。Extension 默认按同步声明，提供者可以显式声明异步资格。其他模型及旧平铺会话使用同步声明。运行时使用完整调用返回的模式和已登记的并发策略，下一请求只等待同步调用的结果；较早启动的异步调用可以继续执行。
 
 首先使用当前选中的模型和已有账号，在真实应用中确认“声明工具 → 返回 function_call → 接收 function_call_output → 继续回答”成立。模型目录里的 `code_mode_only` 记录不替代这次验证。
 
@@ -156,7 +156,7 @@ flowchart TD
 
 `Conversation` 持续持有会话历史、展示状态、Queue 和工具任务登记。Runner 通过 Runtime 在当前 Turn 的借用边界内读取或更新局部状态。模型等待只持冻结的请求，工具等待只持该次执行所需的上下文。
 
-Runner 提交记录意图并等待 Store 回执。原生异步调用的稳定任务 ID 与完整响应一起保存，确认后才发布和派发。每个结果独立确认进入历史，当前运行仍收齐整批工具结果才续发请求。Runtime 回收 Runner 后提交并发布终态。
+Runner 提交记录意图并等待 Store 回执。原生异步调用的稳定任务 ID 与完整响应一起保存，确认后才发布和派发。每个结果独立保存，以原 `call_id` 在请求边界按保存序号追加。模型给出 final 后，Runner 在本地继续回收剩余工作，Runtime 回收 Runner 后提交并发布终态。
 
 这样会话业务类型仍由 `conversation` 定义，执行算法归 `turn_runner`，线程与 JoinHandle 归 `runtime`。不会因为拆了 crate，反而出现多个“谁说了算”的状态副本。
 
