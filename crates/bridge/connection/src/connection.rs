@@ -683,7 +683,7 @@ impl Connection {
                             ) {
                                 return Ok(Some(event));
                             }
-                            if event.operation_id == 0 && matches!(kind, agentelier_conversation_bridge::ConversationEvent::Tasks(_) | agentelier_conversation_bridge::ConversationEvent::Processes(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveCleanup(_) | agentelier_conversation_bridge::ConversationEvent::Archives(_) | agentelier_conversation_bridge::ConversationEvent::Opened(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveFailed(_)) {
+                            if event.operation_id == 0 && matches!(kind, agentelier_conversation_bridge::ConversationEvent::Tasks(_) | agentelier_conversation_bridge::ConversationEvent::Processes(_) | agentelier_conversation_bridge::ConversationEvent::IdleUpdated(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveCleanup(_) | agentelier_conversation_bridge::ConversationEvent::Archives(_) | agentelier_conversation_bridge::ConversationEvent::Opened(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveFailed(_)) {
                                 if let agentelier_conversation_bridge::ConversationEvent::Opened(view) = kind { self.reserved_queue.extend(view.queue.iter().map(|input| input.operation_id)); }
                                 return Ok(Some(event));
                             }

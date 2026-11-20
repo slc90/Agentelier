@@ -213,7 +213,7 @@ impl Conversation {
                 && session
                     .history
                     .as_ref()
-                    .is_some_and(|history| !history.has_open_calls())
+                    .is_some_and(|history| !history.has_open_synchronous_calls())
                 && session
                     .view
                     .turn

@@ -16,14 +16,43 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-pub(super) struct TurnTools {
+pub struct ToolWork {
     calls: HashMap<String, PendingCall>,
-    waits: Vec<PendingWait>,
-    pub(super) controls: mpsc::Receiver<SessionTaskCommand>,
     pub(super) incoming: mpsc::UnboundedReceiver<ToolEvent>,
 }
 
+impl ToolWork {
+    pub fn new(incoming: mpsc::UnboundedReceiver<ToolEvent>) -> Self {
+        Self {
+            calls: HashMap::new(),
+            incoming,
+        }
+    }
+
+    pub fn has_calls(&self) -> bool {
+        !self.calls.is_empty()
+    }
+
+    pub async fn next(&mut self) -> Option<ToolEvent> {
+        self.incoming.recv().await
+    }
+
+    pub fn stop_all(&self) {
+        for call in self.calls.values() {
+            call.stop.cancel();
+        }
+    }
+}
+
+pub(super) struct TurnTools {
+    pub(super) work: tokio::sync::OwnedMutexGuard<ToolWork>,
+    waits: Vec<PendingWait>,
+    pub(super) controls: mpsc::Receiver<SessionTaskCommand>,
+    turn: u64,
+}
+
 struct PendingCall {
+    turn: u64,
     mode: ToolMode,
     execution: Option<agentelier_conversation::TaskExecution>,
     admission: CancellationToken,
@@ -32,19 +61,35 @@ struct PendingCall {
 
 impl TurnTools {
     pub(super) fn new(
-        incoming: mpsc::UnboundedReceiver<ToolEvent>,
+        work: tokio::sync::OwnedMutexGuard<ToolWork>,
         controls: mpsc::Receiver<SessionTaskCommand>,
+        turn: u64,
     ) -> Self {
         Self {
-            calls: HashMap::new(),
+            work,
             waits: Vec::new(),
             controls,
-            incoming,
+            turn,
         }
     }
 
     pub(super) fn has_calls(&self) -> bool {
-        !self.calls.is_empty()
+        self.work.has_calls()
+    }
+
+    fn has_own_calls(&self) -> bool {
+        self.work.calls.values().any(|call| call.turn == self.turn)
+    }
+
+    pub(super) fn stop_own(&self) {
+        for call in self
+            .work
+            .calls
+            .values()
+            .filter(|call| call.turn == self.turn)
+        {
+            call.stop.cancel();
+        }
     }
 
     pub(super) async fn dispatch(
@@ -120,9 +165,10 @@ impl TurnTools {
             if steered && mode == ToolMode::Synchronous {
                 admission.cancel();
             }
-            self.calls.insert(
+            self.work.calls.insert(
                 call.call_id.clone(),
                 PendingCall {
+                    turn: context.user_turn().turn,
                     mode,
                     execution,
                     admission: admission.clone(),
@@ -198,7 +244,7 @@ impl TurnTools {
         if !plan.targets.is_empty() {
             let mut stops = Vec::with_capacity(plan.targets.len());
             for target in &plan.targets {
-                match self.calls.get(&target.call_id) {
+                match self.work.calls.get(&target.call_id) {
                     Some(call) if call.execution == Some(target.execution) => {
                         stops.push(call.stop.clone())
                     }
@@ -306,7 +352,7 @@ impl TurnTools {
             false,
         )
         .await?;
-        for call in self.calls.values() {
+        for call in self.work.calls.values() {
             call.stop.cancel();
         }
         Self::reap_stopped_processes(active, dispatcher).await
@@ -316,7 +362,9 @@ impl TurnTools {
         active: &TurnAccess,
         dispatcher: &ToolDispatcher,
     ) -> Result<(), ConversationFailure> {
-        let report = dispatcher.reap_processes("background_stopped").await?;
+        let report = dispatcher
+            .reap_processes("background_stopped", agentelier_tools::ProcessScope::All)
+            .await?;
         let failed = report.failed;
         active
             .call(move |mut turn| turn.process_cleanup(report))
@@ -338,6 +386,7 @@ impl TurnTools {
         match event {
             Some(ToolEvent::Ready { call_id, begin }) => {
                 let call = self
+                    .work
                     .calls
                     .get(&call_id)
                     .ok_or_else(|| ConversationFailure::new("工具准入缺少调用身份"))?;
@@ -365,6 +414,7 @@ impl TurnTools {
             }
             Some(ToolEvent::Finished { call_id, result }) => {
                 let call = self
+                    .work
                     .calls
                     .remove(&call_id)
                     .ok_or_else(|| ConversationFailure::new("工具终态缺少调用身份"))?;
@@ -415,9 +465,9 @@ impl TurnTools {
         &self,
         active: &TurnAccess,
     ) -> Result<(), ConversationFailure> {
-        if !self.calls.is_empty() && active.call(|turn| Ok(turn.has_pending_steer())).await? {
-            for call in self.calls.values() {
-                if call.mode == ToolMode::Synchronous {
+        if !self.work.calls.is_empty() && active.call(|turn| Ok(turn.has_pending_steer())).await? {
+            for call in self.work.calls.values() {
+                if call.turn == self.turn && call.mode == ToolMode::Synchronous {
                     call.admission.cancel();
                 }
             }
@@ -444,9 +494,10 @@ impl TurnTools {
             }
             if self.waits.is_empty()
                 && !self
+                    .work
                     .calls
                     .values()
-                    .any(|call| call.mode == ToolMode::Synchronous)
+                    .any(|call| call.turn == self.turn && call.mode == ToolMode::Synchronous)
             {
                 break;
             }
@@ -463,7 +514,7 @@ impl TurnTools {
                         self.accept_steer(active, input, progress, cancel).await?;
                     }
                 }
-                event = self.incoming.recv() => {
+                event = self.work.incoming.recv() => {
                     if let Err(failure) = self.apply(active, dispatcher, event, progress, cancel).await {
                         self.fail_waits(active, dispatcher).await?;
                         return Err(failure);
@@ -538,7 +589,7 @@ impl TurnTools {
             self.command(active, dispatcher, command, progress, cancel)
                 .await?;
         }
-        while let Ok(event) = self.incoming.try_recv() {
+        while let Ok(event) = self.work.incoming.try_recv() {
             self.apply(active, dispatcher, Some(event), progress, cancel)
                 .await?;
         }
@@ -570,16 +621,18 @@ impl TurnTools {
         reason: &'static str,
     ) -> Result<(), ConversationFailure> {
         let mut reap_processes = true;
-        while !self.calls.is_empty() {
+        while self.has_own_calls() {
             // A yielded process can hold the permit needed by an already registered call.
             if reap_processes {
-                let report = dispatcher.reap_processes(reason).await?;
+                let report = dispatcher
+                    .reap_processes(reason, agentelier_tools::ProcessScope::Turn(self.turn))
+                    .await?;
                 active
                     .call(move |mut turn| turn.process_cleanup(report))
                     .await?;
             }
             let event = tokio::select! {
-                event = self.incoming.recv() => event,
+                event = self.work.incoming.recv() => event,
                 command = self.controls.recv(), if !self.controls.is_closed() => {
                     if let Some(command) = command {
                         self.command(active, dispatcher, command, progress, cancel).await?;
@@ -715,11 +768,14 @@ async fn append_saved_results(active: &TurnAccess) -> Result<(), ConversationFai
         .await?
     {
         let sequence = active.record(event).await?;
-        active
+        if active
             .call(move |mut turn| {
                 turn.confirm_result_append(call_id, saved_sequence, append, sequence)
             })
-            .await?;
+            .await?
+        {
+            active.publish_tasks().await?;
+        }
     }
     Ok(())
 }

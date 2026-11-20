@@ -98,7 +98,7 @@ impl PendingResponses {
     }
 
     fn call_source(&mut self, state: &StoredState, call_id: &str) -> Option<&mut PendingResponse> {
-        let turn = state.turn.as_ref()?;
+        let turn = state.call_turn(call_id)?;
         self.0.values_mut().find(|response| {
             response.turn == turn.id
                 && response.request_index <= turn.request_index
@@ -351,8 +351,8 @@ fn merge(state: &mut StoredState, mut incoming: StoredState) {
     *state = incoming;
 }
 
-fn merge_tool(state: &mut StoredState, mut incoming: StoredState, call_id: &str) {
-    let Some(source) = incoming.turn.as_mut() else {
+fn merge_tool(state: &mut StoredState, incoming: StoredState, call_id: &str) {
+    let Some(source) = incoming.call_turn(call_id) else {
         return;
     };
     let Some(target) = state
@@ -640,9 +640,12 @@ pub fn restore(
                 let mut incoming = incoming;
                 incoming.task_policy.external_unconfirmed =
                     std::mem::take(&mut state.task_policy.external_unconfirmed);
+                retained_input = incoming
+                    .turn
+                    .as_ref()
+                    .is_some_and(|turn| turn.result_continuation);
                 state = incoming;
                 continued = None;
-                retained_input = false;
                 covered_sequence = record.sequence;
             }
             RecordEvent::ContinuedWithoutCompaction {
@@ -821,8 +824,7 @@ pub fn restore(
                     return Err(ConversationFailure::new("工具开始身份未知或重复"));
                 }
                 let turn = incoming
-                    .turn
-                    .as_ref()
+                    .call_turn(&call_id)
                     .ok_or_else(|| ConversationFailure::new("工具开始缺少来源任务"))?;
                 tasks.transition(
                     turn.id,
@@ -888,8 +890,7 @@ pub fn restore(
                     ));
                 }
                 let turn = incoming
-                    .turn
-                    .as_ref()
+                    .call_turn(&call_id)
                     .ok_or_else(|| ConversationFailure::new("工具结果缺少来源任务"))?;
                 let tool = turn
                     .tools
@@ -942,7 +943,7 @@ pub fn restore(
                     .get(&call_id)
                     .filter(|saved| saved.sequence == saved_sequence)
                     .ok_or_else(|| ConversationFailure::new("追加工具结果缺少已保存载荷"))?;
-                tasks.append_result(&call_id, saved_sequence)?;
+                tasks.append_result(&call_id, saved_sequence, record.sequence)?;
                 history
                     .append_result(call_id.clone(), saved.output.clone(), append)
                     .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
@@ -962,9 +963,15 @@ pub fn restore(
                             && response.output.call_ids().count() == response.appended.len()
                     })
                     .ok_or_else(|| ConversationFailure::new("批次结束前工具结果尚未全部追加"))?;
-                if !incoming.turn.as_ref().is_some_and(|turn| {
-                    turn.id == response.turn && turn.request_index >= response.request_index
-                }) {
+                if !incoming
+                    .turn
+                    .iter()
+                    .map(Box::as_ref)
+                    .chain(&incoming.previous_turns)
+                    .any(|turn| {
+                        turn.id == response.turn && turn.request_index >= response.request_index
+                    })
+                {
                     return Err(ConversationFailure::new("批次结束不属于已接纳的请求"));
                 }
                 covered_sequence = record.sequence;
@@ -1022,8 +1029,8 @@ pub fn restore(
                 history: finalized,
             } => {
                 finalized_without_join = true;
-                if pending.0.values().any(|response| response.in_history) {
-                    return Err(ConversationFailure::new("终态不能替换尚未收齐结果的历史"));
+                if pending.has_barrier() {
+                    return Err(ConversationFailure::new("前台终态仍有未确认响应或同步调用"));
                 }
                 history = finalized;
                 state.queue_paused |= incoming.queue_paused;
@@ -1034,7 +1041,7 @@ pub fn restore(
                 history: finished,
             } => {
                 finalized_without_join = false;
-                if let Some(finished) = finished.filter(|_| pending.0.is_empty()) {
+                if let Some(finished) = finished.filter(|_| !pending.has_barrier()) {
                     history = finished;
                 } else {
                     // An unconfirmed writer acknowledgement must not overwrite a durable replacement.
@@ -1359,6 +1366,7 @@ impl Conversation {
         };
         self.next_turn = restored.next_turn;
         self.session = Some(ChatSession {
+            idle: None,
             processes: restored.processes,
             memory: settings.memory.map(Arc::new),
             view: view.clone(),

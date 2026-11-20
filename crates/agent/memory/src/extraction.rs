@@ -155,7 +155,10 @@ fn turn_evidence(turn: &TurnView, redactor: &Redactor, include_assistant: bool) 
         role,
         text: redactor.clean(text, EVIDENCE_ITEM_BYTES),
     };
-    let mut items = vec![item("user", &turn.input)];
+    let mut items = Vec::new();
+    if !turn.result_continuation {
+        items.push(item("user", &turn.input));
+    }
     let mut ordered = Vec::new();
     for steer in &turn.steers {
         let role = if steer.applied_request.is_some() {

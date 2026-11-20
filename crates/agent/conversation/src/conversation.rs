@@ -90,6 +90,8 @@ pub struct ToolView {
 }
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct TurnView {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub result_continuation: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction_continuation: Option<CompactionContinuation>,
     #[serde(default)]
@@ -133,6 +135,7 @@ pub struct SessionView {
     pub task_policy: Box<crate::TaskPolicy>,
 }
 pub enum ConversationEvent {
+    IdleUpdated(SessionView),
     Processes(crate::SessionProcesses),
     TaskAction(crate::TaskActionReceipt),
     ArchiveCleanup(Vec<String>),
@@ -174,6 +177,7 @@ impl fmt::Display for ConversationFailure {
 impl Error for ConversationFailure {}
 
 pub(crate) struct ChatSession {
+    pub(crate) idle: Option<ActiveState>,
     pub(crate) processes: crate::ProcessLedger,
     pub(crate) memory: Option<Arc<agentelier_llm_model::MemorySnapshot>>,
     pub(crate) view: SessionView,
@@ -394,6 +398,7 @@ impl Conversation {
         Ok(PreparedSession {
             initial,
             session: ChatSession {
+                idle: None,
                 processes: Default::default(),
                 memory: memory.map(Arc::new),
                 view: session,
@@ -439,6 +444,15 @@ impl Conversation {
         if input.trim().is_empty() {
             return Err(ConversationFailure::new("不能发送空白消息"));
         }
+        self.begin_input(operation_id, session_id, Some(input))
+    }
+
+    fn begin_input(
+        &mut self,
+        operation_id: u64,
+        session_id: SessionId,
+        input: Option<String>,
+    ) -> Result<SessionView, ConversationFailure> {
         let session = self
             .session
             .as_mut()
@@ -467,14 +481,25 @@ impl Conversation {
             .history
             .as_ref()
             .ok_or(ConversationFailure::new("会话缺少历史"))?;
-        session.check_pending_input(history, &input)?;
-        let request_items = history.with_user(&input).summary();
+        let result_continuation = input.is_none();
+        if result_continuation && !session.tasks.has_ready_result() {
+            return Err(ConversationFailure::new("当前没有已保存、待处理的工具结果"));
+        }
+        let request_items = if let Some(input) = &input {
+            session.check_pending_input(history, input)?;
+            history.with_user(input).summary()
+        } else {
+            history.summary()
+        };
         session.view.notice = None;
-        session.view.task_policy.background_paused = false;
+        if !result_continuation {
+            session.view.task_policy.background_paused = false;
+        }
         if let Some(previous) = session.view.turn.take() {
             session.view.previous_turns.push(*previous);
         }
         session.view.turn = Some(Box::new(TurnView {
+            result_continuation,
             compaction_continuation: None,
             selected_skills: Vec::new(),
             skills: None,
@@ -483,7 +508,7 @@ impl Conversation {
             input_id: TurnId(id),
             is_retry: false,
             operation_id,
-            input,
+            input: input.unwrap_or_default(),
             messages: Vec::new(),
             status: TurnStatus::Running,
             request_items,
@@ -499,9 +524,12 @@ impl Conversation {
         session.active = Some(ActiveState {
             memory: session.memory.clone(),
             source_sequence: None,
-            responses: Default::default(),
+            responses: session
+                .idle
+                .take()
+                .map_or_else(Default::default, |idle| idle.responses),
             history_confirmed: true,
-            input_retained: false,
+            input_retained: result_continuation,
             accepting_steers: true,
             completion: None,
             continuation: None,
@@ -515,8 +543,8 @@ impl Conversation {
         request: ConversationRequest,
     ) -> Result<SessionView, ConversationFailure> {
         match request {
-            ConversationRequest::ProcessResults { .. } => {
-                Err(ConversationFailure::new("已保存结果可随下一条消息使用"))
+            ConversationRequest::ProcessResults { session } => {
+                self.begin_input(operation, session, None)
             }
             ConversationRequest::Send { session, input } => self.begin(operation, session, input),
             ConversationRequest::ContinueWithoutCompaction {
@@ -636,7 +664,10 @@ impl Conversation {
         current.active = Some(ActiveState {
             memory: current.memory.clone(),
             source_sequence: None,
-            responses: Default::default(),
+            responses: current
+                .idle
+                .take()
+                .map_or_else(Default::default, |idle| idle.responses),
             history_confirmed: true,
             input_retained: source.input_retained,
             accepting_steers: true,
@@ -661,6 +692,10 @@ impl Conversation {
         operation_id: u64,
     ) -> Result<ActiveTurn<'_>, ConversationFailure> {
         self.turn(operation_id)?;
+        self.tool_turn()
+    }
+
+    pub fn tool_turn(&mut self) -> Result<ActiveTurn<'_>, ConversationFailure> {
         let session = self
             .session
             .as_mut()
@@ -669,6 +704,7 @@ impl Conversation {
             state: session
                 .active
                 .as_mut()
+                .or(session.idle.as_mut())
                 .ok_or_else(|| ConversationFailure::new("当前任务缺少活动状态"))?,
             view: &mut session.view,
             history: session
@@ -695,7 +731,7 @@ impl Conversation {
             .session
             .as_mut()
             .ok_or(ConversationFailure::new("任务缺少会话"))?;
-        session.active = None;
+        session.idle = session.active.take();
         session.tasks.close_execution(turn_id);
         if !matches!(completion, TurnStatus::Completed) {
             session.view.queue_paused = true;
@@ -713,8 +749,7 @@ impl Conversation {
             .ok_or(ConversationFailure::new("任务缺少会话"))?;
         session.view.execution_blocked = true;
         session.view.queue_paused = true;
-        session.history = None;
-        session.active = None;
+        session.idle = session.active.take();
         session.tasks.close_execution(turn_id);
         Ok(session.view.clone())
     }

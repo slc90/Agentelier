@@ -239,6 +239,7 @@ pub struct SessionTasks {
 pub(crate) struct TaskLedger {
     tasks: Vec<Task>,
     revision: u64,
+    delivery_revision: u64,
 }
 
 impl TaskLedger {
@@ -436,13 +437,14 @@ impl TaskLedger {
         &mut self,
         call_id: &str,
         saved_sequence: u64,
-    ) -> Result<(), ConversationFailure> {
+        sequence: u64,
+    ) -> Result<bool, ConversationFailure> {
         let Some(task) = self
             .tasks
             .iter_mut()
             .find(|task| task.registration.call_id == call_id)
         else {
-            return Ok(());
+            return Ok(false);
         };
         if task.delivery != Delivery::Saved(saved_sequence) {
             return Err(ConversationFailure::new(
@@ -450,7 +452,8 @@ impl TaskLedger {
             ));
         }
         task.delivery = Delivery::Appended;
-        Ok(())
+        self.delivery_revision = self.delivery_revision.max(sequence);
+        Ok(true)
     }
 
     pub(crate) fn restore_appended<'a>(&mut self, call_ids: impl Iterator<Item = &'a str>) {
@@ -537,7 +540,7 @@ impl TaskLedger {
         for task in self
             .tasks
             .iter_mut()
-            .filter(|task| task.registration.turn == turn)
+            .filter(|task| task.registration.turn == turn && !task.in_progress())
         {
             task.live = false;
         }
@@ -548,14 +551,21 @@ impl TaskLedger {
         for task in self
             .tasks
             .iter_mut()
-            .filter(|task| task.registration.turn == turn)
+            .filter(|task| task.registration.turn == turn && task.live && !task.in_progress())
         {
-            changed |= task.recover_interrupted();
+            task.live = false;
+            changed = true;
         }
         if changed {
             self.revision = sequence;
         }
         changed
+    }
+
+    pub(crate) fn has_ready_result(&self) -> bool {
+        self.tasks
+            .iter()
+            .any(|task| task.delivery == Delivery::Appended)
     }
 
     pub(crate) fn revision(&self) -> u64 {
@@ -733,7 +743,7 @@ impl TaskLedger {
             .collect();
         SessionTasks {
             session: session.id,
-            revision: self.revision,
+            revision: self.revision.max(self.delivery_revision),
             tasks,
             background_paused: session.task_policy.background_paused,
             queue_paused: session.queue_paused,

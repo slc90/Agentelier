@@ -3,7 +3,9 @@ use agentelier_tools::{
     ExecutionContext, ProcessSessions, ToolAccess, ToolAdmission, ToolCatalog, ToolMode,
     ToolResult, ToolStatus,
 };
-use agentelier_turn_runner::{ToolBatch, ToolCommand, ToolEvent, ToolJobRequest};
+use agentelier_turn_runner::{
+    ToolBatch, ToolCommand, ToolDispatcher, ToolEvent, ToolJobRequest, ToolWork,
+};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{
     Arc,
@@ -20,6 +22,9 @@ pub(super) struct SessionTools {
     pub(super) admission: ToolAdmission,
     pub(super) processes: Arc<ProcessSessions>,
     pub(super) process_views: tokio::sync::watch::Receiver<agentelier_conversation::ProcessLedger>,
+    pub(super) dispatcher: ToolDispatcher,
+    pub(super) work: Arc<tokio::sync::Mutex<ToolWork>>,
+    worker: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<RetainedResults>>>>,
 }
 
 impl SessionTools {
@@ -64,13 +69,46 @@ impl SessionTools {
                 result
             })
         });
+        let processes = Arc::new(ProcessSessions::new(admission.clone(), journal));
+        let (dispatcher, commands, events, incoming) =
+            ToolDispatcher::channel(admission.clone(), process_views.clone());
+        let work = Arc::new(tokio::sync::Mutex::new(ToolWork::new(incoming)));
+        let worker = tokio::spawn(run(commands, events, processes.clone(), admission.clone()));
         let tools = Self {
-            processes: Arc::new(ProcessSessions::new(admission.clone(), journal)),
+            processes,
             admission,
             process_views,
+            dispatcher,
+            work,
+            worker: Arc::new(tokio::sync::Mutex::new(Some(worker))),
         };
         *active = Some((session, tools.clone()));
         tools
+    }
+
+    pub(super) fn busy(&self) -> bool {
+        self.work.try_lock().map_or(true, |work| work.has_calls())
+    }
+
+    pub(super) async fn join(
+        &self,
+        reason: &'static str,
+    ) -> Result<agentelier_tools::CleanupReport, agentelier_conversation::ConversationFailure> {
+        let report = self.dispatcher.cleanup(reason).await;
+        let handle = self.worker.lock().await.take().ok_or_else(|| {
+            agentelier_conversation::ConversationFailure::new("会话工具执行者已回收")
+        })?;
+        let retained = handle.await.map_err(|failure| {
+            agentelier_conversation::ConversationFailure::new(format!(
+                "会话工具执行者异常结束：{failure}"
+            ))
+        })?;
+        if !retained.is_empty() {
+            return Err(agentelier_conversation::ConversationFailure::new(
+                "仍有执行结果未接纳，须从会话记录恢复",
+            ));
+        }
+        report
     }
 }
 
@@ -111,6 +149,12 @@ impl Execution {
             } else {
                 &mut self.ordinary
             };
+            while order
+                .as_ref()
+                .is_some_and(|entry| entry.released.is_cancelled())
+            {
+                *order = order.as_ref().and_then(|entry| entry.previous.clone());
+            }
             let next = Arc::new(JobOrder {
                 previous: order.clone(),
                 released: CancellationToken::new(),
@@ -287,7 +331,8 @@ impl Job {
             return skipped();
         }
         drop(self.admitted);
-        if !confirmation.await.unwrap_or(false)
+        let confirmed = confirmation.await.unwrap_or(false);
+        if !confirmed
             || cancel.is_cancelled()
             || admission_stop.is_cancelled()
             || (admission.is_blocked() && self.policy != ToolAccess::ProcessControl)
@@ -348,17 +393,18 @@ impl Job {
     }
 }
 
-pub(super) async fn run(
+async fn run(
     mut incoming: mpsc::Receiver<ToolCommand>,
     events: mpsc::UnboundedSender<ToolEvent>,
-    tools: SessionTools,
+    processes: Arc<ProcessSessions>,
+    admission: ToolAdmission,
 ) -> RetainedResults {
     let mut execution = Execution {
         calls: JoinSet::new(),
         events,
         identities: HashMap::new(),
-        processes: tools.processes,
-        admission: tools.admission,
+        processes,
+        admission,
         ordinary: None,
         controls: None,
     };
@@ -377,8 +423,8 @@ pub(super) async fn run(
             command = incoming.recv(), if cleanup.is_none() => match command {
                 Some(ToolCommand::Batch(batch)) => execution.enqueue(batch),
                 Some(ToolCommand::Accepted(call_id)) => { retained.remove(&call_id); }
-                Some(ToolCommand::ReapProcesses { reason, reply }) => {
-                    let report = execution.processes.cleanup(reason, agentelier_tools::ProcessScope::All).await;
+                Some(ToolCommand::ReapProcesses { reason, scope, reply }) => {
+                    let report = execution.processes.cleanup(reason, scope).await;
                     if report.failed {
                         execution.admission.block();
                     }

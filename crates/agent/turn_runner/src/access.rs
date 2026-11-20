@@ -20,7 +20,12 @@ pub struct TurnEdit(Box<Edit>);
 
 impl TurnEdit {
     pub fn apply(self, conversation: &mut Conversation, operation: u64) {
-        self.0(conversation.active_turn(operation));
+        let scope = if operation == 0 {
+            conversation.tool_turn()
+        } else {
+            conversation.active_turn(operation)
+        };
+        self.0(scope);
     }
 }
 

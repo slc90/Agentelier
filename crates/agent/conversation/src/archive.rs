@@ -20,6 +20,16 @@ pub struct StoredState {
     pub task_policy: crate::TaskPolicy,
 }
 
+impl StoredState {
+    pub(crate) fn call_turn(&self, call_id: &str) -> Option<&crate::TurnView> {
+        self.turn
+            .iter()
+            .map(Box::as_ref)
+            .chain(&self.previous_turns)
+            .find(|turn| turn.tools.iter().any(|tool| tool.call_id == call_id))
+    }
+}
+
 impl From<&SessionView> for StoredState {
     fn from(view: &SessionView) -> Self {
         Self {

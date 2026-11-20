@@ -13,4 +13,5 @@ pub use dispatch::{
     SessionTaskAction, SessionTaskCommand, SessionTaskOutcome, ToolBatch, ToolCommand,
     ToolDispatcher, ToolEvent, ToolJobRequest,
 };
-pub use runner::run;
+pub use runner::{IdleAction, run, run_idle};
+pub use tool_events::ToolWork;

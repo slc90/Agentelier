@@ -14,7 +14,7 @@ use std::sync::Arc;
 pub(crate) struct ActiveState {
     pub(crate) memory: Option<Arc<agentelier_llm_model::MemorySnapshot>>,
     pub(crate) source_sequence: Option<u64>,
-    pub(crate) responses: std::collections::BTreeMap<u64, u32>,
+    pub(crate) responses: std::collections::BTreeMap<u64, (crate::TurnId, u32)>,
     pub(crate) history_confirmed: bool,
     pub(crate) input_retained: bool,
     pub(crate) accepting_steers: bool,
@@ -172,7 +172,9 @@ impl ActiveTurn<'_> {
             .turn
             .as_ref()
             .ok_or_else(|| ConversationFailure::new("工具调用缺少当前用户任务"))?;
-        let statements = std::iter::once(turn.input.clone())
+        let statements = (!turn.result_continuation)
+            .then(|| turn.input.clone())
+            .into_iter()
             .chain(
                 turn.steers
                     .iter()
@@ -202,6 +204,36 @@ impl ActiveTurn<'_> {
         self.view.id
     }
 
+    pub fn turn_id(&self) -> Result<u64, ConversationFailure> {
+        self.view
+            .turn
+            .as_ref()
+            .map(|turn| turn.id.0)
+            .ok_or_else(|| ConversationFailure::new("会话缺少当前轮次"))
+    }
+
+    pub fn supports_detached_work(&self) -> bool {
+        !self.tools.contract().is_flat()
+    }
+
+    fn tool_source(
+        &self,
+        call_id: &str,
+    ) -> Result<(crate::TurnId, &crate::ToolView), ConversationFailure> {
+        self.view
+            .turn
+            .iter()
+            .map(Box::as_ref)
+            .chain(&self.view.previous_turns)
+            .find_map(|turn| {
+                turn.tools
+                    .iter()
+                    .find(|tool| tool.retained && tool.call_id == call_id)
+                    .map(|tool| (turn.id, tool))
+            })
+            .ok_or_else(|| ConversationFailure::new("工具状态缺少来源调用"))
+    }
+
     pub fn validate_record(&self, event: &crate::RecordEvent) -> Result<(), ConversationFailure> {
         let state = event
             .state()
@@ -229,7 +261,7 @@ impl ActiveTurn<'_> {
                     .state
                     .responses
                     .values()
-                    .any(|request| *request == live.request_index)
+                    .any(|request| *request == (live.id, live.request_index))
                     || append.start != self.history.position()
                     || append.end.checked_sub(append.start)
                         != Some(output.len() + usize::from(!self.state.input_retained))
@@ -268,13 +300,12 @@ impl ActiveTurn<'_> {
             } => (call_id, *execution, *status),
             _ => return Ok(()),
         };
-        let tool = live
-            .tools
-            .iter()
-            .find(|tool| tool.retained && tool.call_id == *call_id && tool.status == status)
-            .ok_or_else(|| ConversationFailure::new("工具记录不属于已接纳的调用"))?;
+        let (source, tool) = self.tool_source(call_id)?;
+        if tool.status != status {
+            return Err(ConversationFailure::new("工具记录不属于已接纳的调用"));
+        }
         self.tasks.matching_transition(
-            live.id,
+            source,
             tool.request_index,
             call_id,
             execution,
@@ -891,25 +922,10 @@ impl ActiveTurn<'_> {
         status: ToolStatus,
         sequence: u64,
     ) -> Result<bool, ConversationFailure> {
-        let turn = self
-            .view
-            .turn
-            .as_ref()
-            .ok_or_else(|| ConversationFailure::new("工具状态更新缺少活动轮次"))?;
-        let source = turn
-            .tools
-            .iter()
-            .find(|tool| tool.retained && tool.call_id == call_id)
-            .ok_or_else(|| ConversationFailure::new("工具状态缺少来源调用"))?;
-        self.tasks.transition(
-            turn.id,
-            source.request_index,
-            call_id,
-            execution,
-            status,
-            sequence,
-            false,
-        )
+        let (turn, source) = self.tool_source(call_id)?;
+        let request = source.request_index;
+        self.tasks
+            .transition(turn, request, call_id, execution, status, sequence, false)
     }
 
     pub fn confirm_result_saved(
@@ -929,14 +945,13 @@ impl ActiveTurn<'_> {
     }
 
     pub fn tool_started(&mut self, call_id: &str) -> Result<(), ConversationFailure> {
-        let turn = self
+        let tool = self
             .view
             .turn
-            .as_mut()
-            .ok_or(ConversationFailure::new("活动任务缺少轮次"))?;
-        let tool = turn
-            .tools
             .iter_mut()
+            .map(Box::as_mut)
+            .chain(&mut self.view.previous_turns)
+            .flat_map(|turn| &mut turn.tools)
             .find(|tool| tool.retained && tool.call_id == call_id)
             .ok_or(ConversationFailure::new("执行工具缺少调用记录"))?;
         tool.status = ToolStatus::Running;
@@ -948,14 +963,13 @@ impl ActiveTurn<'_> {
         call_id: &str,
         mut result: ToolResult,
     ) -> Result<Option<(ToolStatus, ToolPayload)>, ConversationFailure> {
-        let turn = self
+        let tool = self
             .view
             .turn
-            .as_mut()
-            .ok_or_else(|| ConversationFailure::new("活动任务缺少轮次"))?;
-        let tool = turn
-            .tools
             .iter_mut()
+            .map(Box::as_mut)
+            .chain(&mut self.view.previous_turns)
+            .flat_map(|turn| &mut turn.tools)
             .find(|tool| tool.retained && tool.call_id == call_id)
             .ok_or_else(|| ConversationFailure::new("工具结果缺少调用记录"))?;
         let previous = self
@@ -1069,22 +1083,30 @@ impl ActiveTurn<'_> {
             &self.view.settings.instructions,
             self.tools.definitions(),
         )?;
-        self.state.responses.insert(sequence, turn.request_index);
+        self.state
+            .responses
+            .insert(sequence, (turn.id, turn.request_index));
         self.confirm_history_commit(sequence);
         Ok(result.compaction)
     }
 
     fn response_can_close(&self, sequence: u64) -> bool {
-        let Some(request) = self.state.responses.get(&sequence) else {
+        let Some((id, request)) = self.state.responses.get(&sequence) else {
             return false;
         };
-        self.view.turn.as_ref().is_some_and(|turn| {
-            let open: std::collections::HashSet<_> =
-                self.history.open_calls().map(|(id, _)| id).collect();
-            turn.tools
-                .iter()
-                .all(|tool| tool.request_index != *request || !open.contains(tool.call_id.as_str()))
-        })
+        self.view
+            .turn
+            .iter()
+            .map(Box::as_ref)
+            .chain(&self.view.previous_turns)
+            .find(|turn| turn.id == *id)
+            .is_some_and(|turn| {
+                let open: std::collections::HashSet<_> =
+                    self.history.open_calls().map(|(id, _)| id).collect();
+                turn.tools.iter().all(|tool| {
+                    tool.request_index != *request || !open.contains(tool.call_id.as_str())
+                })
+            })
     }
 
     pub fn next_closed_response(&self) -> Option<u64> {
@@ -1135,7 +1157,7 @@ impl ActiveTurn<'_> {
         saved_sequence: u64,
         append: HistoryAppend,
         sequence: u64,
-    ) -> Result<(), ConversationFailure> {
+    ) -> Result<bool, ConversationFailure> {
         if self.result_append(&call_id, saved_sequence)? != append {
             return Err(ConversationFailure::new("结果历史位置与回执不一致"));
         }
@@ -1143,7 +1165,9 @@ impl ActiveTurn<'_> {
             .results
             .remove(&call_id)
             .ok_or_else(|| ConversationFailure::new("确认追加时工具结果已丢失"))?;
-        self.tasks.append_result(&call_id, saved_sequence)?;
+        let task_changed = self
+            .tasks
+            .append_result(&call_id, saved_sequence, sequence)?;
         self.history
             .append_result(call_id, output.output)
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
@@ -1154,7 +1178,7 @@ impl ActiveTurn<'_> {
             self.tools.definitions(),
         )?;
         self.confirm_history_commit(sequence);
-        Ok(())
+        Ok(task_changed)
     }
 
     pub fn finish(&mut self, status: TurnStatus) -> Result<(), ConversationFailure> {
@@ -1164,7 +1188,8 @@ impl ActiveTurn<'_> {
             .as_mut()
             .ok_or(ConversationFailure::new("活动任务缺少轮次"))?;
         for tool in &mut turn.tools {
-            if matches!(tool.status, ToolStatus::Receiving | ToolStatus::Pending) {
+            if matches!(tool.status, ToolStatus::Receiving | ToolStatus::Pending) && !tool.retained
+            {
                 let result = ToolResult::not_executed(
                     "incomplete_response",
                     "模型响应未完成或调用未接纳，工具未执行",

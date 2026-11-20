@@ -34,6 +34,7 @@ pub enum ToolCommand {
     Accepted(String),
     ReapProcesses {
         reason: &'static str,
+        scope: agentelier_tools::ProcessScope,
         reply: oneshot::Sender<CleanupReport>,
     },
     Cleanup {
@@ -61,6 +62,7 @@ pub struct SessionTaskCommand {
     pub reply: oneshot::Sender<Result<SessionTaskOutcome, ConversationFailure>>,
 }
 
+#[derive(Clone)]
 pub struct ToolDispatcher {
     sender: mpsc::Sender<ToolCommand>,
     admission: ToolAdmission,
@@ -132,16 +134,21 @@ impl ToolDispatcher {
     pub(crate) async fn reap_processes(
         &self,
         reason: &'static str,
+        scope: agentelier_tools::ProcessScope,
     ) -> Result<CleanupReport, ConversationFailure> {
         let (reply, result) = oneshot::channel();
-        self.send(ToolCommand::ReapProcesses { reason, reply })
-            .await?;
+        self.send(ToolCommand::ReapProcesses {
+            reason,
+            scope,
+            reply,
+        })
+        .await?;
         result
             .await
             .map_err(|_| ConversationFailure::new("进程资源回收未返回结果"))
     }
 
-    pub(crate) async fn cleanup(
+    pub async fn cleanup(
         &self,
         reason: &'static str,
     ) -> Result<CleanupReport, ConversationFailure> {

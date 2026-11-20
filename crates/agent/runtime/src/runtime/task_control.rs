@@ -31,6 +31,7 @@ pub(super) async fn dispatch(
     model: Option<&super::model_task::ModelTask>,
     tools: Option<&super::tool_jobs::SessionTools>,
     store: &SessionStore,
+    publish: &impl Fn(super::AgentEvent) -> Result<(), agentelier_account::DeliveryFailure>,
 ) {
     if conversation
         .current()
@@ -101,19 +102,31 @@ pub(super) async fn dispatch(
                 .map(outcome);
             (id, TaskActionReceipt { session, result })
         });
+    } else if let Some(tools) = tools {
+        let (reply, response) = oneshot::channel();
+        let command = agentelier_turn_runner::SessionTaskCommand { action, reply };
+        let driven = super::model_task::drive_idle(
+            conversation,
+            tools,
+            agentelier_turn_runner::IdleAction::Control(command),
+            store,
+            publish,
+        )
+        .await;
+        let result = match driven {
+            Ok(()) => response
+                .await
+                .map_err(|_| "任务控制未返回结果".to_owned())
+                .and_then(|result| result.map_err(|failure| failure.to_string()))
+                .map(outcome),
+            Err(failure) => Err(failure.to_string()),
+        };
+        receipts.spawn(async move { (id, TaskActionReceipt { session, result }) });
     } else {
         let result = idle(conversation, session, action, store)
             .await
             .map(outcome)
             .map_err(|error| error.to_string());
-        if let Some(tools) = tools
-            && let Some(view) = conversation.current()
-        {
-            tools.admission.pause(view.task_policy.background_paused);
-            tools
-                .admission
-                .external_unconfirmed(!view.task_policy.external_unconfirmed.is_empty());
-        }
         receipts.spawn(async move { (id, TaskActionReceipt { session, result }) });
     }
 }

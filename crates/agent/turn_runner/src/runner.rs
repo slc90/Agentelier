@@ -1,4 +1,5 @@
 use crate::dispatch::{SessionTaskCommand, ToolDispatcher, ToolEvent};
+use crate::tool_events::ToolWork;
 use crate::{
     access::{RunnerEvent, TurnAccess},
     control,
@@ -73,7 +74,7 @@ async fn request_once(
         tokio::pin!(generation);
         loop {
             tokio::select! { biased;
-                event = jobs.incoming.recv(), if jobs.has_calls() => {
+                event = jobs.work.incoming.recv(), if jobs.has_calls() => {
                     jobs.apply(active, dispatcher, event, progress, cancel).await?;
                 }
                 command = jobs.controls.recv(), if !jobs.controls.is_closed() => {
@@ -162,10 +163,13 @@ pub async fn run(
     user_skills_root: std::path::PathBuf,
     memory: Option<agentelier_memory::MemoryClient>,
     dispatcher: ToolDispatcher,
-    incoming: mpsc::UnboundedReceiver<ToolEvent>,
+    work: Arc<tokio::sync::Mutex<ToolWork>>,
     controls: mpsc::Receiver<SessionTaskCommand>,
 ) -> Result<(), ConversationFailure> {
     let active = TurnAccess::new(progress.clone());
+    let (turn_id, native) = active
+        .call(|turn| Ok((turn.turn_id()?, turn.supports_detached_work())))
+        .await?;
     let event = active
         .call(|turn| {
             let state = turn.stored_state();
@@ -184,7 +188,7 @@ pub async fn run(
             })
             .await?;
     }
-    let mut jobs = TurnTools::new(incoming, controls);
+    let mut jobs = TurnTools::new(work.lock_owned().await, controls, turn_id);
     let mut outcome = if admitted.is_ok() {
         run_task(
             &active,
@@ -201,11 +205,16 @@ pub async fn run(
     } else {
         admitted.map(|_| TurnStatus::Cancelled)
     };
-    let phase = active.call(|mut turn| turn.reaping()).await;
-    let projection = if phase.is_ok() {
-        publish(&progress, &cancel).await
+    let detach = native && outcome.is_ok() && !cancel.is_cancelled() && !dispatcher.is_blocked();
+    let projection = if detach {
+        Ok(())
     } else {
-        phase
+        if dispatcher.is_blocked() {
+            jobs.work.stop_all();
+        }
+        jobs.stop_own();
+        active.call(|mut turn| turn.reaping()).await?;
+        publish(&progress, &cancel).await
     };
     let reason = match &outcome {
         Ok(TurnStatus::Completed) => "task_completed",
@@ -214,7 +223,7 @@ pub async fn run(
         _ => "task_failed",
     };
     let projection = projection.and(control::close(&mut steers, &progress).await);
-    if outcome.is_ok() && projection.is_ok() {
+    if !detach && outcome.is_ok() && projection.is_ok() {
         if let Err(failure) = jobs
             .reap(&active, &dispatcher, &progress, &cancel, reason)
             .await
@@ -232,12 +241,25 @@ pub async fn run(
     {
         outcome = Err(failure);
     }
+    let cleanup_failed = if detach && !cancel.is_cancelled() {
+        false
+    } else {
+        if detach {
+            jobs.stop_own();
+            jobs.reap(&active, &dispatcher, &progress, &cancel, "task_stopped")
+                .await?;
+            outcome = Ok(TurnStatus::Cancelled);
+        }
+        let report = dispatcher
+            .reap_processes(reason, agentelier_tools::ProcessScope::Turn(turn_id))
+            .await?;
+        let failed = report.failed;
+        active
+            .call(move |mut turn| turn.process_cleanup(report))
+            .await?;
+        failed
+    };
     drop(jobs);
-    let report = dispatcher.cleanup(reason).await?;
-    let cleanup_failed = report.failed;
-    active
-        .call(move |mut turn| turn.process_cleanup(report))
-        .await?;
     let status = match outcome.and_then(|status| projection.map(|()| status)) {
         Ok(_) if cleanup_failed => TurnStatus::Failed("任务进程清理失败，执行已暂停".into()),
         Ok(status) => status,
@@ -254,7 +276,7 @@ pub async fn run(
     let finalized = active
         .call(move |mut turn| {
             turn.finish(status)?;
-            if !turn.history_confirmed() || turn.has_open_calls() {
+            if !turn.history_confirmed() || (!native && turn.has_open_calls()) {
                 return Err(ConversationFailure::new(
                     "模型历史有未确认的提交或待归并结果，请从存档重新加载后继续",
                 ));
@@ -266,6 +288,7 @@ pub async fn run(
         })
         .await?;
     if let Err(failure) = active.record(finalized).await {
+        dispatcher.block();
         active
             .call(move |mut turn| {
                 turn.block_execution();
@@ -274,6 +297,39 @@ pub async fn run(
             .await?;
     }
     Ok(())
+}
+
+pub enum IdleAction {
+    Tool(ToolEvent),
+    Control(SessionTaskCommand),
+}
+
+pub async fn run_idle(
+    work: Arc<tokio::sync::Mutex<ToolWork>>,
+    dispatcher: ToolDispatcher,
+    action: IdleAction,
+    progress: mpsc::Sender<RunnerEvent>,
+) -> Result<(), ConversationFailure> {
+    let active = TurnAccess::new(progress.clone());
+    let (unused, controls) = mpsc::channel(1);
+    drop(unused);
+    let mut jobs = TurnTools::new(work.lock_owned().await, controls, 0);
+    let cancel = CancellationToken::new();
+    match action {
+        IdleAction::Tool(event) => {
+            jobs.apply(&active, &dispatcher, Some(event), &progress, &cancel)
+                .await?
+        }
+        IdleAction::Control(command) => {
+            jobs.command(&active, &dispatcher, command, &progress, &cancel)
+                .await?
+        }
+    }
+    if active.call(|turn| Ok(turn.history_confirmed())).await? {
+        jobs.boundary(&active, &dispatcher, &progress, &cancel)
+            .await?;
+    }
+    publish(&progress, &cancel).await
 }
 
 async fn run_task(

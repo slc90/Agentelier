@@ -156,6 +156,7 @@ pub(crate) fn panel() -> impl Scene {
             }) as Box<dyn SceneList>)}}
             Viewport Node {width:percent(100),height:px(TASK_VIEWPORT_HEIGHT),min_height:px(0),flex_shrink:1.0}--
             Text("") WidgetryText Feedback Name("ChatTaskFeedback") TextLayout::linebreak(LineBreak::AnyCharacter)
+            Node {display:Display::None}
         ]
     }
 }
@@ -386,11 +387,16 @@ pub(crate) fn reconcile(world: &mut World) -> Result {
     {
         text.set_if_neq(Text(summary.clone()));
     }
-    for mut text in world
-        .query_filtered::<&mut Text, With<Feedback>>()
+    for (mut text, mut node) in world
+        .query_filtered::<(&mut Text, &mut Node), With<Feedback>>()
         .iter_mut(world)
     {
         text.set_if_neq(Text(feedback.clone()));
+        node.display = if feedback.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
     }
     let buttons = world
         .query::<(Entity, &Button)>()

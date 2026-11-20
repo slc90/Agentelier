@@ -107,6 +107,7 @@ pub struct ChatRequest {
 }
 #[derive(Clone, Reflect)]
 pub struct ChatTurn {
+    pub result_continuation: bool,
     pub compaction_continuation: Option<u32>,
     pub requests: Vec<ChatRequest>,
     pub id: u64,
@@ -959,6 +960,7 @@ fn history_item(item: agentelier_conversation_bridge::HistoryItem) -> ChatHistor
 }
 fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTurn> {
     Ok(ChatTurn {
+        result_continuation: turn.result_continuation,
         compaction_continuation: turn.compaction_continuation,
         requests: turn
             .requests
@@ -1150,6 +1152,19 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         .drain()
         .collect();
     for event in events {
+        if let ConversationEvent::IdleUpdated(view) = event.kind {
+            let state = world.resource::<ChatState>();
+            if state.operation.is_none()
+                && state
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.id == view.id)
+            {
+                world.resource_mut::<ChatState>().session = Some(project(view)?);
+                changed = true;
+            }
+            continue;
+        }
         if let ConversationEvent::Processes(update) = event.kind {
             crate::task_panel::processes(world, update);
             continue;
@@ -1409,6 +1424,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 "聊天操作未被接纳"
             ),
             ConversationEvent::Tasks(_)
+            | ConversationEvent::IdleUpdated(_)
             | ConversationEvent::Processes(_)
             | ConversationEvent::TaskAction(_)
             | ConversationEvent::Updated(_)
@@ -1454,6 +1470,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 world.resource_mut::<ChatState>().session = Some(project(view)?);
             }
             ConversationEvent::Tasks(_)
+            | ConversationEvent::IdleUpdated(_)
             | ConversationEvent::Processes(_)
             | ConversationEvent::TaskAction(_)
             | ConversationEvent::InputReceipt(_)
@@ -1532,7 +1549,7 @@ fn reconcile(world: &mut World) -> Result {
                     output_index: None,
                     item_id: None,
                 };
-                if !desired.iter().any(|(key, _)| key == &user_key) {
+                if !turn.result_continuation && !desired.iter().any(|(key, _)| key == &user_key) {
                     desired.push((user_key, RowContent::Plain(format!("你\n{}", turn.input))));
                 }
                 if turn.messages.is_empty() && turn.tools.is_empty() {

@@ -10,10 +10,7 @@ pub(super) const PROGRESS_CAPACITY: usize = 32;
 pub(super) type ModelJoin = Result<Option<TaskResult>, tokio::task::JoinError>;
 pub(super) enum TaskResult {
     Model(Result<ModelResult, ModelFailure>),
-    Chat {
-        outcome: Result<(), ConversationFailure>,
-        retained: super::tool_jobs::RetainedResults,
-    },
+    Chat(Result<(), ConversationFailure>),
 }
 pub(super) enum TaskRequest {
     Model(ModelRequest),
@@ -56,30 +53,19 @@ impl ModelTask {
                     memory,
                     tools,
                 ) => {
-                    let (dispatcher, commands, events, incoming) =
-                        agentelier_turn_runner::ToolDispatcher::channel(
-                            tools.admission.clone(),
-                            tools.process_views.clone(),
-                        );
-                    let runner = tokio::spawn(agentelier_turn_runner::run(
+                    let outcome = agentelier_turn_runner::run(
                         credentials,
                         cancel.clone(),
                         progress,
                         steers,
                         user_skills_root,
                         memory,
-                        dispatcher,
-                        incoming,
+                        tools.dispatcher.clone(),
+                        tools.work.clone(),
                         task_actions,
-                    ));
-                    let (outcome, retained) =
-                        tokio::join!(runner, super::tool_jobs::run(commands, events, tools));
-                    let outcome = outcome.unwrap_or_else(|failure| {
-                        Err(ConversationFailure::new(format!(
-                            "聊天执行体异常结束：{failure}"
-                        )))
-                    });
-                    Some(TaskResult::Chat { outcome, retained })
+                    )
+                    .await;
+                    Some(TaskResult::Chat(outcome))
                 }
             };
             debug!(operation_id = id, chat, "模型操作执行体已结束");
@@ -109,10 +95,12 @@ pub(super) fn progress(
         RunnerEvent::Record(record) => {
             let agentelier_turn_runner::TurnRecord { event, reply } = *record;
             let session = event.session();
-            if let Err(failure) = conversation
-                .active_turn(id)
-                .and_then(|turn| turn.validate_record(&event))
-            {
+            let target = if id == 0 {
+                conversation.tool_turn()
+            } else {
+                conversation.active_turn(id)
+            };
+            if let Err(failure) = target.and_then(|turn| turn.validate_record(&event)) {
                 drop(reply.send(Err(failure)));
                 return Ok(());
             }
@@ -142,9 +130,12 @@ pub(super) fn progress(
                 image,
                 reply,
             } = attachment;
-            let valid = conversation
-                .active_turn(id)
-                .is_ok_and(|turn| turn.session_id() == session);
+            let target = if id == 0 {
+                conversation.tool_turn()
+            } else {
+                conversation.active_turn(id)
+            };
+            let valid = target.is_ok_and(|turn| turn.session_id() == session);
             if !valid {
                 drop(reply.send(Err(ConversationFailure::new("图片附件不属于当前任务"))));
                 return Ok(());
@@ -164,16 +155,28 @@ pub(super) fn progress(
             Ok(())
         }
         RunnerEvent::Progress => {
-            conversation.active_turn(id)?;
+            if id == 0 {
+                conversation.tool_turn()?;
+            } else {
+                conversation.active_turn(id)?;
+            }
             let view = conversation.current().ok_or(RuntimeFailure::ModelState)?;
             emit(
                 publish,
                 id,
-                AgentEventKind::Conversation(ConversationEvent::Updated(view)),
+                AgentEventKind::Conversation(if id == 0 {
+                    ConversationEvent::IdleUpdated(view)
+                } else {
+                    ConversationEvent::Updated(view)
+                }),
             )
         }
         RunnerEvent::TaskProgress => {
-            conversation.active_turn(id)?;
+            if id == 0 {
+                conversation.tool_turn()?;
+            } else {
+                conversation.active_turn(id)?;
+            }
             publish_tasks(conversation, publish)
         }
         RunnerEvent::Receipt(receipt) => emit(
@@ -235,25 +238,10 @@ pub(super) fn complete(
 ) -> Result<AgentEventKind, RuntimeFailure> {
     if chat {
         let view = match result {
-            Ok(Some(TaskResult::Chat { outcome, retained })) => {
-                let has_retained = !retained.is_empty();
-                if has_retained {
-                    let mut turn = conversation.active_turn(id)?;
-                    for (call_id, result) in retained {
-                        if let Err(failure) = turn.tool_result(&call_id, result) {
-                            tracing::error!(operation_id = id, call_id, %failure, "工具终态无法安装到当前会话");
-                        }
-                    }
-                }
-                match outcome {
-                    Ok(()) if !has_retained => conversation.finish(id)?,
-                    outcome => {
-                        if let Err(failure) = outcome {
-                            tracing::error!(operation_id = id, error = %failure, "聊天执行记录未确认");
-                        }
-                        conversation.interrupt(id)?
-                    }
-                }
+            Ok(Some(TaskResult::Chat(Ok(())))) => conversation.finish(id)?,
+            Ok(Some(TaskResult::Chat(Err(failure)))) => {
+                tracing::error!(operation_id = id, error = %failure, "聊天执行记录未确认");
+                conversation.interrupt(id)?
             }
             Err(_) => conversation.interrupt(id)?,
             _ => return Err(RuntimeFailure::ModelState),
@@ -269,6 +257,71 @@ pub(super) fn complete(
             _ => Err(RuntimeFailure::ModelState),
         }
     }
+}
+
+pub(super) async fn drive_idle(
+    conversation: &mut Conversation,
+    tools: &super::tool_jobs::SessionTools,
+    action: agentelier_turn_runner::IdleAction,
+    store: &agentelier_session_store::SessionStore,
+    publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
+) -> Result<(), RuntimeFailure> {
+    let (outgoing, mut incoming) = mpsc::channel(PROGRESS_CAPACITY);
+    let operation = agentelier_turn_runner::run_idle(
+        tools.work.clone(),
+        tools.dispatcher.clone(),
+        action,
+        outgoing,
+    );
+    tokio::pin!(operation);
+    let result = loop {
+        tokio::select! { biased;
+            Some(event) = incoming.recv() => progress(conversation, 0, event, store, publish)?,
+            result = &mut operation => break result,
+        }
+    };
+    while let Ok(event) = incoming.try_recv() {
+        progress(conversation, 0, event, store, publish)?;
+    }
+    result.map_err(Into::into)
+}
+
+pub(super) async fn finish_tools(
+    tools: super::tool_jobs::SessionTools,
+    reason: &'static str,
+    conversation: &mut Conversation,
+    store: &agentelier_session_store::SessionStore,
+    publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
+) -> Result<(), RuntimeFailure> {
+    tools.work.lock().await.stop_all();
+    let mut failure = None;
+    while tools.busy() {
+        let event = { tools.work.lock().await.next().await };
+        let Some(event) = event else {
+            failure = Some(RuntimeFailure::ModelState);
+            break;
+        };
+        if let Err(error) = drive_idle(
+            conversation,
+            &tools,
+            agentelier_turn_runner::IdleAction::Tool(event),
+            store,
+            publish,
+        )
+        .await
+        {
+            tracing::error!(%error, "会话工具终态收尾失败");
+            failure.get_or_insert(error);
+        }
+    }
+    let report = tools.join(reason).await?;
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    if report.failed {
+        return Err(ConversationFailure::new("会话资源回收或保存未确认").into());
+    }
+    Ok(())
 }
 
 pub(super) async fn stop_model(

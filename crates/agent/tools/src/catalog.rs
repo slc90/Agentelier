@@ -1,6 +1,13 @@
 use crate::{
     ExecutionContext, ProcessSessions, ToolAccess, ToolFailure, ToolPermit, ToolResult, execution,
 };
+
+const SHELL_LIFETIME: &str = "If still running, returns a conversation-scoped session_id for write_stdin. Native asynchronous work and yielded processes can outlive a turn. At most 8 live or unread process results are retained. Use list_async_tasks to discover them.";
+const LEGACY_SHELL_LIFETIME: &str = "If still running, returns a task-scoped session_id for write_stdin and new output. No command lifetime limit. At most 8 unreaped sessions. All processes are reaped when this user task ends; old IDs cannot be used in a later task.";
+const STDIN_SCOPE: &str = "Continue an existing process in this conversation.";
+const LEGACY_STDIN_SCOPE: &str = "Continue a process session from this user task.";
+const STDIN_EXPIRATION: &str = "Consumed or restored historical IDs cannot be used.";
+const LEGACY_STDIN_EXPIRATION: &str = "Sessions expire at task end.";
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::HashSet, future::Future, pin::Pin, sync::Arc};
@@ -144,6 +151,23 @@ pub struct ToolRegistration {
 }
 
 impl ToolRegistration {
+    fn can_rebind(&self, saved: &ToolDefinition) -> bool {
+        if self.definition.can_bind(saved) {
+            return true;
+        }
+        let mut legacy = self.definition.clone();
+        legacy.description = match self.executor {
+            Executor::Shell => legacy
+                .description
+                .replace(SHELL_LIFETIME, LEGACY_SHELL_LIFETIME),
+            Executor::Stdin => legacy
+                .description
+                .replace(STDIN_SCOPE, LEGACY_STDIN_SCOPE)
+                .replace(STDIN_EXPIRATION, LEGACY_STDIN_EXPIRATION),
+            _ => return false,
+        };
+        legacy.can_bind(saved)
+    }
     pub fn new(
         definition: ToolDefinition,
         executor: impl for<'a> Fn(
@@ -286,7 +310,7 @@ impl ToolCatalog {
                 strict: true,
                 display_source: None,
                 output_schema: None,
-                description: format!("Execute PowerShell 7 using UTF-8 pipes and no profile. workdir null uses fixed session directory {}; relative values resolve there. yield_time_ms null waits 10000 ms; 0..30000 is allowed. If still running, returns a task-scoped session_id for write_stdin and new output. No command lifetime limit. At most 8 unreaped sessions. All processes are reaped when this user task ends; old IDs cannot be used in a later task. Runs with current-user access, without a sandbox or PTY.", directory.display()),
+                description: format!("Execute PowerShell 7 using UTF-8 pipes and no profile. workdir null uses fixed session directory {}; relative values resolve there. yield_time_ms null waits 10000 ms; 0..30000 is allowed. {SHELL_LIFETIME} Runs with current-user access, without a sandbox or PTY.", directory.display()),
                 parameters: json!({"type":"object","properties":{
                     "cmd":{"type":"string"},"workdir":{"type":["string","null"]},
                     "yield_time_ms":{"type":["integer","null"],"minimum":0,"maximum":30000}
@@ -299,7 +323,7 @@ impl ToolCatalog {
                 strict: true,
                 display_source: None,
                 output_schema: None,
-                description: "Continue a process session from this user task. Empty chars only polls for new output; nonempty chars writes exactly those UTF-8 bytes, without adding a newline. close_stdin closes input after this write (EOF). terminate kills and reaps that process group, and cannot be combined with nonempty chars or close_stdin. yield_time_ms null waits 10000 ms; range 0..30000. Output is consumed, never repeated; no automatic input retry. Nonzero exit codes are preserved. Sessions expire at task end. Pipes are not window keyboard input or a terminal.".into(),
+                description: format!("{STDIN_SCOPE} Empty chars only polls for new output; nonempty chars writes exactly those UTF-8 bytes, without adding a newline. close_stdin closes input after this write (EOF). terminate kills and reaps that process group, and cannot be combined with nonempty chars or close_stdin. yield_time_ms null waits 10000 ms; range 0..30000. Output is consumed, never repeated; no automatic input retry. Nonzero exit codes are preserved. {STDIN_EXPIRATION} Pipes are not window keyboard input or a terminal."),
                 parameters: json!({"type":"object","properties":{
                     "session_id":{"type":"string"},"chars":{"type":"string"},
                     "yield_time_ms":{"type":["integer","null"],"minimum":0,"maximum":30000},
@@ -391,7 +415,7 @@ impl ToolCatalog {
             }
             let registration = self
                 .find(&definition.name)
-                .filter(|tool| tool.definition.can_bind(definition))
+                .filter(|tool| tool.can_rebind(definition))
                 .ok_or_else(|| {
                     ToolFailure::new(
                         "tool_contract",

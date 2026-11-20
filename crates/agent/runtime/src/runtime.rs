@@ -147,6 +147,7 @@ enum Command {
     },
     TaskActionFinished(u64, agentelier_conversation::TaskActionReceipt),
     ProcessesChanged,
+    IdleTool(agentelier_turn_runner::ToolEvent),
     Conversation {
         id: u64,
         control: ModelControl,
@@ -280,6 +281,7 @@ impl AgentRuntime {
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
                             loop {
+                                let idle_work = session_tools.as_ref().map(|(_, tools)| tools.work.clone());
                                 let command = tokio::select! { biased;
                                     request = sign_out_incoming.recv() => match request {
                                         Some(id) => Command::Account(AccountCommand::SignOut(id)),
@@ -320,6 +322,14 @@ impl AgentRuntime {
                                     } => {
                                         changed.map_err(|_| RuntimeFailure::ModelState)?;
                                         Command::ProcessesChanged
+                                    },
+                                    event = async move {
+                                        match idle_work {
+                                            Some(work) => work.lock().await.next().await,
+                                            None => std::future::pending().await,
+                                        }
+                                    }, if model.is_none() && !finalizing && !pending_queue && creating.is_none() && loading.is_none() && deleting.is_none() => {
+                                        Command::IdleTool(event.ok_or(RuntimeFailure::ModelState)?)
                                     },
                                     result = async { match &mut creating {
                                         Some(pending) => pending.wait().await,
@@ -432,7 +442,9 @@ impl AgentRuntime {
                                         let pending = deleting.take().ok_or(RuntimeFailure::ModelState)?;
                                         let id = pending.id;
                                         let event = pending.complete(result, &mut conversation);
-                                        if matches!(&event, ConversationEvent::Deleted { was_open: true, .. }) { session_tools = None; }
+                                        if matches!(&event, ConversationEvent::Deleted { was_open: true, .. }) && let Some((_, tools)) = session_tools.take() {
+                                            tools.join("session_deleted").await?;
+                                        }
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
                                     }
                                     Command::Scan => {
@@ -469,7 +481,9 @@ impl AgentRuntime {
                                         let opened = matches!(&event, ConversationEvent::Opened(_));
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
                                         if opened {
-                                            session_tools = None;
+                                            if let Some((_, tools)) = session_tools.take() {
+                                                tools.join("session_replaced").await?;
+                                            }
                                             model_task::publish_tasks(&conversation, &publish)?;
                                             if let Some(view) = conversation.current() {
                                                 let processes = conversation.restored_processes().projection(view.id);
@@ -488,6 +502,12 @@ impl AgentRuntime {
                                         let applied = recording::apply(pending, result, &mut conversation, &publish)?;
                                         match applied.kind { recording::AppliedKind::Suspended => suspending = suspending.checked_sub(1).ok_or(RuntimeFailure::ModelState)?, recording::AppliedKind::Queue => pending_queue = false, recording::AppliedKind::Finished => finalizing = false }
                                         if applied.failed && let Some(control) = owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.as_ref() { control.cancel.cancel(); }
+                                        if applied.failed && let Some((_, tools)) = &session_tools {
+                                            tools.admission.block();
+                                            if let Ok(work) = tools.work.try_lock() {
+                                                work.stop_all();
+                                            }
+                                        }
                                         if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && !pending_queue && !finalizing && !runtime_shutdown.is_cancelled() {
                                             model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store)?;
                                         }
@@ -496,7 +516,9 @@ impl AgentRuntime {
                                         let pending = creating.take().ok_or(RuntimeFailure::ModelState)?;
                                         let id = pending.id;
                                         let event = pending.complete(result, &mut conversation);
-                                        if matches!(&event, ConversationEvent::Created(_)) { session_tools = None; }
+                                        if matches!(&event, ConversationEvent::Created(_)) && let Some((_, tools)) = session_tools.take() {
+                                            tools.join("session_replaced").await?;
+                                        }
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
                                     }
                                     Command::Model {
@@ -524,6 +546,11 @@ impl AgentRuntime {
                                         drain_progress(&mut conversation, task.id, &mut progress_events, &store, &publish)?;
                                         let event = complete(&mut conversation, task.id, task.chat, result)?;
                                         if task.chat {
+                                            if conversation.current().is_some_and(|view| view.execution_blocked)
+                                                && let Some((_, tools)) = &session_tools {
+                                                tools.admission.block();
+                                                tools.work.lock().await.stop_all();
+                                            }
                                             let (state, history) = conversation.archive().ok_or(RuntimeFailure::ModelState)?;
                                             let session = state.session;
                                             recording::submit(recording::Pending::Finished { id: task.id, session, control: task.control }, agentelier_conversation::RecordEvent::Finished { state, history }, &store, &mut records);
@@ -564,6 +591,16 @@ impl AgentRuntime {
                                             emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Processes(processes)))?;
                                         }
                                     }
+                                    Command::IdleTool(event) => {
+                                        let (_, tools) = session_tools.as_ref().ok_or(RuntimeFailure::ModelState)?;
+                                        if let Err(error) = model_task::drive_idle(&mut conversation, tools, agentelier_turn_runner::IdleAction::Tool(event), &store, &publish).await {
+                                            tools.admission.block();
+                                            tracing::error!(%error, "后台工具结果保存或归并失败");
+                                            if let Some(view) = conversation.fail_storage(error.to_string()) {
+                                                emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::IdleUpdated(view)))?;
+                                            }
+                                        }
+                                    }
                                     Command::TaskActionFinished(id, receipt) => {
                                         model_task::publish_tasks(&conversation, &publish)?;
                                         emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::TaskAction(receipt)))?;
@@ -573,7 +610,7 @@ impl AgentRuntime {
                                             task_control::reject(&mut task_receipts, id, session, "会话变更或保存正在进行");
                                         } else {
                                             let tools = session_tools.as_ref().filter(|(current, _)| *current == session).map(|(_, tools)| tools);
-                                            task_control::dispatch(&mut task_receipts, id, session, action, &mut conversation, model.as_ref(), tools, &store).await;
+                                            task_control::dispatch(&mut task_receipts, id, session, action, &mut conversation, model.as_ref(), tools, &store, &publish).await;
                                         }
                                     }
                                     Command::Stream(event) => {
@@ -607,6 +644,11 @@ impl AgentRuntime {
                                         if replacing && session_tools.as_ref().is_some_and(|(_, tools)| tools.process_views.borrow().has_active()) {
                                             control.finished.cancel();
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("当前会话仍有进程活跃或回收未确认".into())))?;
+                                            continue;
+                                        }
+                                        if replacing && session_tools.as_ref().is_some_and(|(_, tools)| tools.busy()) {
+                                            control.finished.cancel();
+                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("当前会话仍有后台任务或结果正在保存".into())))?;
                                             continue;
                                         }
                                         if replacing && !task_receipts.is_empty() {
@@ -718,6 +760,9 @@ impl AgentRuntime {
                                                 .await,
                                                 &mut delivery_failure,
                                             );
+                                            if let Some((_, tools)) = session_tools.take() {
+                                                capture_delivery(model_task::finish_tools(tools, "account_sign_out", &mut conversation, &store, &publish).await, &mut delivery_failure);
+                                            }
                                             while let Ok(queued) = incoming.try_recv() {
                                                 match queued {
                                                     Command::Memory(id, _) => {
@@ -787,6 +832,9 @@ impl AgentRuntime {
                                         if let Some(subject) = identity.take() {
                                             if current_subject != subject {
                                                 if model.is_some() { stop_model(&mut model, &mut progress_events, &mut conversation, &store, &publish).await?; }
+                                                if let Some((_, tools)) = session_tools.take() {
+                                                    model_task::finish_tools(tools, "account_changed", &mut conversation, &store, &publish).await?;
+                                                }
                                                 if let Some(event) = conversation.suspend_queue()? {
                                                     let session = event.session();
                                                     recording::submit(recording::Pending::Suspended { session }, event, &store, &mut records);
@@ -825,6 +873,9 @@ impl AgentRuntime {
                             .await,
                             &mut delivery_failure,
                         );
+                        if let Some((_, tools)) = session_tools.take() {
+                            capture_delivery(model_task::finish_tools(tools, "application_shutdown", &mut conversation, &store, &publish).await, &mut delivery_failure);
+                        }
                         if let Some(job) = material {
                             job.cancel.cancel();
                             if job.task.await.is_err() {
@@ -849,7 +900,6 @@ impl AgentRuntime {
                                 delivery_failure = delivery_failure.or(Some(RuntimeFailure::ModelState));
                             }
                         }
-                        drop(session_tools);
                         let stored = store.finish().await.map_err(RuntimeFailure::Store);
                         if let Some(pending) = loading && let Some(control) = pending.control { control.finished.cancel(); }
                         let pending_saved = if let Some(mut pending) = creating {

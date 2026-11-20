@@ -180,6 +180,7 @@ pub struct RequestView {
 
 #[derive(Clone)]
 pub struct TurnView {
+    pub result_continuation: bool,
     pub compaction_continuation: Option<u32>,
     pub requests: Vec<RequestView>,
     pub id: u64,
@@ -317,6 +318,7 @@ fn project_context(state: agentelier_conversation::ProjectContextState) -> Proje
 }
 
 pub enum ConversationEvent {
+    IdleUpdated(SessionView),
     Processes(SessionProcesses),
     TaskAction(TaskActionReceipt),
     Tasks(SessionTasks),
@@ -536,6 +538,7 @@ fn history_item(item: agentelier_conversation::ProtocolItemSummary) -> HistoryIt
 }
 fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
     TurnView {
+        result_continuation: turn.result_continuation,
         compaction_continuation: turn.compaction_continuation.map(|source| source.request),
         requests: turn
             .requests
@@ -683,6 +686,9 @@ fn tool_status(status: agentelier_conversation::ToolStatus) -> &'static str {
 
 pub fn convert(event: agentelier_conversation::ConversationEvent) -> ConversationEvent {
     match event {
+        agentelier_conversation::ConversationEvent::IdleUpdated(state) => {
+            ConversationEvent::IdleUpdated(view(state))
+        }
         agentelier_conversation::ConversationEvent::TaskAction(receipt) => {
             ConversationEvent::TaskAction(receipt)
         }
