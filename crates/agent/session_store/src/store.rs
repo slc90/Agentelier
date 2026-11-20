@@ -74,6 +74,11 @@ enum Command {
         oneshot::Sender<io::Result<()>>,
     ),
     ReadImage(StoredImage, oneshot::Sender<io::Result<Arc<ImagePayload>>>),
+    SaveGenerated(
+        SessionId,
+        Arc<agentelier_tools::OriginalImage>,
+        oneshot::Sender<io::Result<PathBuf>>,
+    ),
     Append(Box<RecordEvent>, oneshot::Sender<io::Result<Commit>>),
 }
 
@@ -218,6 +223,21 @@ impl SessionStoreClient {
             .await
             .map_err(|_| io::Error::other("附件读取未返回结果"))?
     }
+
+    pub async fn save_generated(
+        &self,
+        session: SessionId,
+        image: Arc<agentelier_tools::OriginalImage>,
+    ) -> io::Result<PathBuf> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::SaveGenerated(session, image, reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("生成原图写入未返回结果"))?
+    }
 }
 
 pub struct SessionStore {
@@ -278,6 +298,17 @@ impl SessionStore {
                             let result = crate::attachments::read(&root, &reference);
                             if let Err(failure) = &result { error!(session_id = %reference.session, error = %failure, "会话图片附件读取失败"); }
                             if reply.send(result).is_err() { debug!("附件读取已结束，等待者已离开"); }
+                        }
+                        Command::SaveGenerated(session, image, reply) => {
+                            let result = crate::attachments::save_generated(&root, session, &image);
+                            match &result {
+                                Ok(_) => debug!(
+                                    session_id = %session, sha256 = image.descriptor().digest,
+                                    encoded_bytes = image.descriptor().encoded_bytes, "会话生成原图已同步保存"
+                                ),
+                                Err(failure) => error!(session_id = %session, error = %failure, "会话生成原图提交失败"),
+                            }
+                            let _closed = reply.send(result);
                         }
                         Command::Create(initial, reply) => {
                             let result = create(&root, *initial);

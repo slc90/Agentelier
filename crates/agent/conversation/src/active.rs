@@ -234,6 +234,17 @@ impl ActiveTurn<'_> {
             .ok_or_else(|| ConversationFailure::new("工具状态缺少来源调用"))
     }
 
+    pub fn generated_image_turn(
+        &self,
+        call_id: &str,
+    ) -> Result<crate::TurnId, ConversationFailure> {
+        let (turn, tool) = self.tool_source(call_id)?;
+        if !self.tools.is_codex_image(&tool.name) {
+            return Err(ConversationFailure::new("原图不属于已接纳的图片工具调用"));
+        }
+        Ok(turn)
+    }
+
     pub fn validate_record(&self, event: &crate::RecordEvent) -> Result<(), ConversationFailure> {
         let state = event
             .state()
@@ -303,6 +314,14 @@ impl ActiveTurn<'_> {
         let (source, tool) = self.tool_source(call_id)?;
         if tool.status != status {
             return Err(ConversationFailure::new("工具记录不属于已接纳的调用"));
+        }
+        if let crate::RecordEvent::ToolReturned {
+            generated_image: Some(image),
+            ..
+        } = event
+            && !image.matches(source, tool, status)
+        {
+            return Err(ConversationFailure::new("生成原图与工具结果身份不符"));
         }
         self.tasks.matching_transition(
             source,
@@ -963,6 +982,9 @@ impl ActiveTurn<'_> {
         call_id: &str,
         mut result: ToolResult,
     ) -> Result<Option<(ToolStatus, ToolPayload)>, ConversationFailure> {
+        if matches!(result.output, ToolPayload::GeneratedImage { .. }) {
+            return Err(ConversationFailure::new("生成原图缺少存储回执"));
+        }
         let tool = self
             .view
             .turn

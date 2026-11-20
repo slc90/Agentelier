@@ -155,6 +155,38 @@ pub(super) fn progress(
             });
             Ok(())
         }
+        RunnerEvent::GeneratedImage(attachment) => {
+            let agentelier_turn_runner::TurnGeneratedImage {
+                session,
+                call_id,
+                image,
+                reply,
+            } = attachment;
+            let target = if id == 0 {
+                conversation.tool_turn()
+            } else {
+                conversation.active_turn(id)
+            };
+            let valid = target.is_ok_and(|turn| {
+                turn.session_id() == session && turn.generated_image_turn(&call_id).is_ok()
+            });
+            if !valid {
+                drop(reply.send(Err(ConversationFailure::new(
+                    "原图不属于当前会话的图片调用",
+                ))));
+                return Ok(());
+            }
+            let store = store.client();
+            tokio::spawn(async move {
+                let result = store.save_generated(session, image).await;
+                drop(
+                    reply.send(
+                        result.map_err(|failure| ConversationFailure::new(failure.to_string())),
+                    ),
+                );
+            });
+            Ok(())
+        }
         RunnerEvent::Progress => {
             if id == 0 {
                 conversation.tool_turn()?;

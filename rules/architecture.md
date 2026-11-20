@@ -15,7 +15,7 @@
 - `crates/ui/assets/`：统一管理应用 Asset。
 - `crates/agent/login/`（`agentelier_login`）：Codex OAuth 凭据文件的只读解析、凭据值及数据环境，不承担统一运行调度。
 - `crates/agent/account/`（`agentelier_account`）：Codex 来源状态、共享凭据请求和执行身份门控，具体文件解析由 Login 实现。
-- `crates/agent/llm_model/`（`agentelier_llm_model`）：模型服务通信、模型目录、Responses 和 SSE，通过 Account 取得凭据，不维护第二份账号状态或读写认证文件。
+- `crates/agent/llm_model/`（`agentelier_llm_model`）：模型服务通信，包括模型目录、Responses 和 Codex Images，通过 Account 取得凭据，不维护第二份账号状态或读写认证文件。
 - `crates/agent/conversation/`（`agentelier_conversation`）：聊天会话、设置快照、Turn、展示与历史业务，不接管线程或网络。
 - `crates/bridge/conversation/`（`agentelier_conversation_bridge`）：聊天请求与安全展示投影，不持有会话权威状态。
 - `crates/agent/runtime/`（`agentelier_agent_runtime`）：Tokio 执行环境、跨业务任务调度、取消、回收与运行生命周期，不包含具体 OAuth 或模型网络协议。

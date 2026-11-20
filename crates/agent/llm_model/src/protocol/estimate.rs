@@ -99,6 +99,7 @@ fn count(value: &Value) -> Result<usize, ModelFailure> {
 pub fn result_wire_bytes(call_id: &str, output: &ToolPayload) -> Result<usize, ModelFailure> {
     let (body, encoded_bytes) = match output {
         ToolPayload::Text(text) => (json!(text), 0),
+        ToolPayload::GeneratedImage { .. } => return Err(protocol("生成原图尚未确认保存")),
         ToolPayload::Image { summary, image } => (
             json!([{"type":"input_text","text":summary},{"type":"input_image","image_url":format!("data:{};base64,", image.mime()),"detail":"high"}]),
             image.bytes().len().div_ceil(3).saturating_mul(4),

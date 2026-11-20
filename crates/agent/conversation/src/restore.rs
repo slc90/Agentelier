@@ -849,6 +849,7 @@ pub fn restore(
                 call_id,
                 status,
                 output,
+                generated_image,
                 execution,
             } => {
                 if !matches!(
@@ -906,6 +907,11 @@ pub fn restore(
                         tool.call_id == call_id && tool.request_index == response.request_index
                     })
                     .ok_or_else(|| ConversationFailure::new("工具结果缺少展示身份"))?;
+                if let Some(image) = generated_image
+                    && !image.matches(turn.id, tool, status)
+                {
+                    return Err(ConversationFailure::new("生成原图与存档工具结果身份不符"));
+                }
                 if matches!(
                     initial
                         .settings
@@ -1302,6 +1308,7 @@ impl Conversation {
                 &settings.working_directory,
                 settings.image_input,
                 settings.tool_contract,
+                true,
                 self.extensions.iter().chain(tools),
             )
             .and_then(|available| available.rebind(&settings.tools));

@@ -29,8 +29,9 @@ pub use tasks::{
 };
 
 pub use archive::{
-    InitialSession, RecordEvent, RecoveredResult, RecoveryEvidence, ResponseAcceptance,
-    SessionRecord, SessionSummary, StoredImage, StoredSettings, StoredState, StoredTool,
+    GeneratedImage, InitialSession, RecordEvent, RecoveredResult, RecoveryEvidence,
+    ResponseAcceptance, SessionRecord, SessionSummary, StoredImage, StoredSettings, StoredState,
+    StoredTool,
 };
 pub use conversation::PreparedSession;
 

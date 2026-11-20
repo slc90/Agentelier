@@ -138,6 +138,8 @@ pub enum RecordEvent {
         status: agentelier_tools::ToolStatus,
         output: agentelier_llm_model::ArchivedPayload,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        generated_image: Option<GeneratedImage>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         execution: Option<crate::TaskExecution>,
     },
     ResultAppended {
@@ -231,6 +233,31 @@ pub struct StoredImage {
     pub session: SessionId,
     pub image: agentelier_tools::ImageDescriptor,
     pub summary: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct GeneratedImage {
+    pub turn: crate::TurnId,
+    pub prompt: String,
+    pub model: String,
+    pub image: agentelier_tools::ImageDescriptor,
+}
+
+impl GeneratedImage {
+    pub fn matches(
+        &self,
+        turn: crate::TurnId,
+        tool: &crate::ToolView,
+        status: agentelier_tools::ToolStatus,
+    ) -> bool {
+        self.turn == turn
+            && tool.name == agentelier_tools::GENERATE_IMAGE_TOOL
+            && status == agentelier_tools::ToolStatus::Succeeded
+            && self.model == agentelier_tools::GENERATED_IMAGE_MODEL
+            && !self.prompt.trim().is_empty()
+            && self.prompt.chars().count() <= agentelier_tools::MAX_GENERATION_PROMPT_CHARS
+            && self.image.validate_original().is_ok()
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]

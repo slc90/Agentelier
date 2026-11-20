@@ -46,6 +46,10 @@ impl ExecutionIdentity {
         self.invalidated.cancelled().await;
     }
 
+    pub fn is_invalidated(&self) -> bool {
+        self.invalidated.is_cancelled()
+    }
+
     pub fn validate(&self, credentials: &UsableCredentials) -> Result<(), SessionFailure> {
         if self.invalidated.is_cancelled() || self.identity() != credentials.version().identity() {
             return Err(SessionFailure::new(

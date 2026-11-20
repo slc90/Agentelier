@@ -6,6 +6,7 @@ mod compaction;
 pub use compaction::{CompactionItem, CompactionMetadata};
 mod context;
 mod generation;
+mod images;
 mod memory;
 pub use context::{ContextLimits, ResponseUsage};
 mod model;
@@ -14,6 +15,7 @@ mod protocol;
 pub use project::{ProjectItem, ProjectPublication, PublicationKind};
 mod stream;
 pub use agentelier_account::CodexIdentity;
+pub use images::generate_image;
 
 pub use generation::{
     GenerationConnection, GenerationRequest, MAX_REQUEST_BYTES, PreparedGeneration,

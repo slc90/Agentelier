@@ -383,17 +383,26 @@ impl Job {
                     execution.instance
                 }),
         };
-        let outcome = agentelier_tools::execute(
-            &self.catalog,
-            &self.context,
-            &processes,
-            &self.call.name,
-            &self.call.arguments,
-            &cancel,
-            permit,
-            origin,
-        )
-        .await;
+        let outcome = if self.catalog.is_codex_image(&self.call.name) {
+            let result = self
+                .authorization
+                .generate_image(&self.call.arguments, &cancel)
+                .await;
+            drop(permit);
+            result
+        } else {
+            agentelier_tools::execute(
+                &self.catalog,
+                &self.context,
+                &processes,
+                &self.call.name,
+                &self.call.arguments,
+                &cancel,
+                permit,
+                origin,
+            )
+            .await
+        };
         if outcome.cleanup_failed || outcome.status == ToolStatus::Unconfirmed {
             admission.block();
         }

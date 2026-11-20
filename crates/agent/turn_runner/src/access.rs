@@ -1,7 +1,7 @@
 use agentelier_conversation::{
     ActiveTurn, Conversation, ConversationFailure, InputReceipt, RecordEvent, SessionId,
 };
-use agentelier_tools::ImagePayload;
+use agentelier_tools::{ImagePayload, OriginalImage};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
@@ -9,6 +9,7 @@ pub enum RunnerEvent {
     Edit(TurnEdit),
     Record(Box<TurnRecord>),
     Image(TurnImage),
+    GeneratedImage(TurnGeneratedImage),
     Progress,
     TaskProgress,
     Receipt(InputReceipt),
@@ -39,6 +40,13 @@ pub struct TurnImage {
     pub summary: String,
     pub image: Arc<ImagePayload>,
     pub reply: oneshot::Sender<Result<Arc<ImagePayload>, ConversationFailure>>,
+}
+
+pub struct TurnGeneratedImage {
+    pub session: SessionId,
+    pub call_id: String,
+    pub image: Arc<OriginalImage>,
+    pub reply: oneshot::Sender<Result<std::path::PathBuf, ConversationFailure>>,
 }
 
 pub(crate) struct TurnAccess {
@@ -104,5 +112,26 @@ impl TurnAccess {
         result
             .await
             .map_err(|_| ConversationFailure::new("图片附件保存未返回结果"))?
+    }
+
+    pub(crate) async fn persist_generated_image(
+        &self,
+        session: SessionId,
+        call_id: String,
+        image: Arc<OriginalImage>,
+    ) -> Result<std::path::PathBuf, ConversationFailure> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(RunnerEvent::GeneratedImage(TurnGeneratedImage {
+                session,
+                call_id,
+                image,
+                reply,
+            }))
+            .await
+            .map_err(|_| ConversationFailure::new("原图保存接收端已关闭"))?;
+        result
+            .await
+            .map_err(|_| ConversationFailure::new("原图保存未返回结果"))?
     }
 }

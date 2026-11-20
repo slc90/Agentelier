@@ -138,6 +138,7 @@ type ToolExecutor = dyn for<'a> Fn(&'a ExecutionContext, &'a str, &'a Cancellati
 #[derive(Clone)]
 enum Executor {
     Function(Arc<ToolExecutor>),
+    CodexImage,
     Shell,
     Stdin,
     TaskControl(crate::TaskControl),
@@ -238,11 +239,11 @@ impl ToolRegistration {
                 result
             }),
             Executor::Stdin => Box::pin(async move { processes.stdin(arguments, cancel).await }),
-            Executor::TaskControl(_) => Box::pin(async {
+            Executor::TaskControl(_) | Executor::CodexImage => Box::pin(async {
                 ToolResult::error(
                     crate::ToolStatus::Unconfirmed,
-                    "task_control_route",
-                    "任务控制调用被错误派至普通执行器",
+                    "tool_route",
+                    "专用工具被错误派至普通执行器",
                 )
             }),
             Executor::Function(execute) => {
@@ -338,9 +339,26 @@ impl ToolCatalog {
         directory: &std::path::Path,
         image_input: Option<bool>,
         contract: ToolContract,
+        codex_images: bool,
         extensions: impl IntoIterator<Item = &'a ToolRegistration>,
     ) -> Result<Self, ToolFailure> {
         let mut tools = Self::builtins(directory, image_input);
+        if codex_images {
+            tools.push(ToolRegistration::process(
+                ToolDefinition {
+                    name: crate::GENERATE_IMAGE_TOOL.into(),
+                    description: "Generate one image from a text prompt using GPT Image 2 when the user asks for an image. Saves the original as a conversation attachment and returns its metadata and local path. Editing and reference images are unavailable.".into(),
+                    parameters: json!({"type":"object","properties":{"prompt":{"type":"string"}},"required":["prompt"],"additionalProperties":false}),
+                    source: ToolSource::Builtin,
+                    strict: true,
+                    mode: ToolMode::Asynchronous,
+                    display_source: Some("GPT Image 2".into()),
+                    output_schema: None,
+                },
+                Executor::CodexImage,
+                ToolAccess::SharedRead,
+            ));
+        }
         if !contract.is_flat() {
             tools.extend(
                 [
@@ -432,7 +450,10 @@ impl ToolCatalog {
         }
         if self.tools.iter().any(|tool| {
             matches!(tool.definition.source, ToolSource::Builtin)
-                && !matches!(tool.executor, Executor::TaskControl(_))
+                && !matches!(
+                    tool.executor,
+                    Executor::TaskControl(_) | Executor::CodexImage
+                )
                 && !seen.contains(&tool.definition.name)
         }) {
             return Err(ToolFailure::new("tool_contract", "存档缺少内置工具契约"));
@@ -448,6 +469,11 @@ impl ToolCatalog {
             Executor::TaskControl(control) => Some(control),
             _ => None,
         }
+    }
+
+    pub fn is_codex_image(&self, name: &str) -> bool {
+        self.find(name)
+            .is_some_and(|tool| matches!(tool.executor, Executor::CodexImage))
     }
 
     pub fn access(&self, name: &str) -> ToolAccess {

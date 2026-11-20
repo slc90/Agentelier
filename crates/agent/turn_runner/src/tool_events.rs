@@ -9,9 +9,13 @@ use crate::{
     task_control::{self, PendingWait, TaskControlAction, WaitInterruption},
 };
 use agentelier_conversation::{
-    ConversationFailure, RecordEvent, SteerInput, TaskCancellationPlan, TaskPolicyChange,
+    ConversationFailure, GeneratedImage, RecordEvent, SteerInput, TaskCancellationPlan,
+    TaskPolicyChange,
 };
-use agentelier_tools::{ExecutionContext, ToolCatalog, ToolMode, ToolResult, ToolStatus};
+use agentelier_tools::{
+    ExecutionContext, GENERATED_IMAGE_MODEL, ToolCatalog, ToolMode, ToolPayload, ToolResult,
+    ToolStatus,
+};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -729,6 +733,8 @@ async fn save_call(
     progress: &mpsc::Sender<RunnerEvent>,
     cancel: &CancellationToken,
 ) -> Result<(), ConversationFailure> {
+    let (result, generated_image) =
+        persist_generated_image(active, session, call_id, result).await?;
     let (result, storage_failure) = persist_image(active, session, result).await;
     let outcome = retain_call(active, dispatcher, call_id.to_owned(), result).await?;
     if let Some(failure) = storage_failure {
@@ -745,6 +751,7 @@ async fn save_call(
                     call_id: id,
                     status,
                     output: agentelier_llm_model::ArchivedPayload::capture(&output),
+                    generated_image,
                     execution,
                 })
             })
@@ -759,6 +766,56 @@ async fn save_call(
         }
     }
     publish(progress, cancel).await
+}
+
+async fn persist_generated_image(
+    active: &TurnAccess,
+    session: agentelier_conversation::SessionId,
+    call_id: &str,
+    mut result: ToolResult,
+) -> Result<(ToolResult, Option<GeneratedImage>), ConversationFailure> {
+    let ToolPayload::GeneratedImage { prompt, image } = result.output else {
+        return Ok((result, None));
+    };
+    let id = call_id.to_owned();
+    let turn = active
+        .call(move |turn| turn.generated_image_turn(&id))
+        .await?;
+    let path = match active
+        .persist_generated_image(session, call_id.to_owned(), image.clone())
+        .await
+    {
+        Ok(path) => path,
+        Err(failure) => {
+            return Ok((
+                ToolResult::error(
+                    ToolStatus::Failed,
+                    "image_storage",
+                    &format!("已生成图片，但原图保存失败：{failure}"),
+                ),
+                None,
+            ));
+        }
+    };
+    let descriptor = image.descriptor().clone();
+    result.output = serde_json::json!({
+        "ok": true,
+        "model": GENERATED_IMAGE_MODEL,
+        "original": descriptor,
+        "path": path.to_string_lossy(),
+        "visual_input": false
+    })
+    .to_string()
+    .into();
+    Ok((
+        result,
+        Some(GeneratedImage {
+            turn,
+            prompt,
+            model: GENERATED_IMAGE_MODEL.into(),
+            image: descriptor,
+        }),
+    ))
 }
 
 async fn append_saved_results(active: &TurnAccess) -> Result<(), ConversationFailure> {

@@ -570,6 +570,15 @@ pub(super) fn load(
         .initial
         .take()
         .ok_or_else(|| io::Error::other("存档没有可恢复的初始记录"))?;
+    for record in &parsed.records {
+        if let agentelier_conversation::RecordEvent::ToolReturned {
+            generated_image: Some(generated),
+            ..
+        } = &record.event
+        {
+            crate::attachments::validate_generated(root, session, &generated.image)?;
+        }
+    }
     let mut restored = agentelier_conversation::restore(
         initial,
         std::mem::take(&mut parsed.records),

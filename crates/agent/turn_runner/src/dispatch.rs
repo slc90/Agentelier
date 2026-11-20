@@ -30,6 +30,11 @@ impl ToolAuthorization {
     pub async fn validate(&self) -> Result<(), SessionFailure> {
         self.credentials.validate_execution(&self.identity).await
     }
+
+    pub async fn generate_image(&self, arguments: &str, cancel: &CancellationToken) -> ToolResult {
+        agentelier_llm_model::generate_image(&self.credentials, &self.identity, arguments, cancel)
+            .await
+    }
 }
 
 pub struct ToolJobRequest {

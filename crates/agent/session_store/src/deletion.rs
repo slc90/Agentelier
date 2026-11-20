@@ -58,7 +58,8 @@ fn files(path: &Path) -> io::Result<(Vec<PathBuf>, Option<PathBuf>)> {
                     .file_name()
                     .into_string()
                     .map_err(|_| io::Error::other("附件文件名无效"))?;
-                if !image(&name) && !temporary(&name) {
+                if !image(&name) && !crate::attachments::generated_file(&name) && !temporary(&name)
+                {
                     return Err(io::Error::other(format!("会话中存在未识别附件：{name}")));
                 }
                 regular(&attachment.path())?;

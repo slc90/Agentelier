@@ -407,6 +407,7 @@ impl Conversation {
                 &settings.working_directory,
                 settings.image_input,
                 agentelier_llm_model::codex_tool_contract(&settings.slug),
+                settings.codex.is_some(),
                 self.extensions.iter().chain(discovered),
             )
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?,
