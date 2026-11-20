@@ -515,6 +515,13 @@ pub fn restore(
                     .requests
                     .last()
                     .ok_or_else(|| ConversationFailure::new("准备记录缺少请求材料"))?;
+                if (fact.projection.route == agentelier_llm_model::ModelRoute::Codex)
+                    != initial.settings.codex.is_some()
+                {
+                    return Err(ConversationFailure::new(
+                        "冻结请求的模型来源与会话设置不一致",
+                    ));
+                }
                 fact.projection
                     .validate_request_materials()
                     .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
@@ -1341,7 +1348,8 @@ impl Conversation {
             context: restored.state.context,
             id: restored.state.session,
             notice: restored.notice,
-            settings: SessionSettings {
+            settings: Box::new(SessionSettings {
+                codex: settings.codex,
                 context_limits: settings.context_limits,
                 slug: settings.slug,
                 display_name: settings.display_name,
@@ -1349,7 +1357,7 @@ impl Conversation {
                 image_input: settings.image_input,
                 instructions: Arc::new(settings.instructions),
                 working_directory: settings.working_directory,
-            },
+            }),
             turn: restored.state.turn,
             previous_turns: restored.state.previous_turns,
             committed_items: restored.state.committed_items,

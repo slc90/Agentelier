@@ -1,6 +1,6 @@
 use crate::model::{
-    ModelFailure, ModelFailureKind, acquire, http_failure, network, recover, request_id,
-    with_response,
+    ModelFailure, ModelFailureKind, ModelRoute, acquire, http_failure, network, recover,
+    request_id, with_response,
 };
 use crate::protocol::ProtocolHistory;
 use crate::stream::{GenerationResult, STREAM_IDLE_TIMEOUT, StreamEvent, consume};
@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 
-const RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 
@@ -34,6 +33,7 @@ impl std::io::Write for RequestBytes {
 }
 
 pub struct GenerationRequest {
+    pub route: ModelRoute,
     pub memory: Option<crate::MemorySnapshot>,
     pub selected_skills: Vec<agentelier_skills::SelectedSkill>,
     pub skill_catalog: Option<String>,
@@ -50,6 +50,8 @@ pub struct GenerationRequest {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct RequestProjection {
+    #[serde(default, skip_serializing_if = "ModelRoute::is_siwc")]
+    pub route: ModelRoute,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction: Option<RequestCompaction>,
     #[serde(default, skip_serializing_if = "ToolContract::is_flat")]
@@ -306,6 +308,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     if let Some(effort) = &generation.effort {
         payload["reasoning"] = serde_json::json!({"effort": effort});
     }
+    generation.route.responses_payload(&mut payload);
     let mut body = RequestBytes(Vec::new());
     serde_json::to_writer(&mut body, &payload).map_err(|error| {
         ModelFailure::new(
@@ -336,6 +339,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     }
     use sha2::{Digest, Sha256};
     let projection = RequestProjection {
+        route: generation.route,
         compaction: Some(compaction),
         tool_contract: contract,
         skill_materials,
@@ -391,6 +395,12 @@ pub async fn generate(
     identity.validate(&current).map_err(|failure| {
         ModelFailure::new(ModelFailureKind::Authentication, failure.to_string())
     })?;
+    if generation.projection.route != ModelRoute::of(&current) {
+        return Err(ModelFailure::new(
+            ModelFailureKind::Authentication,
+            "当前授权来源与冻结请求不一致",
+        ));
+    }
     tracing::debug!(
         request_bytes = generation.body.len(),
         payload_hash = generation.projection.payload_hash,
@@ -408,11 +418,10 @@ pub async fn generate(
             .map_err(|_| crate::model::protocol("模型进度接收端已关闭"))?;
         let response = tokio::time::timeout(
             STREAM_IDLE_TIMEOUT,
-            client
-                .post(RESPONSES_URL)
-                .bearer_auth(current.access_token())
-                .header(reqwest::header::ACCEPT, "text/event-stream")
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
+            generation
+                .projection
+                .route
+                .responses(&client, &current)
                 .body(generation.body.clone())
                 .send(),
         )
@@ -451,6 +460,9 @@ pub async fn generate(
         };
         match outcome {
             Ok(result) => {
+                identity.validate(&current).map_err(|failure| {
+                    ModelFailure::new(ModelFailureKind::Authentication, failure.to_string())
+                })?;
                 if !result.output.is_replayable() {
                     return Err(ModelFailure::new(
                         ModelFailureKind::Protocol,

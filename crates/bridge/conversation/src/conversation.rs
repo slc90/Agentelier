@@ -386,6 +386,7 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
         ConversationRequest::Create(settings) => {
             agentelier_conversation::ConversationRequest::Create(
                 agentelier_conversation::SessionSettings {
+                    codex: None,
                     slug: settings.slug,
                     display_name: settings.display_name,
                     effort: settings.effort,

@@ -1,7 +1,7 @@
 use agentelier_account::{
     AuthenticatedRequest, CredentialClient, ExecutionIdentity, UsableCredentials,
 };
-use reqwest::{Client, Response};
+use reqwest::{Client, RequestBuilder, Response};
 use serde::Deserialize;
 use serde_json::Value;
 use std::time::Duration;
@@ -9,11 +9,79 @@ use std::{error::Error, fmt};
 
 const MODELS_URL: &str = "https://api.openai.com/v1/models";
 const RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
+const CODEX_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
+const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
+const CODEX_CATALOG_VERSION: &str = "0.171.0";
 const INPUT: &str = "请简短回复，确认连接正常";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
 const MAX_DIAGNOSTIC_CHARS: usize = 2048;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelRoute {
+    #[default]
+    Siwc,
+    Codex,
+}
+
+impl ModelRoute {
+    pub(crate) fn of(credentials: &UsableCredentials) -> Self {
+        if credentials.version().codex_identity().is_some() {
+            Self::Codex
+        } else {
+            Self::Siwc
+        }
+    }
+
+    pub(crate) fn is_siwc(&self) -> bool {
+        *self == Self::Siwc
+    }
+
+    fn catalog(self, client: &Client, credentials: &UsableCredentials) -> RequestBuilder {
+        let request = match self {
+            Self::Siwc => client.get(MODELS_URL),
+            Self::Codex => client.get(format!(
+                "{CODEX_MODELS_URL}?client_version={CODEX_CATALOG_VERSION}"
+            )),
+        };
+        Self::authorize(request, credentials)
+    }
+
+    pub(crate) fn responses(
+        self,
+        client: &Client,
+        credentials: &UsableCredentials,
+    ) -> RequestBuilder {
+        let url = match self {
+            Self::Siwc => RESPONSES_URL,
+            Self::Codex => CODEX_RESPONSES_URL,
+        };
+        Self::authorize(client.post(url), credentials)
+            .header(reqwest::header::ACCEPT, "text/event-stream")
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+    }
+
+    fn authorize(request: RequestBuilder, credentials: &UsableCredentials) -> RequestBuilder {
+        let request = request.bearer_auth(credentials.access_token());
+        match credentials.version().codex_identity() {
+            Some(identity) => request
+                .header("ChatGPT-Account-Id", &identity.workspace_id)
+                .header(
+                    reqwest::header::USER_AGENT,
+                    concat!("Agentelier/", env!("CARGO_PKG_VERSION")),
+                ),
+            None => request,
+        }
+    }
+
+    pub(crate) fn responses_payload(self, payload: &mut Value) {
+        if self == Self::Codex {
+            payload["instructions"] = Value::String(String::new());
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct ModelInfo {
@@ -102,6 +170,14 @@ pub async fn execute(
     credentials: CredentialClient,
     operation: ModelRequest,
 ) -> Result<ModelResult, ModelFailure> {
+    execute_model(&credentials, operation, None).await
+}
+
+async fn execute_model(
+    credentials: &CredentialClient,
+    operation: ModelRequest,
+    identity: Option<&ExecutionIdentity>,
+) -> Result<ModelResult, ModelFailure> {
     let client = Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
@@ -109,7 +185,8 @@ pub async fn execute(
         .timeout(REQUEST_TIMEOUT)
         .build()
         .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "无法建立安全模型客户端"))?;
-    let mut current = acquire(&credentials).await?;
+    let mut current = acquire(credentials).await?;
+    let route = ModelRoute::of(&current);
     let ModelRequest::Verify {
         slug,
         display_name,
@@ -118,22 +195,24 @@ pub async fn execute(
     else {
         let mut catalog_request = AuthenticatedRequest::new(&current);
         let catalog = loop {
-            let response = client
-                .get(MODELS_URL)
-                .bearer_auth(current.access_token())
+            validate_identity(identity, &current)?;
+            let response = route
+                .catalog(&client, &current)
                 .send()
                 .await
                 .map_err(network)?;
             if response.status().is_success() {
                 let status = response.status().as_u16();
                 let id = request_id(&response);
-                break read_json(response)
+                let catalog = read_json(response)
                     .await
                     .map_err(|failure| with_response(failure, status, id))?;
+                validate_identity(identity, &current)?;
+                break catalog;
             }
             let failure = http_failure(response).await;
             if let Some(replacement) =
-                recover(&credentials, &mut catalog_request, &current, &failure).await?
+                recover(credentials, &mut catalog_request, &current, &failure).await?
             {
                 current = replacement;
             } else {
@@ -145,10 +224,7 @@ pub async fn execute(
             .and_then(Value::as_array)
             .ok_or_else(|| protocol("模型目录缺少 models 数组"))?;
         let mut result = Vec::new();
-        for model in models
-            .iter()
-            .filter(|model| model.get("visibility").and_then(Value::as_str) == Some("list"))
-        {
+        for model in models.iter().filter(|model| catalog_model(route, model)) {
             let slug = required_text(model, "slug", "可显示模型缺少 slug")?.to_owned();
             let display_name =
                 required_text(model, "display_name", "可显示模型缺少 display_name")?.to_owned();
@@ -191,7 +267,7 @@ pub async fn execute(
     if let Some(effort) = &effort {
         payload["reasoning"] = serde_json::json!({"effort": effort});
     }
-    let output = request_text(&client, &credentials, current, None, &payload).await?;
+    let output = request_text(&client, credentials, current, identity, payload).await?;
     Ok(ModelResult::Verified(ModelReply {
         slug,
         effort,
@@ -229,7 +305,7 @@ pub async fn background_text(
         "stream": true,
         "text": {"format": format},
     });
-    let output = request_text(&client, credentials, current, Some(identity), &payload).await?;
+    let output = request_text(&client, credentials, current, Some(identity), payload).await?;
     Ok(BackgroundText {
         text: text_output(output.messages),
         usage: output.usage,
@@ -250,20 +326,17 @@ async fn request_text(
     credentials: &CredentialClient,
     mut current: UsableCredentials,
     identity: Option<&ExecutionIdentity>,
-    payload: &Value,
+    mut payload: Value,
 ) -> Result<crate::GenerationResult, ModelFailure> {
+    let route = ModelRoute::of(&current);
+    route.responses_payload(&mut payload);
+    let body = serde_json::to_vec(&payload).map_err(|_| protocol("无法序列化模型验证请求"))?;
     let mut request = AuthenticatedRequest::new(&current);
     loop {
-        if let Some(identity) = identity {
-            identity
-                .validate(&current)
-                .map_err(ModelFailure::authentication)?;
-        }
-        let response = client
-            .post(RESPONSES_URL)
-            .bearer_auth(current.access_token())
-            .header(reqwest::header::ACCEPT, "text/event-stream")
-            .json(payload)
+        validate_identity(identity, &current)?;
+        let response = route
+            .responses(client, &current)
+            .body(body.clone())
             .send()
             .await
             .map_err(network)?;
@@ -278,11 +351,7 @@ async fn request_text(
         };
         match outcome {
             Ok(output) => {
-                if let Some(identity) = identity {
-                    identity
-                        .validate(&current)
-                        .map_err(ModelFailure::authentication)?;
-                }
+                validate_identity(identity, &current)?;
                 return Ok(output);
             }
             Err(failure) => {
@@ -296,6 +365,27 @@ async fn request_text(
             }
         }
     }
+}
+
+fn validate_identity(
+    identity: Option<&ExecutionIdentity>,
+    credentials: &UsableCredentials,
+) -> Result<(), ModelFailure> {
+    identity.map_or(Ok(()), |identity| {
+        identity
+            .validate(credentials)
+            .map_err(ModelFailure::authentication)
+    })
+}
+
+fn catalog_model(route: ModelRoute, model: &Value) -> bool {
+    model["visibility"] == "list"
+        && (route == ModelRoute::Siwc
+            || model["input_modalities"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|item| item == "text"))
+                && model["allow_only_chatgpt_workspace_executor"].as_bool() != Some(true)
+                && model["allow_only_codex_cloud_agent_orchestrator"].as_bool() != Some(true))
 }
 #[derive(Deserialize)]
 struct ReasoningLevel {
@@ -458,6 +548,7 @@ fn classify(status: Option<u16>, code: Option<&str>) -> ModelFailureKind {
             Some(
                 "subscription_sharing_usage_limit_exceeded"
                 | "subscription_sharing_usage_unavailable"
+                | "usage_limit_reached"
                 | "rate_limit_exceeded"
                 | "insufficient_quota",
             ),
@@ -474,8 +565,13 @@ pub(super) fn service_failure(
     let error = value
         .get("error")
         .filter(|error| !error.is_null())
+        .or_else(|| value.get("detail").filter(|detail| detail.is_object()))
         .unwrap_or(value);
-    let code = error.get("code").and_then(Value::as_str).map(diagnostic);
+    let code = error
+        .get("code")
+        .and_then(Value::as_str)
+        .or_else(|| error.get("type").and_then(Value::as_str))
+        .map(diagnostic);
     let mut message = error
         .get("message")
         .and_then(Value::as_str)
@@ -539,13 +635,7 @@ pub async fn task_model(
     identity: &agentelier_account::ExecutionIdentity,
     slug: &str,
 ) -> Result<ModelInfo, ModelFailure> {
-    identity
-        .validate(&acquire(&credentials).await?)
-        .map_err(ModelFailure::authentication)?;
-    let result = execute(credentials.clone(), ModelRequest::Catalog).await?;
-    identity
-        .validate(&acquire(&credentials).await?)
-        .map_err(ModelFailure::authentication)?;
+    let result = execute_model(&credentials, ModelRequest::Catalog, Some(identity)).await?;
     let ModelResult::Catalog(models) = result else {
         return Err(protocol("模型能力请求返回了非目录结果"));
     };

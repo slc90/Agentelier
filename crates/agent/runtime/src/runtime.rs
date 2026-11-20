@@ -577,9 +577,11 @@ impl AgentRuntime {
                                             })))?;
                                             continue;
                                         }
-                                        if matches!(command, SessionCommand::Resume { .. }) && current_subject.is_none() {
+                                        if matches!(command, SessionCommand::Resume { .. })
+                                            && let Err(failure) = model_source(&account, current_subject.is_some()).and_then(|source| conversation.validate_model_source(source))
+                                        {
                                             let id = command.id();
-                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Queue(agentelier_conversation::QueueEvent { id, view: conversation.current(), decision: agentelier_conversation::QueueDecision::Rejected("请先登录当前账号，再明确继续队列".into()) })))?;
+                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Queue(agentelier_conversation::QueueEvent { id, view: conversation.current(), decision: agentelier_conversation::QueueDecision::Rejected(failure.to_string()) })))?;
                                             continue;
                                         }
                                         match conversation.prepare_queue(command) {
@@ -687,7 +689,20 @@ impl AgentRuntime {
                                                     }
                                                 }
                                             }
-                                            request @ (ConversationRequest::Create(_) | ConversationRequest::Reset { .. }) => {
+                                            mut request @ (ConversationRequest::Create(_) | ConversationRequest::Reset { .. }) => {
+                                                let binding = model_source(&account, current_subject.is_some()).and_then(|source| {
+                                                    if let ConversationRequest::Create(settings) = &mut request {
+                                                        settings.codex = source.cloned();
+                                                        Ok(())
+                                                    } else {
+                                                        conversation.validate_model_source(source)
+                                                    }
+                                                });
+                                                if let Err(failure) = binding {
+                                                    control.finished.cancel();
+                                                    emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
+                                                    continue;
+                                                }
                                                 let snapshot = if let Ok(memory) = &memory {
                                                     match memory.client().snapshot().await {
                                                         Ok(snapshot) => snapshot,
@@ -709,7 +724,11 @@ impl AgentRuntime {
                                                 }
                                             }
                                             request @ (ConversationRequest::Send { .. } | ConversationRequest::Retry { .. } | ConversationRequest::ContinueWithoutCompaction { .. } | ConversationRequest::ProcessResults { .. }) => {
-                                                if current_subject.is_none() { control.finished.cancel(); emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("请先登录当前账号后再开始任务".into())))?; continue; }
+                                                if let Err(failure) = model_source(&account, current_subject.is_some()).and_then(|source| conversation.validate_model_source(source)) {
+                                                    control.finished.cancel();
+                                                    emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
+                                                    continue;
+                                                }
                                                 match conversation.start(id, request) {
                                                     Ok(view) => {
                                                         let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
@@ -803,6 +822,7 @@ impl AgentRuntime {
                                         }
                                         let identity = std::cell::Cell::new(None);
                                         let codex_selected = account.codex_selected();
+                                        let codex_identity = account.codex_identity().cloned();
                                         let (returned, failure) = account
                                             .handle(command, &|event| {
                                                 match &event.kind {
@@ -837,8 +857,9 @@ impl AgentRuntime {
                                             .await?;
                                         account = returned;
                                         let subject = identity.take();
-                                        if subject.as_ref().is_some_and(|subject| *subject != current_subject)
+                                        if (!account.codex_selected() && subject.as_ref().is_some_and(|subject| *subject != current_subject))
                                             || codex_selected != account.codex_selected()
+                                            || codex_identity.as_ref() != account.codex_identity()
                                         {
                                             if model.is_some() { stop_model(&mut model, &mut progress_events, &mut conversation, &store, &publish).await?; }
                                             if let Some((_, tools)) = session_tools.take() {
@@ -1241,6 +1262,26 @@ impl AgentRuntime {
             Some(thread) => thread.join().map_err(|_| RuntimeFailure::Thread)?,
             None => Ok(()),
         }
+    }
+}
+
+fn model_source(
+    account: &Account,
+    siwc_available: bool,
+) -> Result<Option<&agentelier_account::CodexIdentity>, agentelier_conversation::ConversationFailure>
+{
+    if account.codex_selected() {
+        account.codex_identity().map(Some).ok_or_else(|| {
+            agentelier_conversation::ConversationFailure::new(
+                "当前 Codex 凭据不可用，请检查所选文件",
+            )
+        })
+    } else if siwc_available {
+        Ok(None)
+    } else {
+        Err(agentelier_conversation::ConversationFailure::new(
+            "请先登录当前账号后再开始任务",
+        ))
     }
 }
 impl Drop for AgentRuntime {

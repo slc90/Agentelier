@@ -197,7 +197,7 @@ impl ActiveTurn<'_> {
     }
 
     pub fn settings(&self) -> crate::SessionSettings {
-        self.view.settings.clone()
+        self.view.settings.as_ref().clone()
     }
 
     pub fn session_id(&self) -> crate::SessionId {
@@ -368,6 +368,7 @@ impl ActiveTurn<'_> {
             self.tools.definitions(),
         )?;
         Ok(GenerationRequest {
+            route: self.view.settings.model_route(),
             history_position: self.history.position(),
             skip_compaction,
             reserved_result_bytes,

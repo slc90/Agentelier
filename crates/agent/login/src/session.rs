@@ -5,7 +5,9 @@ use crate::authentication::{
 use crate::browser::{
     MAX_RESPONSE_BYTES, RESOURCE, TOKEN_ENDPOINT, TokenResponse, http_client, identity,
 };
+use crate::{CodexCredentials, CodexIdentity};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{error::Error, fmt};
 use subtle::ConstantTimeEq;
@@ -25,7 +27,6 @@ pub enum SessionActivity {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionFailureKind {
-    CodexModelUnavailable,
     SignedOut,
     SubscriptionMissing,
     NotYetRefreshable,
@@ -75,18 +76,45 @@ impl fmt::Display for SessionFailure {
 impl Error for SessionFailure {}
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct CredentialVersion {
-    client_id: String,
-    subject: String,
-    generation: Uuid,
+pub enum CredentialVersion {
+    Siwc {
+        client_id: String,
+        subject: String,
+        generation: Uuid,
+    },
+    Codex {
+        identity: CodexIdentity,
+        fingerprint: [u8; 32],
+    },
 }
 impl CredentialVersion {
-    pub fn subject(&self) -> &str {
-        &self.subject
+    pub fn codex_identity(&self) -> Option<&CodexIdentity> {
+        match self {
+            Self::Siwc { .. } => None,
+            Self::Codex { identity, .. } => Some(identity),
+        }
     }
 
     pub fn same_account(&self, other: &Self) -> bool {
-        self.client_id == other.client_id && self.subject == other.subject
+        match (self, other) {
+            (
+                Self::Siwc {
+                    client_id, subject, ..
+                },
+                Self::Siwc {
+                    client_id: other_client,
+                    subject: other_subject,
+                    ..
+                },
+            ) => client_id == other_client && subject == other_subject,
+            (
+                Self::Codex { identity, .. },
+                Self::Codex {
+                    identity: other, ..
+                },
+            ) => identity == other,
+            _ => false,
+        }
     }
 }
 
@@ -97,6 +125,24 @@ pub struct UsableCredentials {
     pub expires_at: u64,
 }
 impl UsableCredentials {
+    pub fn from_codex(file: CodexCredentials) -> Result<Self, SessionFailure> {
+        if file.summary.expired {
+            return Err(SessionFailure::new(
+                SessionFailureKind::ReauthenticationRequired,
+                "Codex 外部凭据已过期，请在 Codex 中恢复授权",
+            ));
+        }
+        let fingerprint = Sha256::digest(file.access_token.as_bytes()).into();
+        Ok(Self {
+            access_token: file.access_token,
+            version: CredentialVersion::Codex {
+                identity: file.summary.identity,
+                fingerprint,
+            },
+            expires_at: file.expires_at,
+        })
+    }
+
     pub fn access_token(&self) -> &str {
         &self.access_token
     }
@@ -182,8 +228,8 @@ impl AuthFile {
                 .as_ref()
                 .and_then(|record| record.registration.as_ref())
                 .is_none_or(|registration| {
-                    version.client_id != registration.client_id
-                        || version.subject != registration.subject
+                    !matches!(version, CredentialVersion::Siwc { client_id, subject, .. }
+                        if client_id == &registration.client_id && subject == &registration.subject)
                 })
         }) {
             return Err(SessionFailure::new(
@@ -235,7 +281,7 @@ impl AuthFile {
             .expires_at
             .ok_or_else(SessionFailure::reauthentication)?;
         let valid = now < expires;
-        let updated = rejected.is_some_and(|version| version.generation != self.generation);
+        let updated = matches!(rejected, Some(CredentialVersion::Siwc { generation, .. }) if *generation != self.generation);
         let due = expires.saturating_sub(now) <= REFRESH_WINDOW_SECONDS;
         let refresh_allowed = session
             .refresh_not_before
@@ -310,7 +356,7 @@ impl AuthFile {
                 .access_token
                 .clone()
                 .ok_or_else(SessionFailure::reauthentication)?,
-            version: CredentialVersion {
+            version: CredentialVersion::Siwc {
                 client_id: registration.client_id.clone(),
                 subject: registration.subject.clone(),
                 generation: self.generation,

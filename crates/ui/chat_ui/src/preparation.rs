@@ -1,7 +1,7 @@
 use crate::reasoning::{self, ReasoningSetting, ReasoningSource};
 use agentelier_agent_host::{AgentHost, HostActivity, HostFailed, ModelEvent, ReceiveAgentEvents};
 use agentelier_llm_model_bridge::{ModelEventKind, ModelRequest, ModelResult};
-use agentelier_login_ui::{AccountPhase, AccountState, CredentialState, SessionActivity};
+use agentelier_login_ui::{AccountPhase, AccountState, SessionActivity};
 use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
 use bevy::text::LineBreak;
@@ -76,16 +76,9 @@ impl ModelState {
         self.operation.is_none()
             && account.operation.is_none()
             && account.phase == AccountPhase::Idle
-            && !account.uses_codex()
             && !account.runtime_failed
             && account.session_activity == SessionActivity::Idle
-            && matches!(
-                account.credentials,
-                CredentialState::StoredSession {
-                    subscription_enabled: true,
-                    ..
-                }
-            )
+            && account.model_unavailable_reason().is_none()
     }
     pub(crate) fn selected_model(&self) -> Option<&ModelChoice> {
         self.selected
@@ -325,15 +318,9 @@ fn activate(event: On<Activate>, actions: Query<&ModelAction>, mut commands: Com
 
 pub(crate) fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) -> Result {
     let account = world.resource::<AccountState>();
-    let subject = account
-        .account
-        .as_ref()
-        .filter(|_| !account.uses_codex())
-        .map(|account| account.subject.clone());
-    let signed_out = account.uses_codex()
-        || !matches!(account.credentials, CredentialState::StoredSession { .. });
+    let subject = account.model_account_key();
     if world.resource::<ModelState>().account_subject != subject
-        || signed_out && world.resource::<ModelState>().catalog_loaded
+        || subject.is_none() && world.resource::<ModelState>().catalog_loaded
     {
         *world.resource_mut::<ModelState>() = ModelState {
             account_subject: subject,
@@ -452,9 +439,6 @@ pub(crate) fn receive(world: &mut World, mut failures: Local<MessageCursor<HostF
 }
 
 fn status(state: &ModelState, account: &AccountState) -> String {
-    if account.uses_codex() {
-        return "当前 Codex OAuth 来源尚未接入模型服务".into();
-    }
     match state.phase {
         ModelPhase::Catalog => return "正在读取模型目录…".into(),
         ModelPhase::Verify => return "正在验证所选模型连接…".into(),
@@ -463,14 +447,8 @@ fn status(state: &ModelState, account: &AccountState) -> String {
     if let Some(error) = state.catalog_error.as_ref().or(state.error.as_ref()) {
         return error.clone();
     }
-    if !matches!(
-        account.credentials,
-        CredentialState::StoredSession {
-            subscription_enabled: true,
-            ..
-        }
-    ) {
-        return "请先登录并开启订阅授权".into();
+    if let Some(reason) = account.model_unavailable_reason() {
+        return reason.into();
     }
     if let Some(selected) = &state.selected
         && state.selected_model().is_none()

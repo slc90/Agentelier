@@ -2,7 +2,7 @@
 
 Agentelier 已经具备一个稳定的基本闭环：账号所有者交付凭据，LLM Model 生成冻结的 Responses 请求，Turn Runner 与会话所有者处理 Function Tool，Session Store 保存权威事件和不可变图片结果，Bridge 向 Bevy 界面投影安全状态。`gpt-6.2-sol` 的 `additional_tools` 与 `async: true` 已进入当前源码，不属于本次要重建的功能。
 
-模型服务先从第三方 Sign in with ChatGPT（SIWC）迁移到 Codex OAuth，再接入媒体能力。独立实验已用官方 Codex OAuth 凭据取得普通 Responses 回复、`gpt-image-2` 有效 PNG，以及 `gpt-6-astra` 跨回合异步工具结果。Agentelier 已能选择并校验本地 Codex 凭据文件，当前模型请求仍走 SIWC。下图是完成迁移后的目标结构。
+模型服务先从第三方 Sign in with ChatGPT（SIWC）迁移到 Codex OAuth，再接入媒体能力。独立实验已用官方 Codex OAuth 凭据取得普通 Responses 回复、`gpt-image-2` 有效 PNG，以及 `gpt-6-astra` 跨回合异步工具结果。当前应用按所选凭据提供 SIWC 或 Codex 的模型目录、连接验证与普通 HTTP 对话。下图是完成迁移后的目标结构。
 
 ```mermaid
 flowchart TD

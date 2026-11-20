@@ -1,6 +1,6 @@
 # 从 SIWC 迁移到 Codex OAuth
 
-当前模型请求仍通过第三方 Sign in with ChatGPT（SIWC）访问 `api.openai.com/v1`。Login 管理固定发行者、动态注册的客户端身份、`chatgpt.tokens.use.direct` 授权、受保护文件提交及按需续期。Account 已能选择并恢复 Codex 外部文件。迁移继续沿用同一个 Account 和 CredentialClient，使 Codex OAuth 成为唯一登录来源。
+当前模型请求按选定来源访问第三方 Sign in with ChatGPT（SIWC）的 `api.openai.com/v1`，或使用用户选择的 Codex 外部凭据访问 Codex 后端。Login 管理 SIWC 的固定发行者、动态注册的客户端身份、`chatgpt.tokens.use.direct` 授权、受保护文件提交及按需续期，也负责只读解析 Codex 文件。迁移继续沿用同一个 Account 和 CredentialClient，使 Codex OAuth 成为唯一登录来源。
 
 Codex OAuth 由官方 Codex 客户端签发，模型服务使用 `https://chatgpt.com/backend-api/codex`。该授权已经在独立实验中用于 GPT Image 2 和 GPT-6 Astra 的跨回合异步调用。服务、授权主体和工作区共同决定执行身份，邮箱只作为账号摘要展示。
 

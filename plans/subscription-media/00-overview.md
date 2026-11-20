@@ -32,7 +32,7 @@ flowchart TD
 ## 依次实施
 
 - 01 [选择并读取现有 Codex OAuth 凭据](01-codex-credential-source.md)（已实现）
-- 02 [使用 Codex OAuth 完成模型目录和普通对话](02-codex-model-routing.md)
+- 02 [使用 Codex OAuth 完成模型目录和普通对话](02-codex-model-routing.md)（已实现）
 - 03 [处理外部凭据更新与跨账号执行边界](03-external-credential-lifecycle.md)
 - 04 [让已有原生异步工具在 Codex 模型路由上工作](04-codex-native-async.md)
 - 04a [下线 SIWC 并收束到 Codex OAuth](04a-retire-siwc.md)

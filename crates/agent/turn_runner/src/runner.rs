@@ -397,6 +397,9 @@ async fn run_task(
         _ = cancel.cancelled() => return Ok(TurnStatus::Cancelled),
         result = credentials.execution() => match result { Ok(identity) => identity, Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())) },
     };
+    if let Err(failure) = settings.validate_source(identity.codex_identity()) {
+        return Ok(TurnStatus::Failed(failure.to_string()));
+    }
     let slug = settings.slug;
     let model = tokio::select! { biased;
         _ = cancel.cancelled() => return Ok(TurnStatus::Cancelled),

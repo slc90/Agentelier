@@ -236,6 +236,8 @@ pub struct StoredImage {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct StoredSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex: Option<agentelier_llm_model::CodexIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<agentelier_llm_model::MemorySnapshot>,
     #[serde(default)]
     pub context_limits: Box<agentelier_llm_model::ContextLimits>,
@@ -290,6 +292,7 @@ impl InitialSession {
             title: "新会话".into(),
             created_at_ms,
             settings: StoredSettings {
+                codex: view.settings.codex.clone(),
                 memory,
                 context_limits: view.settings.context_limits.clone(),
                 slug: view.settings.slug.clone(),

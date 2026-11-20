@@ -67,7 +67,6 @@ pub enum AccountFailure {
     Storage(String),
     SignedOut,
     SigningOut,
-    CodexModelUnavailable,
 }
 impl fmt::Display for AccountFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -79,7 +78,6 @@ impl fmt::Display for AccountFailure {
             Self::Storage(message) => f.write_str(message),
             Self::SignedOut => f.write_str("账号正在退出或已退出，需要重新登录"),
             Self::SigningOut => f.write_str("退出尚未完成，禁止新的账号操作"),
-            Self::CodexModelUnavailable => f.write_str("当前 Codex OAuth 来源尚未接入模型服务"),
             Self::Delivery(DeliveryFailure::Closed) => f.write_str("认证结果接收端已关闭"),
             Self::Delivery(DeliveryFailure::Full) => f.write_str("认证结果队列已满"),
             Self::Delivery(DeliveryFailure::Wake) => {
@@ -95,6 +93,7 @@ pub enum AccountCommand {
     ReadSource,
     SignOut(u64),
     Credentials {
+        codex: bool,
         intent: CredentialIntent,
         result: watch::Sender<Option<Result<UsableCredentials, SessionFailure>>>,
     },
@@ -140,6 +139,12 @@ impl Account {
         self.source.codex_selected()
     }
 
+    pub fn codex_identity(&self) -> Option<&crate::CodexIdentity> {
+        self.source_snapshot
+            .as_ref()
+            .and_then(AccountSource::codex_identity)
+    }
+
     pub async fn handle(
         self,
         command: AccountCommand,
@@ -163,7 +168,11 @@ impl Account {
                 .map_err(|_| AccountFailure::Task)?;
                 source = updated;
                 if let Ok(snapshot) = &result {
-                    owner_credentials.set_codex_selected(source.codex_selected())?;
+                    let changed = source_snapshot.as_ref().is_some_and(|previous| {
+                        previous.path() != snapshot.path()
+                            || previous.codex_identity() != snapshot.codex_identity()
+                    });
+                    owner_credentials.update_source(source.codex_selected(), changed)?;
                     source_snapshot = Some(snapshot.clone());
                 }
                 let result = result.map_err(|_| "无法保存当前凭据来源".to_owned());
@@ -175,6 +184,7 @@ impl Account {
             AccountCommand::ReadSource => {
                 read_source(
                     &source,
+                    &owner_credentials,
                     &mut source_snapshot,
                     &publish,
                     &mut delivery_failure,
@@ -189,13 +199,34 @@ impl Account {
                     delivery_failure = failure;
                 }
             }
-            AccountCommand::Credentials { result, .. } if source.codex_selected() => {
+            AccountCommand::Credentials { codex, result, .. }
+                if codex != source.codex_selected() =>
+            {
                 result.send_replace(Some(Err(SessionFailure::new(
-                    SessionFailureKind::CodexModelUnavailable,
-                    AccountFailure::CodexModelUnavailable.to_string(),
+                    SessionFailureKind::Identity,
+                    "凭据来源已变化，原请求已停止",
                 ))));
             }
-            AccountCommand::Credentials { intent, result } => {
+            AccountCommand::Credentials {
+                codex: true,
+                intent,
+                result,
+            } => {
+                let selection = source.clone();
+                let (snapshot, outcome) =
+                    tokio::task::spawn_blocking(move || selection.acquire(intent))
+                        .await
+                        .map_err(|_| AccountFailure::Task)??;
+                update_source_snapshot(
+                    snapshot,
+                    &owner_credentials,
+                    &mut source_snapshot,
+                    &publish,
+                    &mut delivery_failure,
+                )?;
+                result.send_replace(Some(outcome));
+            }
+            AccountCommand::Credentials { intent, result, .. } => {
                 let (returned, outcome, failure) = acquire(file, intent, &publish).await?;
                 file = returned;
                 result.send_replace(Some(outcome));
@@ -207,6 +238,7 @@ impl Account {
                 if source_snapshot.is_none() {
                     read_source(
                         &source,
+                        &owner_credentials,
                         &mut source_snapshot,
                         &publish,
                         &mut delivery_failure,
@@ -346,6 +378,7 @@ impl Account {
 
 async fn read_source(
     source: &SourceSettings,
+    credentials: &CredentialClient,
     previous: &mut Option<AccountSource>,
     publish: &impl Fn(AccountEvent) -> Result<(), DeliveryFailure>,
     delivery_failure: &mut Option<AccountFailure>,
@@ -354,6 +387,22 @@ async fn read_source(
     let snapshot = tokio::task::spawn_blocking(move || source.read())
         .await
         .map_err(|_| AccountFailure::Task)?;
+    update_source_snapshot(snapshot, credentials, previous, publish, delivery_failure)
+}
+
+fn update_source_snapshot(
+    snapshot: AccountSource,
+    credentials: &CredentialClient,
+    previous: &mut Option<AccountSource>,
+    publish: &impl Fn(AccountEvent) -> Result<(), DeliveryFailure>,
+    delivery_failure: &mut Option<AccountFailure>,
+) -> Result<(), AccountFailure> {
+    if previous
+        .as_ref()
+        .is_some_and(|old| old.codex_identity() != snapshot.codex_identity())
+    {
+        credentials.update_source(snapshot.path().is_some(), true)?;
+    }
     if previous.as_ref() != Some(&snapshot) {
         *previous = Some(snapshot.clone());
         capture_delivery(

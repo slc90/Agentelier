@@ -427,11 +427,9 @@ fn apply_source(state: &mut AccountState, snapshot: SourceSnapshot, operation_id
             path,
             status: match status {
                 Ok(summary) => CodexStatus::Read {
-                    identity: format!(
-                        "{} · 工作区 {}",
-                        summary.email.unwrap_or(summary.subject),
-                        summary.workspace_id
-                    ),
+                    subject: summary.subject,
+                    workspace_id: summary.workspace_id,
+                    email: summary.email,
                     expired: summary.expired,
                 },
                 Err(message) => {

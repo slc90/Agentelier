@@ -11,10 +11,21 @@ const ISSUER: &str = "https://auth.openai.com";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodexAccountSummary {
-    pub subject: String,
-    pub workspace_id: String,
+    pub identity: CodexIdentity,
     pub email: Option<String>,
     pub expired: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CodexIdentity {
+    pub subject: String,
+    pub workspace_id: String,
+}
+
+pub struct CodexCredentials {
+    pub summary: CodexAccountSummary,
+    pub(crate) access_token: String,
+    pub(crate) expires_at: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,7 +84,7 @@ struct ChatGptClaims {
     user_id: Option<String>,
 }
 
-pub fn read_codex_account(path: &Path) -> Result<CodexAccountSummary, CodexReadFailure> {
+pub fn read_codex_credentials(path: &Path) -> Result<CodexCredentials, CodexReadFailure> {
     if !path.is_absolute() || !path.metadata().is_ok_and(|metadata| metadata.is_file()) {
         return Err(CodexReadFailure::Unreadable);
     }
@@ -97,7 +108,8 @@ pub fn read_codex_account(path: &Path) -> Result<CodexAccountSummary, CodexReadF
         None => CodexReadFailure::Unsupported,
     })?;
     let id = claims(required_token(tokens.id_token.as_deref())?)?;
-    let access = claims(required_token(tokens.access_token.as_deref())?)?;
+    let access_token = tokens.access_token.ok_or(CodexReadFailure::MissingTokens)?;
+    let access = claims(required_token(Some(&access_token))?)?;
     required_token(tokens.refresh_token.as_deref())?;
     let workspace_id = &access.auth.chatgpt_account_id;
     if id.sub != access.sub
@@ -114,16 +126,22 @@ pub fn read_codex_account(path: &Path) -> Result<CodexAccountSummary, CodexReadF
         .duration_since(UNIX_EPOCH)
         .map_err(|_| CodexReadFailure::Clock)?
         .as_secs();
-    Ok(CodexAccountSummary {
-        subject: id.sub,
-        workspace_id: access.auth.chatgpt_account_id,
-        email: id.email.filter(|email| {
-            email.len() <= 254
-                && email.contains('@')
-                && !email.chars().any(char::is_whitespace)
-                && !email.chars().any(char::is_control)
-        }),
-        expired: access.exp <= now,
+    Ok(CodexCredentials {
+        summary: CodexAccountSummary {
+            identity: CodexIdentity {
+                subject: id.sub,
+                workspace_id: access.auth.chatgpt_account_id,
+            },
+            email: id.email.filter(|email| {
+                email.len() <= 254
+                    && email.contains('@')
+                    && !email.chars().any(char::is_whitespace)
+                    && !email.chars().any(char::is_control)
+            }),
+            expired: access.exp <= now,
+        },
+        access_token,
+        expires_at: access.exp,
     })
 }
 

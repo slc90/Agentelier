@@ -33,6 +33,42 @@ impl AccountState {
     pub fn uses_codex(&self) -> bool {
         self.codex.is_some()
     }
+
+    pub fn model_unavailable_reason(&self) -> Option<&'static str> {
+        match self.codex.as_ref().map(|source| &source.status) {
+            Some(CodexStatus::Read { expired: false, .. }) => None,
+            Some(CodexStatus::Read { expired: true, .. }) => Some("请在 Codex 中恢复授权"),
+            Some(CodexStatus::Failed(_)) => Some("请选择有效的 Codex 凭据文件"),
+            None if matches!(
+                self.credentials,
+                CredentialState::StoredSession {
+                    subscription_enabled: true,
+                    ..
+                }
+            ) =>
+            {
+                None
+            }
+            None => Some("请先登录并开启订阅授权"),
+        }
+    }
+
+    pub fn model_account_key(&self) -> Option<String> {
+        match self.codex.as_ref().map(|source| &source.status) {
+            Some(CodexStatus::Read {
+                subject,
+                workspace_id,
+                expired: false,
+                ..
+            }) => Some(format!("codex/{subject}/{workspace_id}")),
+            Some(_) => None,
+            None if matches!(self.credentials, CredentialState::StoredSession { .. }) => self
+                .account
+                .as_ref()
+                .map(|account| format!("siwc/{}", account.subject)),
+            None => None,
+        }
+    }
 }
 
 #[derive(Reflect, Clone)]
@@ -43,7 +79,12 @@ pub(crate) struct CodexSource {
 
 #[derive(Reflect, Clone)]
 pub(crate) enum CodexStatus {
-    Read { identity: String, expired: bool },
+    Read {
+        subject: String,
+        workspace_id: String,
+        email: Option<String>,
+        expired: bool,
+    },
     Failed(String),
 }
 #[derive(Reflect, Clone)]
@@ -134,7 +175,17 @@ pub(crate) fn install(app: &mut App) {
 fn identity(state: &AccountState) -> String {
     if let Some(source) = &state.codex {
         return match &source.status {
-            CodexStatus::Read { identity, .. } => identity.clone(),
+            CodexStatus::Read {
+                subject,
+                workspace_id,
+                email,
+                ..
+            } => {
+                format!(
+                    "{} · 工作区 {workspace_id}",
+                    email.as_deref().unwrap_or(subject)
+                )
+            }
             CodexStatus::Failed(_) => String::new(),
         };
     }

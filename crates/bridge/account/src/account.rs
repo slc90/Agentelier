@@ -195,8 +195,8 @@ fn convert_source(source: agentelier_account::AccountSource) -> SourceSnapshot {
             path,
             status: status
                 .map(|summary| CodexSummary {
-                    subject: summary.subject,
-                    workspace_id: summary.workspace_id,
+                    subject: summary.identity.subject,
+                    workspace_id: summary.identity.workspace_id,
                     email: summary.email,
                     expired: summary.expired,
                 })

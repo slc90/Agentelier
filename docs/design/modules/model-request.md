@@ -8,16 +8,16 @@ sequenceDiagram
     participant Bridge as Bridge
     participant Model as Tokio 模型任务
     participant Auth as 串行认证所有者
-    participant API as 公共模型服务
+    participant API as 当前来源的模型服务
     App->>Bridge: request_model(Catalog 或 Verify)
     Bridge->>Model: 操作 ID
     Model->>Auth: 请求可用凭据
-    Auth-->>Model: 已持久化凭据
+    Auth-->>Model: 源与身份绑定的可用凭据
     alt 读取目录
-        Model->>API: GET /v1/models
+        Model->>API: GET 当前来源的模型目录
         API-->>Model: 当前账号目录
     else 验证明确模型
-        Model->>API: POST /v1/responses + 所选 slug
+        Model->>API: POST 当前 Responses 路由 + 所选 slug
         API-->>Model: SSE 事件至终态
     end
     Model-->>Bridge: 目录、完整正文或实际失败
@@ -28,7 +28,9 @@ sequenceDiagram
 
 模型任务取消只丢弃自己的网络/凭据等待 Future。已提交给认证所有者的刷新独立继续，不因等待者取消而丢失旋转结果。主窗口以真实终态结束等待；退出期间 Bridge 消费并隔离旧模型及认证结果。
 
-模型目录保留全部可显示项目及服务顺序，用户显式选择 slug 后独立验证。每次操作取得当前可用凭据；认证恢复沿 AuthenticatedRequest 的一次恢复预算执行，通过 CredentialVersion 比较 client_id 和 subject，避免恢复到另一账号。HTTP 401 可在输出前触发恢复；输出项或文本开始后标记禁止重放。
+SIWC 使用 `api.openai.com/v1/models` 和 `api.openai.com/v1/responses`。Codex OAuth 使用 `chatgpt.com/backend-api/codex/models` 和同域的 `responses`，目录请求携带 `client_version`，两类请求都携带 `ChatGPT-Account-Id` 工作区头。Codex 目录只显示服务标记为可见、支持文本且可由普通客户端执行的模型，并保留服务顺序。Codex Responses 添加顶层 `instructions` 字段，固定指令仍按原顺序进入 `input`。
+
+用户从当前来源的目录显式选择 slug 后独立验证。认证恢复沿 AuthenticatedRequest 的一次恢复预算执行。SIWC 比较客户端标识和主体，Codex 比较主体和工作区。HTTP 401 可在输出前触发一次同源凭据恢复。输出项或文本开始后禁止重放，请求原始字节在认证恢复期间保持固定。
 
 SSE 解析器跨 HTTP 块保留当前行和事件数据，支持 LF、CRLF、CR、多行 data 及开头 BOM，空行才派发事件。只以完成对象的 output 数组为正文权威来源，按 message/content 顺序提取 output_text；增量仅用于标记输出已经开始。未完成、失败和显式错误独立传播，EOF 没有完成事件不成功。大小和时间限制见[请求边界](#请求边界)。
 
@@ -52,7 +54,7 @@ LLM Model 以 ModelRequest::Catalog 读取全部可显示模型，以 Verify 携
 
 聊天 GenerationRequest 额外携带固定的 InstructionSnapshot。生成前核对快照，并通过其统一 `messages()` 映射将基础覆盖及有序补充文本构造成 `developer` 输入消息，再追加 ProtocolHistory 和当前用户输入；基础与补充槽位不对应不同协议优先级。默认空配置保持原有请求行为。指令材料解析与保存归 Prompts，LLM Model 不读提示词文件，不在模型连接验证中自动注入准备区指令。
 
-聊天请求携带会话冻结的 Function Tool 声明、自动选择和 `parallel_tool_calls: true`。新建 `gpt-6.2-sol` 会话把目录作为 `input` 首个 developer `additional_tools` 项，具备异步资格的叶子带 `async: true`。顶层 `tools` 字段省略。固定指令、记忆、技能、协议历史和本轮输入随原顺序排列，材料索引记录实际位置。其他模型和旧平铺会话沿用同步声明。HTTP 聊天使用 `store: false`、`stream: true` 和完整的 `input`，省略 `previous_response_id`。独立的目录与连接验证不附带工具。
+聊天请求携带会话冻结的 Function Tool 声明、自动选择和 `parallel_tool_calls: true`。SIWC 新建 `gpt-6.2-sol` 会话把目录作为 `input` 首个 developer `additional_tools` 项，具备异步资格的叶子带 `async: true`，顶层 `tools` 字段省略。固定指令、记忆、技能、协议历史和本轮输入随原顺序排列，材料索引记录实际位置。Codex HTTP 路径、其他模型和旧平铺会话使用同步声明。HTTP 聊天使用 `store: false`、`stream: true` 和完整的 `input`，省略 `previous_response_id`。独立的目录与连接验证不附带工具。
 
 SSE 函数参数增量只更新展示。模型层核对完整流项与 `response.completed.output` 的身份、名称、namespace、参数和异步模式。原生路径按无 namespace 的工具名称匹配冻结目录。返回 `async: true` 的调用需要相应声明，省略标志或返回 `false` 按同步处理。请求拒绝沿用实际服务错误。协议历史原样重放 `function_call`，并以 `call_id` 关联 `function_call_output`。普通工具使用有界 JSON 字符串，图片结果使用 `input_text` 和 `input_image` 内容数组。同步调用结果确认追加后才能构建下一次请求；未配对的异步调用保留在冻结请求中。请求在途期间到达的结果只确认保存，待响应接纳或请求停止后按保存序号追加。
 
@@ -66,9 +68,9 @@ SSE 函数参数增量只更新展示。模型层核对完整流项与 `response
 
 ## 任务内固定执行身份
 
-Turn Runner 首次请求前通过 CredentialClient 获取 ExecutionIdentity，捕获凭据版本的账号标识与本次认证生命周期的失效令牌。GenerationRequest 只包含模型、推理、指令、历史和工具设置，不含会话创建者。生成发送前与认证恢复后都核对任务身份；同主体正常 Token 续期可更换凭据版本，退出失效令牌或其他账号凭据不能用于旧任务。身份不实现 Debug/Reflect，也不持久化 Token。
+Turn Runner 首次请求前通过 CredentialClient 获取 ExecutionIdentity，捕获凭据版本的账号标识与本次认证生命周期的失效令牌。新建 Codex 会话时固定主体和工作区，冻结请求记录服务来源并将模型 slug 编入请求字节。生成发送、认证恢复和接纳响应时核对执行身份。同一授权主体和工作区可以使用新的 Token 版本，执行身份的失效令牌和原始凭据留在运行侧。
 
-新任务重新获取当前账号，保留原 Session UUID、固定设置与协议历史。服务拒绝旧不透明协议项或该模型权限时返回真实失败，不裁剪历史或替换模型。跨账号服务接受旧载荷的实际结果仍需授权切换账号后验证。
+新任务重新获取当前账号，保留原 Session UUID、固定设置与协议历史。无 Codex 绑定的旧存档按 SIWC 会话恢复。会话可在任一来源下打开，模型请求须匹配会话绑定。跨来源或 Codex 主体、工作区不匹配时，原会话可阅读，界面提示新建会话。模型权限或旧协议项被服务拒绝时保留真实失败、原历史和原模型选择。
 
 ## 模型窗口能力与响应使用量
 

@@ -12,6 +12,8 @@ mod project;
 mod protocol;
 pub use project::{ProjectItem, ProjectPublication, PublicationKind};
 mod stream;
+pub use agentelier_account::CodexIdentity;
+pub use model::ModelRoute;
 
 pub use generation::{
     GenerationRequest, MAX_REQUEST_BYTES, PreparedGeneration, RequestCompaction, RequestHistory,

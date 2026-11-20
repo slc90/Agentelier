@@ -21,6 +21,7 @@ pub struct CompactionContinuation {
 
 #[derive(Clone)]
 pub struct SessionSettings {
+    pub codex: Option<agentelier_llm_model::CodexIdentity>,
     pub slug: String,
     pub display_name: String,
     pub effort: Option<String>,
@@ -28,6 +29,29 @@ pub struct SessionSettings {
     pub context_limits: Box<agentelier_llm_model::ContextLimits>,
     pub instructions: Arc<InstructionSnapshot>,
     pub working_directory: std::path::PathBuf,
+}
+
+impl SessionSettings {
+    pub fn validate_source(
+        &self,
+        codex: Option<&agentelier_llm_model::CodexIdentity>,
+    ) -> Result<(), ConversationFailure> {
+        if self.codex.as_ref() == codex {
+            Ok(())
+        } else {
+            Err(ConversationFailure::new(
+                "本会话的授权来源、账号或工作区与当前凭据不一致，请新建会话",
+            ))
+        }
+    }
+
+    pub(crate) fn model_route(&self) -> agentelier_llm_model::ModelRoute {
+        if self.codex.is_some() {
+            agentelier_llm_model::ModelRoute::Codex
+        } else {
+            agentelier_llm_model::ModelRoute::Siwc
+        }
+    }
 }
 pub enum ConversationRequest {
     ProcessResults {
@@ -123,7 +147,7 @@ pub struct SessionView {
     pub context: Box<crate::ContextState>,
     pub notice: Option<String>,
     pub id: SessionId,
-    pub settings: SessionSettings,
+    pub settings: Box<SessionSettings>,
     pub turn: Option<Box<TurnView>>,
     pub previous_turns: Vec<TurnView>,
     pub committed_items: Vec<ProtocolItemSummary>,
@@ -202,6 +226,15 @@ pub struct Conversation {
 }
 
 impl Conversation {
+    pub fn validate_model_source(
+        &self,
+        codex: Option<&agentelier_llm_model::CodexIdentity>,
+    ) -> Result<(), ConversationFailure> {
+        self.session.as_ref().map_or(Ok(()), |session| {
+            session.view.settings.validate_source(codex)
+        })
+    }
+
     pub fn restored_processes(&self) -> crate::ProcessLedger {
         self.session
             .as_ref()
@@ -356,7 +389,7 @@ impl Conversation {
             ToolCatalog::with_extensions(
                 &settings.working_directory,
                 settings.image_input,
-                if settings.slug == "gpt-6.2-sol" {
+                if settings.codex.is_none() && settings.slug == "gpt-6.2-sol" {
                     agentelier_tools::ToolContract::AdditionalTools
                 } else {
                     agentelier_tools::ToolContract::Flat
@@ -371,7 +404,7 @@ impl Conversation {
             context: Box::default(),
             notice: None,
             id,
-            settings,
+            settings: Box::new(settings),
             turn: None,
             previous_turns: Vec::new(),
             committed_items: Vec::new(),
@@ -431,6 +464,7 @@ impl Conversation {
             .ok_or(ConversationFailure::new("要重置的会话已变化"))?
             .view
             .settings
+            .as_ref()
             .clone();
         self.prepare(settings, tools, memory)
     }

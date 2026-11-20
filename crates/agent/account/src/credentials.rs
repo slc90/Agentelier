@@ -39,6 +39,10 @@ pub struct ExecutionIdentity {
     invalidated: CancellationToken,
 }
 impl ExecutionIdentity {
+    pub fn codex_identity(&self) -> Option<&crate::CodexIdentity> {
+        self.version.codex_identity()
+    }
+
     pub async fn invalidated(&self) {
         self.invalidated.cancelled().await;
     }
@@ -142,10 +146,7 @@ impl CredentialClient {
             .state
             .lock()
             .map_err(|_| AccountFailure::CredentialState)?;
-        if state.codex_selected {
-            return Err(AccountFailure::CodexModelUnavailable);
-        }
-        if !state.accepting {
+        if state.ending || !state.codex_selected && !state.accepting {
             return Err(AccountFailure::SignedOut);
         }
         state.flights.retain(|flight| {
@@ -160,6 +161,7 @@ impl CredentialClient {
         }
         let (result, receiver) = watch::channel(None);
         (self.submit)(AccountCommand::Credentials {
+            codex: state.codex_selected,
             intent: intent.clone(),
             result,
         })?;
@@ -229,12 +231,16 @@ impl CredentialClient {
         Ok(())
     }
 
-    pub(crate) fn set_codex_selected(&self, selected: bool) -> Result<(), AccountFailure> {
+    pub(crate) fn update_source(
+        &self,
+        selected: bool,
+        changed: bool,
+    ) -> Result<(), AccountFailure> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| AccountFailure::CredentialState)?;
-        if state.codex_selected != selected {
+        if changed || state.codex_selected != selected {
             state.invalidated.cancel();
             state.flights.clear();
             state.invalidated = CancellationToken::new();
