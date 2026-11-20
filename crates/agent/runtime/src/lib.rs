@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod operations;
 mod runtime;
+pub use agentelier_account::{SourceChange, SourceSettings};
 pub use agentelier_mcp::{
     ConfigChange, ConfigSnapshot, Server, ServerId, ServerSettings, Transport,
 };

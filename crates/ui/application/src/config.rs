@@ -19,11 +19,13 @@ pub(crate) struct AppConfig {
     pub(crate) scale_factor: f32,
     pub(crate) brp_enabled: bool,
     pub(crate) brp_port: u16,
-    #[serde(default, serialize_with = "serialize_data_directory")]
+    #[serde(default, serialize_with = "serialize_optional_path")]
     pub(crate) data_directory: Option<PathBuf>,
+    #[serde(default, serialize_with = "serialize_optional_path")]
+    pub(crate) codex_auth_file: Option<PathBuf>,
 }
 
-fn serialize_data_directory<S: Serializer>(
+fn serialize_optional_path<S: Serializer>(
     directory: &Option<PathBuf>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
@@ -40,6 +42,7 @@ impl Default for AppConfig {
             brp_enabled: true,
             brp_port: DEFAULT_BRP_PORT,
             data_directory: None,
+            codex_auth_file: None,
         }
     }
 }
@@ -111,12 +114,20 @@ impl ConfigStore {
     }
 
     pub(crate) fn remember_data_directory(&self, path: &Path) -> io::Result<()> {
+        self.update(|config| config.data_directory = Some(path.to_path_buf()))
+    }
+
+    pub(crate) fn remember_codex_source(&self, path: Option<&Path>) -> io::Result<()> {
+        self.update(|config| config.codex_auth_file = path.map(Path::to_path_buf))
+    }
+
+    fn update(&self, change: impl FnOnce(&mut AppConfig)) -> io::Result<()> {
         let mut current = self
             .0
             .lock()
             .map_err(|_| io::Error::other("应用配置状态不可用"))?;
         let mut updated = current.config.clone();
-        updated.data_directory = Some(path.to_path_buf());
+        change(&mut updated);
         updated.save(&current.file).map_err(|error| {
             io::Error::new(
                 error.kind(),

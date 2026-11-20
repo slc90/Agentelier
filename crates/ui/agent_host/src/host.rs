@@ -1,18 +1,20 @@
 use agentelier_account_bridge::AccountEventKind;
-use agentelier_bridge_connection::{BridgeEventKind, BridgeFailure, Connection};
+use agentelier_bridge_connection::{
+    BridgeEventKind, BridgeFailure, Connection, SourceChange, SourceSettings,
+};
 use agentelier_conversation_bridge::SessionId;
 use agentelier_llm_model_bridge::ModelEventKind;
 use bevy::prelude::*;
 use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tracing::debug;
 
 const MAX_EVENTS_PER_UPDATE: usize = 32;
 
-#[derive(Resource, Clone, Default)]
-pub struct AgentHost(Arc<Mutex<HostState>>);
+#[derive(Resource, Clone)]
+pub struct AgentHost(Arc<Mutex<HostState>>, SourceSettings);
 
 #[derive(Default)]
 struct HostState {
@@ -80,12 +82,23 @@ pub struct HostFailed {
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub struct ReceiveAgentEvents;
 
-#[derive(Default)]
 pub struct AgentHostPlugin {
     host: AgentHost,
 }
 
 impl AgentHostPlugin {
+    pub fn new(
+        codex_auth_file: Option<PathBuf>,
+        save_source: impl Fn(Option<&Path>) -> io::Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            host: AgentHost(
+                Arc::new(Mutex::new(HostState::default())),
+                SourceSettings::new(codex_auth_file, save_source),
+            ),
+        }
+    }
+
     pub fn host(&self) -> AgentHost {
         self.host.clone()
     }
@@ -144,7 +157,11 @@ impl AgentHost {
                 .as_ref()
                 .ok_or_else(|| io::Error::other("执行连接缺少本次数据环境"))?;
             let notify = startup.notify.clone();
-            state.connection = Some(Connection::start(startup.path.clone(), move || notify())?);
+            state.connection = Some(Connection::start(
+                startup.path.clone(),
+                self.1.clone(),
+                move || notify(),
+            )?);
             debug!("共享执行连接已建立");
         }
         let connection = state
@@ -156,6 +173,9 @@ impl AgentHost {
 
     pub fn restore(&self) -> Result<u64> {
         self.submit(Connection::restore)
+    }
+    pub fn change_source(&self, change: SourceChange) -> Result<u64> {
+        self.submit(|connection| connection.change_source(change))
     }
     pub fn login(&self, consent: bool) -> Result<u64> {
         self.submit(|connection| connection.login(consent))

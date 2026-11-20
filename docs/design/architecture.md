@@ -110,7 +110,7 @@ UI 使用 `bevy_widgetry_path_display::display_path` 显示路径，application 
 
 ## Agent 的账号、模型与执行所有者
 
-Login 实现具体协议、身份与文件规则。Account 的 `Account` 持有唯一 AuthFile 及待保存浏览器操作，串行执行恢复、登录、保存重试、凭据获取和退出；文件工作交给 spawn_blocking，网络及回环监听使用异步 I/O。登录协议使用支持系统代理的 reqwest、固定签发方的 JWT 校验及 win-custody 的安全文件权限接口。
+Login 实现具体协议、身份与文件规则。Account 的 `Account` 持有 SIWC AuthFile、待保存浏览器操作与当前凭据来源，串行执行恢复、登录、保存重试、凭据获取、退出和外部来源切换；文件工作交给 spawn_blocking，网络及回环监听使用异步 I/O。SIWC 登录协议使用支持系统代理的 reqwest、固定签发方的 JWT 校验及 win-custody 的安全文件权限接口。Codex OAuth 只读解析用户选择的文件，应用配置仅持久化其路径。选用 Codex 时模型凭据入口停止交付 SIWC 凭据，直到用户断开外部来源。
 
 Account 的可克隆 CredentialClient 管理接纳、会话失效令牌和在途请求合并。它通过 Runtime 赋予的命令提交能力进入同一个有界队列，不反向依赖 Runtime。Token、会话代次和旋转待保存结果只留在执行侧；启动仅恢复文件，无周期保活。按需更新保存成功才交付凭据，取消等待者不丢弃已经开始的旋转。
 

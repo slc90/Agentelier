@@ -52,6 +52,7 @@ impl WakeGate {
 #[derive(Clone, Copy)]
 enum Phase {
     Restore,
+    Source,
     Login,
     SaveFailed,
     Saving,
@@ -98,6 +99,7 @@ pub struct Connection {
 impl Connection {
     pub fn start(
         path: PathBuf,
+        source: crate::SourceSettings,
         notify: impl Fn() -> bool + Send + Sync + 'static,
     ) -> Result<Self, BridgeFailure> {
         let (sender, events) = mpsc::sync_channel(RESULT_CAPACITY);
@@ -111,6 +113,7 @@ impl Connection {
         let operations = agentelier_agent_runtime::OperationSequence::default();
         let runtime = AgentRuntime::start(
             path,
+            source,
             operations.clone(),
             move |event| {
                 let event = BridgeEvent {
@@ -255,6 +258,18 @@ impl Connection {
         self.pending = Some(Pending {
             id,
             phase: Phase::Restore,
+            cancelling: false,
+        });
+        Ok(id)
+    }
+    pub fn change_source(&mut self, change: crate::SourceChange) -> Result<u64, BridgeFailure> {
+        let id = self.allocate()?;
+        self.runtime
+            .change_source(id, change)
+            .map_err(|error| BridgeFailure(error.to_string()))?;
+        self.pending = Some(Pending {
+            id,
+            phase: Phase::Source,
             cancelling: false,
         });
         Ok(id)
@@ -506,7 +521,7 @@ impl Connection {
             .as_mut()
             .filter(|pending| pending.id == id)
             .ok_or_else(|| BridgeFailure("登录操作已经结束".into()))?;
-        if matches!(pending.phase, Phase::Restore) {
+        if matches!(pending.phase, Phase::Restore | Phase::Source) {
             return Err(BridgeFailure("账号读取不支持中途取消".into()));
         }
         if !pending.cancelling {
@@ -813,6 +828,10 @@ impl Connection {
                         self.session_activity = *activity;
                         return Ok(Some(event));
                     }
+                    if matches!(kind, AccountEventKind::SourceChanged(_)) && event.operation_id == 0
+                    {
+                        return Ok(Some(event));
+                    }
                     let Some(pending) = &mut self.pending else {
                         return self.protocol_failure();
                     };
@@ -820,6 +839,12 @@ impl Connection {
                         return self.protocol_failure();
                     }
                     match kind {
+                        AccountEventKind::SourceChanged(_)
+                            if matches!(pending.phase, Phase::Source) =>
+                        {
+                            self.pending = None;
+                        }
+                        AccountEventKind::SourceChanged(_) => return self.protocol_failure(),
                         AccountEventKind::BrowserReady(_) if pending.cancelling => continue,
                         AccountEventKind::SaveFailed(_) => pending.phase = Phase::SaveFailed,
                         AccountEventKind::Saving => pending.phase = Phase::Saving,
@@ -848,6 +873,13 @@ impl Connection {
     pub fn sign_out(&mut self) -> Result<u64, BridgeFailure> {
         if self.stopping || self.failure.is_some() {
             return Err(BridgeFailure("认证运行已停止".into()));
+        }
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| matches!(pending.phase, Phase::Source))
+        {
+            return Err(BridgeFailure("凭据来源更新尚未结束".into()));
         }
         if let Some(pending) = &mut self.sign_out {
             if !pending.failed {

@@ -1,11 +1,14 @@
+use crate::account::{CodexSource, CodexStatus};
 use crate::{
     AccountPhase, AccountState, AccountSummary, CredentialState, DataDirectoryReady, LoginAction,
     RestoreAccount, SessionActivity,
 };
 use agentelier_account_bridge::{
-    AccountEventKind, AuthorizationLink, CredentialState as BridgeCredentials,
+    AccountEventKind, AuthorizationLink, CredentialState as BridgeCredentials, SourceSnapshot,
 };
-use agentelier_agent_host::{AccountEvent, AgentHost, HostFailed, ReceiveAgentEvents};
+use agentelier_agent_host::{
+    AccountEvent, AgentHost, HostFailed, ReceiveAgentEvents, SourceChange,
+};
 use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
 use bevy::winit::EventLoopProxyWrapper;
@@ -64,7 +67,7 @@ fn request(world: &mut World, request: Request) -> Result {
         return Ok(());
     }
     let state = world.resource::<AccountState>();
-    if state.operation.is_some() || state.runtime_failed {
+    if state.operation.is_some() || state.runtime_failed || state.uses_codex() {
         return Ok(());
     }
     let backend = world.resource::<LoginInteraction>().clone();
@@ -103,6 +106,30 @@ fn request(world: &mut World, request: Request) -> Result {
     }
     Ok(())
 }
+
+pub(crate) fn change_source(world: &mut World, change: SourceChange) -> Result {
+    let state = world.resource::<AccountState>();
+    let host = world.resource::<AgentHost>();
+    if state.phase != AccountPhase::Idle || state.runtime_failed || host.is_stopping()? {
+        return Ok(());
+    }
+    let result = host.change_source(change);
+    let mut state = world.resource_mut::<AccountState>();
+    match result {
+        Ok(id) => {
+            state.operation = Some(id);
+            state.phase = AccountPhase::ChangingSource;
+            state.error = None;
+            state.feedback = None;
+            info!(operation_id = id, "用户请求更新当前凭据来源");
+        }
+        Err(failure) => {
+            error!(error = %failure, "无法开始更新凭据来源");
+            state.error = Some(failure.to_string());
+        }
+    }
+    Ok(())
+}
 fn action_request(world: &mut World, action: LoginAction) -> Result {
     match action {
         LoginAction::Login => return request(world, Request::Login { consent: false }),
@@ -121,7 +148,10 @@ fn action_request(world: &mut World, action: LoginAction) -> Result {
         LoginAction::RetrySave => state.phase == AccountPhase::SaveFailed,
         LoginAction::Cancel => !matches!(
             state.phase,
-            AccountPhase::Idle | AccountPhase::Reading | AccountPhase::Cancelling
+            AccountPhase::Idle
+                | AccountPhase::Reading
+                | AccountPhase::ChangingSource
+                | AccountPhase::Cancelling
         ),
         _ => false,
     };
@@ -206,6 +236,19 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
         let mut state = world.resource_mut::<AccountState>();
         match event.kind {
+            AccountEventKind::SourceChanged(result) => {
+                if event.operation_id != 0 {
+                    state.phase = AccountPhase::Idle;
+                    state.operation = None;
+                }
+                match result {
+                    Ok(snapshot) => apply_source(&mut state, snapshot, event.operation_id),
+                    Err(failure) => {
+                        error!(operation_id = event.operation_id, error = %failure, "凭据来源未能保存");
+                        state.error = Some(failure.to_string());
+                    }
+                }
+            }
             AccountEventKind::SignOutProgress(stage) => {
                 backend.authorization = None;
                 open = false;
@@ -376,6 +419,37 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
     }
     receive_browser(world)
 }
+
+fn apply_source(state: &mut AccountState, snapshot: SourceSnapshot, operation_id: u64) {
+    state.codex = match snapshot {
+        SourceSnapshot::Siwc => None,
+        SourceSnapshot::Codex { path, status } => Some(CodexSource {
+            path,
+            status: match status {
+                Ok(summary) => CodexStatus::Read {
+                    identity: format!(
+                        "{} · 工作区 {}",
+                        summary.email.unwrap_or(summary.subject),
+                        summary.workspace_id
+                    ),
+                    expired: summary.expired,
+                },
+                Err(message) => {
+                    error!(operation_id, error = %message, "Codex 凭据文件不可用");
+                    CodexStatus::Failed(message)
+                }
+            },
+        }),
+    };
+    if operation_id != 0 {
+        info!(
+            operation_id,
+            codex_selected = state.uses_codex(),
+            "当前凭据来源已保存"
+        );
+    }
+}
+
 fn apply_snapshot(state: &mut AccountState, snapshot: agentelier_account_bridge::AccountSnapshot) {
     state.account = snapshot.account.map(|account| AccountSummary {
         subject: account.subject,
@@ -399,6 +473,8 @@ fn apply_snapshot(state: &mut AccountState, snapshot: agentelier_account_bridge:
 fn sign_out(world: &mut World) -> Result {
     let state = world.resource::<AccountState>();
     if state.runtime_failed
+        || state.uses_codex()
+        || state.phase == AccountPhase::ChangingSource
         || matches!(
             state.phase,
             AccountPhase::SigningOut | AccountPhase::Revoking | AccountPhase::Clearing
@@ -442,6 +518,7 @@ fn sign_out(world: &mut World) -> Result {
 fn check_session(world: &mut World) -> Result {
     let state = world.resource::<AccountState>();
     if state.phase != AccountPhase::Idle
+        || state.uses_codex()
         || state.runtime_failed
         || matches!(
             state.session_activity,

@@ -1,6 +1,6 @@
 # 认证运行与凭据管理
 
-当前已实现文件账号恢复、ChatGPT 浏览器授权及按需会话续期。具体认证与文件能力归 `agentelier_login`，Agent/Tokio 串行执行，Bridge 转换业务事件，`login_ui` 负责安全投影、Bridge 衔接以及浏览器和剪贴板交互；`application` 通过界面库提供的生命周期句柄协调退出。续期不依赖周期保活，退出登录在同一所有者中撤销并清空会话。
+当前已实现 SIWC 文件账号恢复、ChatGPT 浏览器授权及按需会话续期，以及 Codex OAuth 外部凭据的只读选择。具体认证与文件能力归 `agentelier_login`，Agent/Tokio 串行执行，Bridge 转换业务事件，`login_ui` 负责安全投影、Bridge 衔接以及浏览器和剪贴板交互；`application` 通过界面库提供的生命周期句柄协调退出。SIWC 续期不依赖周期保活，退出登录在同一所有者中撤销并清空 SIWC 会话。
 
 ## 记录与会话
 
@@ -15,6 +15,14 @@
 有会话必须有登记。Access Token、Bearer 类型和有效期必须共同存在；直接订阅使用范围需要 Access Token，offline_access 需要相应凭据。仅有已验证身份的合法授权不生成假的 Access Token 或有效期。最早刷新时间可能在网络响应到达前已经过去，不因此拒绝合法记录。
 
 文件缺失、只有主机、登记但会话为空分别为 NoRecord、HostOnly、SignedOut。已有会话恢复摘要、是否过期及实际订阅范围，不把本地读取视为远端认证检查。解析错误只显示行列，结构错误使用固定字段名称，原始正文和 Token 不进入错误或 Debug。
+
+## Codex OAuth 外部来源
+
+Account 保存当前来源。用户可以显式选择本地绝对路径上的 Codex `auth.json`，或断开该来源并回到原 SIWC 状态。应用配置的 `codex_auth_file` 只保存路径，配置原子提交成功后才切换来源。启动恢复配置中的路径，运行期间定期只读检查选中的文件，摘要或状态变化时才更新投影。文件读取失败、格式不支持、令牌缺失、工作区或身份不一致和过期都有独立反馈。读取失败时保留所选来源。
+
+Login 识别 Codex ChatGPT OAuth 文件的认证模式及令牌结构，核对两枚 JWT 的账号与工作区声明以及文件记录的工作区。Access Token 的本地有效期用于显示过期状态。声明核对是本地结构检查，尚无远程会话或签名验证。Token 仅在 Login 解析期间存在，不写入配置、SIWC 认证文件、事件或日志。外部文件的签发、刷新和撤销由原 Codex 客户端处理。
+
+Codex 来源尚未接入模型路由。启用该来源时 CredentialClient 停止发放 SIWC 凭据并使旧执行身份失效，Runtime 收尾相关工具和队列工作。断开仅清除配置中的文件引用，原外部文件和 SIWC 会话继续保留。
 
 ## 浏览器尝试
 
@@ -84,7 +92,7 @@ Runtime 在独立线程驱动 Tokio，Account 串行协调账号操作，Login �
 
 退出协调暂存 AppExit，停止认证命令及普通通知，取消当前授权并等待执行线程与 Tokio 真实结束，再在事件循环有效时收尾辅助任务。最后允许主循环退出、完成日志并释放数据环境。显式 finish 传播错误，Drop 仅提供防泄漏兜底。
 
-协议参照：[OpenAI 注册与登录](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)。本项目仅维护一个账号登记，不提供其他登录方式、存储后端或多账号框架。
+SIWC 协议参照 [OpenAI 注册与登录](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)。Codex OAuth 结构参照 [Codex auth.json](https://github.com/openai/codex/blob/main/codex-rs/login/src/auth/storage.rs) 及 [TokenData](https://github.com/openai/codex/blob/main/codex-rs/login/src/token_data.rs)。
 
 ## 模型消费者与认证收敛
 

@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod credentials;
 mod operations;
+mod source;
 
 pub use agentelier_login::{
     AuthenticatedRequest, CredentialState, RemoteRevocation, RestoredAccount, SessionActivity,
@@ -13,3 +14,4 @@ pub use operations::{
     Account, AccountCommand, AccountEvent, AccountEventKind, AccountFailure, DeliveryFailure,
     OperationFailure,
 };
+pub use source::{AccountSource, SourceChange, SourceSettings};

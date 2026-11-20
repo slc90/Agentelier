@@ -22,6 +22,7 @@ struct ClientState {
     flights: Vec<Flight>,
     accepting: bool,
     ending: bool,
+    codex_selected: bool,
     invalidated: CancellationToken,
 }
 
@@ -92,6 +93,7 @@ impl CredentialRequest {
 impl CredentialClient {
     pub fn new(
         shutdown: CancellationToken,
+        codex_selected: bool,
         submit: impl Fn(AccountCommand) -> Result<(), AccountFailure> + Send + Sync + 'static,
     ) -> Self {
         Self {
@@ -100,6 +102,7 @@ impl CredentialClient {
                 flights: Vec::new(),
                 accepting: true,
                 ending: false,
+                codex_selected,
                 invalidated: CancellationToken::new(),
             })),
             shutdown,
@@ -139,6 +142,9 @@ impl CredentialClient {
             .state
             .lock()
             .map_err(|_| AccountFailure::CredentialState)?;
+        if state.codex_selected {
+            return Err(AccountFailure::CodexModelUnavailable);
+        }
         if !state.accepting {
             return Err(AccountFailure::SignedOut);
         }
@@ -219,6 +225,20 @@ impl CredentialClient {
         if !state.ending && !state.accepting {
             state.invalidated = CancellationToken::new();
             state.accepting = true;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn set_codex_selected(&self, selected: bool) -> Result<(), AccountFailure> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| AccountFailure::CredentialState)?;
+        if state.codex_selected != selected {
+            state.invalidated.cancel();
+            state.flights.clear();
+            state.invalidated = CancellationToken::new();
+            state.codex_selected = selected;
         }
         Ok(())
     }

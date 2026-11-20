@@ -34,6 +34,7 @@ use tracing::{debug, error};
 pub use agentelier_account::DeliveryFailure;
 
 const COMMAND_CAPACITY: usize = 4;
+const SOURCE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 const SIGN_OUT_CAPACITY: usize = 1;
 const SESSION_COMMAND_CAPACITY: usize = 16;
 
@@ -206,6 +207,7 @@ impl ModelControl {
 impl AgentRuntime {
     pub fn start(
         credentials_path: PathBuf,
+        source: crate::SourceSettings,
         operations: crate::OperationSequence,
         publish: impl Fn(AgentEvent) -> Result<(), DeliveryFailure> + Send + 'static,
         finished: impl Fn() -> Result<(), DeliveryFailure> + Send + 'static,
@@ -222,14 +224,15 @@ impl AgentRuntime {
         let shutdown = CancellationToken::new();
         let runtime_shutdown = shutdown.clone();
         let credential_commands = commands.clone();
-        let credentials = CredentialClient::new(shutdown.clone(), move |command| {
-            credential_commands
-                .try_send(Command::Account(command))
-                .map_err(|failure| match failure {
-                    mpsc::error::TrySendError::Full(_) => AccountFailure::Busy,
-                    mpsc::error::TrySendError::Closed(_) => AccountFailure::Closed,
-                })
-        });
+        let credentials =
+            CredentialClient::new(shutdown.clone(), source.codex_selected(), move |command| {
+                credential_commands
+                    .try_send(Command::Account(command))
+                    .map_err(|failure| match failure {
+                        mpsc::error::TrySendError::Full(_) => AccountFailure::Busy,
+                        mpsc::error::TrySendError::Closed(_) => AccountFailure::Closed,
+                    })
+            });
         let owner_credentials = credentials.clone();
         let (sign_out_commands, mut sign_out_incoming) = mpsc::channel(SIGN_OUT_CAPACITY);
         let shared_model: SharedModel = Arc::new(Mutex::new(None));
@@ -269,7 +272,9 @@ impl AgentRuntime {
                         let mut renaming: Option<renaming::Renaming> = None;
                         let mut suspending = 0usize;
                         let mut finalizing = false;
-                        let mut account = Account::new(credentials_path, owner_credentials.clone());
+                        let mut account = Account::new(credentials_path, owner_credentials.clone(), source);
+                        let mut source_check = tokio::time::interval(SOURCE_CHECK_INTERVAL);
+                        source_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                         let mut delivery_failure = None;
                         let mut model: Option<ModelTask> = None;
                         let mut session_tools: Option<(SessionId, tool_jobs::SessionTools)> = None;
@@ -351,6 +356,7 @@ impl AgentRuntime {
                                         Some(command) => command,
                                         None => break,
                                     },
+                                    _ = source_check.tick(), if account.codex_selected() => Command::Account(AccountCommand::ReadSource),
                                 };
                                 match command {
                                     Command::Memory(id, MemoryRequest::Reset) => {
@@ -796,6 +802,7 @@ impl AgentRuntime {
                                             }
                                         }
                                         let identity = std::cell::Cell::new(None);
+                                        let codex_selected = account.codex_selected();
                                         let (returned, failure) = account
                                             .handle(command, &|event| {
                                                 match &event.kind {
@@ -829,18 +836,21 @@ impl AgentRuntime {
                                             })
                                             .await?;
                                         account = returned;
-                                        if let Some(subject) = identity.take() {
-                                            if current_subject != subject {
-                                                if model.is_some() { stop_model(&mut model, &mut progress_events, &mut conversation, &store, &publish).await?; }
-                                                if let Some((_, tools)) = session_tools.take() {
-                                                    model_task::finish_tools(tools, "account_changed", &mut conversation, &store, &publish).await?;
-                                                }
-                                                if let Some(event) = conversation.suspend_queue()? {
-                                                    let session = event.session();
-                                                    recording::submit(recording::Pending::Suspended { session }, event, &store, &mut records);
-                                                    suspending = suspending.checked_add(1).ok_or(RuntimeFailure::ModelState)?;
-                                                }
+                                        let subject = identity.take();
+                                        if subject.as_ref().is_some_and(|subject| *subject != current_subject)
+                                            || codex_selected != account.codex_selected()
+                                        {
+                                            if model.is_some() { stop_model(&mut model, &mut progress_events, &mut conversation, &store, &publish).await?; }
+                                            if let Some((_, tools)) = session_tools.take() {
+                                                model_task::finish_tools(tools, "account_changed", &mut conversation, &store, &publish).await?;
                                             }
+                                            if let Some(event) = conversation.suspend_queue()? {
+                                                let session = event.session();
+                                                recording::submit(recording::Pending::Suspended { session }, event, &store, &mut records);
+                                                suspending = suspending.checked_add(1).ok_or(RuntimeFailure::ModelState)?;
+                                            }
+                                        }
+                                        if let Some(subject) = subject {
                                             current_subject = subject;
                                         }
                                         if failure.is_some()
@@ -993,6 +1003,13 @@ impl AgentRuntime {
 
     pub fn restore(&self, operation_id: u64) -> Result<(), RuntimeFailure> {
         self.send(Command::Account(AccountCommand::Restore(operation_id)))
+    }
+    pub fn change_source(
+        &self,
+        id: u64,
+        change: crate::SourceChange,
+    ) -> Result<(), RuntimeFailure> {
+        self.send(Command::Account(AccountCommand::ChangeSource(id, change)))
     }
     pub fn credentials(&self) -> CredentialClient {
         self.credentials.clone()

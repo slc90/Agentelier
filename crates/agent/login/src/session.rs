@@ -25,6 +25,7 @@ pub enum SessionActivity {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionFailureKind {
+    CodexModelUnavailable,
     SignedOut,
     SubscriptionMissing,
     NotYetRefreshable,

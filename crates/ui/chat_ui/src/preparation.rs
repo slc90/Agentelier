@@ -76,6 +76,7 @@ impl ModelState {
         self.operation.is_none()
             && account.operation.is_none()
             && account.phase == AccountPhase::Idle
+            && !account.uses_codex()
             && !account.runtime_failed
             && account.session_activity == SessionActivity::Idle
             && matches!(
@@ -327,8 +328,10 @@ pub(crate) fn receive(world: &mut World, mut failures: Local<MessageCursor<HostF
     let subject = account
         .account
         .as_ref()
+        .filter(|_| !account.uses_codex())
         .map(|account| account.subject.clone());
-    let signed_out = !matches!(account.credentials, CredentialState::StoredSession { .. });
+    let signed_out = account.uses_codex()
+        || !matches!(account.credentials, CredentialState::StoredSession { .. });
     if world.resource::<ModelState>().account_subject != subject
         || signed_out && world.resource::<ModelState>().catalog_loaded
     {
@@ -449,6 +452,9 @@ pub(crate) fn receive(world: &mut World, mut failures: Local<MessageCursor<HostF
 }
 
 fn status(state: &ModelState, account: &AccountState) -> String {
+    if account.uses_codex() {
+        return "当前 Codex OAuth 来源尚未接入模型服务".into();
+    }
     match state.phase {
         ModelPhase::Catalog => return "正在读取模型目录…".into(),
         ModelPhase::Verify => return "正在验证所选模型连接…".into(),

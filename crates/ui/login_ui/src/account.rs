@@ -4,6 +4,8 @@ use bevy::ui::{InteractionDisabled, UiSystems};
 use bevy::ui_widgets::Activate;
 use bevy_widgetry::button::{WidgetryButton, WidgetryButtonLoading};
 use bevy_widgetry::text::WidgetryText;
+use bevy_widgetry_path_display::display_path;
+use std::path::PathBuf;
 
 const ACCOUNT_GAP: f32 = 12.0;
 const BUTTON_HEIGHT: f32 = 40.0;
@@ -12,6 +14,7 @@ const BUTTON_WIDTH: f32 = 168.0;
 #[derive(Resource, Reflect, Clone, Default)]
 #[reflect(Resource)]
 pub struct AccountState {
+    pub(crate) codex: Option<CodexSource>,
     pub account: Option<AccountSummary>,
     pub credentials: CredentialState,
     pub operation: Option<u64>,
@@ -24,6 +27,24 @@ pub struct AccountState {
     pub session_client_error: bool,
     pub session_retry_at: Option<u64>,
     pub session_error: Option<String>,
+}
+
+impl AccountState {
+    pub fn uses_codex(&self) -> bool {
+        self.codex.is_some()
+    }
+}
+
+#[derive(Reflect, Clone)]
+pub(crate) struct CodexSource {
+    pub(crate) path: PathBuf,
+    pub(crate) status: CodexStatus,
+}
+
+#[derive(Reflect, Clone)]
+pub(crate) enum CodexStatus {
+    Read { identity: String, expired: bool },
+    Failed(String),
 }
 #[derive(Reflect, Clone)]
 pub struct AccountSummary {
@@ -49,6 +70,7 @@ pub enum AccountPhase {
     #[default]
     Idle,
     Reading,
+    ChangingSource,
     Preparing,
     Waiting,
     Exchanging,
@@ -86,6 +108,8 @@ pub enum LoginAction {
 enum ButtonAction {
     Restore,
     Login(LoginAction),
+    SelectCodex,
+    DisconnectCodex,
 }
 #[derive(Component, Clone, Copy)]
 struct ButtonLabel(ButtonAction);
@@ -97,6 +121,10 @@ struct AccountStatus;
 struct AccountError;
 #[derive(Component, Clone, Default)]
 struct AccountFeedback;
+#[derive(Component, Clone, Default)]
+struct AccountSourceLabel;
+#[derive(Component, Clone, Default)]
+struct AccountSourcePath;
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<AccountState>()
@@ -104,6 +132,12 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(PostUpdate, update_panel.before(UiSystems::Content));
 }
 fn identity(state: &AccountState) -> String {
+    if let Some(source) = &state.codex {
+        return match &source.status {
+            CodexStatus::Read { identity, .. } => identity.clone(),
+            CodexStatus::Failed(_) => String::new(),
+        };
+    }
     if matches!(
         state.credentials,
         CredentialState::SignedOut | CredentialState::NoRecord | CredentialState::HostOnly
@@ -124,6 +158,7 @@ fn identity(state: &AccountState) -> String {
 fn status(state: &AccountState) -> &'static str {
     match state.phase {
         AccountPhase::Reading => return "正在读取账号…",
+        AccountPhase::ChangingSource => return "正在更新凭据来源…",
         AccountPhase::Preparing => return "正在准备登录…",
         AccountPhase::Waiting => return "请在浏览器中完成登录",
         AccountPhase::Exchanging => return "正在交换授权码并校验身份…",
@@ -135,6 +170,13 @@ fn status(state: &AccountState) -> &'static str {
         AccountPhase::Clearing => return "正在退出登录，清除本地凭据…",
         AccountPhase::SignOutFailed => return "退出未完成，无法清除本地凭据",
         AccountPhase::Idle => {}
+    }
+    if let Some(source) = &state.codex {
+        return match source.status {
+            CodexStatus::Read { expired: false, .. } => "已读取外部凭据",
+            CodexStatus::Read { expired: true, .. } => "外部凭据已过期，请在 Codex 中恢复授权",
+            CodexStatus::Failed(_) => "外部凭据不可用",
+        };
     }
     match state.session_activity {
         SessionActivity::Checking => return "正在检查可用会话…",
@@ -158,8 +200,42 @@ fn status(state: &AccountState) -> &'static str {
         CredentialState::StoredSession { .. } => "账号已登录，订阅授权已开启",
     }
 }
+
+fn source_label(state: &AccountState) -> &'static str {
+    if state.uses_codex() {
+        "当前来源：Codex OAuth（外部凭据）"
+    } else {
+        "当前来源：Sign in with ChatGPT（SIWC）"
+    }
+}
+
+fn source_path(state: &AccountState) -> String {
+    state
+        .codex
+        .as_ref()
+        .map(|source| display_path(&source.path))
+        .unwrap_or_default()
+}
+
+fn error_text(state: &AccountState) -> String {
+    let source_error = match state.codex.as_ref().map(|source| &source.status) {
+        Some(CodexStatus::Failed(message)) => Some(message),
+        Some(CodexStatus::Read { .. }) => None,
+        None => state.session_error.as_ref(),
+    };
+    state
+        .error
+        .as_ref()
+        .or(source_error)
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn label(state: &AccountState, action: ButtonAction) -> &'static str {
     match action {
+        ButtonAction::SelectCodex if state.uses_codex() => "更改 Codex 凭据文件",
+        ButtonAction::SelectCodex => "选择 Codex 凭据文件",
+        ButtonAction::DisconnectCodex => "断开 Codex 来源",
         ButtonAction::Restore => "重新读取账号",
         ButtonAction::Login(LoginAction::Login)
             if matches!(state.credentials, CredentialState::StoredSession { .. }) =>
@@ -186,6 +262,12 @@ fn label(state: &AccountState, action: ButtonAction) -> &'static str {
 }
 fn button_state(state: &AccountState, action: ButtonAction) -> (bool, bool, bool) {
     let idle = state.phase == AccountPhase::Idle;
+    let changing_source = state.phase == AccountPhase::ChangingSource;
+    if (state.uses_codex() || changing_source)
+        && matches!(action, ButtonAction::Restore | ButtonAction::Login(_))
+    {
+        return (false, true, false);
+    }
     let ending = matches!(
         state.phase,
         AccountPhase::SigningOut
@@ -194,6 +276,8 @@ fn button_state(state: &AccountState, action: ButtonAction) -> (bool, bool, bool
             | AccountPhase::SignOutFailed
     );
     let (visible, loading) = match action {
+        ButtonAction::SelectCodex => (idle || changing_source, changing_source),
+        ButtonAction::DisconnectCodex => (idle && state.uses_codex(), false),
         ButtonAction::Restore => (
             idle || state.phase == AccountPhase::Reading,
             state.phase == AccountPhase::Reading,
@@ -296,17 +380,19 @@ fn model_blocks(busy: bool, action: ButtonAction) -> bool {
 pub(crate) fn account_panel(state: &AccountState, model_busy: bool) -> impl Scene {
     let name = identity(state);
     let status = status(state);
-    let error = state
-        .error
-        .clone()
-        .or_else(|| state.session_error.clone())
-        .unwrap_or_default();
+    let error = error_text(state);
+    let source = source_label(state);
+    let path = source_path(state);
+    let path_display = optional_display(&path);
     let feedback = state.feedback.clone().unwrap_or_default();
     bsn! {
         Name("AccountPanel")
         Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(ACCOUNT_GAP), flex_shrink: 0.0 }
         Children [
-            Text("账号") WidgetryText--
+            Text(source) WidgetryText AccountSourceLabel Name("AccountSourceLabel")--
+            Text(path) WidgetryText AccountSourcePath Name("AccountSourcePath")
+            TextLayout::linebreak(LineBreak::AnyCharacter)
+            Node { width: percent(100), min_width: px(0), display: path_display }--
             Text(name) WidgetryText AccountIdentity Name("AccountIdentity")
             TextLayout::linebreak(LineBreak::AnyCharacter) Node { width: percent(100), min_width: px(0) }--
             Text(status) WidgetryText AccountStatus Name("AccountStatus")--
@@ -323,7 +409,9 @@ pub(crate) fn account_panel(state: &AccountState, model_busy: bool) -> impl Scen
                 @button(state, ButtonAction::Login(LoginAction::CopyLink), "AccountCopyLink", model_busy)--
                 @button(state, ButtonAction::Login(LoginAction::RetrySave), "AccountRetrySave", model_busy)--
                 @button(state, ButtonAction::Login(LoginAction::Cancel), "AccountCancel", model_busy)--
-                @button(state, ButtonAction::Restore, "AccountRestore", model_busy)
+                @button(state, ButtonAction::Restore, "AccountRestore", model_busy)--
+                @button(state, ButtonAction::SelectCodex, "AccountSelectCodex", model_busy)--
+                @button(state, ButtonAction::DisconnectCodex, "AccountDisconnectCodex", model_busy)
             ]
         ]
     }
@@ -345,6 +433,13 @@ fn activate(
             ButtonAction::Login(action) => {
                 commands.trigger(action);
             }
+            ButtonAction::SelectCodex => commands.queue(crate::directory_settings::pick_codex),
+            ButtonAction::DisconnectCodex => commands.queue(|world: &mut World| {
+                crate::authentication::change_source(
+                    world,
+                    agentelier_agent_host::SourceChange::Disconnect,
+                )
+            }),
         }
     }
     Ok(())
@@ -352,15 +447,25 @@ fn activate(
 fn update_panel(
     state: Res<AccountState>,
     model: Res<agentelier_agent_host::HostActivity>,
-    mut text: Query<(
-        &mut Text,
-        Has<AccountIdentity>,
-        Has<AccountStatus>,
-        Has<AccountError>,
-        Has<AccountFeedback>,
-        Option<&ButtonLabel>,
-    )>,
+    mut text: Query<
+        (
+            &mut Text,
+            Has<AccountIdentity>,
+            Has<AccountStatus>,
+            Has<AccountError>,
+            Has<AccountFeedback>,
+            Option<&ButtonLabel>,
+        ),
+        (Without<AccountSourceLabel>, Without<AccountSourcePath>),
+    >,
     mut buttons: Query<(Entity, &ButtonAction, &mut Node)>,
+    mut sources: Query<
+        (&mut Text, &mut Node, Has<AccountSourcePath>),
+        (
+            Without<ButtonAction>,
+            Or<(With<AccountSourceLabel>, With<AccountSourcePath>)>,
+        ),
+    >,
     mut commands: Commands,
 ) {
     if !state.is_changed() && !model.is_changed() {
@@ -372,15 +477,19 @@ fn update_panel(
         } else if is_status {
             text.0 = status(&state).into();
         } else if is_error {
-            text.0 = state
-                .error
-                .clone()
-                .or_else(|| state.session_error.clone())
-                .unwrap_or_default();
+            text.0 = error_text(&state);
         } else if is_feedback {
             text.0 = state.feedback.clone().unwrap_or_default();
         } else if let Some(button) = button {
             text.0 = label(&state, button.0).into();
+        }
+    }
+    for (mut text, mut node, is_path) in &mut sources {
+        if is_path {
+            text.0 = source_path(&state);
+            node.display = optional_display(&text.0);
+        } else {
+            text.0 = source_label(&state).into();
         }
     }
     for (entity, action, mut node) in &mut buttons {
@@ -397,5 +506,13 @@ fn update_panel(
             commands.entity(entity).remove::<InteractionDisabled>();
         }
         WidgetryButtonLoading::set(&mut commands, entity, loading);
+    }
+}
+
+fn optional_display(text: &str) -> Display {
+    if text.is_empty() {
+        Display::None
+    } else {
+        Display::Flex
     }
 }

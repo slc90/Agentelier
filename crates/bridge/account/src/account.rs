@@ -1,4 +1,19 @@
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, path::PathBuf};
+
+pub enum SourceSnapshot {
+    Siwc,
+    Codex {
+        path: PathBuf,
+        status: Result<CodexSummary, String>,
+    },
+}
+
+pub struct CodexSummary {
+    pub subject: String,
+    pub workspace_id: String,
+    pub email: Option<String>,
+    pub expired: bool,
+}
 
 #[derive(Clone, Debug)]
 pub struct AccountSummary {
@@ -29,6 +44,7 @@ impl AuthorizationLink {
     }
 }
 pub enum AccountEventKind {
+    SourceChanged(Result<SourceSnapshot, BridgeFailure>),
     SignOutProgress(SignOutStage),
     SignOutFailed(BridgeFailure),
     SignedOut {
@@ -93,6 +109,9 @@ impl Error for BridgeFailure {}
 
 pub fn convert(kind: agentelier_account::AccountEventKind) -> AccountEventKind {
     match kind {
+        agentelier_account::AccountEventKind::SourceChanged(result) => {
+            AccountEventKind::SourceChanged(result.map(convert_source).map_err(BridgeFailure))
+        }
         agentelier_account::AccountEventKind::SignOutProgress(stage) => {
             AccountEventKind::SignOutProgress(match stage {
                 agentelier_account::SignOutStage::Settling => SignOutStage::Settling,
@@ -166,6 +185,23 @@ pub fn convert(kind: agentelier_account::AccountEventKind) -> AccountEventKind {
                 .map(convert_snapshot)
                 .map_err(|error| BridgeFailure(error.to_string())),
         ),
+    }
+}
+
+fn convert_source(source: agentelier_account::AccountSource) -> SourceSnapshot {
+    match source {
+        agentelier_account::AccountSource::Siwc => SourceSnapshot::Siwc,
+        agentelier_account::AccountSource::Codex { path, status } => SourceSnapshot::Codex {
+            path,
+            status: status
+                .map(|summary| CodexSummary {
+                    subject: summary.subject,
+                    workspace_id: summary.workspace_id,
+                    email: summary.email,
+                    expired: summary.expired,
+                })
+                .map_err(|failure| failure.to_string()),
+        },
     }
 }
 

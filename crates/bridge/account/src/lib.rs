@@ -6,5 +6,5 @@ mod account;
 pub use account::{
     AccountEventKind, AccountSnapshot, AccountSummary, AuthorizationLink, BridgeFailure,
     CredentialState, RemoteRevocation, SessionActivity, SessionFailure, SessionFailureKind,
-    SignOutStage, convert,
+    SignOutStage, SourceSnapshot, convert,
 };
