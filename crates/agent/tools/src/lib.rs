@@ -11,6 +11,7 @@ mod patch;
 mod payload;
 mod process;
 mod sessions;
+mod task_control;
 
 pub use environment::WorkingDirectory;
 pub use image::from_mcp_bytes;
@@ -27,4 +28,7 @@ pub use payload::{
     ImageDescriptor, ImagePayload, MAX_ENCODED_IMAGE_BYTES, MAX_SESSION_IMAGE_BYTES, ToolPayload,
 };
 pub use sessions::{CleanupReport, ProcessCleanup, ProcessSessions};
+pub use task_control::{
+    MAX_TASK_PAGE, TaskControl, TaskControlRequest, TaskList, TaskWait, WaitMode,
+};
 mod admission;

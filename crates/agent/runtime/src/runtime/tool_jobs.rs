@@ -3,7 +3,7 @@ use agentelier_tools::{
     ExecutionContext, ProcessSessions, ToolAccess, ToolAdmission, ToolCatalog, ToolMode,
     ToolResult, ToolStatus,
 };
-use agentelier_turn_runner::{ToolBatch, ToolCommand, ToolEvent};
+use agentelier_turn_runner::{ToolBatch, ToolCommand, ToolEvent, ToolJobRequest};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{
     Arc,
@@ -61,7 +61,11 @@ struct Execution {
 impl Execution {
     fn enqueue(&mut self, batch: ToolBatch) {
         let serial = batch.catalog.contract().is_flat();
-        for call in batch.calls {
+        for ToolJobRequest {
+            call,
+            admission: admission_stop,
+        } in batch.calls
+        {
             let policy = batch.catalog.access(&call.name);
             let policy = match (policy, call.mode()) {
                 (ToolAccess::SharedRead, ToolMode::Synchronous) => ToolAccess::Exclusive,
@@ -94,7 +98,6 @@ impl Execution {
                 admitted,
             };
             let cancel = self.cancel.clone();
-            let admission_stop = batch.admission.clone();
             let admission = self.admission.clone();
             let processes = self.processes.clone();
             let events = self.events.clone();

@@ -15,8 +15,8 @@ mod tasks;
 pub use archive::ArchiveEntry;
 pub use restore::{RestoredSession, restore};
 pub use tasks::{
-    ResponseDelivery, ResponseTasks, SessionTaskView, SessionTasks, TaskExecution, TaskId,
-    TaskRegistration,
+    ResponseDelivery, ResponseTasks, SessionTaskView, SessionTasks, TaskDelivery, TaskExecution,
+    TaskId, TaskPage, TaskRegistration, TaskReport,
 };
 
 pub use archive::{

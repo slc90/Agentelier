@@ -406,6 +406,8 @@ dependencies = [
  "agentelier_project_context",
  "agentelier_skills",
  "agentelier_tools",
+ "serde",
+ "serde_json",
  "tokio",
  "tokio-util",
  "tracing",

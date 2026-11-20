@@ -10,6 +10,8 @@ pub struct PreparedRequestFact {
     pub sending_started: bool,
     #[serde(default)]
     pub response_status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_registration_cutoff: Option<u64>,
     pub request: u32,
     pub window: u64,
     pub publication: Option<u64>,
@@ -133,6 +135,7 @@ impl crate::ActiveTurn<'_> {
             response_accepted: Some(false),
             sending_started: false,
             response_status: None,
+            task_registration_cutoff: Some(self.tasks.revision()),
             request: turn.request_index,
             window: self.view.context.window,
             publication: self

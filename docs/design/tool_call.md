@@ -71,6 +71,8 @@ Direct Mode 使用 Responses 的结构化 `function_call`。`llm_model` 在现�
 
 如果实际服务拒绝该工具协议，应显示原始错误类别和请求标识，保留普通聊天能力，并停止把该组合视为已验证的工具模式。不要自动加入 JS 环境、改用 Code Mode、换模型或换登录方式。
 
+新原生目录提供同步 `list_async_tasks` 与 `wait_for_tasks`。列表每页最多 64 项，返回真实任务 ID、来源、安全参数大小与保存和交付状态。等待对明确 ID 集合使用 `any` 或 `all`，最长 30 秒。后台调用的结果通过原 `call_id` 入史，随后才保存等待的状态报告。控制路径与普通工具资源准入独立。
+
 ## 工具结果怎样进入下一次请求
 
 `llm_model` 负责协议项的序列化，工具库只返回业务结果。结果通过 `function_call_output` 携带对应 `call_id`，普通文本结果使用有界 JSON 字符串表示成功数据或错误；图片结果使用包含 input_text 与 input_image 的内容数组，不序列化为嵌套 JSON 字符串。

@@ -492,6 +492,10 @@ pub fn restore(
                     ));
                 }
                 if pending.has_barrier()
+                    || (prepared
+                        && fact
+                            .task_registration_cutoff
+                            .is_some_and(|cutoff| cutoff != tasks.revision()))
                     || fact.projection.tool_contract != initial.settings.tool_contract
                     || fact.projection.memory.as_ref().is_some_and(|material| {
                         Some(&material.snapshot) != initial.settings.memory.as_ref()

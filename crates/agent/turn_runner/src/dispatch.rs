@@ -6,9 +6,13 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 pub struct ToolBatch {
-    pub calls: Vec<FunctionCall>,
+    pub calls: Vec<ToolJobRequest>,
     pub catalog: Arc<ToolCatalog>,
     pub context: Arc<ExecutionContext>,
+}
+
+pub struct ToolJobRequest {
+    pub call: FunctionCall,
     pub admission: CancellationToken,
 }
 

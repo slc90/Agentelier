@@ -132,6 +132,7 @@ enum Executor {
     Function(Arc<ToolExecutor>),
     Shell,
     Stdin,
+    TaskControl(crate::TaskControl),
 }
 
 #[derive(Clone)]
@@ -205,6 +206,13 @@ impl ToolRegistration {
                 result
             }),
             Executor::Stdin => Box::pin(async move { processes.stdin(arguments, cancel).await }),
+            Executor::TaskControl(_) => Box::pin(async {
+                ToolResult::error(
+                    crate::ToolStatus::Unconfirmed,
+                    "task_control_route",
+                    "任务控制调用被错误派至普通执行器",
+                )
+            }),
             Executor::Function(execute) => {
                 let execution = execute(context, arguments, cancel);
                 Box::pin(async move {
@@ -298,6 +306,17 @@ impl ToolCatalog {
         extensions: impl IntoIterator<Item = &'a ToolRegistration>,
     ) -> Result<Self, ToolFailure> {
         let mut tools = Self::builtins(directory, image_input);
+        if !contract.is_flat() {
+            tools.extend(
+                [crate::TaskControl::List, crate::TaskControl::Wait].map(|control| {
+                    ToolRegistration::process(
+                        control.definition(),
+                        Executor::TaskControl(control),
+                        ToolAccess::ProcessControl,
+                    )
+                }),
+            );
+        }
         for tool in extensions {
             if matches!(tool.definition.source, ToolSource::Builtin) {
                 return Err(ToolFailure::new(
@@ -371,16 +390,24 @@ impl ToolCatalog {
                 image_result: registration.image_result,
             });
         }
-        if self
-            .definitions()
-            .any(|tool| matches!(tool.source, ToolSource::Builtin) && !seen.contains(&tool.name))
-        {
+        if self.tools.iter().any(|tool| {
+            matches!(tool.definition.source, ToolSource::Builtin)
+                && !matches!(tool.executor, Executor::TaskControl(_))
+                && !seen.contains(&tool.definition.name)
+        }) {
             return Err(ToolFailure::new("tool_contract", "存档缺少内置工具契约"));
         }
         Ok(Self {
             contract: self.contract,
             tools,
         })
+    }
+
+    pub fn task_control(&self, name: &str) -> Option<crate::TaskControl> {
+        match self.find(name)?.executor {
+            Executor::TaskControl(control) => Some(control),
+            _ => None,
+        }
     }
 
     pub fn access(&self, name: &str) -> ToolAccess {

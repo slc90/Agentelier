@@ -26,6 +26,8 @@ pub struct TaskRegistration {
     pub item_id: String,
     pub tool: String,
     pub memory_epoch: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_bytes: Option<usize>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -67,6 +69,9 @@ impl ResponseTasks {
                 || registration.call_id != call.call_id
                 || registration.item_id != call.id
                 || registration.tool != call.name
+                || registration
+                    .argument_bytes
+                    .is_some_and(|bytes| bytes != call.arguments.len())
             {
                 return Err(ConversationFailure::new("工具任务登记与原始调用不一致"));
             }
@@ -80,17 +85,47 @@ enum Delivery {
     AwaitingResult,
     Saved(u64),
     Appended,
-    Delivered,
+    Delivered(u64),
 }
 
 struct Task {
     registration: TaskRegistration,
     status: ToolStatus,
+    registered_at: u64,
     live: bool,
     delivery: Delivery,
 }
 
 impl Task {
+    fn report(&self, tools: &agentelier_tools::ToolCatalog) -> TaskReport {
+        let registration = &self.registration;
+        let source = match tools
+            .definition(&registration.tool)
+            .map(|tool| &tool.source)
+        {
+            Some(agentelier_tools::ToolSource::Builtin) => "built_in",
+            Some(agentelier_tools::ToolSource::Mcp { .. }) => "mcp",
+            Some(agentelier_tools::ToolSource::Extension { .. }) => "extension",
+            None => "unavailable",
+        };
+        TaskReport {
+            task_id: registration.execution.task,
+            turn: registration.turn,
+            request: registration.request,
+            tool: registration.tool.clone(),
+            source,
+            argument_bytes: registration.argument_bytes,
+            status: self.status,
+            delivery: match self.delivery {
+                Delivery::AwaitingResult => TaskDelivery::AwaitingResult,
+                Delivery::Saved(_) => TaskDelivery::Saved,
+                Delivery::Appended => TaskDelivery::Appended,
+                Delivery::Delivered(_) => TaskDelivery::Delivered,
+            },
+            blocked_by: (self.status == ToolStatus::Pending).then_some("admission"),
+        }
+    }
+
     fn recover_interrupted(&mut self) -> bool {
         self.live = false;
         self.status = match self.status {
@@ -111,6 +146,40 @@ pub struct SessionTaskView {
     pub call_id: String,
     pub tool: String,
     pub status: ToolStatus,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskDelivery {
+    AwaitingResult,
+    Saved,
+    Appended,
+    Delivered,
+}
+
+#[derive(Serialize)]
+pub struct TaskReport {
+    pub task_id: TaskId,
+    pub turn: TurnId,
+    pub request: u32,
+    pub tool: String,
+    pub source: &'static str,
+    pub argument_bytes: Option<usize>,
+    pub status: ToolStatus,
+    pub delivery: TaskDelivery,
+    pub blocked_by: Option<&'static str>,
+}
+
+impl TaskReport {
+    pub fn result_saved(&self) -> bool {
+        !matches!(self.delivery, TaskDelivery::AwaitingResult)
+    }
+}
+
+#[derive(Serialize)]
+pub struct TaskPage {
+    pub tasks: Vec<TaskReport>,
+    pub next_history_offset: Option<usize>,
 }
 
 pub struct SessionTasks {
@@ -155,6 +224,7 @@ impl TaskLedger {
                 item_id: call.id.clone(),
                 tool: call.name.clone(),
                 memory_epoch,
+                argument_bytes: Some(call.arguments.len()),
             })
             .collect();
         self.validate_identities(&registrations)?;
@@ -180,7 +250,7 @@ impl TaskLedger {
         let occupied = self
             .tasks
             .iter()
-            .filter(|task| task.delivery != Delivery::Delivered)
+            .filter(|task| !matches!(task.delivery, Delivery::Delivered(_)))
             .count();
         let available = MAX_UNDELIVERED_TASKS.saturating_sub(occupied - settled.len());
         let rejected = if within_budget {
@@ -228,13 +298,14 @@ impl TaskLedger {
         }
         for task in &mut self.tasks {
             if settled.contains(&task.registration.execution.task) {
-                task.delivery = Delivery::Delivered;
+                task.delivery = Delivery::Delivered(sequence);
             }
         }
         self.tasks
             .extend(registrations.into_iter().map(|registration| Task {
                 registration,
                 status: ToolStatus::Pending,
+                registered_at: sequence,
                 live,
                 delivery: Delivery::AwaitingResult,
             }));
@@ -421,6 +492,64 @@ impl TaskLedger {
             self.revision = sequence;
         }
         changed
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub(crate) fn selectable(&self, ids: &[Uuid], cutoff: u64) -> bool {
+        ids.iter().all(|id| {
+            self.tasks.iter().any(|task| {
+                task.registration.execution.task.0 == *id && task.registered_at <= cutoff
+            })
+        })
+    }
+
+    pub(crate) fn reports(
+        &self,
+        ids: &[Uuid],
+        tools: &agentelier_tools::ToolCatalog,
+    ) -> Option<Vec<TaskReport>> {
+        ids.iter()
+            .map(|id| {
+                self.tasks
+                    .iter()
+                    .find(|task| task.registration.execution.task.0 == *id)
+                    .map(|task| task.report(tools))
+            })
+            .collect()
+    }
+
+    pub(crate) fn page(
+        &self,
+        offset: Option<usize>,
+        tools: &agentelier_tools::ToolCatalog,
+    ) -> TaskPage {
+        let mut tasks = Vec::new();
+        let mut history = Vec::new();
+        for task in &self.tasks {
+            if let Delivery::Delivered(sequence) = task.delivery {
+                history.push((sequence, task));
+            } else if offset.is_none() {
+                tasks.push(task.report(tools));
+            }
+        }
+        history.sort_by_key(|(sequence, _)| *sequence);
+        let offset = offset.unwrap_or_default();
+        let page_space = agentelier_tools::MAX_TASK_PAGE.saturating_sub(tasks.len());
+        tasks.extend(
+            history
+                .iter()
+                .skip(offset)
+                .take(page_space)
+                .map(|(_, task)| task.report(tools)),
+        );
+        let next = offset.saturating_add(page_space);
+        TaskPage {
+            tasks,
+            next_history_offset: (next < history.len()).then_some(next),
+        }
     }
 
     pub(crate) fn view(&self, session: SessionId) -> SessionTasks {

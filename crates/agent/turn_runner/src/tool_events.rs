@@ -1,8 +1,9 @@
 use crate::{
     access::{RunnerEvent, TurnAccess},
     control,
-    dispatch::{ToolBatch, ToolCommand, ToolDispatcher, ToolEvent},
+    dispatch::{ToolBatch, ToolCommand, ToolDispatcher, ToolEvent, ToolJobRequest},
     runner::publish,
+    task_control::{self, PendingWait, TaskControlAction, WaitInterruption},
 };
 use agentelier_conversation::{ConversationFailure, RecordEvent, SteerInput};
 use agentelier_tools::{ExecutionContext, ToolCatalog, ToolMode, ToolResult, ToolStatus};
@@ -12,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 pub(super) struct TurnTools {
     calls: HashMap<String, PendingCall>,
+    waits: Vec<PendingWait>,
     pub(super) incoming: mpsc::UnboundedReceiver<ToolEvent>,
 }
 
@@ -25,6 +27,7 @@ impl TurnTools {
     pub(super) fn new(incoming: mpsc::UnboundedReceiver<ToolEvent>) -> Self {
         Self {
             calls: HashMap::new(),
+            waits: Vec::new(),
             incoming,
         }
     }
@@ -47,10 +50,8 @@ impl TurnTools {
     ) -> Result<(), ConversationFailure> {
         let session = context.user_turn().session;
         let mut eligible = Vec::new();
-        let admission = cancel.child_token();
-        if active.call(|turn| Ok(turn.has_pending_steer())).await? {
-            admission.cancel();
-        }
+        let mut controls = Vec::new();
+        let steered = active.call(|turn| Ok(turn.has_pending_steer())).await?;
         for call in calls {
             let skip = if limited {
                 Some(ToolResult::not_executed(
@@ -77,12 +78,11 @@ impl TurnTools {
                     cancel,
                 )
                 .await?;
+            } else if let Some(control) = catalog.task_control(&call.name) {
+                controls.push((call, control));
             } else {
                 eligible.push(call);
             }
-        }
-        if eligible.is_empty() {
-            return Ok(());
         }
         let ids: Vec<_> = eligible.iter().map(|call| call.call_id.clone()).collect();
         let executions = active
@@ -93,24 +93,57 @@ impl TurnTools {
                     .collect::<Vec<_>>())
             })
             .await?;
-        for (call, execution) in eligible.iter().zip(executions) {
+        let mut jobs = Vec::new();
+        for (call, execution) in eligible.into_iter().zip(executions) {
+            let mode = call.mode();
+            let admission = cancel.child_token();
+            if steered && mode == ToolMode::Synchronous {
+                admission.cancel();
+            }
             self.calls.insert(
                 call.call_id.clone(),
                 PendingCall {
-                    mode: call.mode(),
+                    mode,
                     execution,
                     admission: admission.clone(),
                 },
             );
+            jobs.push(ToolJobRequest { call, admission });
         }
-        dispatcher
-            .send(ToolCommand::Batch(ToolBatch {
-                calls: eligible,
-                catalog,
-                context,
-                admission,
-            }))
-            .await
+        if !jobs.is_empty() {
+            dispatcher
+                .send(ToolCommand::Batch(ToolBatch {
+                    calls: jobs,
+                    catalog,
+                    context,
+                }))
+                .await?;
+        }
+        for (call, control) in controls {
+            let id = call.call_id;
+            let started = !cancel.is_cancelled()
+                && !steered
+                && start_call(active, id.clone(), None, true).await?;
+            let result = if started {
+                match task_control::control(active, control, &call.arguments).await? {
+                    TaskControlAction::Return(result) => result,
+                    TaskControlAction::Wait(wait) => {
+                        self.waits.push(PendingWait::new(id, wait));
+                        continue;
+                    }
+                }
+            } else {
+                ToolResult::not_executed(
+                    "admission_cancelled",
+                    "停止或补充输入已接纳，此调用未执行",
+                )
+            };
+            save_call(
+                active, dispatcher, session, &id, None, result, progress, cancel,
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     pub(super) async fn apply(
@@ -130,7 +163,13 @@ impl TurnTools {
                 let started = if call.admission.is_cancelled() || dispatcher.is_blocked() {
                     Ok(false)
                 } else {
-                    start_call(active, call_id, call.execution).await
+                    start_call(
+                        active,
+                        call_id,
+                        call.execution,
+                        call.mode == ToolMode::Synchronous,
+                    )
+                    .await
                 };
                 let should_begin = matches!(&started, Ok(true));
                 if begin.send(should_begin).is_err() && should_begin {
@@ -185,7 +224,9 @@ impl TurnTools {
     ) -> Result<(), ConversationFailure> {
         if !self.calls.is_empty() && active.call(|turn| Ok(turn.has_pending_steer())).await? {
             for call in self.calls.values() {
-                call.admission.cancel();
+                if call.mode == ToolMode::Synchronous {
+                    call.admission.cancel();
+                }
             }
         }
         Ok(())
@@ -199,21 +240,92 @@ impl TurnTools {
         cancel: &CancellationToken,
         steers: &mut mpsc::Receiver<SteerInput>,
     ) -> Result<(), ConversationFailure> {
-        while self
-            .calls
-            .values()
-            .any(|call| call.mode == ToolMode::Synchronous)
-        {
-            tokio::select! {
-                event = self.incoming.recv() => self.apply(active, dispatcher, event, progress, cancel).await?,
+        loop {
+            if !self.waits.is_empty() {
+                if let Err(failure) = self.boundary(active, dispatcher, progress, cancel).await {
+                    self.fail_waits(active, dispatcher).await?;
+                    return Err(failure);
+                }
+                self.advance_waits(active, dispatcher, progress, cancel)
+                    .await?;
+            }
+            if self.waits.is_empty()
+                && !self
+                    .calls
+                    .values()
+                    .any(|call| call.mode == ToolMode::Synchronous)
+            {
+                break;
+            }
+            let deadline = self.waits.iter().map(|wait| wait.deadline).min();
+            tokio::select! { biased;
+                _ = cancel.cancelled(), if deadline.is_some() => {},
                 input = steers.recv(), if !steers.is_closed() => {
                     if let Some(input) = input {
                         self.accept_steer(active, input, progress, cancel).await?;
                     }
                 }
+                event = self.incoming.recv() => {
+                    if let Err(failure) = self.apply(active, dispatcher, event, progress, cancel).await {
+                        self.fail_waits(active, dispatcher).await?;
+                        return Err(failure);
+                    }
+                }
+                () = wait_deadline(deadline) => {},
             }
         }
         self.boundary(active, dispatcher, progress, cancel).await
+    }
+
+    async fn fail_waits(
+        &mut self,
+        active: &TurnAccess,
+        dispatcher: &ToolDispatcher,
+    ) -> Result<(), ConversationFailure> {
+        for wait in std::mem::take(&mut self.waits) {
+            let result = ToolResult::error(
+                ToolStatus::Failed,
+                "wait_unconfirmed",
+                "目标执行或结果提交未确认，等待已终止",
+            );
+            retain_call(active, dispatcher, wait.call_id, result).await?;
+        }
+        Ok(())
+    }
+
+    async fn advance_waits(
+        &mut self,
+        active: &TurnAccess,
+        dispatcher: &ToolDispatcher,
+        progress: &mpsc::Sender<RunnerEvent>,
+        cancel: &CancellationToken,
+    ) -> Result<(), ConversationFailure> {
+        let interrupted = if cancel.is_cancelled() {
+            Some(WaitInterruption::Stopped)
+        } else if active.call(|turn| Ok(turn.has_pending_steer())).await? {
+            Some(WaitInterruption::Steered)
+        } else {
+            None
+        };
+        let session = active.call(|turn| Ok(turn.session_id())).await?;
+        for wait in std::mem::take(&mut self.waits) {
+            if let Some(result) = wait.evaluate(active, interrupted).await? {
+                save_call(
+                    active,
+                    dispatcher,
+                    session,
+                    &wait.call_id,
+                    None,
+                    result,
+                    progress,
+                    cancel,
+                )
+                .await?;
+            } else {
+                self.waits.push(wait);
+            }
+        }
+        Ok(())
     }
 
     pub(super) async fn boundary(
@@ -259,15 +371,23 @@ impl TurnTools {
     }
 }
 
+async fn wait_deadline(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
 async fn start_call(
     active: &TurnAccess,
     call_id: String,
     execution: Option<agentelier_conversation::TaskExecution>,
+    stop_on_steer: bool,
 ) -> Result<bool, ConversationFailure> {
     let source = call_id.clone();
     let event = active
         .call(move |mut turn| {
-            if turn.has_pending_steer() {
+            if stop_on_steer && turn.has_pending_steer() {
                 return Ok(None);
             }
             turn.tool_started(&source)?;

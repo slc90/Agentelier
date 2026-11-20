@@ -823,6 +823,27 @@ impl ActiveTurn<'_> {
         self.tasks.install(registrations, delivery, sequence, true)
     }
 
+    pub fn task_selection_exists(&self, ids: &[uuid::Uuid]) -> bool {
+        self.view
+            .turn
+            .as_ref()
+            .and_then(|turn| {
+                turn.requests
+                    .last()
+                    .filter(|request| request.request == turn.request_index)
+            })
+            .and_then(|request| request.task_registration_cutoff)
+            .is_some_and(|cutoff| self.tasks.selectable(ids, cutoff))
+    }
+
+    pub fn task_reports(&self, ids: &[uuid::Uuid]) -> Option<Vec<crate::TaskReport>> {
+        self.tasks.reports(ids, self.tools)
+    }
+
+    pub fn task_page(&self, offset: Option<usize>) -> crate::TaskPage {
+        self.tasks.page(offset, self.tools)
+    }
+
     pub fn task_execution(&self, call_id: &str) -> Option<crate::TaskExecution> {
         self.tasks.execution(call_id)
     }
