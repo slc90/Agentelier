@@ -89,11 +89,7 @@ futures-util = { version = "0.3", default-features = false, features = [
 reqwest = { version = "0.13.5", default-features = false, features = [
   "native-tls",
   "system-proxy",
-  "form",
   "json",
-] }
-jsonwebtoken = { version = "12", default-features = false, features = [
-  "rust_crypto",
 ] }
 base64 = "0.23"
 sha2 = "0.10"
@@ -101,13 +97,9 @@ image = { version = "0.25.9", default-features = false, features = [
   "png",
   "jpeg",
 ] }
-getrandom = "0.4"
 url = "2.5"
 uritemplate = { package = "uritemplate-next", version = "0.2.0" }
-httparse = "1.10"
 time = { version = "0.3", default-features = false, features = ["parsing"] }
-win-custody = "0.1.1"
-subtle = "2.6"
 
 [workspace.dependencies.bevy]
 version = "*"

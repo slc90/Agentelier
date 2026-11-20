@@ -1,7 +1,7 @@
 use crate::reasoning::{self, ReasoningSetting, ReasoningSource};
 use agentelier_agent_host::{AgentHost, HostActivity, HostFailed, ModelEvent, ReceiveAgentEvents};
 use agentelier_llm_model_bridge::{ModelEventKind, ModelRequest, ModelResult};
-use agentelier_login_ui::{AccountPhase, AccountState, SessionActivity};
+use agentelier_login_ui::AccountState;
 use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
 use bevy::text::LineBreak;
@@ -68,16 +68,13 @@ pub struct ModelState {
     pub used_slug: Option<String>,
     pub text: Option<String>,
     pub error: Option<String>,
-    pub account_subject: Option<String>,
+    pub account_identity: Option<(String, String)>,
 }
 
 impl ModelState {
     pub(crate) fn can_request(&self, account: &AccountState) -> bool {
         self.operation.is_none()
-            && account.operation.is_none()
-            && account.phase == AccountPhase::Idle
             && !account.runtime_failed
-            && account.session_activity == SessionActivity::Idle
             && account.model_unavailable_reason().is_none()
     }
     pub(crate) fn selected_model(&self) -> Option<&ModelChoice> {
@@ -197,7 +194,7 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
                 }
                 Node { width: percent(100), height: px(64), flex_shrink: 0.0 }--
                 @crate::working_directory::panel(world.resource::<crate::working_directory::DirectoryState>())--
-                @crate::conversation::panel(&chat)
+                @crate::conversation::panel(&chat, account)
                 ]--
                 crate::prompts::PromptWorkspace Name("PromptWorkspace")
                 Node { display: Display::None, width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column }
@@ -318,12 +315,14 @@ fn activate(event: On<Activate>, actions: Query<&ModelAction>, mut commands: Com
 
 pub(crate) fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) -> Result {
     let account = world.resource::<AccountState>();
-    let subject = account.model_account_key();
-    if world.resource::<ModelState>().account_subject != subject
-        || subject.is_none() && world.resource::<ModelState>().catalog_loaded
+    let identity = account
+        .model_identity()
+        .map(|(subject, workspace)| (subject.to_owned(), workspace.to_owned()));
+    if world.resource::<ModelState>().account_identity != identity
+        || identity.is_none() && world.resource::<ModelState>().catalog_loaded
     {
         *world.resource_mut::<ModelState>() = ModelState {
-            account_subject: subject,
+            account_identity: identity,
             ..default()
         };
         let source = world.resource::<ModelSource>().0;
@@ -494,12 +493,14 @@ fn update(
     state: Res<ModelState>,
     account: Res<AccountState>,
     activity: Res<HostActivity>,
+    mounted: Query<(), Added<ModelAction>>,
     mut buttons: Query<(Entity, &ModelAction)>,
     selectors: Query<Entity, With<ModelSelector>>,
     mut texts: Query<(&mut Text, Has<ModelStatus>, Has<ModelText>)>,
     mut commands: Commands,
 ) {
-    if !state.is_changed() && !account.is_changed() && !activity.is_changed() {
+    if !state.is_changed() && !account.is_changed() && !activity.is_changed() && mounted.is_empty()
+    {
         return;
     }
     for (entity, action) in &mut buttons {

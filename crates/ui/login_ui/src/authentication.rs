@@ -1,116 +1,36 @@
 use crate::account::{CodexSource, CodexStatus};
-use crate::{
-    AccountPhase, AccountState, AccountSummary, CredentialState, DataDirectoryReady, LoginAction,
-    RestoreAccount, SessionActivity,
-};
-use agentelier_account_bridge::{
-    AccountEventKind, AuthorizationLink, CredentialState as BridgeCredentials, SourceSnapshot,
-};
+use crate::{AccountState, DataDirectoryReady};
+use agentelier_account_bridge::{AccountEventKind, SourceSnapshot};
 use agentelier_agent_host::{
     AccountEvent, AgentHost, HostFailed, ReceiveAgentEvents, SourceChange,
 };
-use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
 use bevy::winit::EventLoopProxyWrapper;
-use bevy_widgetry::job::{
-    JobId, JobManager, JobOptions, JobOutcome, JobRead, JobReceiver, SendStatus,
-};
 use std::io;
-use std::sync::{Arc, Mutex};
-use tracing::{debug, error, info};
-
-#[derive(Resource, Clone, Default)]
-struct LoginInteraction(Arc<Mutex<BackendState>>);
-#[derive(Default)]
-struct BackendState {
-    authorization: Option<(u64, AuthorizationLink)>,
-    browser: Option<BrowserPending>,
-}
-struct BrowserPending {
-    operation_id: u64,
-    job_id: JobId,
-    receiver: JobReceiver<io::Result<()>>,
-    reply: Option<Arc<io::Result<()>>>,
-}
-#[derive(Clone, Copy)]
-enum Request {
-    Restore,
-    Login { consent: bool },
-}
+use tracing::{error, info};
 
 pub(crate) fn install(app: &mut App) {
-    app.init_resource::<LoginInteraction>()
-        .add_observer(ready)
-        .add_observer(retry)
-        .add_observer(login_action)
+    app.add_observer(ready)
         .add_systems(Update, receive.after(ReceiveAgentEvents));
 }
+
 fn ready(
     event: On<DataDirectoryReady>,
     host: Res<AgentHost>,
     proxy: Res<EventLoopProxyWrapper>,
-    mut commands: Commands,
-) -> Result {
-    host.prepare(event.environment.credentials_path().to_path_buf(), &proxy)?;
-    commands.queue(|world: &mut World| request(world, Request::Restore));
-    Ok(())
-}
-fn retry(_event: On<RestoreAccount>, mut commands: Commands) {
-    commands.queue(|world: &mut World| request(world, Request::Restore));
-}
-fn login_action(event: On<LoginAction>, mut commands: Commands) {
-    let action = *event;
-    commands.queue(move |world: &mut World| action_request(world, action));
-}
-fn request(world: &mut World, request: Request) -> Result {
-    if world.resource::<AgentHost>().model_busy()? {
-        return Ok(());
+    mut state: ResMut<AccountState>,
+) {
+    if let Err(failure) = host.prepare(event.environment.root().to_path_buf(), &proxy) {
+        error!(error = %failure, "无法启动执行宿主");
+        state.error = Some(failure.to_string());
+        state.runtime_failed = true;
     }
-    let state = world.resource::<AccountState>();
-    if state.operation.is_some() || state.runtime_failed || state.uses_codex() {
-        return Ok(());
-    }
-    let backend = world.resource::<LoginInteraction>().clone();
-    let mut backend = backend
-        .0
-        .lock()
-        .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
-    if world.resource::<AgentHost>().is_stopping()? {
-        return Ok(());
-    }
-    let host = world.resource::<AgentHost>();
-    let result = match request {
-        Request::Restore => host.restore(),
-        Request::Login { consent } => host.login(consent),
-    };
-    let mut state = world.resource_mut::<AccountState>();
-    match result {
-        Ok(id) => {
-            backend.authorization = None;
-            state.operation = Some(id);
-            state.error = None;
-            state.feedback = None;
-            state.phase = match request {
-                Request::Restore => AccountPhase::Reading,
-                Request::Login { .. } => AccountPhase::Preparing,
-            };
-            match request {
-                Request::Restore => info!(operation_id = id, "开始读取当前数据目录的账号"),
-                Request::Login { consent } => info!(operation_id = id, consent, "开始浏览器登录"),
-            }
-        }
-        Err(failure) => {
-            error!(error = %failure, "无法开始账号操作");
-            state.error = Some(failure.to_string());
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn change_source(world: &mut World, change: SourceChange) -> Result {
     let state = world.resource::<AccountState>();
     let host = world.resource::<AgentHost>();
-    if state.phase != AccountPhase::Idle || state.runtime_failed || host.is_stopping()? {
+    if state.is_busy() || state.runtime_failed || host.is_stopping()? {
         return Ok(());
     }
     let result = host.change_source(change);
@@ -118,9 +38,7 @@ pub(crate) fn change_source(world: &mut World, change: SourceChange) -> Result {
     match result {
         Ok(id) => {
             state.operation = Some(id);
-            state.phase = AccountPhase::ChangingSource;
             state.error = None;
-            state.feedback = None;
             info!(operation_id = id, "用户请求更新当前凭据来源");
         }
         Err(failure) => {
@@ -130,119 +48,23 @@ pub(crate) fn change_source(world: &mut World, change: SourceChange) -> Result {
     }
     Ok(())
 }
-fn action_request(world: &mut World, action: LoginAction) -> Result {
-    match action {
-        LoginAction::Login => return request(world, Request::Login { consent: false }),
-        LoginAction::Consent => return request(world, Request::Login { consent: true }),
-        LoginAction::OpenBrowser => return launch_browser(world),
-        LoginAction::CopyLink => return copy_link(world),
-        LoginAction::CheckSession => return check_session(world),
-        LoginAction::SignOut => return sign_out(world),
-        _ => {}
-    }
-    let state = world.resource::<AccountState>();
-    let Some(id) = state.operation else {
-        return Ok(());
-    };
-    let valid = match action {
-        LoginAction::RetrySave => state.phase == AccountPhase::SaveFailed,
-        LoginAction::Cancel => !matches!(
-            state.phase,
-            AccountPhase::Idle
-                | AccountPhase::Reading
-                | AccountPhase::ChangingSource
-                | AccountPhase::Cancelling
-        ),
-        _ => false,
-    };
-    if !valid {
+fn receive(
+    mut events: MessageReader<AccountEvent>,
+    mut failures: MessageReader<HostFailed>,
+    mut state: ResMut<AccountState>,
+    host: Res<AgentHost>,
+) -> Result {
+    if host.is_stopping()? {
         return Ok(());
     }
-    let backend = world.resource::<LoginInteraction>().clone();
-    let mut backend = backend
-        .0
-        .lock()
-        .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
-    if world.resource::<AgentHost>().is_stopping()? {
-        return Ok(());
-    }
-    let host = world.resource::<AgentHost>();
-    let result = if action == LoginAction::RetrySave {
-        host.retry_save(id)
-    } else {
-        host.cancel(id)
-    };
-    let manager = world.resource::<JobManager>().clone();
-    let mut state = world.resource_mut::<AccountState>();
-    match result {
-        Ok(()) => {
-            state.phase = if action == LoginAction::RetrySave {
-                AccountPhase::Saving
-            } else {
-                AccountPhase::Cancelling
-            };
-            state.error = None;
-            state.feedback = None;
-            if action == LoginAction::Cancel {
-                backend.authorization = None;
-                if let Some(browser) = &backend.browser {
-                    manager
-                        .cancel(browser.job_id)
-                        .map_err(|failure| failure.into_bevy_error())?;
-                }
-                info!(operation_id = id, "用户请求取消登录，等待实际结束");
-            } else {
-                info!(operation_id = id, "用户重试保存已取得的登录结果");
-            }
-        }
-        Err(failure) => {
-            error!(operation_id = id, error = %failure, "登录控制操作失败");
-            state.error = Some(failure.to_string());
-        }
-    }
-    Ok(())
-}
-fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) -> Result {
-    let backend = world.resource::<LoginInteraction>().clone();
-    if world.resource::<AgentHost>().is_stopping()? {
-        let mut interaction = backend
-            .0
-            .lock()
-            .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
-        interaction.authorization = None;
-        if let Some(browser) = &interaction.browser {
-            world
-                .resource::<JobManager>()
-                .cancel(browser.job_id)
-                .map_err(|failure| failure.into_bevy_error())?;
-        }
-        drop(interaction);
-        return receive_browser(world);
-    }
-    let events: Vec<_> = world
-        .resource_mut::<Messages<AccountEvent>>()
-        .drain()
-        .collect();
-    let mut open = false;
-    for event in events {
-        if event.operation_id != 0
-            && world.resource::<AccountState>().operation != Some(event.operation_id)
-        {
+    for event in events.read() {
+        if event.operation_id != 0 && state.operation != Some(event.operation_id) {
             return Err(io::Error::other("账号界面收到非当前操作的结果").into());
         }
-        let mut backend = backend
-            .0
-            .lock()
-            .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
-        let mut state = world.resource_mut::<AccountState>();
-        match event.kind {
-            AccountEventKind::SourceSettling => {
-                state.source_settling = true;
-                state.feedback = None;
-            }
+        match &event.kind {
+            AccountEventKind::SourceSettling => state.source_settling = true,
             AccountEventKind::SourceChanged(result) => {
                 if event.operation_id != 0 {
-                    state.phase = AccountPhase::Idle;
                     state.operation = None;
                 }
                 match result {
@@ -256,193 +78,33 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                     }
                 }
             }
-            AccountEventKind::SignOutProgress(stage) => {
-                backend.authorization = None;
-                open = false;
-                state.phase = match stage {
-                    agentelier_account_bridge::SignOutStage::Settling => AccountPhase::SigningOut,
-                    agentelier_account_bridge::SignOutStage::Revoking => AccountPhase::Revoking,
-                    agentelier_account_bridge::SignOutStage::Clearing => AccountPhase::Clearing,
-                };
-            }
-            AccountEventKind::SignOutFailed(failure) => {
-                state.phase = AccountPhase::SignOutFailed;
-                state.error = Some(failure.to_string());
-                error!(operation_id = event.operation_id, error = %failure, "退出未完成，等待重试本地清理");
-            }
-            AccountEventKind::SignedOut { snapshot, remote } => {
-                backend.authorization = None;
-                open = false;
-                apply_snapshot(&mut state, snapshot);
-                state.phase = AccountPhase::Idle;
-                state.operation = None;
-                state.error = None;
-                state.session_error = None;
-                state.session_activity = SessionActivity::Idle;
-                state.session_client_error = false;
-                state.session_retry_at = None;
-                state.feedback = Some(match remote {
-                    agentelier_account_bridge::RemoteRevocation::Unconfirmed(reason) => {
-                        format!("已退出本机登录；远端撤销未确认：{reason}")
-                    }
-                    agentelier_account_bridge::RemoteRevocation::Confirmed
-                    | agentelier_account_bridge::RemoteRevocation::NotApplicable => {
-                        "已退出登录".into()
-                    }
-                });
-                info!(
-                    operation_id = event.operation_id,
-                    "退出登录完成，本地会话已清除并保留账号登记"
-                );
-            }
-            AccountEventKind::SessionStatus {
-                snapshot,
-                activity,
-                failure,
-            } => {
-                let was_checking = state.session_activity != SessionActivity::Idle;
-                apply_snapshot(&mut state, snapshot);
-                state.session_activity = match activity {
-                    agentelier_account_bridge::SessionActivity::Idle => SessionActivity::Idle,
-                    agentelier_account_bridge::SessionActivity::Checking => {
-                        SessionActivity::Checking
-                    }
-                    agentelier_account_bridge::SessionActivity::Refreshing => {
-                        SessionActivity::Refreshing
-                    }
-                    agentelier_account_bridge::SessionActivity::Saving => SessionActivity::Saving,
-                    agentelier_account_bridge::SessionActivity::SaveFailed => {
-                        SessionActivity::SaveFailed
-                    }
-                };
-                if matches!(
-                    activity,
-                    agentelier_account_bridge::SessionActivity::Idle
-                        | agentelier_account_bridge::SessionActivity::SaveFailed
-                ) {
-                    state.session_client_error = failure.as_ref().is_some_and(|failure| {
-                        failure.kind == agentelier_account_bridge::SessionFailureKind::ClientConfiguration
-                    });
-                    state.session_retry_at = failure.as_ref().and_then(|failure| failure.retry_at);
-                    state.session_error = failure.map(|failure| failure.message);
-                }
-                if was_checking
-                    && activity == agentelier_account_bridge::SessionActivity::Idle
-                    && state.session_error.is_none()
-                {
-                    state.feedback = Some("会话凭据可用".into());
-                    info!("当前账号会话检查完成，凭据可用");
-                }
-            }
-            AccountEventKind::BrowserReady(link) => {
-                if state.phase != AccountPhase::Cancelling {
-                    backend.authorization = Some((event.operation_id, link));
-                    state.phase = AccountPhase::Waiting;
-                    open = true;
-                    info!(
-                        operation_id = event.operation_id,
-                        "授权监听已就绪，等待用户完成浏览器登录"
-                    );
-                }
-            }
-            AccountEventKind::Exchanging => {
-                backend.authorization = None;
-                open = false;
-                if state.phase != AccountPhase::Cancelling {
-                    state.phase = AccountPhase::Exchanging;
-                }
-            }
-            AccountEventKind::Saving => {
-                backend.authorization = None;
-                open = false;
-                if state.phase != AccountPhase::Cancelling {
-                    state.phase = AccountPhase::Saving;
-                }
-            }
-            AccountEventKind::SaveFailed(failure) => {
-                state.error = Some(failure.to_string());
-                if state.phase != AccountPhase::Cancelling {
-                    state.phase = AccountPhase::SaveFailed;
-                }
-                error!(operation_id = event.operation_id, error = %failure, "登录凭据尚未保存，保留待保存结果");
-            }
-            AccountEventKind::Completed(result) => {
-                let was_reading = state.phase == AccountPhase::Reading;
-                backend.authorization = None;
-                open = false;
-                state.operation = None;
-                state.phase = AccountPhase::Idle;
-                state.feedback = None;
-                match result {
-                    Ok(snapshot) => {
-                        apply_snapshot(&mut state, snapshot);
-                        if !was_reading {
-                            state.session_activity = SessionActivity::Idle;
-                            state.session_client_error = false;
-                            state.session_retry_at = None;
-                            state.session_error = None;
-                        }
-                        state.error = None;
-                        info!(
-                            operation_id = event.operation_id,
-                            "账号操作完成，已取得持久化状态"
-                        );
-                    }
-                    Err(failure) => {
-                        error!(operation_id = event.operation_id, error = %failure, "账号操作失败，原会话保持不变");
-                        state.error = Some(failure.to_string());
-                    }
-                }
-            }
-            AccountEventKind::Cancelled => {
-                backend.authorization = None;
-                open = false;
-                state.operation = None;
-                state.phase = AccountPhase::Idle;
-                state.error = None;
-                state.feedback = Some("登录已取消".into());
-                info!(
-                    operation_id = event.operation_id,
-                    "登录已实际取消，原会话保持不变"
-                );
-            }
         }
     }
-    if let Some(failure) = failures
-        .read(world.resource::<Messages<HostFailed>>())
-        .last()
-        .map(|failure| failure.reason.clone())
-    {
-        let mut state = world.resource_mut::<AccountState>();
+    if let Some(failure) = failures.read().last() {
         state.operation = None;
-        state.phase = AccountPhase::Idle;
-        state.error = Some(failure.to_string());
+        state.error = Some(failure.reason.to_string());
         state.runtime_failed = true;
         state.source_settling = false;
-        error!(error = %failure, "认证后台运行失败");
-        open = false;
+        error!(error = %failure.reason, "认证后台运行失败");
     }
-    if open {
-        launch_browser(world)?;
-    }
-    receive_browser(world)
+    Ok(())
 }
 
-fn apply_source(state: &mut AccountState, snapshot: SourceSnapshot, operation_id: u64) {
+fn apply_source(state: &mut AccountState, snapshot: &SourceSnapshot, operation_id: u64) {
     state.codex = match snapshot {
-        SourceSnapshot::Siwc => None,
+        SourceSnapshot::Disconnected => None,
         SourceSnapshot::Codex { path, status } => Some(CodexSource {
-            path,
+            path: path.clone(),
             status: match status {
                 Ok(summary) => CodexStatus::Read {
-                    subject: summary.subject,
-                    workspace_id: summary.workspace_id,
-                    email: summary.email,
+                    subject: summary.subject.clone(),
+                    workspace_id: summary.workspace_id.clone(),
+                    email: summary.email.clone(),
                     expired: summary.expired,
                 },
                 Err(message) => {
                     error!(operation_id, error = %message, "Codex 凭据文件不可用");
-                    CodexStatus::Failed(message)
+                    CodexStatus::Failed(message.clone())
                 }
             },
         }),
@@ -450,283 +112,8 @@ fn apply_source(state: &mut AccountState, snapshot: SourceSnapshot, operation_id
     if operation_id != 0 {
         info!(
             operation_id,
-            codex_selected = state.uses_codex(),
+            codex_selected = state.codex.is_some(),
             "当前凭据来源已保存"
         );
     }
-}
-
-fn apply_snapshot(state: &mut AccountState, snapshot: agentelier_account_bridge::AccountSnapshot) {
-    state.account = snapshot.account.map(|account| AccountSummary {
-        subject: account.subject,
-        display_name: account.display_name,
-        email: account.email,
-    });
-    state.credentials = match snapshot.credentials {
-        BridgeCredentials::NoRecord => CredentialState::NoRecord,
-        BridgeCredentials::HostOnly => CredentialState::HostOnly,
-        BridgeCredentials::SignedOut => CredentialState::SignedOut,
-        BridgeCredentials::ReauthenticationRequired => CredentialState::ReauthenticationRequired,
-        BridgeCredentials::StoredSession {
-            expired,
-            subscription_enabled,
-        } => CredentialState::StoredSession {
-            expired,
-            subscription_enabled,
-        },
-    };
-}
-fn sign_out(world: &mut World) -> Result {
-    let state = world.resource::<AccountState>();
-    if state.runtime_failed
-        || state.uses_codex()
-        || state.phase == AccountPhase::ChangingSource
-        || matches!(
-            state.phase,
-            AccountPhase::SigningOut | AccountPhase::Revoking | AccountPhase::Clearing
-        )
-    {
-        return Ok(());
-    }
-    let backend = world.resource::<LoginInteraction>().clone();
-    let mut backend = backend
-        .0
-        .lock()
-        .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
-    if world.resource::<AgentHost>().is_stopping()? {
-        return Ok(());
-    }
-    let host = world.resource::<AgentHost>();
-    match host.sign_out() {
-        Ok(id) => {
-            backend.authorization = None;
-            let mut state = world.resource_mut::<AccountState>();
-            state.operation = Some(id);
-            state.phase = AccountPhase::SigningOut;
-            state.error = None;
-            state.feedback = None;
-            state.session_error = None;
-            info!(operation_id = id, "用户请求退出登录，停止接纳新凭据请求");
-            if let Some(browser) = &backend.browser {
-                world
-                    .resource::<JobManager>()
-                    .cancel(browser.job_id)
-                    .map_err(|failure| failure.into_bevy_error())?;
-            }
-        }
-        Err(failure) => {
-            error!(error = %failure, "无法请求退出登录");
-            world.resource_mut::<AccountState>().error = Some(failure.to_string());
-        }
-    }
-    Ok(())
-}
-fn check_session(world: &mut World) -> Result {
-    let state = world.resource::<AccountState>();
-    if state.phase != AccountPhase::Idle
-        || state.uses_codex()
-        || state.runtime_failed
-        || matches!(
-            state.session_activity,
-            SessionActivity::Checking | SessionActivity::Refreshing | SessionActivity::Saving
-        )
-    {
-        return Ok(());
-    }
-    if world.resource::<AgentHost>().is_stopping()? {
-        return Ok(());
-    }
-    let host = world.resource::<AgentHost>();
-    let result = host.check_session();
-    let mut state = world.resource_mut::<AccountState>();
-    match result {
-        Ok(()) => {
-            state.session_activity = SessionActivity::Checking;
-            state.error = None;
-            state.feedback = None;
-            info!("用户检查当前账号会话");
-        }
-        Err(failure) => {
-            error!(error = %failure, "无法请求账号会话检查");
-            state.error = Some(failure.to_string());
-        }
-    }
-    Ok(())
-}
-fn launch_browser(world: &mut World) -> Result {
-    let state = world.resource::<AccountState>();
-    if state.phase != AccountPhase::Waiting {
-        return Ok(());
-    }
-    let id = state.operation;
-    let backend = world.resource::<LoginInteraction>().clone();
-    let mut backend = backend
-        .0
-        .lock()
-        .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
-    if world.resource::<AgentHost>().is_stopping()? || backend.browser.is_some() {
-        return Ok(());
-    }
-    let Some((operation_id, url)) = backend
-        .authorization
-        .as_ref()
-        .filter(|(operation_id, _)| Some(*operation_id) == id)
-    else {
-        return Ok(());
-    };
-    let operation_id = *operation_id;
-    let url = url.as_str().to_owned();
-    let submission = world.resource::<JobManager>().spawn_thread(
-        JobOptions {
-            label: Some("打开授权浏览器".into()),
-            ..default()
-        },
-        move |context| {
-            if context.is_cancelled() {
-                context.acknowledge_cancel();
-                return Ok(());
-            }
-            let result = open_browser(&url);
-            if context.send_blocking(result)? == SendStatus::Canceled {
-                context.acknowledge_cancel();
-            }
-            Ok(())
-        },
-    );
-    match submission {
-        Ok((job_id, receiver)) => {
-            backend.browser = Some(BrowserPending {
-                operation_id,
-                job_id,
-                receiver,
-                reply: None,
-            });
-            world.resource_mut::<AccountState>().browser_opening = true;
-        }
-        Err(failure) => {
-            world.resource_mut::<AccountState>().error = Some(format!(
-                "无法打开浏览器：{failure}；可以重新打开或复制登录链接"
-            ));
-            error!(operation_id, error = %failure, "无法提交打开浏览器的操作");
-        }
-    }
-    Ok(())
-}
-fn open_browser(url: &str) -> io::Result<()> {
-    use winsafe::co;
-    let _com = winsafe::CoInitializeEx(co::COINIT::APARTMENTTHREADED | co::COINIT::DISABLE_OLE1DDE)
-        .map_err(io::Error::other)?;
-    winsafe::ShellExecuteEx(&winsafe::SHELLEXECUTEINFO {
-        mask: co::SEE_MASK::NOASYNC | co::SEE_MASK::FLAG_NO_UI,
-        verb: Some("open"),
-        file: url,
-        show: co::SW::SHOWNORMAL,
-        ..default()
-    })
-    .map_err(|error| io::Error::other(format!("无法打开系统默认浏览器：{error}")))
-}
-fn copy_link(world: &mut World) -> Result {
-    if world.resource::<AccountState>().phase != AccountPhase::Waiting {
-        return Ok(());
-    }
-    let backend = world.resource::<LoginInteraction>().clone();
-    let backend = backend
-        .0
-        .lock()
-        .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
-    if world.resource::<AgentHost>().is_stopping()? {
-        return Ok(());
-    }
-    let Some((id, link)) = &backend.authorization else {
-        return Ok(());
-    };
-    if world.resource::<AccountState>().operation != Some(*id) {
-        return Ok(());
-    }
-    let result = world
-        .resource_mut::<bevy::clipboard::Clipboard>()
-        .set_text(link.as_str());
-    let mut state = world.resource_mut::<AccountState>();
-    match result {
-        Ok(()) => {
-            state.error = None;
-            state.feedback = Some("登录链接已复制".into());
-            info!(operation_id = *id, "用户复制当前登录链接");
-        }
-        Err(_) => {
-            state.error = Some("无法写入系统剪贴板，请重试或重新打开浏览器".into());
-            error!(operation_id = *id, "无法复制登录链接到系统剪贴板");
-        }
-    }
-    Ok(())
-}
-fn receive_browser(world: &mut World) -> Result {
-    let backend = world.resource::<LoginInteraction>().clone();
-    let mut backend = backend
-        .0
-        .lock()
-        .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
-    let Some(mut pending) = backend.browser.take() else {
-        return Ok(());
-    };
-    let outcome = loop {
-        match pending
-            .receiver
-            .try_recv()
-            .map_err(|failure| failure.into_bevy_error())?
-        {
-            JobRead::Item(reply) => pending.reply = Some(reply),
-            JobRead::Empty => {
-                backend.browser = Some(pending);
-                return Ok(());
-            }
-            JobRead::Finished(outcome) => break outcome,
-            JobRead::Closed => return Err(io::Error::other("打开浏览器的任务缺少终态").into()),
-        }
-    };
-    world
-        .resource::<JobManager>()
-        .remove(pending.job_id)
-        .map_err(|failure| failure.into_bevy_error())?;
-    let result = match outcome {
-        JobOutcome::Completed => pending
-            .reply
-            .as_ref()
-            .ok_or_else(|| io::Error::other("打开浏览器的任务缺少结果"))?
-            .as_ref()
-            .as_ref()
-            .map_err(|error| error.to_string()),
-        JobOutcome::Failed(failure) => Err(failure.to_string()),
-        JobOutcome::Canceled => {
-            debug!(
-                operation_id = pending.operation_id,
-                "打开浏览器的辅助任务已取消"
-            );
-            Ok(&())
-        }
-    };
-    if let Err(failure) = &result {
-        error!(operation_id = pending.operation_id, error = %failure, "打开系统默认浏览器失败");
-    }
-    let open_current = {
-        let mut state = world.resource_mut::<AccountState>();
-        state.browser_opening = false;
-        if state.operation == Some(pending.operation_id) {
-            if let Err(failure) = result
-                && state.phase == AccountPhase::Waiting
-            {
-                state.error = Some(format!(
-                    "无法打开浏览器：{failure}；可以重新打开或复制登录链接"
-                ));
-            }
-            false
-        } else {
-            state.phase == AccountPhase::Waiting && state.operation.is_some()
-        }
-    };
-    drop(backend);
-    if open_current {
-        launch_browser(world)?;
-    }
-    Ok(())
 }

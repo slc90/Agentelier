@@ -8,7 +8,6 @@ edition.workspace = true
 agentelier_login = { path = "../login" }
 tokio.workspace = true
 tokio-util.workspace = true
-tracing.workspace = true
 
 [lints]
 workspace = true

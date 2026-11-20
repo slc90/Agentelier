@@ -1,6 +1,6 @@
 use crate::operations::{AccountCommand, AccountFailure};
 use agentelier_login::{
-    AuthenticatedRequest, CredentialVersion, SessionFailure, SessionFailureKind, UsableCredentials,
+    AuthenticatedRequest, CredentialVersion, SessionFailure, UsableCredentials,
 };
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
@@ -20,8 +20,6 @@ struct Flight {
 }
 struct ClientState {
     flights: Vec<Flight>,
-    accepting: bool,
-    ending: bool,
     codex_selected: bool,
     source_settling: bool,
     invalidated: CancellationToken,
@@ -40,8 +38,8 @@ pub struct ExecutionIdentity {
     invalidated: CancellationToken,
 }
 impl ExecutionIdentity {
-    pub fn codex_identity(&self) -> Option<&crate::CodexIdentity> {
-        self.version.codex_identity()
+    pub fn identity(&self) -> &crate::CodexIdentity {
+        self.version.identity()
     }
 
     pub async fn invalidated(&self) {
@@ -49,9 +47,8 @@ impl ExecutionIdentity {
     }
 
     pub fn validate(&self, credentials: &UsableCredentials) -> Result<(), SessionFailure> {
-        if self.invalidated.is_cancelled() || !self.version.same_account(credentials.version()) {
+        if self.invalidated.is_cancelled() || self.identity() != credentials.version().identity() {
             return Err(SessionFailure::new(
-                SessionFailureKind::Identity,
                 "本次任务的账号会话已结束，请使用当前账号开始新任务",
             ));
         }
@@ -60,10 +57,7 @@ impl ExecutionIdentity {
 
     fn ensure_active(&self) -> Result<(), SessionFailure> {
         if self.invalidated.is_cancelled() {
-            Err(SessionFailure::new(
-                SessionFailureKind::Identity,
-                "本次任务绑定的授权已失效",
-            ))
+            Err(SessionFailure::new("本次任务绑定的授权已失效"))
         } else {
             Ok(())
         }
@@ -79,16 +73,10 @@ impl CredentialRequest {
     pub async fn wait(mut self) -> Outcome {
         loop {
             if self.invalidated.is_cancelled() {
-                return Err(SessionFailure::new(
-                    SessionFailureKind::SignedOut,
-                    "该请求所属会话已结束，不能交付旧凭据",
-                ));
+                return Err(SessionFailure::new("该请求所属会话已结束，不能交付旧凭据"));
             }
             if self.shutdown.is_cancelled() {
-                return Err(SessionFailure::new(
-                    SessionFailureKind::Runtime,
-                    "认证运行正在结束",
-                ));
+                return Err(SessionFailure::new("认证运行正在结束"));
             }
             if let Some(result) = self.result.borrow_and_update().clone() {
                 return result;
@@ -98,7 +86,6 @@ impl CredentialRequest {
                 _ = self.shutdown.cancelled() => continue,
                 result = self.result.changed() => result.map_err(|_| {
                 SessionFailure::new(
-                    SessionFailureKind::Runtime,
                     "认证运行已结束，未返回可用凭据",
                 )
                 })?,
@@ -116,8 +103,6 @@ impl CredentialClient {
             submit: Arc::new(submit),
             state: Arc::new(Mutex::new(ClientState {
                 flights: Vec::new(),
-                accepting: true,
-                ending: false,
                 codex_selected,
                 source_settling: false,
                 invalidated: CancellationToken::new(),
@@ -126,9 +111,9 @@ impl CredentialClient {
         }
     }
     pub async fn execution(&self) -> Result<ExecutionIdentity, SessionFailure> {
-        let request = self.request().map_err(|failure| {
-            SessionFailure::new(SessionFailureKind::Runtime, failure.to_string())
-        })?;
+        let request = self
+            .request()
+            .map_err(|failure| SessionFailure::new(failure.to_string()))?;
         let invalidated = request.invalidated.clone();
         let credentials = request.wait().await?;
         let identity = ExecutionIdentity {
@@ -147,16 +132,12 @@ impl CredentialClient {
         identity: &ExecutionIdentity,
     ) -> Result<(), SessionFailure> {
         identity.ensure_active()?;
-        if identity.codex_identity().is_some() {
-            let request = self.request().map_err(|failure| {
-                SessionFailure::new(SessionFailureKind::Runtime, failure.to_string())
-            })?;
-            tokio::select! { biased;
-                _ = identity.invalidated() => identity.ensure_active(),
-                result = request.wait() => identity.validate(&result?),
-            }
-        } else {
-            Ok(())
+        let request = self
+            .request()
+            .map_err(|failure| SessionFailure::new(failure.to_string()))?;
+        tokio::select! { biased;
+            _ = identity.invalidated() => identity.ensure_active(),
+            result = request.wait() => identity.validate(&result?),
         }
     }
     pub fn recover(
@@ -177,8 +158,8 @@ impl CredentialClient {
             .state
             .lock()
             .map_err(|_| AccountFailure::CredentialState)?;
-        if state.ending || !state.codex_selected && !state.accepting {
-            return Err(AccountFailure::SignedOut);
+        if !state.codex_selected {
+            return Err(AccountFailure::Disconnected);
         }
         if state.source_settling {
             return Err(AccountFailure::SourceSettling);
@@ -195,7 +176,6 @@ impl CredentialClient {
         }
         let (result, receiver) = watch::channel(None);
         (self.submit)(AccountCommand::Credentials {
-            codex: state.codex_selected,
             current: state.invalidated.clone(),
             intent: intent.clone(),
             result,
@@ -218,60 +198,11 @@ impl CredentialClient {
             .state
             .lock()
             .map_err(|_| AccountFailure::CredentialState)?;
-        if state.ending {
-            return Err(AccountFailure::SigningOut);
-        }
         if state.source_settling {
             return Err(AccountFailure::SourceSettling);
         }
         submit()
     }
-    pub fn begin_sign_out(
-        &self,
-        submit: impl FnOnce() -> Result<(), AccountFailure>,
-    ) -> Result<(), AccountFailure> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AccountFailure::CredentialState)?;
-        if state.source_settling {
-            return Err(AccountFailure::SourceSettling);
-        }
-        submit()?;
-        state.accepting = false;
-        state.ending = true;
-        state.invalidated.cancel();
-        state.flights.clear();
-        Ok(())
-    }
-    pub fn is_signing_out(&self) -> Result<bool, AccountFailure> {
-        Ok(self
-            .state
-            .lock()
-            .map_err(|_| AccountFailure::CredentialState)?
-            .ending)
-    }
-    pub(crate) fn finish_sign_out(&self) -> Result<(), AccountFailure> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AccountFailure::CredentialState)?;
-        state.ending = false;
-        state.accepting = false;
-        Ok(())
-    }
-    pub(crate) fn resume_after_login(&self) -> Result<(), AccountFailure> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| AccountFailure::CredentialState)?;
-        if !state.ending && !state.accepting {
-            state.invalidated = CancellationToken::new();
-            state.accepting = true;
-        }
-        Ok(())
-    }
-
     pub(crate) fn update_source(
         &self,
         selected: bool,

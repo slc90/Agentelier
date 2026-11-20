@@ -34,23 +34,19 @@ pub struct SessionSettings {
 impl SessionSettings {
     pub fn validate_source(
         &self,
-        codex: Option<&agentelier_llm_model::CodexIdentity>,
+        codex: &agentelier_llm_model::CodexIdentity,
     ) -> Result<(), ConversationFailure> {
-        if self.codex.as_ref() == codex {
-            Ok(())
-        } else {
-            Err(ConversationFailure::new(
-                "本会话的授权来源、账号或工作区与当前凭据不一致，请新建会话",
-            ))
+        let bound = self.codex.as_ref().ok_or_else(|| {
+            ConversationFailure::new(
+                "此会话的 SIWC 授权已下线。历史可查看，请新建 Codex 会话继续聊天",
+            )
+        })?;
+        if bound != codex {
+            return Err(ConversationFailure::new(
+                "本会话绑定的账号或工作区与当前 Codex 凭据不一致，请新建会话",
+            ));
         }
-    }
-
-    pub(crate) fn model_route(&self) -> agentelier_llm_model::ModelRoute {
-        if self.codex.is_some() {
-            agentelier_llm_model::ModelRoute::Codex
-        } else {
-            agentelier_llm_model::ModelRoute::Siwc
-        }
+        Ok(())
     }
 }
 pub enum ConversationRequest {
@@ -228,7 +224,7 @@ pub struct Conversation {
 impl Conversation {
     pub fn validate_model_source(
         &self,
-        codex: Option<&agentelier_llm_model::CodexIdentity>,
+        codex: &agentelier_llm_model::CodexIdentity,
     ) -> Result<(), ConversationFailure> {
         self.session.as_ref().map_or(Ok(()), |session| {
             session.view.settings.validate_source(codex)
@@ -389,6 +385,11 @@ impl Conversation {
         {
             return Err(ConversationFailure::new("会话设置缺少有效模型或推理选项"));
         }
+        if settings.codex.is_none() {
+            return Err(ConversationFailure::new(
+                "新会话需要绑定有效的 Codex 账号和工作区",
+            ));
+        }
         let id = SessionId::new_v4();
         settings
             .instructions
@@ -405,7 +406,7 @@ impl Conversation {
             ToolCatalog::with_extensions(
                 &settings.working_directory,
                 settings.image_input,
-                settings.model_route().tool_contract(&settings.slug),
+                agentelier_llm_model::codex_tool_contract(&settings.slug),
                 self.extensions.iter().chain(discovered),
             )
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?,

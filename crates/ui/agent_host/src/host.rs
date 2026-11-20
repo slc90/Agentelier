@@ -19,15 +19,10 @@ pub struct AgentHost(Arc<Mutex<HostState>>, SourceSettings);
 #[derive(Default)]
 struct HostState {
     connection: Option<Connection>,
-    startup: Option<ConnectionStartup>,
+    notify: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     stopping: bool,
     failed: bool,
     model_busy: bool,
-}
-
-struct ConnectionStartup {
-    path: PathBuf,
-    notify: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
 #[derive(Resource, Default)]
@@ -132,14 +127,17 @@ impl AgentHost {
         if state.stopping || state.failed {
             return Err(io::Error::other("执行宿主已经停止").into());
         }
-        if state.startup.is_some() {
+        if state.connection.is_some() {
             return Err(io::Error::other("执行连接已经建立，不能重复启动").into());
         }
         let proxy = (**proxy).clone();
-        state.startup = Some(ConnectionStartup {
-            path,
-            notify: Arc::new(move || proxy.send_event(WinitUserEvent::WakeUp).is_ok()),
-        });
+        let notify = Arc::new(move || proxy.send_event(WinitUserEvent::WakeUp).is_ok());
+        let wake_window = notify.clone();
+        state.connection = Some(Connection::start(path, self.1.clone(), move || {
+            wake_window()
+        })?);
+        state.notify = Some(notify);
+        debug!("共享执行连接已建立");
         Ok(())
     }
 
@@ -151,19 +149,6 @@ impl AgentHost {
         if state.stopping || state.failed {
             return Err(io::Error::other("执行宿主已经停止").into());
         }
-        if state.connection.is_none() {
-            let startup = state
-                .startup
-                .as_ref()
-                .ok_or_else(|| io::Error::other("执行连接缺少本次数据环境"))?;
-            let notify = startup.notify.clone();
-            state.connection = Some(Connection::start(
-                startup.path.clone(),
-                self.1.clone(),
-                move || notify(),
-            )?);
-            debug!("共享执行连接已建立");
-        }
         let connection = state
             .connection
             .as_mut()
@@ -171,28 +156,8 @@ impl AgentHost {
         action(connection).map_err(BevyError::from)
     }
 
-    pub fn restore(&self) -> Result<u64> {
-        self.submit(Connection::restore)
-    }
     pub fn change_source(&self, change: SourceChange) -> Result<u64> {
         self.submit(|connection| connection.change_source(change))
-    }
-    pub fn login(&self, consent: bool) -> Result<u64> {
-        self.submit(|connection| connection.login(consent))
-    }
-    pub fn retry_save(&self, id: u64) -> Result {
-        self.submit(|connection| connection.retry_save(id))
-    }
-    pub fn cancel(&self, id: u64) -> Result {
-        self.submit(|connection| connection.cancel(id))
-    }
-    pub fn check_session(&self) -> Result {
-        self.submit(Connection::check_session)
-    }
-    pub fn sign_out(&self) -> Result<u64> {
-        let id = self.submit(Connection::sign_out)?;
-        self.state()?.model_busy = false;
-        Ok(id)
     }
     pub fn request_memory(
         &self,
@@ -328,10 +293,7 @@ fn receive(world: &mut World) -> Result {
             }
         }
         if events.len() == MAX_EVENTS_PER_UPDATE
-            && state
-                .startup
-                .as_ref()
-                .is_some_and(|startup| !(startup.notify)())
+            && state.notify.as_ref().is_some_and(|notify| !notify())
         {
             failure = Some("执行结果已入队，但无法继续唤醒界面".into());
         }
@@ -351,7 +313,7 @@ fn receive(world: &mut World) -> Result {
                 host.state()?.model_busy = busy;
                 world.write_message(ConversationEvent {
                     operation_id: event.operation_id,
-                    kind,
+                    kind: *kind,
                 });
             }
             BridgeEventKind::McpMaterial(result) => {

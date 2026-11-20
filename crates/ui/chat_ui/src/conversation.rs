@@ -128,6 +128,7 @@ pub struct ChatTurn {
 }
 #[derive(Clone, Reflect)]
 pub struct ChatSession {
+    pub codex_identity: Option<(String, String)>,
     pub project_publications: Vec<crate::request_inspection::ChatPublication>,
     pub project_context: crate::project_context::ProjectContext,
     pub notice: Option<String>,
@@ -150,6 +151,19 @@ pub struct ChatSession {
     pub queue: Vec<crate::queue::ChatQueuedInput>,
     pub queue_paused: bool,
 }
+impl ChatSession {
+    fn binding(&self) -> Option<(&str, &str)> {
+        self.codex_identity
+            .as_ref()
+            .map(|(subject, workspace)| (subject.as_str(), workspace.as_str()))
+    }
+
+    pub(crate) fn matches_account(&self, account: &AccountState) -> bool {
+        self.binding()
+            .is_some_and(|binding| account.model_identity() == Some(binding))
+    }
+}
+
 #[derive(Clone, Reflect)]
 pub struct ChatReplacement {
     pub reset_session: Option<SessionId>,
@@ -211,6 +225,7 @@ impl ChatState {
             && !self.draft.trim().is_empty()
             && self.session.as_ref().is_some_and(|session| {
                 !session.execution_blocked
+                    && session.matches_account(account)
                     && session
                         .turn
                         .as_ref()
@@ -221,6 +236,7 @@ impl ChatState {
         !self.cancelling
             && self.replacement.is_none()
             && !account.runtime_failed
+            && account.model_unavailable_reason().is_none()
             && !self.draft.trim().is_empty()
             && !self
                 .pending_inputs
@@ -228,6 +244,7 @@ impl ChatState {
                 .any(|input| input.revision == self.draft_revision && input.text == self.draft)
             && self.session.as_ref().is_some_and(|session| {
                 !session.execution_blocked
+                    && session.matches_account(account)
                     && session.turn.as_ref().is_some_and(|turn| {
                         self.operation == Some(turn.operation_id)
                             && matches!(turn.status, ChatTurnStatus::Running)
@@ -307,10 +324,10 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(PostUpdate, update.before(UiSystems::Content));
 }
 
-pub(crate) fn panel(state: &ChatState) -> impl Scene {
+pub(crate) fn panel(state: &ChatState, account: &AccountState) -> impl Scene {
     let draft = state.draft.clone();
     let summary = summary(state);
-    let status = status(state);
+    let status = status(state, account);
     bsn! {
         Name("ChatPanel")
         Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP) }
@@ -425,12 +442,13 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
 
 pub(crate) fn process_results(world: &mut World, session: SessionId) {
     let state = world.resource::<ChatState>();
+    let account = world.resource::<AccountState>();
     if state.operation.is_some()
         || state.replacement.is_some()
-        || !state
-            .session
-            .as_ref()
-            .is_some_and(|current| current.id == session && !current.execution_blocked)
+        || account.model_unavailable_reason().is_some()
+        || !state.session.as_ref().is_some_and(|current| {
+            current.id == session && !current.execution_blocked && current.matches_account(account)
+        })
         || !state.tasks.iter().any(|task| task.delivery == "pending")
     {
         return;
@@ -578,6 +596,9 @@ fn prepare_reset(world: &mut World) -> Result {
     let Some(session) = &state.session else {
         return Ok(());
     };
+    if !session.matches_account(world.resource::<AccountState>()) {
+        return Ok(());
+    }
     let pending = ChatReplacement {
         reset_session: Some(session.id),
         slug: session.slug.clone(),
@@ -600,8 +621,12 @@ fn confirm_replacement(world: &mut World) -> Result {
         return Ok(());
     };
     let account = world.resource::<AccountState>();
-    if account.runtime_failed
-        || (pending.reset_session.is_none() && !world.resource::<ModelState>().can_request(account))
+    if !world.resource::<ModelState>().can_request(account)
+        || pending.reset_session.is_some()
+            && state
+                .session
+                .as_ref()
+                .is_none_or(|session| !session.matches_account(account))
     {
         return Ok(());
     }
@@ -644,6 +669,7 @@ fn can_retry(
         && model.can_request(account)
         && state.session.as_ref().is_some_and(|session| {
             !session.execution_blocked
+                && session.matches_account(account)
                 && session.turn.as_ref().is_some_and(|turn| {
                     turn.committed_steps == 0
                         && turn.compaction_continuation.is_none()
@@ -1109,6 +1135,7 @@ fn project(session: SessionView) -> Result<ChatSession> {
         context,
         context_details,
         context_limits: session.settings.context_limits.clone(),
+        codex_identity: session.codex_identity,
         notice: session.notice,
         execution_blocked: session.execution_blocked,
         tool_catalog: session.tool_catalog,
@@ -1730,11 +1757,19 @@ fn summary(state: &ChatState) -> String {
         })
         .unwrap_or_else(|| "选择模型与推理设置后创建会话".into())
 }
-fn status(state: &ChatState) -> String {
+fn status(state: &ChatState, account: &AccountState) -> String {
     let mut value = task_status(state);
     if let Some(session) = &state.session {
         value.push('\n');
         value.push_str(&session.context);
+        if session.binding().is_some()
+            && account.model_identity().is_some()
+            && !session.matches_account(account)
+        {
+            value.push_str(
+                "\n此会话绑定了其他 Codex 账号或工作区。历史可查看，请新建会话继续聊天。",
+            );
+        }
     }
     if let Some(notice) = state
         .session
@@ -1855,7 +1890,10 @@ fn update(
                     && model.can_verify(&account)
             }
             ChatAction::Reset => {
-                state.session.is_some()
+                state
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.matches_account(&account))
                     && state.replacement.is_none()
                     && state.operation.is_none()
                     && !activity.model_busy
@@ -1904,7 +1942,7 @@ fn update(
                 .unwrap_or("新会话");
             text.set_if_neq(Text::new(format!("{title} · {}", summary(&state))));
         } else if is_status {
-            text.set_if_neq(Text::new(status(&state)));
+            text.set_if_neq(Text::new(status(&state, &account)));
         }
     }
 }

@@ -417,7 +417,7 @@ async fn run_task(
         _ = cancel.cancelled() => return Ok(TurnStatus::Cancelled),
         result = credentials.execution() => match result { Ok(identity) => identity, Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())) },
     };
-    if let Err(failure) = settings.validate_source(identity.codex_identity()) {
+    if let Err(failure) = settings.validate_source(identity.identity()) {
         return Ok(TurnStatus::Failed(failure.to_string()));
     }
     let tool_authorization = ToolAuthorization::new(credentials.clone(), identity.clone());

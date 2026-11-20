@@ -368,7 +368,6 @@ impl ActiveTurn<'_> {
             self.tools.definitions(),
         )?;
         Ok(GenerationRequest {
-            route: self.view.settings.model_route(),
             history_position: self.history.position(),
             skip_compaction,
             reserved_result_bytes,

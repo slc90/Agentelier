@@ -236,6 +236,7 @@ pub struct ContextView {
 }
 #[derive(Clone)]
 pub struct SessionView {
+    pub codex_identity: Option<(String, String)>,
     pub project_publications: Arc<Vec<ProjectPublicationView>>,
     pub project_context: Box<ProjectContextView>,
     pub context: Box<ContextView>,
@@ -483,6 +484,10 @@ fn view(session: agentelier_conversation::SessionView) -> SessionView {
                 .map(|anchor| anchor.covered_items),
             limits: session.context.limits,
         }),
+        codex_identity: session
+            .settings
+            .codex
+            .map(|identity| (identity.subject, identity.workspace_id)),
         notice: session.notice,
         execution_blocked: session.execution_blocked,
         tool_catalog: session.tool_catalog,

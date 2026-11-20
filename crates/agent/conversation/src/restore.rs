@@ -515,7 +515,7 @@ pub fn restore(
                     .requests
                     .last()
                     .ok_or_else(|| ConversationFailure::new("准备记录缺少请求材料"))?;
-                if (fact.projection.route == agentelier_llm_model::ModelRoute::Codex)
+                if (fact.projection.route == agentelier_llm_model::RecordedModelSource::Codex)
                     != initial.settings.codex.is_some()
                 {
                     return Err(ConversationFailure::new(
@@ -1291,39 +1291,47 @@ impl Conversation {
             turn.operation_id = 0;
         }
         let settings = &restored.initial.settings;
-        let tools = ToolCatalog::with_extensions(
-            &settings.working_directory,
-            settings.image_input,
-            settings.tool_contract,
-            self.extensions.iter().chain(tools),
-        )
-        .and_then(|available| available.rebind(&settings.tools));
-        let tools = match tools {
-            _ if settings.tool_contract == ToolContract::ExperimentalNamespace => {
-                restored.state.execution_blocked = true;
-                restored.add_recovery_notice(
-                    "此会话使用已结束的 namespace 实验契约，历史可查看。请新建会话继续聊天。",
-                );
-                ToolCatalog::default()
-            }
-            Ok(tools) if settings.working_directory.is_absolute() => {
-                if let Err(failure) =
-                    agentelier_tools::WorkingDirectory::validate(&settings.working_directory)
-                {
-                    restored.add_recovery_notice(&format!(
-                        "原工作目录不可用，工具执行会拒绝该路径：{failure}"
-                    ));
+        let tools = if settings.codex.is_none() {
+            restored.state.execution_blocked = true;
+            restored.add_recovery_notice(
+                "此会话的 SIWC 授权已下线。历史可查看，请新建 Codex 会话继续聊天。",
+            );
+            ToolCatalog::default()
+        } else {
+            let tools = ToolCatalog::with_extensions(
+                &settings.working_directory,
+                settings.image_input,
+                settings.tool_contract,
+                self.extensions.iter().chain(tools),
+            )
+            .and_then(|available| available.rebind(&settings.tools));
+            match tools {
+                _ if settings.tool_contract == ToolContract::ExperimentalNamespace => {
+                    restored.state.execution_blocked = true;
+                    restored.add_recovery_notice(
+                        "此会话使用已结束的 namespace 实验契约，历史可查看。请新建会话继续聊天。",
+                    );
+                    ToolCatalog::default()
                 }
-                tools
-            }
-            result => {
-                restored.state.execution_blocked = true;
-                let reason = result.err().map_or_else(
-                    || "存档工作目录不是绝对路径".into(),
-                    |failure| failure.to_string(),
-                );
-                restored.add_recovery_notice(&format!("{reason}，已阻止执行；历史仍可查看"));
-                ToolCatalog::default()
+                Ok(tools) if settings.working_directory.is_absolute() => {
+                    if let Err(failure) =
+                        agentelier_tools::WorkingDirectory::validate(&settings.working_directory)
+                    {
+                        restored.add_recovery_notice(&format!(
+                            "原工作目录不可用，工具执行会拒绝该路径：{failure}"
+                        ));
+                    }
+                    tools
+                }
+                result => {
+                    restored.state.execution_blocked = true;
+                    let reason = result.err().map_or_else(
+                        || "存档工作目录不是绝对路径".into(),
+                        |failure| failure.to_string(),
+                    );
+                    restored.add_recovery_notice(&format!("{reason}，已阻止执行；历史仍可查看"));
+                    ToolCatalog::default()
+                }
             }
         };
 

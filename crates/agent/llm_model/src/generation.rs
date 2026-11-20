@@ -1,7 +1,7 @@
 use crate::codex_socket;
 use crate::model::{
-    ModelFailure, ModelFailureKind, ModelRoute, acquire, http_failure, network, recover,
-    request_id, with_response,
+    ModelFailure, ModelFailureKind, acquire, codex_tool_contract, http_failure, network, recover,
+    request_id, responses, with_response,
 };
 use crate::protocol::ProtocolHistory;
 use crate::stream::{GenerationResult, STREAM_IDLE_TIMEOUT, StreamEvent, consume};
@@ -34,7 +34,6 @@ impl std::io::Write for RequestBytes {
 }
 
 pub struct GenerationRequest {
-    pub route: ModelRoute,
     pub memory: Option<crate::MemorySnapshot>,
     pub selected_skills: Vec<agentelier_skills::SelectedSkill>,
     pub skill_catalog: Option<String>,
@@ -49,10 +48,24 @@ pub struct GenerationRequest {
     pub tools: Arc<ToolCatalog>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordedModelSource {
+    #[default]
+    Siwc,
+    Codex,
+}
+
+impl RecordedModelSource {
+    fn is_siwc(&self) -> bool {
+        *self == Self::Siwc
+    }
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct RequestProjection {
-    #[serde(default, skip_serializing_if = "ModelRoute::is_siwc")]
-    pub route: ModelRoute,
+    #[serde(default, skip_serializing_if = "RecordedModelSource::is_siwc")]
+    pub route: RecordedModelSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction: Option<RequestCompaction>,
     #[serde(default, skip_serializing_if = "ToolContract::is_flat")]
@@ -113,7 +126,9 @@ impl RequestProjection {
 
     pub fn validate_request_materials(&self) -> Result<(), ModelFailure> {
         use sha2::{Digest, Sha256};
-        if self.tool_contract == ToolContract::CodexWebSocket && self.route != ModelRoute::Codex {
+        if self.tool_contract == ToolContract::CodexWebSocket
+            && self.route != RecordedModelSource::Codex
+        {
             return Err(crate::model::protocol(
                 "Codex WebSocket 请求缺少 Codex 授权来源",
             ));
@@ -235,31 +250,19 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         .validate()
         .map_err(|_| ModelFailure::new(ModelFailureKind::Protocol, "会话指令快照无效"))?;
     let contract = generation.tools.contract();
-    if contract == ToolContract::CodexWebSocket
-        && generation.route.tool_contract(&generation.slug) != contract
+    if contract == ToolContract::CodexWebSocket && codex_tool_contract(&generation.slug) != contract
     {
         return Err(crate::model::protocol(
             "冻结的 Codex WebSocket 契约与模型路径不一致",
         ));
     }
-    let declarations = tool_declarations(&generation.tools);
+    match contract {
+        ToolContract::Flat | ToolContract::CodexWebSocket => {}
+        ToolContract::AdditionalTools | ToolContract::ExperimentalNamespace => {
+            return Err(crate::model::protocol("已停用的工具契约仅可查看历史"));
+        }
+    }
     let mut input = Vec::new();
-    let top_level_tools = match contract {
-        ToolContract::Flat | ToolContract::CodexWebSocket => Some(declarations),
-        ToolContract::AdditionalTools => {
-            input.push(serde_json::json!({
-                "type": "additional_tools",
-                "role": "developer",
-                "tools": declarations,
-            }));
-            None
-        }
-        ToolContract::ExperimentalNamespace => {
-            return Err(crate::model::protocol(
-                "已结束的 namespace 实验会话仅可查看",
-            ));
-        }
-    };
     input.extend(
         generation
             .instructions
@@ -316,15 +319,13 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         payload["context_management"] =
             serde_json::json!([{"type":"compaction", "compact_threshold":threshold}]);
     }
-    if let Some(declarations) = top_level_tools {
-        payload["tools"] = declarations;
-    }
+    payload["tools"] = tool_declarations(&generation.tools);
     payload["tool_choice"] = serde_json::json!("auto");
     payload["parallel_tool_calls"] = serde_json::json!(true);
     if let Some(effort) = &generation.effort {
         payload["reasoning"] = serde_json::json!({"effort": effort});
     }
-    generation.route.responses_payload(&mut payload);
+    payload["instructions"] = serde_json::Value::String(String::new());
     if contract == ToolContract::CodexWebSocket {
         payload["type"] = serde_json::json!("response.create");
     }
@@ -358,7 +359,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     }
     use sha2::{Digest, Sha256};
     let projection = RequestProjection {
-        route: generation.route,
+        route: RecordedModelSource::Codex,
         compaction: Some(compaction),
         tool_contract: contract,
         skill_materials,
@@ -452,12 +453,6 @@ async fn generate_inner(
     identity.validate(&current).map_err(|failure| {
         ModelFailure::new(ModelFailureKind::Authentication, failure.to_string())
     })?;
-    if generation.projection.route != ModelRoute::of(&current) {
-        return Err(ModelFailure::new(
-            ModelFailureKind::Authentication,
-            "当前授权来源与冻结请求不一致",
-        ));
-    }
     tracing::debug!(
         request_bytes = generation.body.len(),
         payload_hash = generation.projection.payload_hash,
@@ -527,10 +522,7 @@ async fn generate_http(
 ) -> Result<GenerationResult, ModelFailure> {
     let response = tokio::time::timeout(
         STREAM_IDLE_TIMEOUT,
-        generation
-            .projection
-            .route
-            .responses(client, current)
+        responses(client, current)
             .body(generation.body.clone())
             .send(),
     )

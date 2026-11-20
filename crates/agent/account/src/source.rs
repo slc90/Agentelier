@@ -1,7 +1,4 @@
-use crate::{
-    AccountFailure, CodexIdentity, CredentialIntent, SessionFailure, SessionFailureKind,
-    UsableCredentials,
-};
+use crate::{CodexIdentity, CredentialIntent, SessionFailure, UsableCredentials};
 use agentelier_login::{CodexAccountSummary, CodexReadFailure, read_codex_credentials};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -33,7 +30,7 @@ impl SourceSettings {
     pub(crate) fn read(&self) -> AccountSource {
         self.selected_file
             .as_ref()
-            .map_or(AccountSource::Siwc, |path| AccountSource::Codex {
+            .map_or(AccountSource::Disconnected, |path| AccountSource::Codex {
                 path: path.clone(),
                 status: read_codex_credentials(path).map(|file| file.summary),
             })
@@ -42,48 +39,42 @@ impl SourceSettings {
     pub(crate) fn acquire(
         &self,
         intent: CredentialIntent,
-    ) -> Result<(AccountSource, Result<UsableCredentials, SessionFailure>), AccountFailure> {
-        let path = self
-            .selected_file
-            .as_ref()
-            .ok_or(AccountFailure::CredentialState)?;
+    ) -> (AccountSource, Result<UsableCredentials, SessionFailure>) {
+        let Some(path) = &self.selected_file else {
+            return (
+                AccountSource::Disconnected,
+                Err(SessionFailure::new("请选择有效的 Codex 凭据文件")),
+            );
+        };
         let (status, credentials) = match read_codex_credentials(path) {
             Ok(file) => (
                 Ok(file.summary.clone()),
                 UsableCredentials::from_codex(file),
             ),
-            Err(error) => (
-                Err(error),
-                Err(SessionFailure::new(
-                    SessionFailureKind::Identity,
-                    error.to_string(),
-                )),
-            ),
+            Err(error) => (Err(error), Err(SessionFailure::new(error.to_string()))),
         };
         let credentials = credentials.and_then(|current| {
             if let CredentialIntent::Recover(rejected) = intent {
-                if !rejected.same_account(current.version()) {
+                if rejected.identity() != current.version().identity() {
                     return Err(SessionFailure::new(
-                        SessionFailureKind::Identity,
                         "Codex 凭据的账号或工作区已变化，原请求已停止",
                     ));
                 }
                 if &rejected == current.version() {
                     return Err(SessionFailure::new(
-                        SessionFailureKind::ReauthenticationRequired,
                         "Codex 文件尚未提供新的凭据，请在 Codex 中恢复授权",
                     ));
                 }
             }
             Ok(current)
         });
-        Ok((
+        (
             AccountSource::Codex {
                 path: path.clone(),
                 status,
             },
             credentials,
-        ))
+        )
     }
 
     pub(crate) fn change(&mut self, change: SourceChange) -> io::Result<()> {
@@ -112,7 +103,7 @@ pub enum SourceChange {
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum AccountSource {
-    Siwc,
+    Disconnected,
     Codex {
         path: PathBuf,
         status: Result<CodexAccountSummary, CodexReadFailure>,
@@ -132,7 +123,7 @@ impl AccountSource {
 
     pub(crate) fn path(&self) -> Option<&Path> {
         match self {
-            Self::Siwc => None,
+            Self::Disconnected => None,
             Self::Codex { path, .. } => Some(path),
         }
     }

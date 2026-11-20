@@ -33,11 +33,11 @@
 
 本应用使用 Function Tool：请求保留 `type: function`，符合资格的声明增加 `async: true`；响应解析保留调用项的 `async` 标志，结果仍使用 `function_call_output`。`call_id`、输出项 `id` 和应用任务 ID 各有用途，不可互换。协议支持的 Custom Tool 不属于当前工具体系，本次不扩展它。
 
-SIWC HTTP 继续使用 `store: false`、`stream: true` 和完整有序的 `input`，不发送 `previous_response_id`。异步指南中的服务器链式状态示例不改变本地历史重放路径。[SIWC 限制](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)、[会话状态](https://developers.openai.com/api/docs/guides/conversation-state)分别约束接入方式和历史材料。
+迁移前的 SIWC HTTP 使用 `store: false`、`stream: true` 和完整有序的 `input`，不发送 `previous_response_id`。异步指南中的服务器链式状态示例不改变本地历史重放路径。[SIWC 限制](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)、[会话状态](https://developers.openai.com/api/docs/guides/conversation-state)分别约束接入方式和历史材料。
 
-新建 `gpt-6.2-sol` 会话将冻结的工具目录作为每次 HTTP 请求 `input` 的首项。该项使用 `type: "additional_tools"`、`role: "developer"` 和 `tools` 数组。顶层省略 `tools`，符合资格的 Function Tool 保留 `async: true`，叶子名称、参数 schema 和执行器参数沿用原契约。[Responses 请求结构](https://developers.openai.com/api/reference/resources/responses/methods/create)
+迁移前的新建 `gpt-6.2-sol` 会话将冻结的工具目录作为每次 HTTP 请求 `input` 的首项。该项使用 `type: "additional_tools"`、`role: "developer"` 和 `tools` 数组。顶层省略 `tools`，符合资格的 Function Tool 保留 `async: true`，叶子名称、参数 schema 和执行器参数沿用原契约。[Responses 请求结构](https://developers.openai.com/api/reference/resources/responses/methods/create)
 
-SIWC 每次全量重放从同一冻结目录生成这一项，后面依次使用已有指令、上下文和协议历史顺序。Codex 新建 `gpt-6-astra` 会话使用 WebSocket 的顶层 `tools`。当本地历史确认前一响应且完整输入仍可从该响应续接时，采用同连接的 `previous_response_id` 和新增输入。[Codex 续接边界](../modules/model-request.md#codex-websocket-续接)
+历史 SIWC 协议的每次全量重放从同一冻结目录生成这一项，后面依次使用已有指令、上下文和协议历史顺序。Codex 新建 `gpt-6-astra` 会话使用 WebSocket 的顶层 `tools`。当本地历史确认前一响应且完整输入仍可从该响应续接时，采用同连接的 `previous_response_id` 和新增输入。[Codex 续接边界](../modules/model-request.md#codex-websocket-续接)
 
 工具声明是请求材料，应用历史只保存实际发生的协议内容。完整调用按 `name` 绑定本次请求目录，未知名称或意外 namespace 在派发前拒绝。保留原始调用项及 `call_id`，已有平铺同步存档继续按保存契约重放。
 

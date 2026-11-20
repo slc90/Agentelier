@@ -1,6 +1,6 @@
 # Agentelier 总体架构
 
-Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。Bevy ECS 与 Winit 管理交互和展示，独立线程的 Tokio current-thread Runtime 承载账号与模型执行。当前已实现数据目录启动与设置、文件账号恢复、ChatGPT 浏览器授权、受保护凭据提交、按需续期、退出登录、模型连接验证、多轮流式聊天及运行收尾。
+Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。Bevy ECS 与 Winit 管理交互和展示，独立线程的 Tokio current-thread Runtime 承载账号与模型执行。当前已实现数据目录启动与设置、Codex 外部凭据选择和恢复、模型连接验证、多轮流式聊天、工具执行及运行收尾。
 
 ## Workspace 与三个领域
 
@@ -13,9 +13,9 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/ui/markdown/` | `agentelier_markdown` | 原生 Markdown 解析、块更新、行内样式、原文复制与用户主动链接交互 |
 | `crates/ui/chat_ui/` | `agentelier_chat_ui` | 模型准备、固定会话侧栏、按会话隔离的草稿与阅读状态、多轮流式聊天和相应交互投影 |
 | `crates/ui/agent_host/` | `agentelier_agent_host` | 唯一 Connection、Winit 唤醒、命令提交、业务消息分发及执行收尾 |
-| `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、账号界面，Bevy/Bridge 衔接及浏览器/剪贴板交互 |
-| `crates/agent/login/` | `agentelier_login` | 数据环境、OAuth、Token、身份校验、认证文件与受保护原子提交 |
-| `crates/agent/account/` | `agentelier_account` | 账号操作与会话状态、共享凭据门控和按需续期协调 |
+| `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、Codex 账号界面及 Bevy/Bridge 衔接 |
+| `crates/agent/login/` | `agentelier_login` | 数据环境、Codex 凭据只读解析及身份与凭据值 |
+| `crates/agent/account/` | `agentelier_account` | Codex 来源状态、共享凭据请求和执行身份门控 |
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录与窗口能力、Responses 的 HTTP/SSE 与 WebSocket 传输、响应使用量和模型错误语义 |
 | `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的聊天会话、Turn 身份、工作窗口计量、压缩检查点及恢复、展示记录与结果收敛 |
 | `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话日志、恢复读取、执行事件追加、独立名称与删除元数据、受控会话清理、不可变图片附件、单写入者、提交确认与存储收尾 |
@@ -27,7 +27,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示 |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、封闭边界自动压缩与检查点提交、正文增量和受控取消 |
 | `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型任务取消/回收及执行收尾 |
-| `crates/bridge/account/` | `agentelier_account_bridge` | 账号摘要、凭据安全投影、授权地址及账号事件转换 |
+| `crates/bridge/account/` | `agentelier_account_bridge` | Codex 凭据安全摘要及账号事件转换 |
 | `crates/bridge/llm_model/` | `agentelier_llm_model_bridge` | 模型结果、错误分类、取消和完成状态转换 |
 | `crates/bridge/conversation/` | `agentelier_conversation_bridge` | 聊天命令、会话/轮次和安全展示投影转换 |
 | `crates/bridge/connection/` | `agentelier_bridge_connection` | 命令/事件传递、操作关联、互斥、唤醒与连接生命周期 |
@@ -106,19 +106,19 @@ flowchart TD
 
 目录设置显示本次固定路径、打开当前目录、检查并保存下次启动位置。候选检查不持有第二份长期占用，保存成功才更新配置投影；更改下次位置不搬运文件、不切换当前数据环境或账号。关系见[数据目录与启动](mechanisms/application-data.md)。
 
-UI 使用 `bevy_widgetry_path_display::display_path` 显示路径，application 在序列化配置时使用同库的 `simplify_path`，Login 在调用 Windows Shell 打开数据目录时使用该函数。数据环境对外仍返回原始规范路径，目录比较与文件操作不使用显示字符串。系统浏览器由 login_ui 的辅助 Job 通过 Windows Shell 打开；剪贴板由应用处理。授权地址仅作为无 Debug 的私有交互数据保存，不进入反射状态或日志。
+UI 使用 `bevy_widgetry_path_display::display_path` 显示路径，application 在序列化配置时使用同库的 `simplify_path`，Login 在调用 Windows Shell 打开数据目录时使用该函数。数据环境对外仍返回原始规范路径，目录比较与文件操作不使用显示字符串。Codex 文件选择会提交路径配置，现有目录下的 SIWC 凭据不参与目录检查。
 
 ## Agent 的账号、模型与执行所有者
 
-Login 实现具体协议、身份与文件规则。Account 的 `Account` 持有 SIWC AuthFile、待保存浏览器操作与当前凭据来源，串行执行恢复、登录、保存重试、凭据获取、退出和外部来源切换；文件工作交给 spawn_blocking，网络及回环监听使用异步 I/O。SIWC 登录协议使用支持系统代理的 reqwest、固定签发方的 JWT 校验及 win-custody 的安全文件权限接口。Codex OAuth 只读解析用户选择的文件，应用配置仅持久化其路径。选用 Codex 时模型凭据入口停止交付 SIWC 凭据，直到用户断开外部来源。
+Login 提供数据环境和 Codex 文件只读解析。Account 串行处理外部文件选择、断开、状态检查及凭据请求。文件工作交给 spawn_blocking。应用配置只持久化所选路径，签发和更新由 Codex 客户端负责。
 
 Account 的可克隆 CredentialClient 管理接纳、会话失效令牌和在途请求合并。它通过 Runtime 赋予的命令提交能力进入同一个有界队列，不反向依赖 Runtime。Token、会话代次和旋转待保存结果只留在执行侧；启动仅恢复文件，无周期保活。按需更新保存成功才交付凭据，取消等待者不丢弃已经开始的旋转。
 
-LLM Model 通过 Account 获取凭据，按选定来源请求 SIWC 或 Codex 的目录与 Responses，并管理一次有界认证恢复、流式响应完成判定及错误分类。Codex 会话固定来源、主体和工作区，旧 SIWC 会话保留原路由与工具契约。工具实际执行前通过 CredentialClient 核对原任务授权。来源变化时 Runtime 等待旧任务、工具和队列记录收尾，随后让 Account 恢复凭据交付并向界面发布新状态。协议见[单次模型请求](modules/model-request.md)。
+LLM Model 通过 Account 获取凭据，请求 Codex 的目录与 Responses，并管理一次有界认证恢复、流式响应完成判定及错误分类。会话固定 Codex 主体和工作区。缺少可核对身份的旧 SIWC 会话保留展示、附件及请求契约，作为只读历史恢复。工具实际执行前通过 CredentialClient 核对原任务授权。来源变化时 Runtime 等待旧任务、工具和队列记录收尾，随后让 Account 恢复凭据交付并向界面发布新状态。协议见[单次模型请求](modules/model-request.md)。
 
 Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模型任务和独立 Turn Runner。Runtime 拥有线程、队列、取消令牌、JoinHandle 及真实回收信号；账号处理期间模型任务仍可并发等待网络。它不包含 OAuth、认证文件实现或模型网络协议。依赖为 Runtime → Account → Login、Runtime → LLM Model → Account，以及 Runtime → Tools，以及 Runtime → Turn Runner → Conversation / LLM Model / Account，无循环。
 
-用户请求退出时，共享门控先停止新凭据请求和旧等待者交付；独立控制队列优先处理退出。Runtime 取消并回收模型任务、结束旧排队命令，再让 Account 等待当前更新收敛并调用 Login 执行撤销和本地提交。取消、退出请求与实际完成分别表达。普通关闭不退出账号。详见[认证运行与凭据管理](modules/authentication.md)。
+来源断开或文件失效时，共享门控暂停新凭据交付，Runtime 停止旧模型任务并回收工具。队列暂停和已接纳结果持久确认后，账号区显示新的来源状态。详见[认证运行与凭据管理](modules/authentication.md)。
 
 ## Bridge 按业务转换，共用连接协调
 
@@ -154,9 +154,9 @@ sequenceDiagram
 
 ## 辅助任务与整体生命周期
 
-Widgetry JobManager 管理目录 I/O 和浏览器等应用辅助工作；账号更新、模型网络请求及其取消/回收由 Agent 侧管理。任务所属体系取决于业务所有者，不取决于是否异步。
+Widgetry JobManager 管理目录 I/O 等应用辅助工作；账号更新、模型网络请求及其取消/回收由 Agent 侧管理。任务所属体系取决于业务所有者，不取决于是否异步。
 
-`application::shutdown` 暂存 AppExit，通过 `agentelier_agent_host::AgentHost` 的 begin_shutdown/is_finished/finish 停止连接与普通业务唤醒、取消浏览器及模型等待。退出协调使用自己的 Winit 通知保持事件循环推进，在 World 和接收端仍有效时非阻塞确认线程结束并显式 join。
+`application::shutdown` 暂存 AppExit，通过 `agentelier_agent_host::AgentHost` 的 begin_shutdown/is_finished/finish 停止连接与普通业务唤醒、取消模型及后台业务等待。退出协调使用自己的 Winit 通知保持事件循环推进，在 World 和接收端仍有效时非阻塞确认线程结束并显式 join。
 
 Account 完成在途更新和必要提交。Runtime 等待前台模型和长期记忆后台任务回收、Memory 关闭 SQLite 连接、Session Store 排空已接纳命令并回收存储线程，再释放 Tokio。随后宿主结束辅助 Job、刷新日志，最后释放目录占用。两类后台均结束后才重新发布 AppExit。主循环返回后保留兜底收尾。运行收尾错误影响进程退出结果，辅助任务仍执行收尾。
 
@@ -171,7 +171,7 @@ flowchart LR
 
 所有库使用宿主统一配置的 tracing。日志只包含安全的操作标识、阶段与诊断，不泄露 Token、授权地址或模型正文。开发与 BRP 验证须保护现有登录状态，未经授权不退出、重新授权、重置凭据或更换数据环境。
 
-模型准备区由 chat_ui 构造并持有 UI 投影，通过共享宿主读取目录和验证显式模型。登录主页以 HomeContent 提供内容位置，application 使用 BSN 挂载 ChatUiHost，不把模型状态或网络逻辑放入通用装配。模型目录与验证复用现有模型任务生命周期，结果按业务类型在 LLM Model Bridge 转换；账号自然续期保留准备区，账号身份变化或退出后清除旧目录与选择。
+模型准备区由 chat_ui 构造并持有 UI 投影，通过共享宿主读取目录和验证显式模型。登录主页以 HomeContent 提供内容位置，application 使用 BSN 挂载 ChatUiHost，不把模型状态或网络逻辑放入通用装配。模型目录与验证复用现有模型任务生命周期，结果按业务类型在 LLM Model Bridge 转换；同一主体和工作区的外部 Token 更新保留准备区，账号失效或身份变化后清除旧目录与选择。
 
 ## 内存聊天与流式投影
 
@@ -207,7 +207,7 @@ Connection 创建本次运行共享的 OperationSequence；普通请求与恢复
 
 ## Direct 工具往返
 
-会话创建时固定只读工具目录，请求声明与分发共用它。SIWC 的新建 `gpt-6.2-sol` 会话把冻结工具目录作为每个请求的 developer `additional_tools` 首项。Codex 的新建 `gpt-6-astra` 会话通过 WebSocket 的顶层 `tools` 声明原生异步。Runtime 随会话保存连接，Runner 在响应和工具登记持久确认后推进续接。Codex HTTP 会话、其他模型和旧平铺会话使用同步契约。Tools 不依赖模型、账号、Bridge 或 Bevy。四项内置工具提供会话范围的 PowerShell 进程登记、标准输入、UTF-8 文件补丁和静态 PNG/JPEG 图片结果。编译进程序的提供者可通过 ToolRegistration 配对声明和执行器，恢复时由 Conversation 按工具来源和保存的声明重新绑定。Runner 每任务最多发送 32 次模型请求并接纳 64 次工具调用。完整响应持久确认后，Runtime 按会话许可准入各调用，最多 8 个普通执行；经登记的异步只读可并行，副作用调用按接纳顺序独占。超出单轮预算时整批写入未执行结果后触限。完整响应和逐项工具结果分别确认进入历史。原生会话在发送下一请求前等待同步调用结果，较早 Turn 的异步调用可继续执行。任务查询、有界等待及取消由 Runner 读取会话账本并响应实际保存事件，不占普通工具工作槽。Runtime 接纳会话侧控制，停止全部会暂停新派发并取消本次持有的执行。在途请求保持冻结，晚到结果先保存，并在完整响应接纳或请求结束失败后追加。正常 final 经持久确认并回收前台后释放唯一前台槽。会话保留后台执行与进程，空闲完成只保存并更新任务区。用户发言或明确处理结果才续接。Conversation 在接纳候选响应和用户材料时保护未交付的结果余量，模型层冻结本次请求的开放调用和 Inline 配置。安全压缩按已确认的协议前缀替换窗口，并保留尾部调用与结果关联。失败或停止保留已确认历史，已有响应提交的任务禁用原样重试。调用和正文按任务内请求序号区分，接收中的参数仅用于展示。
+会话创建时固定只读工具目录，请求声明与分发共用它。历史 SIWC 存档保留 developer `additional_tools` 记录供查看。Codex 的新建 `gpt-6-astra` 会话通过 WebSocket 的顶层 `tools` 声明原生异步。Runtime 随会话保存连接，Runner 在响应和工具登记持久确认后推进续接。Codex HTTP 会话使用同步契约。Tools 不依赖模型、账号、Bridge 或 Bevy。四项内置工具提供会话范围的 PowerShell 进程登记、标准输入、UTF-8 文件补丁和静态 PNG/JPEG 图片结果。编译进程序的提供者可通过 ToolRegistration 配对声明和执行器，恢复时由 Conversation 按工具来源和保存的声明重新绑定。Runner 每任务最多发送 32 次模型请求并接纳 64 次工具调用。完整响应持久确认后，Runtime 按会话许可准入各调用，最多 8 个普通执行；经登记的异步只读可并行，副作用调用按接纳顺序独占。超出单轮预算时整批写入未执行结果后触限。完整响应和逐项工具结果分别确认进入历史。原生会话在发送下一请求前等待同步调用结果，较早 Turn 的异步调用可继续执行。任务查询、有界等待及取消由 Runner 读取会话账本并响应实际保存事件，不占普通工具工作槽。Runtime 接纳会话侧控制，停止全部会暂停新派发并取消本次持有的执行。在途请求保持冻结，晚到结果先保存，并在完整响应接纳或请求结束失败后追加。正常 final 经持久确认并回收前台后释放唯一前台槽。会话保留后台执行与进程，空闲完成只保存并更新任务区。用户发言或明确处理结果才续接。Conversation 在接纳候选响应和用户材料时保护未交付的结果余量，模型层冻结本次请求的开放调用和 Inline 配置。安全压缩按已确认的协议前缀替换窗口，并保留尾部调用与结果关联。失败或停止保留已确认历史，已有响应提交的任务禁用原样重试。调用和正文按任务内请求序号区分，接收中的参数仅用于展示。
 
 Steer 通过容量 8 的任务输入通道交给 Runner，由 Conversation 裁决接纳、应用和最终关门。Stop 仍走取消令牌。Connection 的容量 32 可靠结果队列承载接纳、应用和任务投影，正文快照可合并。Runtime 收尾期间持续排空事件至真实回收，UI 用草稿修订和输入身份关联回执。
 

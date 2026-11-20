@@ -1,4 +1,4 @@
-use agentelier_account_bridge::{AccountEventKind, SessionActivity};
+use agentelier_account_bridge::AccountEventKind;
 use agentelier_agent_runtime::{AgentEventKind, AgentRuntime, DeliveryFailure};
 use agentelier_conversation_bridge::SessionId;
 use agentelier_llm_model_bridge::ModelEventKind;
@@ -17,7 +17,7 @@ pub struct BridgeEvent {
 pub enum BridgeEventKind {
     Account(AccountEventKind),
     Model(ModelEventKind),
-    Conversation(agentelier_conversation_bridge::ConversationEvent),
+    Conversation(Box<agentelier_conversation_bridge::ConversationEvent>),
     McpConfig(Result<crate::ConfigSnapshot, String>),
     McpStatus(Vec<crate::ConnectionStatus>),
     Memory(Result<crate::MemoryReply, String>),
@@ -49,28 +49,10 @@ impl WakeGate {
         Ok(())
     }
 }
-#[derive(Clone, Copy)]
-enum Phase {
-    Restore,
-    Source,
-    Login,
-    SaveFailed,
-    Saving,
-}
-struct Pending {
-    id: u64,
-    phase: Phase,
-    cancelling: bool,
-}
 enum QueueRequest {
     Enqueue,
     Remove,
     Resume,
-}
-
-struct PendingSignOut {
-    id: u64,
-    failed: bool,
 }
 
 pub struct Connection {
@@ -81,11 +63,9 @@ pub struct Connection {
     deferred: Option<BridgeEvent>,
     wake: Arc<WakeGate>,
     operations: agentelier_agent_runtime::OperationSequence,
-    pending: Option<Pending>,
+    pending: Option<u64>,
     stopping: bool,
     failure: Option<BridgeFailure>,
-    session_activity: SessionActivity,
-    sign_out: Option<PendingSignOut>,
     model: Option<u64>,
     controls: HashMap<u64, u64>,
     renaming: HashMap<u64, SessionId>,
@@ -134,9 +114,9 @@ impl Connection {
                         AgentEventKind::McpConfig(result) => {
                             BridgeEventKind::McpConfig(result.map_err(|error| error.to_string()))
                         }
-                        AgentEventKind::Conversation(kind) => BridgeEventKind::Conversation(
+                        AgentEventKind::Conversation(kind) => BridgeEventKind::Conversation(Box::new(
                             agentelier_conversation_bridge::convert(kind),
-                        ),
+                        )),
                     },
                 };
                 if matches!(event.kind, BridgeEventKind::McpStatus(_)) {
@@ -168,8 +148,6 @@ impl Connection {
             pending: None,
             stopping: false,
             failure: None,
-            session_activity: SessionActivity::Idle,
-            sign_out: None,
             model: None,
             controls: HashMap::new(),
             renaming: HashMap::new(),
@@ -239,39 +217,19 @@ impl Connection {
         if self.stopping || self.failure.is_some() {
             return Err(BridgeFailure("认证运行已停止".into()));
         }
-        if self.pending.is_some()
-            || self.model.is_some()
-            || self.sign_out.is_some()
-            || self.session_activity != SessionActivity::Idle
-        {
+        if self.pending.is_some() || self.model.is_some() {
             return Err(BridgeFailure("已有账号操作正在进行".into()));
         }
         self.operations
             .allocate()
             .map_err(|failure| BridgeFailure(failure.to_string()))
     }
-    pub fn restore(&mut self) -> Result<u64, BridgeFailure> {
-        let id = self.allocate()?;
-        self.runtime
-            .restore(id)
-            .map_err(|error| BridgeFailure(error.to_string()))?;
-        self.pending = Some(Pending {
-            id,
-            phase: Phase::Restore,
-            cancelling: false,
-        });
-        Ok(id)
-    }
     pub fn change_source(&mut self, change: crate::SourceChange) -> Result<u64, BridgeFailure> {
         let id = self.allocate()?;
         self.runtime
             .change_source(id, change)
             .map_err(|error| BridgeFailure(error.to_string()))?;
-        self.pending = Some(Pending {
-            id,
-            phase: Phase::Source,
-            cancelling: false,
-        });
+        self.pending = Some(id);
         Ok(id)
     }
     pub fn request_model(
@@ -295,11 +253,7 @@ impl Connection {
             agentelier_conversation_bridge::ConversationRequest::Open { .. }
                 | agentelier_conversation_bridge::ConversationRequest::Delete { .. }
         ) {
-            if self.stopping
-                || self.failure.is_some()
-                || self.model.is_some()
-                || self.sign_out.is_some()
-            {
+            if self.stopping || self.failure.is_some() || self.model.is_some() {
                 return Err(BridgeFailure(
                     "当前任务结束并回收后才能切换或删除会话".into(),
                 ));
@@ -341,11 +295,7 @@ impl Connection {
         operation: u64,
         text: String,
     ) -> Result<u64, BridgeFailure> {
-        if self.stopping
-            || self.failure.is_some()
-            || self.sign_out.is_some()
-            || self.model != Some(operation)
-        {
+        if self.stopping || self.failure.is_some() || self.model != Some(operation) {
             return Err(BridgeFailure("当前任务不能接纳补充输入".into()));
         }
         let id = self
@@ -366,11 +316,7 @@ impl Connection {
         session: SessionId,
         title: String,
     ) -> Result<u64, BridgeFailure> {
-        if self.stopping
-            || self.failure.is_some()
-            || self.sign_out.is_some()
-            || !self.renaming.is_empty()
-        {
+        if self.stopping || self.failure.is_some() || !self.renaming.is_empty() {
             return Err(BridgeFailure("当前不能接纳名称操作".into()));
         }
         let id = self
@@ -387,11 +333,7 @@ impl Connection {
         &mut self,
         action: agentelier_conversation_bridge::SessionAction,
     ) -> Result<u64, BridgeFailure> {
-        if self.stopping
-            || self.failure.is_some()
-            || self.sign_out.is_some()
-            || self.pending.is_some()
-        {
+        if self.stopping || self.failure.is_some() || self.pending.is_some() {
             return Err(BridgeFailure("当前执行连接不能接纳队列操作".into()));
         }
         let id = self
@@ -418,11 +360,7 @@ impl Connection {
         session: SessionId,
         action: agentelier_conversation_bridge::TaskAction,
     ) -> Result<u64, BridgeFailure> {
-        if self.stopping
-            || self.failure.is_some()
-            || self.sign_out.is_some()
-            || self.pending.is_some()
-        {
+        if self.stopping || self.failure.is_some() || self.pending.is_some() {
             return Err(BridgeFailure("当前执行连接不能接纳任务控制".into()));
         }
         let id = self
@@ -444,7 +382,7 @@ impl Connection {
         turn: u64,
         operation: u64,
     ) -> Result<bool, BridgeFailure> {
-        if self.stopping || self.sign_out.is_some() || self.failure.is_some() {
+        if self.stopping || self.failure.is_some() {
             return Err(BridgeFailure("聊天运行正在结束".into()));
         }
         if self.model != Some(operation) {
@@ -461,77 +399,6 @@ impl Connection {
             .map_err(|_| BridgeFailure("聊天增量状态锁已损坏".into()))?
             .take())
     }
-    pub fn login(&mut self, consent: bool) -> Result<u64, BridgeFailure> {
-        let id = self.allocate()?;
-        self.runtime
-            .login(id, consent)
-            .map_err(|error| BridgeFailure(error.to_string()))?;
-        self.pending = Some(Pending {
-            id,
-            phase: Phase::Login,
-            cancelling: false,
-        });
-        Ok(id)
-    }
-    pub fn check_session(&mut self) -> Result<(), BridgeFailure> {
-        if self.stopping
-            || self.sign_out.is_some()
-            || self.failure.is_some()
-            || self.pending.is_some()
-            || self.model.is_some()
-            || matches!(
-                self.session_activity,
-                SessionActivity::Checking | SessionActivity::Refreshing | SessionActivity::Saving
-            )
-        {
-            return Err(BridgeFailure("认证运行当前不能接受会话检查".into()));
-        }
-        self.runtime
-            .credentials()
-            .request()
-            .map_err(|failure| BridgeFailure(failure.to_string()))?;
-        self.session_activity = SessionActivity::Checking;
-        Ok(())
-    }
-    pub fn retry_save(&mut self, id: u64) -> Result<(), BridgeFailure> {
-        if self.stopping
-            || self.sign_out.is_some()
-            || !self.pending.as_ref().is_some_and(|pending| {
-                pending.id == id
-                    && matches!(pending.phase, Phase::SaveFailed)
-                    && !pending.cancelling
-            })
-        {
-            return Err(BridgeFailure("当前操作没有可重试的保存结果".into()));
-        }
-        self.runtime
-            .retry_save(id)
-            .map_err(|error| BridgeFailure(error.to_string()))?;
-        if let Some(pending) = &mut self.pending {
-            pending.phase = Phase::Saving;
-        }
-        Ok(())
-    }
-    pub fn cancel(&mut self, id: u64) -> Result<(), BridgeFailure> {
-        if self.stopping || self.sign_out.is_some() {
-            return Err(BridgeFailure("认证运行正在结束".into()));
-        }
-        let pending = self
-            .pending
-            .as_mut()
-            .filter(|pending| pending.id == id)
-            .ok_or_else(|| BridgeFailure("登录操作已经结束".into()))?;
-        if matches!(pending.phase, Phase::Restore | Phase::Source) {
-            return Err(BridgeFailure("账号读取不支持中途取消".into()));
-        }
-        if !pending.cancelling {
-            self.runtime
-                .cancel(id)
-                .map_err(|error| BridgeFailure(error.to_string()))?;
-            pending.cancelling = true;
-        }
-        Ok(())
-    }
     pub fn try_receive(&mut self) -> Result<Option<BridgeEvent>, BridgeFailure> {
         if let Some(failure) = &self.failure {
             return Err(failure.clone());
@@ -544,327 +411,261 @@ impl Connection {
             self.failure = Some(failure.clone());
             return Err(failure);
         }
-        loop {
-            let was_deferred = self.deferred.is_some();
-            let received = self
-                .deferred
+        let was_deferred = self.deferred.is_some();
+        let received = self
+            .deferred
+            .take()
+            .map(Ok)
+            .unwrap_or_else(|| self.events.try_recv());
+        let received = match received {
+            Err(mpsc::TryRecvError::Empty) => match self.take_progress()? {
+                Some(event) => Ok(event),
+                None => Err(mpsc::TryRecvError::Empty),
+            },
+            other => other,
+        };
+        let received = match received {
+            Err(mpsc::TryRecvError::Empty) => self
+                .mcp_status
+                .lock()
+                .map_err(|_| BridgeFailure("MCP 连接状态锁已损坏".into()))?
                 .take()
-                .map(Ok)
-                .unwrap_or_else(|| self.events.try_recv());
-            let received = match received {
-                Err(mpsc::TryRecvError::Empty) if self.sign_out.is_none() => {
-                    match self.take_progress()? {
-                        Some(event) => Ok(event),
-                        None => Err(mpsc::TryRecvError::Empty),
-                    }
-                }
-                other => other,
-            };
-            let received = match received {
-                Err(mpsc::TryRecvError::Empty) => self
-                    .mcp_status
-                    .lock()
-                    .map_err(|_| BridgeFailure("MCP 连接状态锁已损坏".into()))?
-                    .take()
-                    .ok_or(mpsc::TryRecvError::Empty),
-                other => other,
-            };
-            match received {
-                Ok(event) => {
-                    if let BridgeEventKind::Account(kind) = &event.kind
-                        && matches!(
-                            kind,
-                            AccountEventKind::SignOutProgress(_)
-                                | AccountEventKind::SignOutFailed(_)
-                                | AccountEventKind::SignedOut { .. }
-                        )
-                    {
-                        let Some(pending) = &mut self.sign_out else {
-                            return self.protocol_failure();
-                        };
-                        if pending.id != event.operation_id {
-                            return self.protocol_failure();
-                        }
-                        match kind {
-                            AccountEventKind::SignOutFailed(_) => pending.failed = true,
-                            AccountEventKind::SignedOut { .. } => {
-                                self.sign_out = None;
-                                self.pending = None;
-                                self.model = None;
-                                self.session_activity = SessionActivity::Idle;
-                            }
-                            _ => {}
-                        }
-                        return Ok(Some(event));
-                    }
-                    if let BridgeEventKind::Conversation(
-                        agentelier_conversation_bridge::ConversationEvent::Renamed {
-                            session, ..
-                        },
-                    ) = &event.kind
+                .ok_or(mpsc::TryRecvError::Empty),
+            other => other,
+        };
+        match received {
+            Ok(event) => {
+                if let BridgeEventKind::Conversation(kind) = &event.kind {
+                    let kind = kind.as_ref();
+                    if let agentelier_conversation_bridge::ConversationEvent::Renamed {
+                        session,
+                        ..
+                    } = kind
                     {
                         if self.renaming.remove(&event.operation_id) != Some(*session) {
                             return self.protocol_failure();
                         }
                         return Ok(Some(event));
                     }
-                    if let BridgeEventKind::Conversation(kind) = &event.kind {
-                        if let agentelier_conversation_bridge::ConversationEvent::Deleted {
-                            session,
-                            was_open,
-                            ..
-                        } = kind
+                    if let agentelier_conversation_bridge::ConversationEvent::Deleted {
+                        session,
+                        was_open,
+                        ..
+                    } = kind
+                    {
+                        if self.deleting.remove(&event.operation_id) != Some(*session) {
+                            return self.protocol_failure();
+                        }
+                        self.pending_requests.remove(&event.operation_id);
+                        if self.model == Some(event.operation_id) {
+                            self.model = None;
+                        }
+                        if *was_open {
+                            self.reserved_queue.clear();
+                        }
+                        return Ok(Some(event));
+                    }
+                    if matches!(
+                        kind,
+                        agentelier_conversation_bridge::ConversationEvent::Rejected(_)
+                    ) && self.deleting.remove(&event.operation_id).is_some()
+                    {
+                        self.pending_requests.remove(&event.operation_id);
+                        if self.model == Some(event.operation_id) {
+                            self.model = None;
+                        }
+                        return Ok(Some(event));
+                    }
+                }
+                if matches!(event.kind, BridgeEventKind::Memory(_)) {
+                    if !self.pending_memory.remove(&event.operation_id) {
+                        return self.protocol_failure();
+                    }
+                    return Ok(Some(event));
+                }
+                if matches!(event.kind, BridgeEventKind::McpStatus(_)) {
+                    return Ok(Some(event));
+                }
+                if matches!(
+                    event.kind,
+                    BridgeEventKind::McpConfig(_) | BridgeEventKind::McpMaterial(_)
+                ) {
+                    if !self.pending_mcp.remove(&event.operation_id) {
+                        return self.protocol_failure();
+                    }
+                    return Ok(Some(event));
+                }
+                let kind = match &event.kind {
+                    BridgeEventKind::McpStatus(_)
+                    | BridgeEventKind::Memory(_)
+                    | BridgeEventKind::McpConfig(_)
+                    | BridgeEventKind::McpMaterial(_) => {
+                        return self.protocol_failure();
+                    }
+                    BridgeEventKind::Model(_) => {
+                        if self.pending_requests.remove(&event.operation_id)
+                            && self.model != Some(event.operation_id)
                         {
-                            if self.deleting.remove(&event.operation_id) != Some(*session) {
+                            return Ok(Some(event));
+                        }
+                        if self.model != Some(event.operation_id) {
+                            return self.protocol_failure();
+                        }
+                        self.model = None;
+                        return Ok(Some(event));
+                    }
+                    BridgeEventKind::Conversation(kind) => {
+                        let kind = kind.as_ref();
+                        if matches!(
+                            kind,
+                            agentelier_conversation_bridge::ConversationEvent::TaskAction(_)
+                        ) {
+                            return Ok(Some(event));
+                        }
+                        if event.operation_id == 0 && matches!(kind, agentelier_conversation_bridge::ConversationEvent::Tasks(_) | agentelier_conversation_bridge::ConversationEvent::Processes(_) | agentelier_conversation_bridge::ConversationEvent::IdleUpdated(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveCleanup(_) | agentelier_conversation_bridge::ConversationEvent::Archives(_) | agentelier_conversation_bridge::ConversationEvent::Opened(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveFailed(_)) {
+                            if let agentelier_conversation_bridge::ConversationEvent::Opened(view) = kind { self.reserved_queue.extend(view.queue.iter().map(|input| input.operation_id)); }
+                            return Ok(Some(event));
+                        }
+                        if let agentelier_conversation_bridge::ConversationEvent::Queue(reply) =
+                            kind
+                        {
+                            let Some(request) = self.queue_controls.remove(&reply.id) else {
+                                return self.protocol_failure();
+                            };
+                            if reply.id != event.operation_id {
                                 return self.protocol_failure();
                             }
-                            self.pending_requests.remove(&event.operation_id);
-                            if self.model == Some(event.operation_id) {
-                                self.model = None;
+                            match &reply.decision {
+                                agentelier_conversation_bridge::QueueDecision::Rejected(_)
+                                    if matches!(request, QueueRequest::Enqueue) =>
+                                {
+                                    self.reserved_queue.remove(&reply.id);
+                                }
+                                agentelier_conversation_bridge::QueueDecision::Removed {
+                                    operation,
+                                } => {
+                                    self.reserved_queue.remove(operation);
+                                }
+                                _ => {}
                             }
-                            if *was_open {
-                                self.reserved_queue.clear();
+                            return Ok(Some(event));
+                        }
+                        if let agentelier_conversation_bridge::ConversationEvent::Started(_) = kind
+                        {
+                            if !self.reserved_queue.remove(&event.operation_id)
+                                || self
+                                    .model
+                                    .is_some_and(|id| !self.pending_requests.contains(&id))
+                            {
+                                return self.protocol_failure();
                             }
+                            self.model = Some(event.operation_id);
                             return Ok(Some(event));
                         }
                         if matches!(
                             kind,
                             agentelier_conversation_bridge::ConversationEvent::Rejected(_)
-                        ) && self.deleting.remove(&event.operation_id).is_some()
+                        ) && self.pending_requests.remove(&event.operation_id)
+                            && self.model != Some(event.operation_id)
                         {
-                            self.pending_requests.remove(&event.operation_id);
-                            if self.model == Some(event.operation_id) {
-                                self.model = None;
-                            }
                             return Ok(Some(event));
                         }
-                    }
-                    if matches!(event.kind, BridgeEventKind::Memory(_)) {
-                        if !self.pending_memory.remove(&event.operation_id) {
-                            return self.protocol_failure();
-                        }
-                        return Ok(Some(event));
-                    }
-                    if matches!(event.kind, BridgeEventKind::McpStatus(_)) {
-                        return Ok(Some(event));
-                    }
-                    if matches!(
-                        event.kind,
-                        BridgeEventKind::McpConfig(_) | BridgeEventKind::McpMaterial(_)
-                    ) {
-                        if !self.pending_mcp.remove(&event.operation_id) {
-                            return self.protocol_failure();
-                        }
-                        return Ok(Some(event));
-                    }
-                    if self.sign_out.is_some() {
-                        if matches!(
-                            &event.kind,
-                            BridgeEventKind::Account(
-                                AccountEventKind::Completed(_) | AccountEventKind::Cancelled
-                            )
-                        ) && self
-                            .pending
-                            .as_ref()
-                            .is_some_and(|pending| pending.id == event.operation_id)
-                        {
-                            self.pending = None;
-                        }
-                        continue;
-                    }
-                    let kind = match &event.kind {
-                        BridgeEventKind::McpStatus(_)
-                        | BridgeEventKind::Memory(_)
-                        | BridgeEventKind::McpConfig(_)
-                        | BridgeEventKind::McpMaterial(_) => {
-                            return self.protocol_failure();
-                        }
-                        BridgeEventKind::Model(_) => {
-                            if self.pending_requests.remove(&event.operation_id)
-                                && self.model != Some(event.operation_id)
-                            {
-                                return Ok(Some(event));
-                            }
-                            if self.model != Some(event.operation_id) {
-                                return self.protocol_failure();
-                            }
-                            self.model = None;
-                            return Ok(Some(event));
-                        }
-                        BridgeEventKind::Conversation(kind) => {
-                            if matches!(
-                                kind,
-                                agentelier_conversation_bridge::ConversationEvent::TaskAction(_)
-                            ) {
-                                return Ok(Some(event));
-                            }
-                            if event.operation_id == 0 && matches!(kind, agentelier_conversation_bridge::ConversationEvent::Tasks(_) | agentelier_conversation_bridge::ConversationEvent::Processes(_) | agentelier_conversation_bridge::ConversationEvent::IdleUpdated(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveCleanup(_) | agentelier_conversation_bridge::ConversationEvent::Archives(_) | agentelier_conversation_bridge::ConversationEvent::Opened(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveFailed(_)) {
-                                if let agentelier_conversation_bridge::ConversationEvent::Opened(view) = kind { self.reserved_queue.extend(view.queue.iter().map(|input| input.operation_id)); }
-                                return Ok(Some(event));
-                            }
-                            if let agentelier_conversation_bridge::ConversationEvent::Queue(reply) =
-                                kind
-                            {
-                                let Some(request) = self.queue_controls.remove(&reply.id) else {
-                                    return self.protocol_failure();
-                                };
-                                if reply.id != event.operation_id {
-                                    return self.protocol_failure();
-                                }
-                                match &reply.decision {
-                                    agentelier_conversation_bridge::QueueDecision::Rejected(_)
-                                        if matches!(request, QueueRequest::Enqueue) =>
-                                    {
-                                        self.reserved_queue.remove(&reply.id);
-                                    }
-                                    agentelier_conversation_bridge::QueueDecision::Removed {
-                                        operation,
-                                    } => {
-                                        self.reserved_queue.remove(operation);
-                                    }
-                                    _ => {}
-                                }
-                                return Ok(Some(event));
-                            }
-                            if let agentelier_conversation_bridge::ConversationEvent::Started(_) =
-                                kind
-                            {
-                                if !self.reserved_queue.remove(&event.operation_id)
-                                    || self
-                                        .model
-                                        .is_some_and(|id| !self.pending_requests.contains(&id))
-                                {
-                                    return self.protocol_failure();
-                                }
-                                self.model = Some(event.operation_id);
-                                return Ok(Some(event));
-                            }
-                            if matches!(
-                                kind,
-                                agentelier_conversation_bridge::ConversationEvent::Rejected(_)
-                            ) && self.pending_requests.remove(&event.operation_id)
-                                && self.model != Some(event.operation_id)
-                            {
-                                return Ok(Some(event));
-                            }
 
-                            if let agentelier_conversation_bridge::ConversationEvent::InputReceipt(
-                                receipt,
-                            ) = kind
+                        if let agentelier_conversation_bridge::ConversationEvent::InputReceipt(
+                            receipt,
+                        ) = kind
+                        {
+                            if !self.controls.contains_key(&receipt.id)
+                                || self.controls.get(&receipt.id) != self.model.as_ref()
+                                || receipt.id != event.operation_id
                             {
-                                if !self.controls.contains_key(&receipt.id)
-                                    || self.controls.get(&receipt.id) != self.model.as_ref()
-                                    || receipt.id != event.operation_id
-                                {
-                                    return self.protocol_failure();
-                                }
-                                if !matches!(
-                                    receipt.decision,
-                                    agentelier_conversation_bridge::InputDecision::Accepted
-                                ) {
-                                    self.controls.remove(&receipt.id);
-                                }
-                                return Ok(Some(event));
-                            }
-                            if self.model != Some(event.operation_id) {
                                 return self.protocol_failure();
                             }
-                            if matches!(
-                                kind,
-                                agentelier_conversation_bridge::ConversationEvent::Accepted(_)
-                                    | agentelier_conversation_bridge::ConversationEvent::Created(_)
-                                    | agentelier_conversation_bridge::ConversationEvent::Opened(_)
-                                    | agentelier_conversation_bridge::ConversationEvent::ArchiveFailed(_)
+                            if !matches!(
+                                receipt.decision,
+                                agentelier_conversation_bridge::InputDecision::Accepted
                             ) {
-                                self.pending_requests.remove(&event.operation_id);
-                            }
-                            if matches!(
-                                kind,
-                                agentelier_conversation_bridge::ConversationEvent::Created(_)
-                            ) {
-                                self.reserved_queue.clear();
-                            }
-                            if let agentelier_conversation_bridge::ConversationEvent::Opened(view) =
-                                kind
-                            {
-                                self.reserved_queue.clear();
-                                self.reserved_queue
-                                    .extend(view.queue.iter().map(|input| input.operation_id));
-                            }
-                            if let agentelier_conversation_bridge::ConversationEvent::Finished(view) =
-                                kind
-                                && !was_deferred
-                            {
-                                let snapshot = BridgeEvent {
-                                    operation_id: event.operation_id,
-                                    kind: BridgeEventKind::Conversation(
-                                        agentelier_conversation_bridge::ConversationEvent::Updated(
-                                            view.clone(),
-                                        ),
-                                    ),
-                                };
-                                let mut progress = self
-                                    .progress
-                                    .lock()
-                                    .map_err(|_| BridgeFailure("聊天增量状态锁已损坏".into()))?;
-                                if progress.as_ref().is_some_and(|progress| {
-                                    progress.operation_id == event.operation_id
-                                }) {
-                                    *progress = None;
-                                }
-                                self.deferred = Some(event);
-                                return Ok(Some(snapshot));
-                            }
-                            if kind.is_terminal() {
-                                self.controls
-                                    .retain(|_, operation| *operation != event.operation_id);
-                                self.model = None;
+                                self.controls.remove(&receipt.id);
                             }
                             return Ok(Some(event));
                         }
-                        BridgeEventKind::Account(kind) => kind,
-                    };
-                    if let AccountEventKind::SessionStatus { activity, .. } = kind {
-                        self.session_activity = *activity;
-                        return Ok(Some(event));
-                    }
-                    if matches!(
-                        kind,
-                        AccountEventKind::SourceSettling | AccountEventKind::SourceChanged(_)
-                    ) && event.operation_id == 0
-                    {
-                        return Ok(Some(event));
-                    }
-                    let Some(pending) = &mut self.pending else {
-                        return self.protocol_failure();
-                    };
-                    if event.operation_id != pending.id {
-                        return self.protocol_failure();
-                    }
-                    match kind {
-                        AccountEventKind::SourceChanged(_)
-                            if matches!(pending.phase, Phase::Source) =>
+                        if self.model != Some(event.operation_id) {
+                            return self.protocol_failure();
+                        }
+                        if matches!(
+                            kind,
+                            agentelier_conversation_bridge::ConversationEvent::Accepted(_)
+                                | agentelier_conversation_bridge::ConversationEvent::Created(_)
+                                | agentelier_conversation_bridge::ConversationEvent::Opened(_)
+                                | agentelier_conversation_bridge::ConversationEvent::ArchiveFailed(
+                                    _
+                                )
+                        ) {
+                            self.pending_requests.remove(&event.operation_id);
+                        }
+                        if matches!(
+                            kind,
+                            agentelier_conversation_bridge::ConversationEvent::Created(_)
+                        ) {
+                            self.reserved_queue.clear();
+                        }
+                        if let agentelier_conversation_bridge::ConversationEvent::Opened(view) =
+                            kind
                         {
-                            self.pending = None;
+                            self.reserved_queue.clear();
+                            self.reserved_queue
+                                .extend(view.queue.iter().map(|input| input.operation_id));
                         }
-                        AccountEventKind::SourceChanged(_) => return self.protocol_failure(),
-                        AccountEventKind::BrowserReady(_) if pending.cancelling => continue,
-                        AccountEventKind::SaveFailed(_) => pending.phase = Phase::SaveFailed,
-                        AccountEventKind::Saving => pending.phase = Phase::Saving,
-                        AccountEventKind::Completed(_) | AccountEventKind::Cancelled => {
-                            self.pending = None
+                        if let agentelier_conversation_bridge::ConversationEvent::Finished(view) =
+                            kind
+                            && !was_deferred
+                        {
+                            let snapshot = BridgeEvent {
+                                operation_id: event.operation_id,
+                                kind: BridgeEventKind::Conversation(Box::new(
+                                    agentelier_conversation_bridge::ConversationEvent::Updated(
+                                        view.clone(),
+                                    ),
+                                )),
+                            };
+                            let mut progress = self
+                                .progress
+                                .lock()
+                                .map_err(|_| BridgeFailure("聊天增量状态锁已损坏".into()))?;
+                            if progress
+                                .as_ref()
+                                .is_some_and(|progress| progress.operation_id == event.operation_id)
+                            {
+                                *progress = None;
+                            }
+                            self.deferred = Some(event);
+                            return Ok(Some(snapshot));
                         }
-                        _ => {}
+                        if kind.is_terminal() {
+                            self.controls
+                                .retain(|_, operation| *operation != event.operation_id);
+                            self.model = None;
+                        }
+                        return Ok(Some(event));
                     }
-                    return Ok(Some(event));
+                    BridgeEventKind::Account(kind) => kind,
+                };
+                if event.operation_id != 0 {
+                    if !matches!(kind, AccountEventKind::SourceChanged(_))
+                        || self.pending != Some(event.operation_id)
+                    {
+                        return self.protocol_failure();
+                    }
+                    self.pending = None;
                 }
-                Err(mpsc::TryRecvError::Empty) => return Ok(None),
-                Err(mpsc::TryRecvError::Disconnected) if self.stopping => return Ok(None),
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    let failure = BridgeFailure("认证结果通道已关闭".into());
-                    self.failure = Some(failure.clone());
-                    return Err(failure);
-                }
+                Ok(Some(event))
+            }
+            Err(mpsc::TryRecvError::Empty) => Ok(None),
+            Err(mpsc::TryRecvError::Disconnected) if self.stopping => Ok(None),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                let failure = BridgeFailure("认证结果通道已关闭".into());
+                self.failure = Some(failure.clone());
+                Err(failure)
             }
         }
     }
@@ -872,39 +673,6 @@ impl Connection {
         let failure = BridgeFailure("账号结果不属于当前操作".into());
         self.failure = Some(failure.clone());
         Err(failure)
-    }
-    pub fn sign_out(&mut self) -> Result<u64, BridgeFailure> {
-        if self.stopping || self.failure.is_some() {
-            return Err(BridgeFailure("认证运行已停止".into()));
-        }
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| matches!(pending.phase, Phase::Source))
-        {
-            return Err(BridgeFailure("凭据来源更新尚未结束".into()));
-        }
-        if let Some(pending) = &mut self.sign_out {
-            if !pending.failed {
-                return Err(BridgeFailure("退出登录正在进行".into()));
-            }
-            self.runtime
-                .sign_out(pending.id)
-                .map_err(|failure| BridgeFailure(failure.to_string()))?;
-            pending.failed = false;
-            return Ok(pending.id);
-        }
-        let id = self
-            .operations
-            .allocate()
-            .map_err(|failure| BridgeFailure(failure.to_string()))?;
-        self.runtime
-            .sign_out(id)
-            .map_err(|failure| BridgeFailure(failure.to_string()))?;
-        self.sign_out = Some(PendingSignOut { id, failed: false });
-        self.take_progress()?;
-        self.deferred = None;
-        Ok(id)
     }
     pub fn begin_shutdown(&mut self) -> Result<(), BridgeFailure> {
         self.stopping = true;

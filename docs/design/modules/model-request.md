@@ -1,6 +1,6 @@
 # 单次模型请求
 
-模型通信位于 `agentelier_llm_model`，与串行认证所有者共用同一线程的 Tokio。网络任务通过 `agentelier_account::CredentialClient` 取得凭据，Account 在 Runtime 调度下串行处理请求并协调旋转和提交；模型任务不读取文件或维护第二套会话缓存。
+模型通信位于 `agentelier_llm_model`，与串行认证所有者共用同一线程的 Tokio。网络任务通过 `agentelier_account::CredentialClient` 取得凭据，Account 按需读取 Codex 客户端管理的文件，模型任务只消费受身份约束的凭据。
 
 ```mermaid
 sequenceDiagram
@@ -24,13 +24,13 @@ sequenceDiagram
     Bridge-->>App: 入队并唤醒 Winit
 ```
 
-运行侧 ModelControl 分开持有取消信号和实际回收信号；接纳操作后禁止新的恢复或浏览器登录，避免目录与推理跨账号混用。Bridge 独立记录模型操作 ID，与浏览器和退出操作区分。退出可越过互斥门控，先停止凭据接纳并取消模型任务，再等待 JoinHandle 回收，最后处理撤销和本地清理。普通关闭同样取消并回收模型任务，然后等待凭据所有者完成必要提交及 Tokio 结束。
+运行侧 ModelControl 分开持有取消信号和实际回收信号。Bridge 分别关联模型及来源操作。凭据状态变化使旧身份失效，Runtime 等待旧任务和必要记录完成后发布新来源。普通关闭取消并回收模型任务及 Tokio。
 
-模型任务取消只丢弃自己的网络/凭据等待 Future。已提交给认证所有者的刷新独立继续，不因等待者取消而丢失旋转结果。主窗口以真实终态结束等待；退出期间 Bridge 消费并隔离旧模型及认证结果。
+模型任务取消会丢弃自己的网络和凭据等待。主窗口在运行侧确认真实终态后结束等待。
 
-SIWC 使用 `api.openai.com/v1/models` 和 `api.openai.com/v1/responses`。Codex OAuth 使用 `chatgpt.com/backend-api/codex/models` 和同域的 `responses`，目录请求携带 `client_version`，两类请求都携带 `ChatGPT-Account-Id` 工作区头。Codex 目录只显示服务标记为可见、支持文本且可由普通客户端执行的模型，并保留服务顺序。Codex Responses 添加顶层 `instructions` 字段，固定指令仍按原顺序进入 `input`。
+Codex OAuth 使用 `chatgpt.com/backend-api/codex/models` 和同域的 `responses`，目录请求携带 `client_version`，两类请求都携带 `ChatGPT-Account-Id` 工作区头。Codex 目录只显示服务标记为可见、支持文本且可由普通客户端执行的模型，并保留服务顺序。Codex Responses 添加顶层 `instructions` 字段，固定指令仍按原顺序进入 `input`。
 
-用户从当前来源的目录显式选择 slug 后独立验证。认证恢复沿 AuthenticatedRequest 的一次恢复预算执行。SIWC 比较客户端标识和主体，Codex 比较主体和工作区。HTTP 401 可在输出前触发一次同源凭据恢复。输出项或文本开始后禁止重放，请求原始字节在认证恢复期间保持固定。
+用户从当前来源的目录显式选择 slug 后独立验证。认证恢复沿 AuthenticatedRequest 的一次恢复预算执行。恢复要求取得同一主体和工作区的新 Token 版本。HTTP 401 可在输出前触发一次同源凭据恢复。输出项或文本开始后禁止重放，请求原始字节在认证恢复期间保持固定。
 
 SSE 解析器跨 HTTP 块保留当前行和事件数据，支持 LF、CRLF、CR、多行 data 及开头 BOM，空行才派发事件。只以完成对象的 output 数组为正文权威来源，按 message/content 顺序提取 output_text；增量仅用于标记输出已经开始。未完成、失败和显式错误独立传播，EOF 没有完成事件不成功。大小和时间限制见[请求边界](#请求边界)。
 
@@ -54,7 +54,7 @@ LLM Model 以 ModelRequest::Catalog 读取全部可显示模型，以 Verify 携
 
 聊天 GenerationRequest 额外携带固定的 InstructionSnapshot。生成前核对快照，并通过其统一 `messages()` 映射将基础覆盖及有序补充文本构造成 `developer` 输入消息，再追加 ProtocolHistory 和当前用户输入；基础与补充槽位不对应不同协议优先级。默认空配置保持原有请求行为。指令材料解析与保存归 Prompts，LLM Model 不读提示词文件，不在模型连接验证中自动注入准备区指令。
 
-聊天请求携带会话冻结的 Function Tool 声明、自动选择和 `parallel_tool_calls: true`。SIWC 新建 `gpt-6.2-sol` 会话把目录作为 `input` 首个 developer `additional_tools` 项，具备异步资格的叶子带 `async: true`，顶层 `tools` 字段省略。固定指令、记忆、技能、协议历史和本轮输入随原顺序排列，材料索引记录实际位置。Codex 新建 `gpt-6-astra` 会话使用 WebSocket 的 `response.create` 和顶层 `tools`，具备异步资格的声明携带 `async: true`。其他 Codex 模型和旧平铺会话使用 HTTP 同步声明。HTTP 聊天使用 `store: false`、`stream: true` 和完整的 `input`，省略 `previous_response_id`。独立的目录与连接验证不附带工具。
+聊天请求携带会话冻结的 Function Tool 声明、自动选择和 `parallel_tool_calls: true`。固定指令、记忆、技能、协议历史和本轮输入随原顺序排列，材料索引记录实际位置。Codex 新建 `gpt-6-astra` 会话使用 WebSocket 的 `response.create` 和顶层 `tools`，具备异步资格的声明携带 `async: true`。其他模型和已有 Codex 平铺会话使用 HTTP 同步声明。HTTP 聊天使用 `store: false`、`stream: true` 和完整的 `input`，省略 `previous_response_id`。独立的目录与连接验证不附带工具。
 
 SSE 和 WebSocket 共享 Responses 事件解析。函数参数增量只更新展示。模型层核对完整流项与 `response.completed.output` 的身份、名称、namespace、参数和异步模式。原生路径按无 namespace 的工具名称匹配冻结目录。返回 `async: true` 的调用需要相应声明，省略标志或返回 `false` 按同步处理。请求拒绝沿用实际服务错误。协议历史原样重放 `function_call`，并以 `call_id` 关联 `function_call_output`。普通工具使用有界 JSON 字符串，图片结果使用 `input_text` 和 `input_image` 内容数组。同步调用结果确认追加后才能构建下一次请求；未配对的异步调用保留在冻结请求中。请求在途期间到达的结果只确认保存，待响应接纳或请求停止后按保存序号追加。
 
@@ -76,7 +76,7 @@ Model 按当前 Codex 凭据发起 HTTPS Upgrade，沿用认证、TLS 和代理�
 
 Turn Runner 首次请求前通过 CredentialClient 获取 ExecutionIdentity，捕获凭据版本的账号标识与本次认证生命周期的失效令牌。新建 Codex 会话时固定主体和工作区，冻结请求记录服务来源并将模型 slug 编入请求字节。生成发送、认证恢复和接纳响应时核对执行身份。同一授权主体和工作区可以使用新的 Token 版本，执行身份的失效令牌和原始凭据留在运行侧。
 
-新任务重新获取当前账号，保留原 Session UUID、固定设置与协议历史。无 Codex 绑定的旧存档按 SIWC 会话恢复。会话可在任一来源下打开，模型请求须匹配会话绑定。跨来源或 Codex 主体、工作区不匹配时，原会话可阅读，界面提示新建会话。模型权限或旧协议项被服务拒绝时保留真实失败、原历史和原模型选择。
+新任务重新获取当前账号，保留原 Session UUID、固定设置与协议历史。存档可在未连接时打开。缺少 Codex 绑定的旧会话保留 SIWC 请求和工具记录供查看。执行要求当前 Codex 主体及工作区匹配会话绑定。绑定缺失或不匹配时，界面提示新建会话。模型权限或旧协议项被服务拒绝时保留真实失败、原历史和原模型选择。
 
 ## 模型窗口能力与响应使用量
 

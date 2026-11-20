@@ -25,7 +25,6 @@ pub struct CodexIdentity {
 pub struct CodexCredentials {
     pub summary: CodexAccountSummary,
     pub(crate) access_token: String,
-    pub(crate) expires_at: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,7 +140,6 @@ pub fn read_codex_credentials(path: &Path) -> Result<CodexCredentials, CodexRead
             expired: access.exp <= now,
         },
         access_token,
-        expires_at: access.exp,
     })
 }
 
@@ -163,12 +161,15 @@ fn claims(token: &str) -> Result<Claims, CodexReadFailure> {
         .collect::<Vec<_>>()
         .try_into()
         .map_err(|_| CodexReadFailure::InvalidTokens)?;
-    if signature.is_empty()
-        || URL_SAFE_NO_PAD.decode(signature).is_err()
-        || header.is_empty()
-        || !jsonwebtoken::decode_header(token)
-            .is_ok_and(|header| header.alg == jsonwebtoken::Algorithm::RS256)
-    {
+    if signature.is_empty() || URL_SAFE_NO_PAD.decode(signature).is_err() {
+        return Err(CodexReadFailure::InvalidTokens);
+    }
+    let header = URL_SAFE_NO_PAD
+        .decode(header)
+        .map_err(|_| CodexReadFailure::InvalidTokens)?;
+    let header: serde_json::Value =
+        serde_json::from_slice(&header).map_err(|_| CodexReadFailure::InvalidTokens)?;
+    if header["alg"] != "RS256" {
         return Err(CodexReadFailure::InvalidTokens);
     }
     // Imported claims describe the local file. This path has no signing keys or remote session check.

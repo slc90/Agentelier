@@ -194,10 +194,12 @@ pub(crate) fn reconcile(world: &mut World) -> Result {
         .as_ref()
         .is_some_and(|session| session.queue_paused);
     let running = state.operation.is_some();
+    let account = world.resource::<agentelier_login_ui::AccountState>();
     let blocked = state
         .session
         .as_ref()
-        .is_none_or(|session| session.execution_blocked);
+        .is_none_or(|session| session.execution_blocked || !session.matches_account(account))
+        || account.model_unavailable_reason().is_some();
     let mut panels = world.query_filtered::<&mut Node, With<QueuePanel>>();
     for mut node in panels.iter_mut(world) {
         node.display = if items.is_empty() && !paused {

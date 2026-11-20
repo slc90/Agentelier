@@ -35,7 +35,6 @@ pub use agentelier_account::DeliveryFailure;
 
 const COMMAND_CAPACITY: usize = 4;
 const SOURCE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
-const SIGN_OUT_CAPACITY: usize = 1;
 const SESSION_COMMAND_CAPACITY: usize = 16;
 
 pub struct AgentEvent {
@@ -161,10 +160,8 @@ enum Command {
 pub struct AgentRuntime {
     commands: Option<mpsc::Sender<Command>>,
     thread: Option<JoinHandle<Result<(), RuntimeFailure>>>,
-    active: Option<(u64, CancellationToken)>,
     credentials: CredentialClient,
     shutdown: CancellationToken,
-    sign_out_commands: mpsc::Sender<u64>,
     model: SharedModel,
     session_commands: mpsc::Sender<SessionCommand>,
 }
@@ -206,7 +203,7 @@ impl ModelControl {
 }
 impl AgentRuntime {
     pub fn start(
-        credentials_path: PathBuf,
+        data_root: PathBuf,
         source: crate::SourceSettings,
         operations: crate::OperationSequence,
         publish: impl Fn(AgentEvent) -> Result<(), DeliveryFailure> + Send + 'static,
@@ -216,10 +213,6 @@ impl AgentRuntime {
             .enable_all()
             .build()
             .map_err(RuntimeFailure::Startup)?;
-        let data_root = credentials_path
-            .parent()
-            .ok_or_else(|| RuntimeFailure::Store(io::Error::other("凭据路径缺少数据目录")))?
-            .to_path_buf();
         let (commands, mut incoming) = mpsc::channel(COMMAND_CAPACITY);
         let shutdown = CancellationToken::new();
         let runtime_shutdown = shutdown.clone();
@@ -234,7 +227,6 @@ impl AgentRuntime {
                     })
             });
         let owner_credentials = credentials.clone();
-        let (sign_out_commands, mut sign_out_incoming) = mpsc::channel(SIGN_OUT_CAPACITY);
         let shared_model: SharedModel = Arc::new(Mutex::new(None));
         let owner_model = shared_model.clone();
         let (session_commands, mut session_incoming) = mpsc::channel(SESSION_COMMAND_CAPACITY);
@@ -272,7 +264,7 @@ impl AgentRuntime {
                         let mut renaming: Option<renaming::Renaming> = None;
                         let mut suspending = 0usize;
                         let mut finalizing = false;
-                        let mut account = Account::new(credentials_path, owner_credentials.clone(), source);
+                        let mut account = Account::new(owner_credentials.clone(), source);
                         let mut source_check = tokio::time::interval(SOURCE_CHECK_INTERVAL);
                         source_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                         let mut pending_source: Option<agentelier_account::AccountEvent> = None;
@@ -283,16 +275,11 @@ impl AgentRuntime {
                         let mut conversation = Conversation::with_extensions(agentelier_memory::registrations(
                             memory.as_ref().ok().map(Memory::client),
                         ));
-                        let mut current_subject: Option<String> = None;
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
                             loop {
                                 let idle_work = session_tools.as_ref().map(|(_, tools)| tools.work.clone());
                                 let command = tokio::select! { biased;
-                                    request = sign_out_incoming.recv() => match request {
-                                        Some(id) => Command::Account(AccountCommand::SignOut(id)),
-                                        None => break,
-                                    },
                                     _ = runtime_shutdown.cancelled() => break,
                                     _ = source_check.tick(), if account.codex_selected() && pending_source.is_none() => Command::Account(AccountCommand::ReadSource),
                                     reply = async {
@@ -518,7 +505,8 @@ impl AgentRuntime {
                                         if applied.failed && pending_source.is_some() {
                                             return Err(RuntimeFailure::Store(io::Error::other("凭据来源切换前的会话收尾保存未确认")));
                                         }
-                                        if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && !pending_queue && !finalizing && pending_source.is_none() && !runtime_shutdown.is_cancelled() {
+                                        if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && !pending_queue && !finalizing && pending_source.is_none() && !runtime_shutdown.is_cancelled()
+                                            && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
                                             model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store)?;
                                         }
                                     }
@@ -569,7 +557,8 @@ impl AgentRuntime {
                                             task.control.finished.cancel();
                                             capture_delivery(emit(&publish, task.id, event), &mut delivery_failure);
                                         }
-                                        if !finalizing && !pending_queue && suspending == 0 && pending_source.is_none() && delivery_failure.is_none() && !runtime_shutdown.is_cancelled() {
+                                        if !finalizing && !pending_queue && suspending == 0 && pending_source.is_none() && delivery_failure.is_none() && !runtime_shutdown.is_cancelled()
+                                            && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
                                             model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store)?;
                                         }
                                     }
@@ -582,7 +571,7 @@ impl AgentRuntime {
                                             continue;
                                         }
                                         if matches!(command, SessionCommand::Resume { .. })
-                                            && let Err(failure) = model_source(&account, current_subject.is_some()).and_then(|source| conversation.validate_model_source(source))
+                                            && let Err(failure) = model_source(&account).and_then(|source| conversation.validate_model_source(source))
                                         {
                                             let id = command.id();
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Queue(agentelier_conversation::QueueEvent { id, view: conversation.current(), decision: agentelier_conversation::QueueDecision::Rejected(failure.to_string()) })))?;
@@ -694,9 +683,9 @@ impl AgentRuntime {
                                                 }
                                             }
                                             mut request @ (ConversationRequest::Create(_) | ConversationRequest::Reset { .. }) => {
-                                                let binding = model_source(&account, current_subject.is_some()).and_then(|source| {
+                                                let binding = model_source(&account).and_then(|source| {
                                                     if let ConversationRequest::Create(settings) = &mut request {
-                                                        settings.codex = source.cloned();
+                                                        settings.codex = Some(source.clone());
                                                         Ok(())
                                                     } else {
                                                         conversation.validate_model_source(source)
@@ -728,7 +717,7 @@ impl AgentRuntime {
                                                 }
                                             }
                                             request @ (ConversationRequest::Send { .. } | ConversationRequest::Retry { .. } | ConversationRequest::ContinueWithoutCompaction { .. } | ConversationRequest::ProcessResults { .. }) => {
-                                                if let Err(failure) = model_source(&account, current_subject.is_some()).and_then(|source| conversation.validate_model_source(source)) {
+                                                if let Err(failure) = model_source(&account).and_then(|source| conversation.validate_model_source(source)) {
                                                     control.finished.cancel();
                                                     emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
                                                     continue;
@@ -773,100 +762,9 @@ impl AgentRuntime {
                                         }
                                     }
                                     Command::Account(command) => {
-                                        let signing_out =
-                                            matches!(&command, AccountCommand::SignOut(_));
-                                        let acquiring =
-                                            matches!(&command, AccountCommand::Credentials { .. });
-                                        if signing_out {
-                                            capture_delivery(
-                                                stop_model(
-                                                    &mut model,
-                                                    &mut progress_events,
-                                                    &mut conversation,
-                                                    &store,
-                                                    &publish,
-                                                )
-                                                .await,
-                                                &mut delivery_failure,
-                                            );
-                                            if let Some((_, tools)) = session_tools.take() {
-                                                capture_delivery(model_task::finish_tools(tools, "account_sign_out", &mut conversation, &store, &publish).await, &mut delivery_failure);
-                                            }
-                                            while let Ok(queued) = incoming.try_recv() {
-                                                match queued {
-                                                    Command::Memory(id, _) => {
-                                                        emit(&publish, id, AgentEventKind::Memory(Err("账号正在退出，请刷新后重试".into())))?;
-                                                    }
-                                                    Command::McpMaterial(id, _) => {
-                                                        emit(&publish, id, AgentEventKind::McpMaterial(Err("账号操作开始前尚未接纳 MCP 材料操作，请重新提交".into())))?;
-                                                    }
-                                                    Command::CancelMcpMaterial(id) => {
-                                                        if let Some(job) = &material && job.id == id {
-                                                            job.cancel.cancel();
-                                                        }
-                                                    }
-                                                    Command::McpConfig(id, _) => {
-                                                        emit(&publish, id, AgentEventKind::McpConfig(Err(io::Error::other("账号操作开始前尚未接纳 MCP 配置操作，请重新提交"))))?;
-                                                    }
-                                                    Command::Conversation { id, control, request: ConversationRequest::Delete { .. }, .. } => {
-                                                        control.finished.cancel();
-                                                        emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("账号操作开始前尚未接纳删除，请重新提交".into())))?;
-                                                    }
-                                                    Command::Rename { id, session, .. } => emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Renamed { session, result: Err("账号操作开始前尚未接纳名称写入，请重新提交".into()) }))?,
-                                                    Command::Account(command) => {
-                                                        command.reject_for_sign_out()
-                                                    }
-                                                    Command::Model { control, .. }
-                                                    | Command::Conversation { control, .. } => {
-                                                        control.finished.cancel()
-                                                    }
-                                                    _ => {}
-                                                }
-                                            }
-                                        }
-                                        let identity = std::cell::Cell::new(None);
-                                        let source_event = std::cell::RefCell::new(None);
-                                        let (returned, failure) = account
-                                            .handle(command, &|event| {
-                                                match &event.kind {
-                                                    AccountEventKind::SourceChanged(_) => {
-                                                        source_event.replace(Some(event));
-                                                        return Ok(());
-                                                    }
-                                                    AccountEventKind::Completed(Ok(snapshot))
-                                                    | AccountEventKind::SessionStatus {
-                                                        snapshot,
-                                                        ..
-                                                    }
-                                                    | AccountEventKind::SignedOut {
-                                                        snapshot,
-                                                        ..
-                                                    } => {
-                                                        let subject = if matches!(
-                                                            &snapshot.credentials,
-                                                            agentelier_account::CredentialState::SignedOut
-                                                                | agentelier_account::CredentialState::NoRecord
-                                                                | agentelier_account::CredentialState::HostOnly
-                                                        ) {
-                                                            None
-                                                        } else {
-                                                            snapshot.account.as_ref().map(|account| account.subject.clone())
-                                                        };
-                                                        identity.set(Some(subject));
-                                                    }
-                                                    _ => {}
-                                                }
-                                                publish(AgentEvent {
-                                                    operation_id: event.operation_id,
-                                                    kind: AgentEventKind::Account(event.kind),
-                                                })
-                                            })
-                                            .await?;
-                                        account = returned;
-                                        let subject = identity.take();
+                                        let mut source_event = account.handle(command).await?;
                                         let settling = owner_credentials.source_settling()?;
                                         let starting_settlement = settling && pending_source.is_none();
-                                        let mut source_event = source_event.into_inner();
                                         if settling
                                             && source_event.as_ref().is_some_and(|event| matches!(event.kind, AccountEventKind::SourceChanged(Ok(_))))
                                             && let Some(event) = source_event.take()
@@ -877,9 +775,7 @@ impl AgentRuntime {
                                             }
                                             pending_source = Some(event);
                                         }
-                                        if (!account.codex_selected() && subject.as_ref().is_some_and(|subject| *subject != current_subject))
-                                            || starting_settlement
-                                        {
+                                        if starting_settlement {
                                             if model.is_some() { stop_model(&mut model, &mut progress_events, &mut conversation, &store, &publish).await?; }
                                             if let Some((session, tools)) = session_tools.take() {
                                                 let processes = tools.process_views.clone();
@@ -893,22 +789,11 @@ impl AgentRuntime {
                                                 suspending = suspending.checked_add(1).ok_or(RuntimeFailure::ModelState)?;
                                             }
                                         }
-                                        if let Some(subject) = subject {
-                                            current_subject = subject;
-                                        }
                                         if let Some(event) = source_event {
                                             capture_delivery(
                                                 emit(&publish, event.operation_id, AgentEventKind::Account(event.kind)),
                                                 &mut delivery_failure,
                                             );
-                                        }
-                                        if failure.is_some()
-                                            && (acquiring || delivery_failure.is_none())
-                                        {
-                                            delivery_failure = failure.map(RuntimeFailure::Account);
-                                        }
-                                        if signing_out && delivery_failure.is_some() {
-                                            break;
                                         }
                                     }
                                 }
@@ -919,13 +804,11 @@ impl AgentRuntime {
                                     debug!("旧账号任务收尾完成，已发布当前凭据来源");
                                     emit(&publish, event.operation_id, AgentEventKind::Account(event.kind))?;
                                 }
-                                if delivery_failure.is_some()
-                                    && !owner_credentials.is_signing_out()?
-                                {
+                                if delivery_failure.is_some() {
                                     break;
                                 }
                             }
-                            Ok::<Account, RuntimeFailure>(account)
+                            Ok::<(), RuntimeFailure>(())
                         }
                         .await;
                         capture_delivery(
@@ -990,16 +873,12 @@ impl AgentRuntime {
                         } else {
                             Ok(())
                         };
-                        let account_finished = match execution {
-                            Ok(account) => account.finish().await.map_err(RuntimeFailure::Account),
-                            Err(failure) => Err(failure),
-                        };
                         if let Err(failure) = stored {
                             error!(error = %failure, "会话存储收尾失败");
-                            account_finished?;
+                            execution?;
                             return Err(failure);
                         }
-                        account_finished?;
+                        execution?;
                         pending_saved?;
                         mcp_finished.map_err(RuntimeFailure::Mcp)?;
                         memory_worker_finished.map_err(RuntimeFailure::Memory)?;
@@ -1021,10 +900,8 @@ impl AgentRuntime {
         Ok(Self {
             commands: Some(commands),
             thread: Some(thread),
-            active: None,
             credentials,
             shutdown,
-            sign_out_commands,
             model: shared_model,
             session_commands,
         })
@@ -1057,9 +934,6 @@ impl AgentRuntime {
             })
     }
 
-    pub fn restore(&self, operation_id: u64) -> Result<(), RuntimeFailure> {
-        self.send(Command::Account(AccountCommand::Restore(operation_id)))
-    }
     pub fn change_source(
         &self,
         id: u64,
@@ -1210,47 +1084,6 @@ impl AgentRuntime {
         control.cancel.cancel();
         Ok(true)
     }
-    pub fn sign_out(&mut self, id: u64) -> Result<(), RuntimeFailure> {
-        if self.shutdown.is_cancelled() {
-            return Err(AccountFailure::Closed.into());
-        }
-        self.credentials.begin_sign_out(|| {
-            self.sign_out_commands
-                .try_send(id)
-                .map_err(|failure| match failure {
-                    mpsc::error::TrySendError::Full(_) => AccountFailure::Busy,
-                    mpsc::error::TrySendError::Closed(_) => AccountFailure::Closed,
-                })
-        })?;
-        if let Some(model) = self.active_model()? {
-            model.cancel.cancel();
-        }
-        if let Some((_, cancel)) = &self.active {
-            cancel.cancel();
-        }
-        Ok(())
-    }
-    pub fn login(&mut self, id: u64, consent: bool) -> Result<(), RuntimeFailure> {
-        let cancel = CancellationToken::new();
-        self.send(Command::Account(AccountCommand::Login {
-            id,
-            consent,
-            cancel: cancel.clone(),
-        }))?;
-        self.active = Some((id, cancel));
-        Ok(())
-    }
-    pub fn retry_save(&self, operation_id: u64) -> Result<(), RuntimeFailure> {
-        self.send(Command::Account(AccountCommand::RetrySave(operation_id)))
-    }
-    pub fn cancel(&self, operation_id: u64) -> Result<(), RuntimeFailure> {
-        if let Some((id, token)) = &self.active
-            && *id == operation_id
-        {
-            token.cancel();
-        }
-        self.send(Command::Account(AccountCommand::Cancel(operation_id)))
-    }
     fn send(&self, command: Command) -> Result<(), RuntimeFailure> {
         if self
             .active_model()?
@@ -1283,9 +1116,6 @@ impl AgentRuntime {
             Ok(None) => {}
             Err(failure) => error!(error=%failure,"关闭时无法读取活动任务，运行线程仍将回收任务"),
         }
-        if let Some((_, token)) = &self.active {
-            token.cancel();
-        }
         self.commands = None;
     }
     pub fn is_finished(&self) -> bool {
@@ -1302,22 +1132,10 @@ impl AgentRuntime {
 
 fn model_source(
     account: &Account,
-    siwc_available: bool,
-) -> Result<Option<&agentelier_account::CodexIdentity>, agentelier_conversation::ConversationFailure>
-{
-    if account.codex_selected() {
-        account.codex_identity().map(Some).ok_or_else(|| {
-            agentelier_conversation::ConversationFailure::new(
-                "当前 Codex 凭据不可用，请检查所选文件",
-            )
-        })
-    } else if siwc_available {
-        Ok(None)
-    } else {
-        Err(agentelier_conversation::ConversationFailure::new(
-            "请先登录当前账号后再开始任务",
-        ))
-    }
+) -> Result<&agentelier_account::CodexIdentity, agentelier_conversation::ConversationFailure> {
+    account.codex_identity().ok_or_else(|| {
+        agentelier_conversation::ConversationFailure::new("请选择有效的 Codex 凭据文件")
+    })
 }
 impl Drop for AgentRuntime {
     fn drop(&mut self) {

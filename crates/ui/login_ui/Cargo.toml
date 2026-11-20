@@ -17,7 +17,6 @@ bevy_widgetry = { workspace = true, features = [
   "scroll_area",
 ] }
 tracing.workspace = true
-winsafe = { workspace = true, features = ["shell"] }
 
 [lints]
 workspace = true

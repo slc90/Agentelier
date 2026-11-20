@@ -8,7 +8,7 @@
 
 ## 既有依据与本方案的选择
 
-同一 Sign in with ChatGPT 登录和 `gpt-6.2-sol` 下的四组对照确认了 `additional_tools` 路径。服务返回 `async: true` 的调用项，在结果缺席时回答了独立问题，随后按原 `call_id` 收到并使用真实结果。新会话采用此包装，正式会话链路仍需逐项验收。[协议与对照记录](sources.md)
+退役前，使用同一 Sign in with ChatGPT 登录和 `gpt-6.2-sol` 下的四组对照确认了 `additional_tools` 路径。服务返回 `async: true` 的调用项，在结果缺席时回答了独立问题，随后按原 `call_id` 收到并使用真实结果。以上为迁移前的实验。当前新建 Codex `gpt-6-astra` 会话通过 WebSocket 顶层工具声明接入异步，历史 SIWC 声明继续用于存档读取。[协议与对照记录](sources.md)
 
 此前已经确定的范围是 Direct Mode、现有登录路径、单活动 Turn、同一会话内多项跨 Turn 异步工作，以及现有 Steer、Queue 交互。本方案把尚未具体化的行为收束如下。
 

@@ -14,11 +14,10 @@ mod protocol;
 pub use project::{ProjectItem, ProjectPublication, PublicationKind};
 mod stream;
 pub use agentelier_account::CodexIdentity;
-pub use model::ModelRoute;
 
 pub use generation::{
     GenerationConnection, GenerationRequest, MAX_REQUEST_BYTES, PreparedGeneration,
-    RequestCompaction, RequestHistory, RequestProjection, generate, prepare,
+    RecordedModelSource, RequestCompaction, RequestHistory, RequestProjection, generate, prepare,
 };
 pub use memory::{MAX_MEMORY_SUMMARY_BYTES, MemoryMaterial, MemorySnapshot};
 pub use protocol::{
@@ -29,7 +28,7 @@ pub use stream::{FunctionCall, GenerationResult, OutputMessage, OutputText, Stre
 
 pub use model::{
     BackgroundText, ModelFailure, ModelFailureKind, ModelInfo, ModelReply, ModelRequest,
-    ModelResult, background_text, execute, task_model,
+    ModelResult, background_text, codex_tool_contract, execute, task_catalog, task_model,
 };
 
 pub use protocol::{estimated_text_tokens, result_token_budget, result_tokens, result_wire_bytes};

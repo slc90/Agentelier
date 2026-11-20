@@ -207,6 +207,12 @@ fn activate(event: On<Activate>, actions: Query<&Button>, mut commands: Commands
 pub(crate) fn reconcile(world: &mut World) -> Result {
     let chat = world.resource::<ChatState>();
     let state = world.resource::<PanelState>();
+    let account = world.resource::<agentelier_login_ui::AccountState>();
+    let can_process_results = account.model_unavailable_reason().is_none()
+        && chat
+            .session
+            .as_ref()
+            .is_some_and(|session| !session.execution_blocked && session.matches_account(account));
     let running = chat.operation.is_some();
     let ready = chat
         .tasks
@@ -417,6 +423,7 @@ pub(crate) fn reconcile(world: &mut World) -> Result {
             node.display = if show { Display::Flex } else { Display::None };
         }
         let disabled = match &b.intent {
+            Intent::Results => !can_process_results,
             Intent::ConfirmExternal => pending
                 .iter()
                 .any(|item| matches!(item, TaskAction::ConfirmExternal { .. })),

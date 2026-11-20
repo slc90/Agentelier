@@ -6,13 +6,10 @@ mod operations;
 mod source;
 
 pub use agentelier_login::{
-    AuthenticatedRequest, CodexIdentity, CredentialState, CredentialVersion, RemoteRevocation,
-    RestoredAccount, SessionActivity, SessionFailure, SessionFailureKind, SignOutStage,
-    UsableCredentials,
+    AuthenticatedRequest, CodexIdentity, CredentialVersion, SessionFailure, UsableCredentials,
 };
 pub use credentials::{CredentialClient, CredentialIntent, CredentialRequest, ExecutionIdentity};
 pub use operations::{
     Account, AccountCommand, AccountEvent, AccountEventKind, AccountFailure, DeliveryFailure,
-    OperationFailure,
 };
 pub use source::{AccountSource, SourceChange, SourceSettings};

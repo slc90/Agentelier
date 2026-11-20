@@ -1,5 +1,5 @@
 use crate::model::{
-    CODEX_RESPONSES_URL, ModelFailure, ModelFailureKind, ModelRoute, http_failure, protocol,
+    CODEX_RESPONSES_URL, ModelFailure, ModelFailureKind, authorize, http_failure, protocol,
     request_id,
 };
 use crate::protocol::{ProtocolItem, ProtocolOutput};
@@ -92,7 +92,7 @@ impl Connection {
         let key = handshake::client::generate_key();
         let response = timeout(
             super::generation::CONNECT_TIMEOUT,
-            ModelRoute::authorize(client.get(CODEX_RESPONSES_URL), credentials)
+            authorize(client.get(CODEX_RESPONSES_URL), credentials)
                 .header(header::CONNECTION, "Upgrade")
                 .header(header::UPGRADE, "websocket")
                 .header(header::SEC_WEBSOCKET_VERSION, "13")

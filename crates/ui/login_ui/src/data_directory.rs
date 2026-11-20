@@ -215,7 +215,7 @@ fn start_check(world: &mut World, path: PathBuf) -> Result {
                             if options.environment.set(environment.clone()).is_err() {
                                 CheckResult::Failed { title: "无法建立数据环境", reason: "本次运行的数据环境已建立，不能重复切换".into() }
                             } else {
-                                debug!(path = %display_path(environment.root()), credentials_path = %display_path(environment.credentials_path()), "本次数据环境已就绪并取得独占占用");
+                                debug!(path = %display_path(environment.root()), "本次数据环境已就绪并取得独占占用");
                                 CheckResult::Ready(environment)
                             }
                         }

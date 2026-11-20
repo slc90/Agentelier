@@ -1,6 +1,6 @@
 use agentelier_account::{CredentialClient, ExecutionIdentity};
 use agentelier_conversation::SessionId;
-use agentelier_llm_model::{ModelInfo, ModelRequest, ModelResult, background_text, execute};
+use agentelier_llm_model::{ModelInfo, background_text, task_catalog};
 use agentelier_memory::{
     MemoryClient, MemoryDetail, MemoryInspection, SourceCompletion, extraction_prompt,
     parse_extraction,
@@ -366,12 +366,10 @@ impl Worker {
         let result = tokio::select! { biased;
             _ = self.cancel.cancelled() => return None,
             _ = identity.invalidated() => return None,
-            result = execute(self.credentials.clone(), ModelRequest::Catalog) => result,
+            result = task_catalog(&self.credentials, &identity) => result,
         };
         match result {
-            Ok(ModelResult::Catalog(models)) if !models.is_empty() => {
-                Some(AvailableModels { identity, models })
-            }
+            Ok(models) if !models.is_empty() => Some(AvailableModels { identity, models }),
             Ok(_) => {
                 debug!("记忆后台暂缓，当前模型目录为空");
                 None
