@@ -11,12 +11,15 @@ mod conversation;
 mod queue;
 mod restore;
 mod result_budget;
+mod task_policy;
 mod tasks;
 pub use archive::ArchiveEntry;
 pub use restore::{RestoredSession, restore};
+pub use task_policy::{TaskPolicy, TaskPolicyChange};
 pub use tasks::{
-    ResponseDelivery, ResponseTasks, SessionTaskView, SessionTasks, TaskDelivery, TaskExecution,
-    TaskId, TaskPage, TaskRegistration, TaskReport,
+    ResponseDelivery, ResponseTasks, SessionTaskView, SessionTasks, TaskCancelReceipt,
+    TaskCancellation, TaskCancellationPlan, TaskDelivery, TaskExecution, TaskId, TaskPage,
+    TaskRegistration, TaskReport,
 };
 
 pub use archive::{

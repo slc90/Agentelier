@@ -14,6 +14,7 @@ pub struct ToolBatch {
 pub struct ToolJobRequest {
     pub call: FunctionCall,
     pub admission: CancellationToken,
+    pub stop: CancellationToken,
 }
 
 pub enum ToolEvent {
@@ -40,6 +41,25 @@ pub enum ToolCommand {
     },
 }
 
+pub enum SessionTaskAction {
+    Cancel(agentelier_tools::TaskTargets),
+    StopAll,
+    Resume,
+    ConfirmExternal { call_ids: Vec<String> },
+}
+
+pub enum SessionTaskOutcome {
+    Cancellation(Vec<agentelier_conversation::TaskCancelReceipt>),
+    StopRequested,
+    Resumed,
+    ExternalConfirmed,
+}
+
+pub struct SessionTaskCommand {
+    pub action: SessionTaskAction,
+    pub reply: oneshot::Sender<Result<SessionTaskOutcome, ConversationFailure>>,
+}
+
 pub struct ToolDispatcher {
     sender: mpsc::Sender<ToolCommand>,
     admission: ToolAdmission,
@@ -57,6 +77,20 @@ impl ToolDispatcher {
         let (sender, receiver) = mpsc::channel(1);
         let (events, incoming) = mpsc::unbounded_channel();
         (Self { sender, admission }, receiver, events, incoming)
+    }
+
+    pub(crate) fn task_policy(&self, policy: agentelier_conversation::TaskPolicy) {
+        self.admission.pause(policy.background_paused);
+        self.admission
+            .external_unconfirmed(!policy.external_unconfirmed.is_empty());
+    }
+
+    pub(crate) fn external_result_saved(&self) {
+        self.admission.external_result_saved();
+    }
+
+    pub(crate) fn block(&self) {
+        self.admission.block();
     }
 
     pub(crate) fn is_blocked(&self) -> bool {

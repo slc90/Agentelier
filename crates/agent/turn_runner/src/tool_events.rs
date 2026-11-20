@@ -1,11 +1,16 @@
 use crate::{
     access::{RunnerEvent, TurnAccess},
     control,
-    dispatch::{ToolBatch, ToolCommand, ToolDispatcher, ToolEvent, ToolJobRequest},
+    dispatch::{
+        SessionTaskAction, SessionTaskCommand, SessionTaskOutcome, ToolBatch, ToolCommand,
+        ToolDispatcher, ToolEvent, ToolJobRequest,
+    },
     runner::publish,
     task_control::{self, PendingWait, TaskControlAction, WaitInterruption},
 };
-use agentelier_conversation::{ConversationFailure, RecordEvent, SteerInput};
+use agentelier_conversation::{
+    ConversationFailure, RecordEvent, SteerInput, TaskCancellationPlan, TaskPolicyChange,
+};
 use agentelier_tools::{ExecutionContext, ToolCatalog, ToolMode, ToolResult, ToolStatus};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::mpsc;
@@ -14,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 pub(super) struct TurnTools {
     calls: HashMap<String, PendingCall>,
     waits: Vec<PendingWait>,
+    pub(super) controls: mpsc::Receiver<SessionTaskCommand>,
     pub(super) incoming: mpsc::UnboundedReceiver<ToolEvent>,
 }
 
@@ -21,13 +27,18 @@ struct PendingCall {
     mode: ToolMode,
     execution: Option<agentelier_conversation::TaskExecution>,
     admission: CancellationToken,
+    stop: CancellationToken,
 }
 
 impl TurnTools {
-    pub(super) fn new(incoming: mpsc::UnboundedReceiver<ToolEvent>) -> Self {
+    pub(super) fn new(
+        incoming: mpsc::UnboundedReceiver<ToolEvent>,
+        controls: mpsc::Receiver<SessionTaskCommand>,
+    ) -> Self {
         Self {
             calls: HashMap::new(),
             waits: Vec::new(),
+            controls,
             incoming,
         }
     }
@@ -89,14 +100,23 @@ impl TurnTools {
             .call(move |turn| {
                 Ok(ids
                     .iter()
-                    .map(|id| turn.task_execution(id))
+                    .map(|id| {
+                        (
+                            turn.task_execution(id),
+                            turn.task_cancellation_requested(id),
+                        )
+                    })
                     .collect::<Vec<_>>())
             })
             .await?;
         let mut jobs = Vec::new();
-        for (call, execution) in eligible.into_iter().zip(executions) {
+        for (call, (execution, cancelled)) in eligible.into_iter().zip(executions) {
             let mode = call.mode();
             let admission = cancel.child_token();
+            let stop = cancel.child_token();
+            if cancelled {
+                stop.cancel();
+            }
             if steered && mode == ToolMode::Synchronous {
                 admission.cancel();
             }
@@ -106,9 +126,14 @@ impl TurnTools {
                     mode,
                     execution,
                     admission: admission.clone(),
+                    stop: stop.clone(),
                 },
             );
-            jobs.push(ToolJobRequest { call, admission });
+            jobs.push(ToolJobRequest {
+                call,
+                admission,
+                stop,
+            });
         }
         if !jobs.is_empty() {
             dispatcher
@@ -127,6 +152,12 @@ impl TurnTools {
             let result = if started {
                 match task_control::control(active, control, &call.arguments).await? {
                     TaskControlAction::Return(result) => result,
+                    TaskControlAction::Cancel(targets) => {
+                        match self.cancel_tasks(active, dispatcher, targets, true).await? {
+                            Some(plan) => task_control::success(plan.receipts)?,
+                            None => task_control::unknown_tasks(),
+                        }
+                    }
                     TaskControlAction::Wait(wait) => {
                         self.waits.push(PendingWait::new(id, wait));
                         continue;
@@ -146,6 +177,154 @@ impl TurnTools {
         Ok(())
     }
 
+    async fn cancel_tasks(
+        &self,
+        active: &TurnAccess,
+        dispatcher: &ToolDispatcher,
+        targets: agentelier_tools::TaskTargets,
+        from_model: bool,
+    ) -> Result<Option<TaskCancellationPlan>, ConversationFailure> {
+        let Some((plan, state)) = active
+            .call(move |turn| {
+                Ok(turn
+                    .task_cancellation(&targets, from_model)
+                    .map(|plan| (plan, turn.stored_state())))
+            })
+            .await?
+        else {
+            return Ok(None);
+        };
+        if !plan.targets.is_empty() {
+            let mut stops = Vec::with_capacity(plan.targets.len());
+            for target in &plan.targets {
+                match self.calls.get(&target.call_id) {
+                    Some(call) if call.execution == Some(target.execution) => {
+                        stops.push(call.stop.clone())
+                    }
+                    None if plan.receipts.iter().any(|receipt| {
+                        receipt.task_id == target.execution.task
+                            && receipt.status == ToolStatus::Pending
+                    }) => {}
+                    _ => return Err(ConversationFailure::new("取消目标缺少实际执行句柄")),
+                }
+            }
+            let event = RecordEvent::TaskCancellationRequested {
+                state,
+                targets: plan.targets.clone(),
+            };
+            let sequence = match active.record(event).await {
+                Ok(sequence) => sequence,
+                Err(failure) => {
+                    dispatcher.block();
+                    return Err(failure);
+                }
+            };
+            let targets = plan.targets.clone();
+            active
+                .call(move |mut turn| turn.confirm_task_cancellation(&targets, sequence))
+                .await?;
+            for stop in stops {
+                stop.cancel();
+            }
+            active.publish_tasks().await?;
+        }
+        Ok(Some(plan))
+    }
+
+    pub(super) async fn command(
+        &mut self,
+        active: &TurnAccess,
+        dispatcher: &ToolDispatcher,
+        control: SessionTaskCommand,
+        progress: &mpsc::Sender<RunnerEvent>,
+        cancel: &CancellationToken,
+    ) -> Result<(), ConversationFailure> {
+        let result = match control.action {
+            SessionTaskAction::Cancel(targets) => self
+                .cancel_tasks(active, dispatcher, targets, false)
+                .await
+                .and_then(|plan| {
+                    plan.map(|plan| SessionTaskOutcome::Cancellation(plan.receipts))
+                        .ok_or_else(|| ConversationFailure::new("目标任务不存在或所属会话已变化"))
+                }),
+            SessionTaskAction::StopAll => self
+                .stop_background(active, dispatcher)
+                .await
+                .map(|()| SessionTaskOutcome::StopRequested),
+            SessionTaskAction::Resume if self.has_calls() => {
+                Err(ConversationFailure::new("仍有任务尚未回收"))
+            }
+            SessionTaskAction::Resume => {
+                Self::change_policy(active, dispatcher, TaskPolicyChange::Resume)
+                    .await
+                    .map(|()| SessionTaskOutcome::Resumed)
+            }
+            SessionTaskAction::ConfirmExternal { call_ids } => Self::change_policy(
+                active,
+                dispatcher,
+                TaskPolicyChange::ConfirmExternal { call_ids },
+            )
+            .await
+            .map(|()| SessionTaskOutcome::ExternalConfirmed),
+        };
+        drop(control.reply.send(result));
+        publish(progress, cancel).await
+    }
+
+    async fn change_policy(
+        active: &TurnAccess,
+        dispatcher: &ToolDispatcher,
+        change: TaskPolicyChange,
+    ) -> Result<(), ConversationFailure> {
+        let intended = change.clone();
+        let event = active
+            .call(move |turn| turn.task_policy_record(intended))
+            .await?;
+        if let Err(failure) = active.record(event).await {
+            dispatcher.block();
+            return Err(failure);
+        }
+        let policy = active
+            .call(move |mut turn| turn.apply_task_policy(&change))
+            .await?;
+        dispatcher.task_policy(policy);
+        Ok(())
+    }
+
+    async fn stop_background(
+        &mut self,
+        active: &TurnAccess,
+        dispatcher: &ToolDispatcher,
+    ) -> Result<(), ConversationFailure> {
+        Self::change_policy(active, dispatcher, TaskPolicyChange::Pause).await?;
+        self.cancel_tasks(
+            active,
+            dispatcher,
+            agentelier_tools::TaskTargets::All,
+            false,
+        )
+        .await?;
+        for call in self.calls.values() {
+            call.stop.cancel();
+        }
+        Self::reap_stopped_processes(active, dispatcher).await
+    }
+
+    async fn reap_stopped_processes(
+        active: &TurnAccess,
+        dispatcher: &ToolDispatcher,
+    ) -> Result<(), ConversationFailure> {
+        let report = dispatcher.reap_processes("background_stopped").await?;
+        let failed = report.failed;
+        active
+            .call(move |mut turn| turn.process_cleanup(report))
+            .await?;
+        if failed {
+            return Err(ConversationFailure::new("后台进程回收未确认"));
+        }
+        Ok(())
+    }
+
     pub(super) async fn apply(
         &mut self,
         active: &TurnAccess,
@@ -160,7 +339,10 @@ impl TurnTools {
                     .calls
                     .get(&call_id)
                     .ok_or_else(|| ConversationFailure::new("工具准入缺少调用身份"))?;
-                let started = if call.admission.is_cancelled() || dispatcher.is_blocked() {
+                let started = if call.admission.is_cancelled()
+                    || call.stop.is_cancelled()
+                    || dispatcher.is_blocked()
+                {
                     Ok(false)
                 } else {
                     start_call(
@@ -184,7 +366,10 @@ impl TurnTools {
                     .calls
                     .remove(&call_id)
                     .ok_or_else(|| ConversationFailure::new("工具终态缺少调用身份"))?;
-                let session = active.call(|turn| Ok(turn.session_id())).await?;
+                let external_unconfirmed = result.status == ToolStatus::ExternalUnconfirmed;
+                let (session, paused) = active
+                    .call(|turn| Ok((turn.session_id(), turn.background_paused())))
+                    .await?;
                 save_call(
                     active,
                     dispatcher,
@@ -196,6 +381,12 @@ impl TurnTools {
                     cancel,
                 )
                 .await?;
+                if external_unconfirmed {
+                    dispatcher.external_result_saved();
+                }
+                if paused {
+                    Self::reap_stopped_processes(active, dispatcher).await?;
+                }
             }
             None => {
                 return Err(ConversationFailure::new(
@@ -260,6 +451,11 @@ impl TurnTools {
             let deadline = self.waits.iter().map(|wait| wait.deadline).min();
             tokio::select! { biased;
                 _ = cancel.cancelled(), if deadline.is_some() => {},
+                command = self.controls.recv(), if !self.controls.is_closed() => {
+                    if let Some(command) = command {
+                        self.command(active, dispatcher, command, progress, cancel).await?;
+                    }
+                }
                 input = steers.recv(), if !steers.is_closed() => {
                     if let Some(input) = input {
                         self.accept_steer(active, input, progress, cancel).await?;
@@ -336,12 +532,31 @@ impl TurnTools {
         cancel: &CancellationToken,
     ) -> Result<(), ConversationFailure> {
         self.stop_admission_for_steer(active).await?;
+        while let Ok(command) = self.controls.try_recv() {
+            self.command(active, dispatcher, command, progress, cancel)
+                .await?;
+        }
         while let Ok(event) = self.incoming.try_recv() {
             self.apply(active, dispatcher, Some(event), progress, cancel)
                 .await?;
         }
         append_saved_results(active).await?;
         close_responses(active).await
+    }
+
+    pub(super) async fn close_commands(
+        &mut self,
+        active: &TurnAccess,
+        dispatcher: &ToolDispatcher,
+        progress: &mpsc::Sender<RunnerEvent>,
+        cancel: &CancellationToken,
+    ) -> Result<(), ConversationFailure> {
+        self.controls.close();
+        while let Ok(command) = self.controls.try_recv() {
+            self.command(active, dispatcher, command, progress, cancel)
+                .await?;
+        }
+        Ok(())
     }
 
     pub(super) async fn reap(
@@ -361,7 +576,15 @@ impl TurnTools {
                     .call(move |mut turn| turn.process_cleanup(report))
                     .await?;
             }
-            let event = self.incoming.recv().await;
+            let event = tokio::select! {
+                event = self.incoming.recv() => event,
+                command = self.controls.recv(), if !self.controls.is_closed() => {
+                    if let Some(command) = command {
+                        self.command(active, dispatcher, command, progress, cancel).await?;
+                    }
+                    continue;
+                }
+            };
             reap_processes = matches!(event, Some(ToolEvent::Finished { .. }));
             self.apply(active, dispatcher, event, progress, cancel)
                 .await?;
@@ -387,7 +610,9 @@ async fn start_call(
     let source = call_id.clone();
     let event = active
         .call(move |mut turn| {
-            if stop_on_steer && turn.has_pending_steer() {
+            if (stop_on_steer && turn.has_pending_steer())
+                || turn.task_cancellation_requested(&source)
+            {
                 return Ok(None);
             }
             turn.tool_started(&source)?;

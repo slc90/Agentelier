@@ -17,6 +17,7 @@ pub use memory::{MemoryReply, MemoryRequest};
 mod model_task;
 mod recording;
 mod renaming;
+mod task_control;
 mod tool_jobs;
 use model_task::{
     ModelJoin, ModelTask, PROGRESS_CAPACITY, TaskRequest, complete, drain_progress, progress,
@@ -139,11 +140,16 @@ enum Command {
     ModelFinished(ModelJoin),
     Stream(Option<RunnerEvent>),
     Session(SessionCommand),
+    TaskControl {
+        session: SessionId,
+        command: agentelier_turn_runner::SessionTaskCommand,
+    },
     Conversation {
         id: u64,
         control: ModelControl,
         request: ConversationRequest,
         steers: mpsc::Receiver<SteerInput>,
+        task_actions: mpsc::Receiver<agentelier_turn_runner::SessionTaskCommand>,
     },
 }
 
@@ -167,10 +173,18 @@ struct ModelControl {
     cancel: CancellationToken,
     finished: CancellationToken,
     steers: mpsc::Sender<SteerInput>,
+    task_actions: mpsc::Sender<agentelier_turn_runner::SessionTaskCommand>,
 }
 impl ModelControl {
-    fn new(id: u64) -> (Self, mpsc::Receiver<SteerInput>) {
+    fn new(
+        id: u64,
+    ) -> (
+        Self,
+        mpsc::Receiver<SteerInput>,
+        mpsc::Receiver<agentelier_turn_runner::SessionTaskCommand>,
+    ) {
         let (steers, incoming) = mpsc::channel(MAX_PENDING_STEERS);
+        let (task_actions, tasks) = mpsc::channel(MAX_PENDING_STEERS);
         (
             Self {
                 id,
@@ -178,8 +192,10 @@ impl ModelControl {
                 cancel: CancellationToken::new(),
                 finished: CancellationToken::new(),
                 steers,
+                task_actions,
             },
             incoming,
+            tasks,
         )
     }
 }
@@ -520,6 +536,20 @@ impl AgentRuntime {
                                             Err(event) => emit(&publish,event.id,AgentEventKind::Conversation(ConversationEvent::Queue(*event)))?,
                                         }
                                     }
+                                    Command::TaskControl { session, command } => {
+                                        if creating.is_some() || loading.is_some() || deleting.is_some() || finalizing || suspending != 0 || pending_queue {
+                                            drop(command.reply.send(Err(agentelier_conversation::ConversationFailure::new("会话变更或保存正在进行"))));
+                                        } else if let Some(model) = &model {
+                                            if model.control.turn.get().is_none_or(|(current, _)| *current != session) {
+                                                drop(command.reply.send(Err(agentelier_conversation::ConversationFailure::new("当前运行不属于目标会话"))));
+                                            } else if let Err(failure) = model.control.task_actions.try_send(command) {
+                                                drop(failure.into_inner().reply.send(Err(agentelier_conversation::ConversationFailure::new("任务控制入口当前不可用"))));
+                                            }
+                                        } else {
+                                            let result = task_control::idle(&mut conversation, session, command.action, &store).await;
+                                            drop(command.reply.send(result));
+                                        }
+                                    }
                                     Command::Stream(event) => {
                                         if let Some(event) = event {
                                             let task = model
@@ -536,10 +566,22 @@ impl AgentRuntime {
                                         control,
                                         request,
                                         steers,
+                                        task_actions,
                                     } => {
+                                        let replacing = match &request {
+                                            ConversationRequest::Delete { session } => conversation.current().is_some_and(|current| current.id == *session),
+                                            ConversationRequest::Create(_) | ConversationRequest::Open { .. } | ConversationRequest::Reset { .. } => true,
+                                            _ => false,
+                                        };
+                                        if replacing && let Err(failure) = conversation.check_replacement() {
+                                            control.finished.cancel();
+                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
+                                            continue;
+                                        }
                                         if model.is_some() || creating.is_some() || loading.is_some() || deleting.is_some() || suspending != 0 || finalizing || pending_queue {
                                             control.finished.cancel();
-                                            emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Rejected("排队任务已经开始，当前发送未接纳，草稿保留".into())))?;
+                                            let reason = if replacing { "任务正在回收或会话保存正在进行，暂不能替换会话" } else { "排队任务已经开始，当前发送未接纳，草稿保留" };
+                                            emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Rejected(reason.into())))?;
                                             continue;
                                         }
                                         match request {
@@ -587,7 +629,7 @@ impl AgentRuntime {
                                                 match conversation.start(id, request) {
                                                     Ok(view) => {
                                                         let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
-                                                        let tools = tool_jobs::SessionTools::for_session(&mut session_tools, view.id);
+                                                        let tools = tool_jobs::SessionTools::for_session(&mut session_tools, &view);
                                                         control.turn.set((view.id, turn.id.0)).map_err(|_| RuntimeFailure::ModelState)?;
                                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?=Some(control.clone());
                                                         emit(
@@ -604,7 +646,7 @@ impl AgentRuntime {
                                                             id,
                                                             control,
                                                             owner_credentials.clone(),
-                                                            TaskRequest::Chat(sender, steers, data_root.join("skills"), memory.as_ref().ok().map(Memory::client), tools),
+                                                            TaskRequest::Chat(sender, steers, task_actions, data_root.join("skills"), memory.as_ref().ok().map(Memory::client), tools),
                                                         ));
                                                     }
                                                     Err(failure) => {
@@ -863,8 +905,8 @@ impl AgentRuntime {
         self.credentials.clone()
     }
     pub fn request_model(&mut self, id: u64, request: ModelRequest) -> Result<(), RuntimeFailure> {
-        let (control, steers) = ModelControl::new(id);
-        drop(steers);
+        let (control, steers, task_actions) = ModelControl::new(id);
+        drop((steers, task_actions));
         self.send(Command::Model {
             id,
             request,
@@ -877,15 +919,48 @@ impl AgentRuntime {
         id: u64,
         request: ConversationRequest,
     ) -> Result<(), RuntimeFailure> {
-        let (control, steers) = ModelControl::new(id);
-        self.send(Command::Conversation {
-            steers,
-            id,
-            control: control.clone(),
+        let (control, steers, task_actions) = ModelControl::new(id);
+        let replacing = matches!(
             request,
-        })?;
-        Ok(())
+            ConversationRequest::Create(_)
+                | ConversationRequest::Open { .. }
+                | ConversationRequest::Reset { .. }
+                | ConversationRequest::Delete { .. }
+        );
+        let command = Command::Conversation {
+            steers,
+            task_actions,
+            id,
+            control,
+            request,
+        };
+        if replacing {
+            self.submit(command)
+        } else {
+            self.send(command)
+        }
     }
+    pub fn control_tasks(
+        &self,
+        session: SessionId,
+        action: agentelier_turn_runner::SessionTaskAction,
+    ) -> Result<
+        tokio::sync::oneshot::Receiver<
+            Result<
+                agentelier_turn_runner::SessionTaskOutcome,
+                agentelier_conversation::ConversationFailure,
+            >,
+        >,
+        RuntimeFailure,
+    > {
+        let (reply, result) = tokio::sync::oneshot::channel();
+        self.submit(Command::TaskControl {
+            session,
+            command: agentelier_turn_runner::SessionTaskCommand { action, reply },
+        })?;
+        Ok(result)
+    }
+
     pub fn rename_session(
         &self,
         id: u64,
@@ -1026,6 +1101,10 @@ impl AgentRuntime {
         {
             return Err(AccountFailure::Busy.into());
         }
+        self.submit(command)
+    }
+
+    fn submit(&self, command: Command) -> Result<(), RuntimeFailure> {
         self.credentials
             .submit_operation(|| {
                 self.commands

@@ -78,40 +78,46 @@ impl Gateway {
         let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
         let deadline = tokio::time::sleep(CALL_TIMEOUT);
         tokio::pin!(deadline);
+        if cancel.is_cancelled() {
+            return cancelled("任务已停止，未提交 MCP 调用");
+        }
+        if route.closed.is_cancelled() {
+            return fail("mcp_offline", "原 MCP 连接已关闭");
+        }
         let mut handle = tokio::select! {
             biased;
-            _ = cancel.cancelled() => return cancelled("任务已停止，未提交 MCP 调用"),
-            _ = route.closed.cancelled() => return disconnected(),
-            _ = &mut deadline => return timed_out(),
             result = route.peer.send_cancellable_request(request, PeerRequestOptions::no_options()) => match result {
                 Ok(handle) => handle,
                 Err(error) => return protocol_error(error),
-            }
+            },
+            _ = cancel.cancelled() => return external_unconfirmed("mcp_cancelled", "MCP 调用提交期间本地等待结束，远端效果未确认"),
+            _ = route.closed.cancelled() => return disconnected(),
+            _ = &mut deadline => return external_unconfirmed("mcp_timeout", "MCP 调用提交超时，远端效果未确认"),
         };
         let result = tokio::select! {
             biased;
             result = &mut handle.rx => result.unwrap_or(Err(ServiceError::TransportClosed)),
             _ = cancel.cancelled() => {
                 let acknowledged = matches!(tokio::time::timeout(CANCEL_TIMEOUT, handle.cancel(Some("Agentelier task stopped".into()))).await, Ok(Ok(())));
-                return cancelled(if acknowledged {
-                    "已请求取消 MCP 调用；远端已产生的变化会保留"
+                return external_unconfirmed("mcp_cancelled", if acknowledged {
+                    "已发送取消通知，远端结束及副作用未确认"
                 } else {
-                    "已结束本地等待；无法确认服务器收到取消通知"
+                    "本地等待已结束，远端是否收到取消通知与实际效果均未确认"
                 });
             }
             _ = route.closed.cancelled() => return disconnected(),
             _ = &mut deadline => {
                 if !matches!(tokio::time::timeout(CANCEL_TIMEOUT, handle.cancel(Some("Agentelier request timed out".into()))).await, Ok(Ok(()))) {
-                    return ToolResult::error(ToolStatus::TimedOut, "mcp_timeout", "MCP 调用超时；无法确认服务器收到取消通知");
+                    return external_unconfirmed("mcp_timeout", "MCP 调用超时，取消通知与远端效果均未确认");
                 }
                 return timed_out();
             }
         };
         match result {
             Ok(ServerResult::CallToolResult(result)) => convert(result, images, cancel).await,
-            Ok(_) => fail(
+            Ok(_) => external_unconfirmed(
                 "mcp_protocol",
-                "MCP 服务器没有返回完整工具结果，交互式输入与服务器任务暂不可用",
+                "MCP 服务器未返回完整工具结果，实际效果未确认",
             ),
             Err(error) => protocol_error(error),
         }
@@ -126,22 +132,24 @@ fn cancelled(message: &str) -> ToolResult {
     ToolResult::error(ToolStatus::Cancelled, "mcp_cancelled", message)
 }
 
+fn external_unconfirmed(code: &str, message: &str) -> ToolResult {
+    ToolResult::error(ToolStatus::ExternalUnconfirmed, code, message)
+}
+
 fn timed_out() -> ToolResult {
-    ToolResult::error(
-        ToolStatus::TimedOut,
-        "mcp_timeout",
-        "MCP 调用超时；未确认远端结果",
-    )
+    external_unconfirmed("mcp_timeout", "MCP 调用超时，远端结束及效果未确认")
 }
 
 fn disconnected() -> ToolResult {
-    fail("mcp_offline", "原 MCP 连接已关闭；未确认远端结果")
+    external_unconfirmed("mcp_offline", "原 MCP 连接已关闭，远端效果未确认")
 }
 
 fn protocol_error(error: ServiceError) -> ToolResult {
     match error {
         ServiceError::TransportSend(error) => crate::http::transport_failure(&error)
-            .map_or_else(disconnected, |failure| fail("mcp_http", failure.reason)),
+            .map_or_else(disconnected, |failure| {
+                external_unconfirmed("mcp_http", failure.reason)
+            }),
         ServiceError::TransportClosed => disconnected(),
         ServiceError::Timeout { .. } => timed_out(),
         ServiceError::Cancelled { .. } => cancelled("MCP 服务器取消了本次请求"),

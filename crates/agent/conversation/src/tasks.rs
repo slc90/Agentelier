@@ -18,6 +18,32 @@ pub struct TaskExecution {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+pub struct TaskCancellation {
+    pub call_id: String,
+    pub execution: TaskExecution,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskCancelState {
+    Requested,
+    AlreadyRequested,
+    Finished,
+}
+
+#[derive(Serialize)]
+pub struct TaskCancelReceipt {
+    pub task_id: TaskId,
+    pub state: TaskCancelState,
+    pub status: ToolStatus,
+}
+
+pub struct TaskCancellationPlan {
+    pub targets: Vec<TaskCancellation>,
+    pub receipts: Vec<TaskCancelReceipt>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TaskRegistration {
     pub execution: TaskExecution,
     pub turn: TurnId,
@@ -92,6 +118,7 @@ struct Task {
     registration: TaskRegistration,
     status: ToolStatus,
     registered_at: u64,
+    cancellation_requested: bool,
     live: bool,
     delivery: Delivery,
 }
@@ -123,7 +150,12 @@ impl Task {
                 Delivery::Delivered(_) => TaskDelivery::Delivered,
             },
             blocked_by: (self.status == ToolStatus::Pending).then_some("admission"),
+            cancelling: self.cancellation_requested && self.in_progress(),
         }
+    }
+
+    fn in_progress(&self) -> bool {
+        matches!(self.status, ToolStatus::Pending | ToolStatus::Running)
     }
 
     fn recover_interrupted(&mut self) -> bool {
@@ -139,6 +171,7 @@ impl Task {
 
 #[derive(Clone)]
 pub struct SessionTaskView {
+    pub cancelling: bool,
     pub task: TaskId,
     pub instance: Option<Uuid>,
     pub turn: TurnId,
@@ -168,6 +201,7 @@ pub struct TaskReport {
     pub status: ToolStatus,
     pub delivery: TaskDelivery,
     pub blocked_by: Option<&'static str>,
+    pub cancelling: bool,
 }
 
 impl TaskReport {
@@ -306,6 +340,7 @@ impl TaskLedger {
                 registration,
                 status: ToolStatus::Pending,
                 registered_at: sequence,
+                cancellation_requested: false,
                 live,
                 delivery: Delivery::AwaitingResult,
             }));
@@ -448,6 +483,7 @@ impl TaskLedger {
             | ToolStatus::Failed
             | ToolStatus::TimedOut
             | ToolStatus::Unconfirmed
+            | ToolStatus::ExternalUnconfirmed
             | ToolStatus::Cancelled => task.status == ToolStatus::Running,
             _ => false,
         };
@@ -460,6 +496,16 @@ impl TaskLedger {
     pub(crate) fn recover_interrupted(&mut self) {
         for task in &mut self.tasks {
             task.recover_interrupted();
+        }
+    }
+
+    pub(crate) fn recover_external_unconfirmed(&mut self, call_id: &str) {
+        if let Some(task) = self
+            .tasks
+            .iter_mut()
+            .find(|task| task.registration.call_id == call_id)
+        {
+            task.status = ToolStatus::ExternalUnconfirmed;
         }
     }
 
@@ -504,6 +550,93 @@ impl TaskLedger {
                 task.registration.execution.task.0 == *id && task.registered_at <= cutoff
             })
         })
+    }
+
+    pub(crate) fn cancellation(
+        &self,
+        scope: &agentelier_tools::TaskTargets,
+        cutoff: u64,
+    ) -> Option<TaskCancellationPlan> {
+        let selected = match scope {
+            agentelier_tools::TaskTargets::Ids(ids) => ids
+                .iter()
+                .map(|id| {
+                    self.tasks.iter().find(|task| {
+                        task.registration.execution.task.0 == *id && task.registered_at <= cutoff
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?,
+            agentelier_tools::TaskTargets::All => self
+                .tasks
+                .iter()
+                .filter(|task| task.registered_at <= cutoff && task.live && task.in_progress())
+                .collect(),
+        };
+        let mut plan = TaskCancellationPlan {
+            targets: Vec::new(),
+            receipts: Vec::new(),
+        };
+        for task in selected {
+            let execution = task.registration.execution;
+            let state = if !task.live || !task.in_progress() {
+                TaskCancelState::Finished
+            } else if task.cancellation_requested {
+                TaskCancelState::AlreadyRequested
+            } else {
+                plan.targets.push(TaskCancellation {
+                    call_id: task.registration.call_id.clone(),
+                    execution,
+                });
+                TaskCancelState::Requested
+            };
+            plan.receipts.push(TaskCancelReceipt {
+                task_id: execution.task,
+                state,
+                status: task.status,
+            });
+        }
+        Some(plan)
+    }
+
+    pub(crate) fn cancellation_requested(&self, call_id: &str) -> bool {
+        self.tasks
+            .iter()
+            .any(|task| task.registration.call_id == call_id && task.cancellation_requested)
+    }
+
+    pub(crate) fn request_cancel(
+        &mut self,
+        targets: &[TaskCancellation],
+        sequence: u64,
+    ) -> Result<(), ConversationFailure> {
+        if targets.is_empty() || sequence <= self.revision {
+            return Err(ConversationFailure::new("任务取消记录为空或过期"));
+        }
+        let mut indexes = HashSet::new();
+        for target in targets {
+            let index = self
+                .tasks
+                .iter()
+                .position(|task| {
+                    task.registration.call_id == target.call_id
+                        && task.registration.execution == target.execution
+                        && task.in_progress()
+                        && !task.cancellation_requested
+                })
+                .ok_or_else(|| ConversationFailure::new("取消记录不属于可取消的执行实例"))?;
+            if !indexes.insert(index) {
+                return Err(ConversationFailure::new("取消记录包含重复目标"));
+            }
+        }
+        for index in indexes {
+            let task = self
+                .tasks
+                .get_mut(index)
+                .ok_or_else(|| ConversationFailure::new("取消目标在确认时丢失"))?;
+            task.cancellation_requested = true;
+        }
+        self.revision = sequence;
+        Ok(())
     }
 
     pub(crate) fn reports(
@@ -559,6 +692,7 @@ impl TaskLedger {
             .map(|task| {
                 let registration = &task.registration;
                 SessionTaskView {
+                    cancelling: task.cancellation_requested && task.in_progress(),
                     task: registration.execution.task,
                     instance: task.live.then_some(registration.execution.instance),
                     turn: registration.turn,

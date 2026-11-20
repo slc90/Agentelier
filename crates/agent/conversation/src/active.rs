@@ -24,7 +24,7 @@ pub(crate) struct ActiveState {
 
 pub(crate) struct ToolResultEntry {
     pub(crate) output: ToolPayload,
-    saved: Option<u64>,
+    pub(crate) saved: Option<u64>,
 }
 
 pub struct ActiveTurn<'a> {
@@ -137,6 +137,7 @@ impl ActiveTurn<'_> {
             .process_cleanup
             .extend(report.processes);
         if report.failed {
+            self.view.process_cleanup_unconfirmed = true;
             self.block_execution();
         }
         Ok(())
@@ -823,7 +824,7 @@ impl ActiveTurn<'_> {
         self.tasks.install(registrations, delivery, sequence, true)
     }
 
-    pub fn task_selection_exists(&self, ids: &[uuid::Uuid]) -> bool {
+    fn task_registration_cutoff(&self) -> Option<u64> {
         self.view
             .turn
             .as_ref()
@@ -833,7 +834,36 @@ impl ActiveTurn<'_> {
                     .filter(|request| request.request == turn.request_index)
             })
             .and_then(|request| request.task_registration_cutoff)
+    }
+
+    pub fn task_selection_exists(&self, ids: &[uuid::Uuid]) -> bool {
+        self.task_registration_cutoff()
             .is_some_and(|cutoff| self.tasks.selectable(ids, cutoff))
+    }
+
+    pub fn task_cancellation(
+        &self,
+        targets: &agentelier_tools::TaskTargets,
+        from_model: bool,
+    ) -> Option<crate::TaskCancellationPlan> {
+        let cutoff = if from_model {
+            self.task_registration_cutoff()?
+        } else {
+            self.tasks.revision()
+        };
+        self.tasks.cancellation(targets, cutoff)
+    }
+
+    pub fn confirm_task_cancellation(
+        &mut self,
+        targets: &[crate::TaskCancellation],
+        sequence: u64,
+    ) -> Result<(), ConversationFailure> {
+        self.tasks.request_cancel(targets, sequence)
+    }
+
+    pub fn task_cancellation_requested(&self, call_id: &str) -> bool {
+        self.tasks.cancellation_requested(call_id)
     }
 
     pub fn task_reports(&self, ids: &[uuid::Uuid]) -> Option<Vec<crate::TaskReport>> {
@@ -949,6 +979,13 @@ impl ActiveTurn<'_> {
             ) > MAX_SESSION_IMAGE_BYTES
         {
             result = result.reject_image_budget();
+        }
+        if result.status == ToolStatus::ExternalUnconfirmed {
+            self.view
+                .task_policy
+                .external_unconfirmed
+                .insert(call_id.to_owned());
+            self.view.queue_paused = true;
         }
         tool.status = result.status;
         tool.output = Some(result.output.summary().to_owned());

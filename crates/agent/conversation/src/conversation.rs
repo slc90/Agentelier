@@ -123,9 +123,11 @@ pub struct SessionView {
     pub previous_turns: Vec<TurnView>,
     pub committed_items: Vec<ProtocolItemSummary>,
     pub execution_blocked: bool,
+    pub(crate) process_cleanup_unconfirmed: bool,
     pub tool_catalog: Vec<(String, String)>,
     pub queue: Vec<QueuedInput>,
     pub queue_paused: bool,
+    pub task_policy: Box<crate::TaskPolicy>,
 }
 pub enum ConversationEvent {
     ArchiveCleanup(Vec<String>),
@@ -254,6 +256,25 @@ impl Conversation {
         Some(session.view.clone())
     }
 
+    pub fn check_replacement(&self) -> Result<(), ConversationFailure> {
+        if let Some(current) = &self.session {
+            if current.active.is_some() {
+                return Err(ConversationFailure::new("当前会话仍有活动任务"));
+            }
+            if current.view.process_cleanup_unconfirmed {
+                return Err(ConversationFailure::new("当前会话的进程回收仍未确认"));
+            }
+            if current
+                .pending_results
+                .values()
+                .any(|result| result.saved.is_none())
+            {
+                return Err(ConversationFailure::new("当前会话仍有工具结果未确认保存"));
+            }
+        }
+        Ok(())
+    }
+
     pub fn suspend_queue(&mut self) -> Result<Option<crate::RecordEvent>, ConversationFailure> {
         let Some(session) = &mut self.session else {
             return Ok(None);
@@ -326,8 +347,10 @@ impl Conversation {
             previous_turns: Vec::new(),
             committed_items: Vec::new(),
             execution_blocked: false,
+            process_cleanup_unconfirmed: false,
             queue: Vec::new(),
             queue_paused: false,
+            task_policy: Default::default(),
             tool_catalog: tools
                 .definitions()
                 .map(|tool| (tool.name.clone(), tool.catalog_description()))
@@ -421,6 +444,7 @@ impl Conversation {
         session.check_pending_input(history, &input)?;
         let request_items = history.with_user(&input).summary();
         session.view.notice = None;
+        session.view.task_policy.background_paused = false;
         if let Some(previous) = session.view.turn.take() {
             session.view.previous_turns.push(*previous);
         }

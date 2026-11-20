@@ -9,5 +9,8 @@ mod task_control;
 mod tool_events;
 
 pub use access::{RunnerEvent, TurnImage, TurnRecord};
-pub use dispatch::{ToolBatch, ToolCommand, ToolDispatcher, ToolEvent, ToolJobRequest};
+pub use dispatch::{
+    SessionTaskAction, SessionTaskCommand, SessionTaskOutcome, ToolBatch, ToolCommand,
+    ToolDispatcher, ToolEvent, ToolJobRequest,
+};
 pub use runner::run;

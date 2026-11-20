@@ -1,4 +1,4 @@
-use crate::dispatch::{ToolDispatcher, ToolEvent};
+use crate::dispatch::{SessionTaskCommand, ToolDispatcher, ToolEvent};
 use crate::{
     access::{RunnerEvent, TurnAccess},
     control,
@@ -75,6 +75,11 @@ async fn request_once(
             tokio::select! { biased;
                 event = jobs.incoming.recv(), if jobs.has_calls() => {
                     jobs.apply(active, dispatcher, event, progress, cancel).await?;
+                }
+                command = jobs.controls.recv(), if !jobs.controls.is_closed() => {
+                    if let Some(command) = command {
+                        jobs.command(active, dispatcher, command, progress, cancel).await?;
+                    }
                 }
                 _ = dispatcher.blocked() => {
                     stopped_by_resources = true;
@@ -158,6 +163,7 @@ pub async fn run(
     memory: Option<agentelier_memory::MemoryClient>,
     dispatcher: ToolDispatcher,
     incoming: mpsc::UnboundedReceiver<ToolEvent>,
+    controls: mpsc::Receiver<SessionTaskCommand>,
 ) -> Result<(), ConversationFailure> {
     let active = TurnAccess::new(progress.clone());
     let event = active
@@ -178,7 +184,7 @@ pub async fn run(
             })
             .await?;
     }
-    let mut jobs = TurnTools::new(incoming);
+    let mut jobs = TurnTools::new(incoming, controls);
     let mut outcome = if admitted.is_ok() {
         run_task(
             &active,
@@ -217,6 +223,14 @@ pub async fn run(
         } else if cancel.is_cancelled() {
             outcome = Ok(TurnStatus::Cancelled);
         }
+    }
+    if outcome.is_ok()
+        && projection.is_ok()
+        && let Err(failure) = jobs
+            .close_commands(&active, &dispatcher, &progress, &cancel)
+            .await
+    {
+        outcome = Err(failure);
     }
     drop(jobs);
     let report = dispatcher.cleanup(reason).await?;

@@ -217,6 +217,9 @@ impl ToolRegistration {
                 let execution = execute(context, arguments, cancel);
                 Box::pin(async move {
                     let result = execution.await;
+                    if result.status == crate::ToolStatus::ExternalUnconfirmed {
+                        permit.mark_external_unconfirmed();
+                    }
                     drop(permit);
                     self.limit_result(result)
                 })
@@ -308,7 +311,12 @@ impl ToolCatalog {
         let mut tools = Self::builtins(directory, image_input);
         if !contract.is_flat() {
             tools.extend(
-                [crate::TaskControl::List, crate::TaskControl::Wait].map(|control| {
+                [
+                    crate::TaskControl::List,
+                    crate::TaskControl::Wait,
+                    crate::TaskControl::Cancel,
+                ]
+                .map(|control| {
                     ToolRegistration::process(
                         control.definition(),
                         Executor::TaskControl(control),

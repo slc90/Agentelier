@@ -10,6 +10,7 @@ const MAX_WAIT_MS: u64 = 30_000;
 pub enum TaskControl {
     List,
     Wait,
+    Cancel,
 }
 
 #[derive(Deserialize)]
@@ -34,9 +35,22 @@ pub struct TaskWait {
     pub timeout_ms: u64,
 }
 
+pub enum TaskTargets {
+    Ids(Vec<Uuid>),
+    All,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CancelArguments {
+    task_ids: Option<Vec<Uuid>>,
+    all_background: bool,
+}
+
 pub enum TaskControlRequest {
     List(TaskList),
     Wait(TaskWait),
+    Cancel(TaskTargets),
 }
 
 impl TaskControl {
@@ -58,6 +72,14 @@ impl TaskControl {
                     "mode":{"type":"string","enum":["any","all"]},
                     "timeout_ms":{"type":"integer","minimum":0,"maximum":MAX_WAIT_MS}
                 },"required":["task_ids","mode","timeout_ms"],"additionalProperties":false}),
+            ),
+            Self::Cancel => (
+                "cancel_async_tasks",
+                "Request cancellation of specific task IDs from an earlier list, or of all background tasks visible when this request was made. For the all-background scope set all_background true and task_ids null. Otherwise pass task_ids and set all_background false. Reports requests or already finished states. Wait for the original call results for confirmation.",
+                json!({"type":"object","properties":{
+                    "task_ids":{"type":["array","null"],"items":{"type":"string"},"minItems":1,"maxItems":MAX_TASK_PAGE},
+                    "all_background":{"type":"boolean"}
+                },"required":["task_ids","all_background"],"additionalProperties":false}),
             ),
         };
         ToolDefinition {
@@ -96,6 +118,19 @@ impl TaskControl {
                     return Err(invalid("等待期限不能超过 30000 毫秒"));
                 }
                 Ok(TaskControlRequest::Wait(request))
+            }
+            Self::Cancel => {
+                let args: CancelArguments =
+                    crate::process::arguments(text, &["task_ids", "all_background"])?;
+                let targets = match (args.task_ids, args.all_background) {
+                    (Some(ids), false) => {
+                        validate_ids(&ids)?;
+                        TaskTargets::Ids(ids)
+                    }
+                    (None, true) => TaskTargets::All,
+                    _ => return Err(invalid("请选择明确的任务 ID 集或全部后台范围")),
+                };
+                Ok(TaskControlRequest::Cancel(targets))
             }
         }
     }

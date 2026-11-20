@@ -1,8 +1,8 @@
 use crate::access::TurnAccess;
 use agentelier_conversation::{ConversationFailure, TaskPage};
 use agentelier_tools::{
-    MAX_TOOL_BODY_BYTES, TaskControl, TaskControlRequest, TaskWait, ToolResult, ToolStatus,
-    WaitMode,
+    MAX_TOOL_BODY_BYTES, TaskControl, TaskControlRequest, TaskTargets, TaskWait, ToolResult,
+    ToolStatus, WaitMode,
 };
 use serde::Serialize;
 use std::time::Duration;
@@ -11,6 +11,7 @@ use tokio::time::Instant;
 pub(super) enum TaskControlAction {
     Return(ToolResult),
     Wait(TaskWait),
+    Cancel(TaskTargets),
 }
 
 pub(super) async fn control(
@@ -45,6 +46,7 @@ pub(super) async fn control(
                 };
                 Ok(TaskControlAction::Return(success(page)?))
             }
+            TaskControlRequest::Cancel(targets) => Ok(TaskControlAction::Cancel(targets)),
             TaskControlRequest::Wait(wait) => Ok(if turn.task_selection_exists(&wait.task_ids) {
                 TaskControlAction::Wait(wait)
             } else {
@@ -54,7 +56,7 @@ pub(super) async fn control(
         .await
 }
 
-fn unknown_tasks() -> ToolResult {
+pub(super) fn unknown_tasks() -> ToolResult {
     ToolResult::error(
         ToolStatus::Failed,
         "unknown_task",
@@ -128,7 +130,7 @@ impl PendingWait {
     }
 }
 
-fn success(value: impl Serialize) -> Result<ToolResult, ConversationFailure> {
+pub(super) fn success(value: impl Serialize) -> Result<ToolResult, ConversationFailure> {
     let body = serde_json::to_string(&value).map_err(|failure| {
         ConversationFailure::new(format!("任务控制结果序列化失败：{failure}"))
     })?;

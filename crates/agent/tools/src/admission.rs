@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 use tokio::sync::{OwnedRwLockWriteGuard, OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio_util::sync::CancellationToken;
 
@@ -17,6 +20,9 @@ pub struct ToolAdmission {
     effects: Arc<RwLock<()>>,
     slots: Arc<Semaphore>,
     blocked: CancellationToken,
+    paused: Arc<AtomicBool>,
+    external_unconfirmed: Arc<AtomicBool>,
+    external_waiting_save: Arc<AtomicUsize>,
 }
 
 impl Default for ToolAdmission {
@@ -25,6 +31,9 @@ impl Default for ToolAdmission {
             effects: Arc::new(RwLock::new(())),
             slots: Arc::new(Semaphore::new(MAX_RUNNING_TOOLS)),
             blocked: CancellationToken::new(),
+            paused: Arc::default(),
+            external_unconfirmed: Arc::default(),
+            external_waiting_save: Arc::default(),
         }
     }
 }
@@ -33,9 +42,46 @@ pub struct ToolPermit {
     _slot: Option<OwnedSemaphorePermit>,
     _shared: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
     pub(crate) exclusive: Option<OwnedRwLockWriteGuard<()>>,
+    external_waiting_save: Arc<AtomicUsize>,
+}
+
+impl ToolPermit {
+    pub(crate) fn mark_external_unconfirmed(&self) {
+        self.external_waiting_save.fetch_add(1, Ordering::AcqRel);
+    }
 }
 
 impl ToolAdmission {
+    pub fn pause(&self, value: bool) {
+        self.paused.store(value, Ordering::Release);
+    }
+
+    pub fn external_unconfirmed(&self, value: bool) {
+        self.external_unconfirmed.store(value, Ordering::Release);
+    }
+
+    pub fn external_result_saved(&self) {
+        self.external_unconfirmed(true);
+        let _updated =
+            self.external_waiting_save
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |waiting| {
+                    waiting.checked_sub(1)
+                });
+    }
+
+    pub fn rejection(&self, access: ToolAccess) -> Option<&'static str> {
+        if self.paused.load(Ordering::Acquire) {
+            Some("background_paused")
+        } else if access == ToolAccess::Exclusive
+            && (self.external_waiting_save.load(Ordering::Acquire) != 0
+                || self.external_unconfirmed.load(Ordering::Acquire))
+        {
+            Some("external_effects_unconfirmed")
+        } else {
+            None
+        }
+    }
+
     pub fn block(&self) {
         self.blocked.cancel();
     }
@@ -59,6 +105,7 @@ impl ToolAdmission {
                 _slot: None,
                 _shared: None,
                 exclusive: None,
+                external_waiting_save: self.external_waiting_save.clone(),
             });
         }
         tokio::select! {
@@ -81,6 +128,7 @@ impl ToolAdmission {
                     _slot: Some(slot),
                     _shared: shared,
                     exclusive,
+                    external_waiting_save: self.external_waiting_save.clone(),
                 });
             }
             drop((shared, exclusive));

@@ -24,14 +24,21 @@ pub(super) struct SessionTools {
 impl SessionTools {
     pub(super) fn for_session(
         active: &mut Option<(agentelier_conversation::SessionId, Self)>,
-        session: agentelier_conversation::SessionId,
+        view: &agentelier_conversation::SessionView,
     ) -> Self {
+        let session = view.id;
         if let Some((id, tools)) = active
             && *id == session
         {
+            tools.admission.pause(view.task_policy.background_paused);
+            tools
+                .admission
+                .external_unconfirmed(!view.task_policy.external_unconfirmed.is_empty());
             return tools.clone();
         }
         let admission = ToolAdmission::default();
+        admission.pause(view.task_policy.background_paused);
+        admission.external_unconfirmed(!view.task_policy.external_unconfirmed.is_empty());
         let tools = Self {
             processes: Arc::new(ProcessSessions::new(admission.clone())),
             admission,
@@ -44,7 +51,8 @@ impl SessionTools {
 struct JobIdentity {
     call_id: String,
     started: Arc<AtomicBool>,
-    following: Option<oneshot::Sender<()>>,
+    following: Option<OrderSignal>,
+    stop: CancellationToken,
 }
 
 struct Execution {
@@ -53,9 +61,8 @@ struct Execution {
     identities: HashMap<Id, JobIdentity>,
     processes: Arc<ProcessSessions>,
     admission: ToolAdmission,
-    cancel: CancellationToken,
-    ordinary: Option<oneshot::Receiver<()>>,
-    controls: Option<oneshot::Receiver<()>>,
+    ordinary: Option<Arc<JobOrder>>,
+    controls: Option<Arc<JobOrder>>,
 }
 
 impl Execution {
@@ -64,6 +71,7 @@ impl Execution {
         for ToolJobRequest {
             call,
             admission: admission_stop,
+            stop,
         } in batch.calls
         {
             let policy = batch.catalog.access(&call.name);
@@ -76,8 +84,12 @@ impl Execution {
             } else {
                 &mut self.ordinary
             };
-            let (following, wait) = oneshot::channel();
-            let previous = order.replace(wait);
+            let next = Arc::new(JobOrder {
+                previous: order.clone(),
+                released: CancellationToken::new(),
+            });
+            let previous = order.replace(next.clone());
+            let following = OrderSignal(next.released.clone());
             let (admitted, finished) = if serial && policy != ToolAccess::ProcessControl {
                 (None, Some(following))
             } else {
@@ -87,6 +99,7 @@ impl Execution {
                 call_id: call.call_id.clone(),
                 started: Arc::default(),
                 following: finished,
+                stop: stop.clone(),
             };
             let job = Job {
                 call,
@@ -97,14 +110,19 @@ impl Execution {
                 previous,
                 admitted,
             };
-            let cancel = self.cancel.clone();
             let admission = self.admission.clone();
             let processes = self.processes.clone();
             let events = self.events.clone();
             let handle =
                 self.calls
-                    .spawn(job.run(admission, processes, admission_stop, cancel, events));
+                    .spawn(job.run(admission, processes, admission_stop, stop, events));
             self.identities.insert(handle.id(), identity);
+        }
+    }
+
+    fn stop_all(&self) {
+        for job in self.identities.values() {
+            job.stop.cancel();
         }
     }
 
@@ -151,14 +169,27 @@ impl Execution {
     }
 }
 
+struct JobOrder {
+    previous: Option<Arc<Self>>,
+    released: CancellationToken,
+}
+
+struct OrderSignal(CancellationToken);
+
+impl Drop for OrderSignal {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
 struct Job {
     call: FunctionCall,
     policy: ToolAccess,
     context: Arc<ExecutionContext>,
     catalog: Arc<ToolCatalog>,
     started: Arc<AtomicBool>,
-    previous: Option<oneshot::Receiver<()>>,
-    admitted: Option<oneshot::Sender<()>>,
+    previous: Option<Arc<JobOrder>>,
+    admitted: Option<OrderSignal>,
 }
 
 struct RunningJob<'a> {
@@ -183,9 +214,6 @@ impl Job {
         cancel: CancellationToken,
         events: mpsc::UnboundedSender<ToolEvent>,
     ) -> ToolResult {
-        if let Some(previous) = self.previous {
-            drop(previous.await);
-        }
         let skipped = || {
             if admission.is_blocked() {
                 ToolResult::not_executed("cleanup_failed", "工具资源清理未确认，此调用未执行")
@@ -196,6 +224,18 @@ impl Job {
                 )
             }
         };
+        let mut previous = self.previous.as_deref();
+        while let Some(order) = previous {
+            tokio::select! { biased;
+                _ = cancel.cancelled() => return skipped(),
+                _ = admission_stop.cancelled() => return skipped(),
+                _ = order.released.cancelled() => {}
+            }
+            previous = order.previous.as_deref();
+        }
+        if let Some(code) = admission.rejection(self.policy) {
+            return ToolResult::not_executed(code, "会话派发暂停，本次调用未执行");
+        }
         let permit = tokio::select! {
             biased;
             _ = cancel.cancelled() => None,
@@ -204,6 +244,9 @@ impl Job {
         let Some(permit) = permit else {
             return skipped();
         };
+        if let Some(code) = admission.rejection(self.policy) {
+            return ToolResult::not_executed(code, "会话派发暂停，本次调用未执行");
+        }
         let (begin, confirmation) = oneshot::channel();
         if events
             .send(ToolEvent::Ready {
@@ -221,6 +264,9 @@ impl Job {
             || (admission.is_blocked() && self.policy != ToolAccess::ProcessControl)
         {
             return skipped();
+        }
+        if let Some(code) = admission.rejection(self.policy) {
+            return ToolResult::not_executed(code, "会话派发暂停，本次调用未执行");
         }
         self.started.store(true, Ordering::Release);
         let mut running = RunningJob {
@@ -263,7 +309,6 @@ impl Job {
 pub(super) async fn run(
     mut incoming: mpsc::Receiver<ToolCommand>,
     events: mpsc::UnboundedSender<ToolEvent>,
-    cancel: CancellationToken,
     tools: SessionTools,
 ) -> RetainedResults {
     let mut execution = Execution {
@@ -272,7 +317,6 @@ pub(super) async fn run(
         identities: HashMap::new(),
         processes: tools.processes,
         admission: tools.admission,
-        cancel: cancel.child_token(),
         ordinary: None,
         controls: None,
     };
@@ -300,11 +344,11 @@ pub(super) async fn run(
                 }
                 Some(ToolCommand::Cleanup { reason, reply }) => {
                     cleanup = Some((reason, Some(reply)));
-                    execution.cancel.cancel();
+                    execution.stop_all();
                 }
                 None => {
                     cleanup = Some(("runner_closed", None));
-                    execution.cancel.cancel();
+                    execution.stop_all();
                 }
             },
         }

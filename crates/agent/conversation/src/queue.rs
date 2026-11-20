@@ -81,9 +81,13 @@ impl PreparedQueue {
                 session.view.queue = self.state.queue;
                 session.view.queue_paused = self.state.queue_paused
                     || session.view.execution_blocked
+                    || !session.view.task_policy.external_unconfirmed.is_empty()
                     || (session.view.queue_paused
                         && (!matches!(self.decision, QueueDecision::Resumed)
                             || self.pause_revision != pause_revision));
+                if matches!(self.decision, QueueDecision::Resumed) && !session.view.queue_paused {
+                    session.view.task_policy.background_paused = false;
+                }
                 conversation.next_turn = conversation.next_turn.max(self.next_turn);
                 QueueEvent {
                     id: self.id,
@@ -184,6 +188,9 @@ impl Conversation {
                 }
             }
             SessionCommand::Resume { .. } => {
+                if !view.task_policy.external_unconfirmed.is_empty() {
+                    return Err(ConversationFailure::new("须明确确认远端效果后才能继续队列"));
+                }
                 if view
                     .turn
                     .as_ref()
@@ -200,6 +207,8 @@ impl Conversation {
     pub fn start_queued(&mut self) -> Result<Option<(u64, SessionView)>, ConversationFailure> {
         let Some(session) = self.session.as_ref().filter(|session| {
             !session.view.queue_paused
+                && !session.view.task_policy.background_paused
+                && session.view.task_policy.external_unconfirmed.is_empty()
                 && !session.view.execution_blocked
                 && session
                     .history

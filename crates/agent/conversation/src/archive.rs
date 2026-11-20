@@ -16,6 +16,8 @@ pub struct StoredState {
     pub execution_blocked: bool,
     pub queue: Vec<crate::QueuedInput>,
     pub queue_paused: bool,
+    #[serde(default)]
+    pub task_policy: crate::TaskPolicy,
 }
 
 impl From<&SessionView> for StoredState {
@@ -33,6 +35,7 @@ impl From<&SessionView> for StoredState {
             execution_blocked: view.execution_blocked,
             queue: view.queue.clone(),
             queue_paused: view.queue_paused,
+            task_policy: view.task_policy.as_ref().clone(),
         }
     }
 }
@@ -102,6 +105,14 @@ pub enum RecordEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         acceptance: Option<ResponseAcceptance>,
     },
+    TaskPolicyChanged {
+        state: StoredState,
+        change: crate::TaskPolicyChange,
+    },
+    TaskCancellationRequested {
+        state: StoredState,
+        targets: Vec<crate::TaskCancellation>,
+    },
     ToolStarted {
         state: StoredState,
         call_id: String,
@@ -163,6 +174,8 @@ impl RecordEvent {
             | Self::Accepted { state }
             | Self::ContinuedWithoutCompaction { state, .. }
             | Self::Response { state, .. }
+            | Self::TaskPolicyChanged { state, .. }
+            | Self::TaskCancellationRequested { state, .. }
             | Self::ToolStarted { state, .. }
             | Self::ToolReturned { state, .. }
             | Self::ResultAppended { state, .. }

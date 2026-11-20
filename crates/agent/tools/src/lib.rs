@@ -29,6 +29,6 @@ pub use payload::{
 };
 pub use sessions::{CleanupReport, ProcessCleanup, ProcessSessions};
 pub use task_control::{
-    MAX_TASK_PAGE, TaskControl, TaskControlRequest, TaskList, TaskWait, WaitMode,
+    MAX_TASK_PAGE, TaskControl, TaskControlRequest, TaskList, TaskTargets, TaskWait, WaitMode,
 };
 mod admission;

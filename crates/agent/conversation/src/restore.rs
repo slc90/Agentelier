@@ -346,6 +346,7 @@ fn merge(state: &mut StoredState, mut incoming: StoredState) {
     // Runner snapshots may lag queue commits, which have their own replay path.
     incoming.queue = std::mem::take(&mut state.queue);
     incoming.queue_paused = state.queue_paused;
+    incoming.task_policy = std::mem::take(&mut state.task_policy);
     *state = incoming;
 }
 
@@ -375,6 +376,40 @@ fn merge_tool(state: &mut StoredState, mut incoming: StoredState, call_id: &str)
     }
 }
 
+fn recover_external_effects(
+    state: &mut StoredState,
+    tasks: &mut crate::tasks::TaskLedger,
+    recovered: &[RecoveredResult],
+    catalog: &[crate::StoredTool],
+) {
+    for result in recovered
+        .iter()
+        .filter(|result| result.evidence == RecoveryEvidence::Unconfirmed)
+    {
+        let tool = state
+            .turn
+            .iter_mut()
+            .map(Box::as_mut)
+            .chain(state.previous_turns.iter_mut())
+            .flat_map(|turn| &mut turn.tools)
+            .find(|tool| tool.retained && tool.call_id == result.call_id);
+        if let Some(tool) = tool
+            && catalog.iter().any(|definition| {
+                definition.name == tool.name
+                    && matches!(definition.source, agentelier_tools::ToolSource::Mcp { .. })
+            })
+        {
+            tool.status = ToolStatus::ExternalUnconfirmed;
+            state
+                .task_policy
+                .external_unconfirmed
+                .insert(result.call_id.clone());
+            tasks.recover_external_unconfirmed(&result.call_id);
+            state.queue_paused = true;
+        }
+    }
+}
+
 pub fn restore(
     initial: InitialSession,
     records: Vec<SessionRecord>,
@@ -395,6 +430,7 @@ pub fn restore(
         execution_blocked: false,
         queue: Vec::new(),
         queue_paused: false,
+        task_policy: Default::default(),
     };
     let mut publications = Vec::<Arc<agentelier_llm_model::ProjectPublication>>::new();
     let mut history = ProtocolArchive::default();
@@ -576,6 +612,9 @@ pub fn restore(
                 if pending.has_barrier() {
                     return Err(ConversationFailure::new("存档在未封闭响应之后开始另一任务"));
                 }
+                let mut incoming = incoming;
+                incoming.task_policy.external_unconfirmed =
+                    std::mem::take(&mut state.task_policy.external_unconfirmed);
                 state = incoming;
                 continued = None;
                 retained_input = false;
@@ -732,6 +771,15 @@ pub fn restore(
                 );
                 merge(&mut state, incoming);
             }
+            RecordEvent::TaskPolicyChanged { change, .. } => {
+                state.task_policy.apply(&change)?;
+                if matches!(change, crate::TaskPolicyChange::Pause) {
+                    state.queue_paused = true;
+                }
+            }
+            RecordEvent::TaskCancellationRequested { targets, .. } => {
+                tasks.request_cancel(&targets, record.sequence)?;
+            }
             RecordEvent::ToolStarted {
                 state: incoming,
                 call_id,
@@ -777,6 +825,7 @@ pub fn restore(
                         | ToolStatus::Cancelled
                         | ToolStatus::NotExecuted
                         | ToolStatus::Unconfirmed
+                        | ToolStatus::ExternalUnconfirmed
                 ) {
                     return Err(ConversationFailure::new("已保存的工具结果缺少终态"));
                 }
@@ -845,6 +894,10 @@ pub fn restore(
                     true,
                 )?;
                 merge_tool(&mut state, incoming, &call_id);
+                if status == ToolStatus::ExternalUnconfirmed {
+                    state.task_policy.external_unconfirmed.insert(call_id);
+                    state.queue_paused = true;
+                }
             }
             RecordEvent::ResultAppended {
                 state: incoming,
@@ -932,7 +985,12 @@ pub fn restore(
             } => {
                 state.queue = incoming.queue;
                 state.queue_paused = incoming.queue_paused
+                    || state.execution_blocked
+                    || !state.task_policy.external_unconfirmed.is_empty()
                     || (state.queue_paused && !matches!(decision, crate::QueueDecision::Resumed));
+                if matches!(decision, crate::QueueDecision::Resumed) && !state.queue_paused {
+                    state.task_policy.background_paused = false;
+                }
             }
             RecordEvent::Finalized {
                 state: incoming,
@@ -965,22 +1023,32 @@ pub fn restore(
                 notice,
                 results,
             } => {
-                match (recovered, results) {
+                let recovered = match (recovered, results) {
                     (None, Some(results)) => {
                         let expected = pending.recover(&mut history, &mut state, retained_input)?;
                         if expected != results {
                             return Err(ConversationFailure::new("恢复结果与已确认工具事实不一致"));
                         }
+                        expected
                     }
                     (Some(recovered), None) => {
-                        pending.recover(&mut history, &mut state, retained_input)?;
+                        let facts = pending.recover(&mut history, &mut state, retained_input)?;
                         history = recovered;
+                        facts
                     }
                     _ => return Err(ConversationFailure::new("恢复记录的历史材料无效")),
-                }
+                };
+                let mut incoming = incoming;
+                incoming.task_policy = state.task_policy;
                 state = incoming;
                 covered_sequence = record.sequence;
                 tasks.recover_interrupted();
+                recover_external_effects(
+                    &mut state,
+                    &mut tasks,
+                    &recovered,
+                    &initial.settings.tools,
+                );
                 tasks.restore_appended(history.result_ids());
                 tasks.confirm_recovery(record.sequence);
                 retained_input = state
@@ -995,6 +1063,12 @@ pub fn restore(
     }
     let mut normalized = !pending.0.is_empty();
     let recovered_results = pending.recover(&mut history, &mut state, retained_input)?;
+    recover_external_effects(
+        &mut state,
+        &mut tasks,
+        &recovered_results,
+        &initial.settings.tools,
+    );
     let missing_results = recovered_results
         .iter()
         .any(|result| !matches!(result.evidence, RecoveryEvidence::Saved { .. }));
@@ -1239,6 +1313,7 @@ impl Conversation {
             previous_turns: restored.state.previous_turns,
             committed_items: restored.state.committed_items,
             execution_blocked: restored.state.execution_blocked,
+            process_cleanup_unconfirmed: false,
             tool_catalog: settings
                 .tools
                 .into_iter()
@@ -1246,6 +1321,7 @@ impl Conversation {
                 .collect(),
             queue: restored.state.queue,
             queue_paused: restored.state.queue_paused,
+            task_policy: Box::new(restored.state.task_policy),
         };
         self.next_turn = restored.next_turn;
         self.session = Some(ChatSession {

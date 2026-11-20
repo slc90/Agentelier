@@ -63,6 +63,7 @@ impl ExecutionContext {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ToolStatus {
     Unconfirmed,
+    ExternalUnconfirmed,
     Receiving,
     Pending,
     Running,

@@ -20,6 +20,7 @@ pub(super) enum TaskRequest {
     Chat(
         mpsc::Sender<RunnerEvent>,
         mpsc::Receiver<SteerInput>,
+        mpsc::Receiver<agentelier_turn_runner::SessionTaskCommand>,
         std::path::PathBuf,
         Option<agentelier_memory::MemoryClient>,
         super::tool_jobs::SessionTools,
@@ -47,7 +48,14 @@ impl ModelTask {
                     result = agentelier_llm_model::execute(credentials, request) => Some(TaskResult::Model(result)),
                     _ = cancel.cancelled() => None,
                 },
-                TaskRequest::Chat(progress, steers, user_skills_root, memory, tools) => {
+                TaskRequest::Chat(
+                    progress,
+                    steers,
+                    task_actions,
+                    user_skills_root,
+                    memory,
+                    tools,
+                ) => {
                     let (dispatcher, commands, events, incoming) =
                         agentelier_turn_runner::ToolDispatcher::channel(tools.admission.clone());
                     let runner = tokio::spawn(agentelier_turn_runner::run(
@@ -59,11 +67,10 @@ impl ModelTask {
                         memory,
                         dispatcher,
                         incoming,
+                        task_actions,
                     ));
-                    let (outcome, retained) = tokio::join!(
-                        runner,
-                        super::tool_jobs::run(commands, events, cancel, tools)
-                    );
+                    let (outcome, retained) =
+                        tokio::join!(runner, super::tool_jobs::run(commands, events, tools));
                     let outcome = outcome.unwrap_or_else(|failure| {
                         Err(ConversationFailure::new(format!(
                             "聊天执行体异常结束：{failure}"
@@ -295,6 +302,19 @@ pub(super) async fn stop_model(
         }
         debug!(operation_id = task.id, "模型操作已真实结束并回收");
         let mut event = complete(conversation, task.id, task.chat, result)?;
+        let unconfirmed = match &event {
+            AgentEventKind::Conversation(ConversationEvent::Finished(view))
+                if view.execution_blocked =>
+            {
+                view.turn.as_ref().and_then(|turn| match &turn.status {
+                    agentelier_conversation::TurnStatus::Failed(reason) => {
+                        Some(ConversationFailure::new(reason.clone()))
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        };
         let mut storage_failure = None;
         if task.chat {
             let (state, history) = conversation.archive().ok_or(RuntimeFailure::ModelState)?;
@@ -326,6 +346,9 @@ pub(super) async fn stop_model(
         if let Some(failure) = storage_failure {
             return Err(failure);
         }
+        if let Some(failure) = unconfirmed {
+            return Err(failure.into());
+        }
     }
     Ok(())
 }
@@ -350,8 +373,8 @@ pub(super) fn start_queued(
     let Some((id, view)) = conversation.start_queued()? else {
         return Ok(());
     };
-    let (control, steers) = ModelControl::new(id);
-    let tools = super::tool_jobs::SessionTools::for_session(session_tools, view.id);
+    let (control, steers, task_actions) = ModelControl::new(id);
+    let tools = super::tool_jobs::SessionTools::for_session(session_tools, &view);
     let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
     control
         .turn
@@ -369,7 +392,14 @@ pub(super) fn start_queued(
         id,
         control,
         credentials.clone(),
-        TaskRequest::Chat(sender, steers, user_skills_root.to_owned(), memory, tools),
+        TaskRequest::Chat(
+            sender,
+            steers,
+            task_actions,
+            user_skills_root.to_owned(),
+            memory,
+            tools,
+        ),
     ));
     Ok(())
 }

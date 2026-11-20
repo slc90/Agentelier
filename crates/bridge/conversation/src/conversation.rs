@@ -633,6 +633,7 @@ fn tool_status(status: agentelier_conversation::ToolStatus) -> &'static str {
     use agentelier_conversation::ToolStatus;
     match status {
         ToolStatus::Unconfirmed => "unconfirmed",
+        ToolStatus::ExternalUnconfirmed => "external_unconfirmed",
         ToolStatus::Receiving => "receiving",
         ToolStatus::Pending => "pending",
         ToolStatus::Running => "running",
