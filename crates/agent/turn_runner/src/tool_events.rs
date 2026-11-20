@@ -133,6 +133,7 @@ impl TurnTools {
                 call,
                 admission,
                 stop,
+                execution,
             });
         }
         if !jobs.is_empty() {
@@ -150,7 +151,7 @@ impl TurnTools {
                 && !steered
                 && start_call(active, id.clone(), None, true).await?;
             let result = if started {
-                match task_control::control(active, control, &call.arguments).await? {
+                match task_control::control(active, dispatcher, control, &call.arguments).await? {
                     TaskControlAction::Return(result) => result,
                     TaskControlAction::Cancel(targets) => {
                         match self.cancel_tasks(active, dispatcher, targets, true).await? {

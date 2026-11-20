@@ -135,6 +135,7 @@ pub async fn execute(
     arguments: &str,
     cancel: &CancellationToken,
     permit: crate::ToolPermit,
+    origin: crate::ProcessOrigin,
 ) -> ToolResult {
     if cancel.is_cancelled() {
         return ToolResult::not_executed("stopped", "任务已停止，工具未执行");
@@ -149,7 +150,7 @@ pub async fn execute(
     let Some(tool) = catalog.find(name) else {
         return ToolResult::error(ToolStatus::Failed, "unknown_tool", "未登记的工具名称");
     };
-    tool.execute(context, processes, arguments, cancel, permit)
+    tool.execute(context, processes, arguments, cancel, permit, origin)
         .await
 }
 

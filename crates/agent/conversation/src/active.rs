@@ -203,7 +203,9 @@ impl ActiveTurn<'_> {
     }
 
     pub fn validate_record(&self, event: &crate::RecordEvent) -> Result<(), ConversationFailure> {
-        let state = event.state();
+        let state = event
+            .state()
+            .ok_or_else(|| ConversationFailure::new("会话记录缺少任务快照"))?;
         let (stored, live) = state
             .turn
             .as_ref()

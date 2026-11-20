@@ -151,6 +151,7 @@ impl Task {
             },
             blocked_by: (self.status == ToolStatus::Pending).then_some("admission"),
             cancelling: self.cancellation_requested && self.in_progress(),
+            process: None,
         }
     }
 
@@ -202,6 +203,8 @@ pub struct TaskReport {
     pub delivery: TaskDelivery,
     pub blocked_by: Option<&'static str>,
     pub cancelling: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub process: Option<agentelier_tools::ProcessView>,
 }
 
 impl TaskReport {
@@ -214,6 +217,10 @@ impl TaskReport {
 pub struct TaskPage {
     pub tasks: Vec<TaskReport>,
     pub next_history_offset: Option<usize>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub processes: Vec<agentelier_tools::ProcessView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_by_process: Option<String>,
 }
 
 pub struct SessionTasks {
@@ -682,6 +689,8 @@ impl TaskLedger {
         TaskPage {
             tasks,
             next_history_offset: (next < history.len()).then_some(next),
+            processes: Vec::new(),
+            blocked_by_process: None,
         }
     }
 

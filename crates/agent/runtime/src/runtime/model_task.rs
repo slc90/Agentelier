@@ -57,7 +57,10 @@ impl ModelTask {
                     tools,
                 ) => {
                     let (dispatcher, commands, events, incoming) =
-                        agentelier_turn_runner::ToolDispatcher::channel(tools.admission.clone());
+                        agentelier_turn_runner::ToolDispatcher::channel(
+                            tools.admission.clone(),
+                            tools.process_views.clone(),
+                        );
                     let runner = tokio::spawn(agentelier_turn_runner::run(
                         credentials,
                         cancel.clone(),
@@ -105,7 +108,7 @@ pub(super) fn progress(
         }
         RunnerEvent::Record(record) => {
             let agentelier_turn_runner::TurnRecord { event, reply } = *record;
-            let session = event.state().session;
+            let session = event.session();
             if let Err(failure) = conversation
                 .active_turn(id)
                 .and_then(|turn| turn.validate_record(&event))
@@ -366,6 +369,7 @@ pub(super) fn start_queued(
         agentelier_conversation::SessionId,
         super::tool_jobs::SessionTools,
     )>,
+    store: &agentelier_session_store::SessionStore,
 ) -> Result<(), RuntimeFailure> {
     if model.is_some() {
         return Ok(());
@@ -374,7 +378,12 @@ pub(super) fn start_queued(
         return Ok(());
     };
     let (control, steers, task_actions) = ModelControl::new(id);
-    let tools = super::tool_jobs::SessionTools::for_session(session_tools, &view);
+    let tools = super::tool_jobs::SessionTools::for_session(
+        session_tools,
+        &view,
+        conversation,
+        store.client(),
+    );
     let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
     control
         .turn

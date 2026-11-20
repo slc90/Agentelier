@@ -169,6 +169,7 @@ impl fmt::Display for ConversationFailure {
 impl Error for ConversationFailure {}
 
 pub(crate) struct ChatSession {
+    pub(crate) processes: crate::ProcessLedger,
     pub(crate) memory: Option<Arc<agentelier_llm_model::MemorySnapshot>>,
     pub(crate) view: SessionView,
     pub(crate) history: Option<ProtocolHistory>,
@@ -192,6 +193,13 @@ pub struct Conversation {
 }
 
 impl Conversation {
+    pub fn restored_processes(&self) -> crate::ProcessLedger {
+        self.session
+            .as_ref()
+            .map_or_else(crate::ProcessLedger::default, |session| {
+                session.processes.clone()
+            })
+    }
     pub fn with_extensions(extensions: Vec<ToolRegistration>) -> Self {
         Self {
             extensions: extensions.into(),
@@ -369,6 +377,7 @@ impl Conversation {
         Ok(PreparedSession {
             initial,
             session: ChatSession {
+                processes: Default::default(),
                 memory: memory.map(Arc::new),
                 view: session,
                 history: Some(ProtocolHistory::default()),

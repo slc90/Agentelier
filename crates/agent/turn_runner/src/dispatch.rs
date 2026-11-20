@@ -15,6 +15,7 @@ pub struct ToolJobRequest {
     pub call: FunctionCall,
     pub admission: CancellationToken,
     pub stop: CancellationToken,
+    pub execution: Option<agentelier_conversation::TaskExecution>,
 }
 
 pub enum ToolEvent {
@@ -63,11 +64,13 @@ pub struct SessionTaskCommand {
 pub struct ToolDispatcher {
     sender: mpsc::Sender<ToolCommand>,
     admission: ToolAdmission,
+    processes: tokio::sync::watch::Receiver<agentelier_conversation::ProcessLedger>,
 }
 
 impl ToolDispatcher {
     pub fn channel(
         admission: ToolAdmission,
+        processes: tokio::sync::watch::Receiver<agentelier_conversation::ProcessLedger>,
     ) -> (
         Self,
         mpsc::Receiver<ToolCommand>,
@@ -76,7 +79,25 @@ impl ToolDispatcher {
     ) {
         let (sender, receiver) = mpsc::channel(1);
         let (events, incoming) = mpsc::unbounded_channel();
-        (Self { sender, admission }, receiver, events, incoming)
+        (
+            Self {
+                sender,
+                admission,
+                processes,
+            },
+            receiver,
+            events,
+            incoming,
+        )
+    }
+
+    pub(crate) fn processes(&self) -> Vec<agentelier_tools::ProcessView> {
+        self.processes
+            .borrow()
+            .views()
+            .filter(|process| process.phase != agentelier_tools::ProcessPhase::Consumed)
+            .cloned()
+            .collect()
     }
 
     pub(crate) fn task_policy(&self, policy: agentelier_conversation::TaskPolicy) {

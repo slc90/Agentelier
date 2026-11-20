@@ -257,7 +257,7 @@ impl SessionStore {
                             if reply.send(result).is_err() { debug!("会话读取已结束，等待者已离开"); }
                         }
                         Command::Append(event, reply) => {
-                            let session = event.state().session;
+                            let session = event.session();
                             let result = writer.append(&root, *event);
                             match &result {
                                 Err(failure) => error!(session_id = %session, error = %failure, "会话记录追加失败"),

@@ -23,12 +23,11 @@ struct Cursor {
 pub(super) struct Writer(HashMap<SessionId, Cursor>);
 
 fn update(cursor: &mut Cursor, record: &SessionRecord) {
-    let state = record.event.state();
     let input = match &record.event {
-        RecordEvent::Accepted { .. } => state.turn.as_ref().map(|turn| turn.input.as_str()),
+        RecordEvent::Accepted { state } => state.turn.as_ref().map(|turn| turn.input.as_str()),
         RecordEvent::QueueChanged {
             decision: agentelier_conversation::QueueDecision::Enqueued,
-            ..
+            state,
         } => state.queue.last().map(|input| input.text.as_str()),
         _ => None,
     };
@@ -92,7 +91,7 @@ impl Writer {
     }
 
     pub(super) fn append(&mut self, root: &Path, event: RecordEvent) -> io::Result<Commit> {
-        let session = event.state().session;
+        let session = event.session();
         let at_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(io::Error::other)?

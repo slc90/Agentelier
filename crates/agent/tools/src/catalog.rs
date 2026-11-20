@@ -189,6 +189,7 @@ impl ToolRegistration {
         arguments: &'a str,
         cancel: &'a CancellationToken,
         mut permit: ToolPermit,
+        origin: crate::ProcessOrigin,
     ) -> ToolExecution<'a> {
         match &self.executor {
             Executor::Shell => Box::pin(async move {
@@ -200,7 +201,13 @@ impl ToolRegistration {
                     );
                 };
                 let result = processes
-                    .exec(context.working_directory(), arguments, cancel, lease)
+                    .exec(
+                        context.working_directory(),
+                        arguments,
+                        cancel,
+                        lease,
+                        origin,
+                    )
                     .await;
                 drop(permit);
                 result

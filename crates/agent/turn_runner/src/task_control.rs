@@ -16,6 +16,7 @@ pub(super) enum TaskControlAction {
 
 pub(super) async fn control(
     active: &TurnAccess,
+    dispatcher: &crate::ToolDispatcher,
     kind: TaskControl,
     arguments: &str,
 ) -> Result<TaskControlAction, ConversationFailure> {
@@ -29,10 +30,16 @@ pub(super) async fn control(
             )));
         }
     };
+    let processes = if matches!(request, TaskControlRequest::List(_)) {
+        dispatcher.processes()
+    } else {
+        Vec::new()
+    };
     active
         .call(move |turn| match request {
             TaskControlRequest::List(list) => {
-                let page = match list.task_ids {
+                let explicit = list.task_ids.is_some();
+                let mut page = match list.task_ids {
                     Some(ids) => {
                         let Some(tasks) = turn.task_reports(&ids) else {
                             return Ok(TaskControlAction::Return(unknown_tasks()));
@@ -40,10 +47,51 @@ pub(super) async fn control(
                         TaskPage {
                             tasks,
                             next_history_offset: None,
+                            processes: Vec::new(),
+                            blocked_by_process: None,
                         }
                     }
                     None => turn.task_page(list.history_offset),
                 };
+                let blocker = processes.iter().find(|process| {
+                    matches!(
+                        process.phase,
+                        agentelier_tools::ProcessPhase::Running
+                            | agentelier_tools::ProcessPhase::CleanupUnconfirmed
+                    )
+                });
+                page.blocked_by_process = blocker.map(|process| process.session_id.clone());
+                for report in &mut page.tasks {
+                    report.process = processes
+                        .iter()
+                        .find(|process| process.origin.task_id == Some(report.task_id.0))
+                        .cloned();
+                }
+                if !explicit {
+                    let mut resources: Vec<_> = processes
+                        .into_iter()
+                        .filter(|process| {
+                            !page.tasks.iter().any(|report| {
+                                report.process.as_ref().is_some_and(|included| {
+                                    included.session_id == process.session_id
+                                })
+                            })
+                        })
+                        .collect();
+                    resources.sort_by_key(|process| {
+                        (
+                            !(process.readable
+                                || process.phase == agentelier_tools::ProcessPhase::Running),
+                            std::cmp::Reverse(process.origin.turn),
+                            std::cmp::Reverse(process.origin.request),
+                        )
+                    });
+                    page.processes.extend(
+                        resources
+                            .into_iter()
+                            .take(agentelier_tools::MAX_PROCESS_SESSIONS),
+                    );
+                }
                 Ok(TaskControlAction::Return(success(page)?))
             }
             TaskControlRequest::Cancel(targets) => Ok(TaskControlAction::Cancel(targets)),

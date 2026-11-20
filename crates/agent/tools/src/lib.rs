@@ -27,7 +27,13 @@ pub use execution::{ExecutionContext, ToolUserTurn};
 pub use payload::{
     ImageDescriptor, ImagePayload, MAX_ENCODED_IMAGE_BYTES, MAX_SESSION_IMAGE_BYTES, ToolPayload,
 };
-pub use sessions::{CleanupReport, ProcessCleanup, ProcessSessions};
+mod process_facts;
+pub use process_facts::{
+    ProcessChange, ProcessFact, ProcessOrigin, ProcessPhase, ProcessView, SaveProcessFact,
+};
+pub use sessions::{
+    CleanupReport, MAX_PROCESS_SESSIONS, ProcessCleanup, ProcessScope, ProcessSessions,
+};
 pub use task_control::{
     MAX_TASK_PAGE, TaskControl, TaskControlRequest, TaskList, TaskTargets, TaskWait, WaitMode,
 };

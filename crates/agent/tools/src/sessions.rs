@@ -1,6 +1,6 @@
-use crate::ToolAdmission;
 use crate::execution::{ToolFailure, ToolResult, ToolStatus};
 use crate::process::{PROCESS_POLL, Process, arguments};
+use crate::{ProcessChange, ProcessFact, ProcessOrigin, SaveProcessFact, ToolAdmission};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -12,7 +12,7 @@ use tokio::sync::{Mutex, OwnedRwLockWriteGuard};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-const MAX_PROCESS_SESSIONS: usize = 8;
+pub const MAX_PROCESS_SESSIONS: usize = 8;
 const DEFAULT_YIELD_MS: u64 = 10_000;
 const MAX_YIELD_MS: u64 = 30_000;
 
@@ -29,17 +29,25 @@ pub struct CleanupReport {
 pub struct ProcessSessions {
     registry: Mutex<ProcessRegistry>,
     admission: ToolAdmission,
+    save: SaveProcessFact,
+}
+
+#[derive(Clone, Copy)]
+pub enum ProcessScope {
+    Turn(u64),
+    All,
 }
 
 #[derive(Default)]
 struct ProcessRegistry {
     processes: BTreeMap<String, Arc<ProcessEntry>>,
-    watchers: Vec<JoinHandle<()>>,
+    watchers: BTreeMap<String, JoinHandle<()>>,
 }
 
 struct ProcessEntry {
     state: Mutex<ProcessState>,
     terminate: CancellationToken,
+    origin: ProcessOrigin,
 }
 
 enum ProcessState {
@@ -48,6 +56,11 @@ enum ProcessState {
         _lease: OwnedRwLockWriteGuard<()>,
     },
     Exited(ToolResult),
+    Unconfirmed {
+        _result: ToolResult,
+        _process: Option<Box<Process>>,
+        _lease: OwnedRwLockWriteGuard<()>,
+    },
     Consumed,
 }
 
@@ -91,10 +104,11 @@ fn failure(error: ToolFailure) -> ToolResult {
 }
 
 impl ProcessSessions {
-    pub fn new(admission: ToolAdmission) -> Self {
+    pub fn new(admission: ToolAdmission, save: SaveProcessFact) -> Self {
         Self {
             registry: Mutex::default(),
             admission,
+            save,
         }
     }
 
@@ -104,6 +118,7 @@ impl ProcessSessions {
         text: &str,
         cancel: &CancellationToken,
         lease: OwnedRwLockWriteGuard<()>,
+        origin: ProcessOrigin,
     ) -> ToolResult {
         let input: ExecArguments = match arguments(text, &["cmd", "workdir", "yield_time_ms"]) {
             Ok(value) => value,
@@ -120,7 +135,7 @@ impl ProcessSessions {
             return ToolResult::error(
                 ToolStatus::Failed,
                 "session_limit",
-                "任务最多持有 8 个未回收进程会话，请先结束已有会话",
+                "会话最多持有 8 个存活或未读取退出结果的进程，请先读取或收起退出结果",
             );
         }
         let mut process = match Process::start(&input.cmd, input.workdir, directory, cancel).await {
@@ -135,6 +150,7 @@ impl ProcessSessions {
             PollInput {
                 wait,
                 terminate: false,
+                kill_on_cancel: true,
                 error: None,
                 evidence: json!({"written_bytes":0,"write_complete":true,"close_stdin":false,"terminate":false}),
             },
@@ -152,14 +168,72 @@ impl ProcessSessions {
                     _lease: lease,
                 }),
                 terminate: CancellationToken::new(),
+                origin,
             });
+            if let Err(error) = save(&self.save, &entry, &id, ProcessChange::Started).await {
+                let mut locked = entry.state.lock().await;
+                let _cleanup = reap_entry(
+                    &entry,
+                    &id,
+                    &mut locked,
+                    &self.save,
+                    &self.admission,
+                    "registration_failed",
+                )
+                .await;
+                return storage_failure(error);
+            }
             let mut registry = self.registry.lock().await;
             registry.processes.insert(id.clone(), entry.clone());
-            registry.watchers.push(tokio::spawn(watch_exit(
-                Arc::downgrade(&entry),
-                id,
-                self.admission.clone(),
-            )));
+            if cancel.is_cancelled() {
+                drop(registry);
+                let mut locked = entry.state.lock().await;
+                let ProcessState::Running { process, .. } = &mut *locked else {
+                    self.admission.block();
+                    return ToolResult::error(
+                        ToolStatus::Unconfirmed,
+                        "process_identity",
+                        "取消时创建进程的状态已变化",
+                    );
+                };
+                let cancelled = complete(
+                    process,
+                    &id,
+                    true,
+                    ToolStatus::Cancelled,
+                    Some("创建任务已取消，关联进程组已请求终止".into()),
+                    json!({"terminate":true,"reason":"launch_cancelled"}),
+                )
+                .await;
+                if let Err(error) = finish(
+                    &entry,
+                    &id,
+                    &mut locked,
+                    &self.save,
+                    &self.admission,
+                    cancelled.clone(),
+                )
+                .await
+                {
+                    return storage_failure(error);
+                }
+                if !cancelled.cleanup_failed
+                    && let Err(error) = self.consume(&entry, &id, &mut locked).await
+                {
+                    return storage_failure(error);
+                }
+                return cancelled;
+            }
+            registry.watchers.retain(|_, handle| !handle.is_finished());
+            registry.watchers.insert(
+                id.clone(),
+                tokio::spawn(watch_exit(
+                    Arc::downgrade(&entry),
+                    id,
+                    self.admission.clone(),
+                    self.save.clone(),
+                )),
+            );
         }
         result
     }
@@ -202,7 +276,14 @@ impl ProcessSessions {
         if input.terminate {
             entry.terminate.cancel();
         }
-        let mut locked = entry.state.lock().await;
+        let mut locked = if input.terminate {
+            entry.state.lock().await
+        } else {
+            tokio::select! { biased;
+                _ = cancel.cancelled() => return ToolResult::not_executed("stopped", "控制已取消，未读取或写入进程"),
+                locked = entry.state.lock() => locked,
+            }
+        };
         let process = match &mut *locked {
             ProcessState::Running { process, .. } => process,
             ProcessState::Exited(result) => {
@@ -214,13 +295,17 @@ impl ProcessSessions {
                     );
                 }
                 let result = result.clone();
-                *locked = ProcessState::Consumed;
-                self.registry
-                    .lock()
-                    .await
-                    .processes
-                    .remove(&input.session_id);
-                return result;
+                return match self.consume(&entry, &input.session_id, &mut locked).await {
+                    Ok(()) => result,
+                    Err(error) => storage_failure(error),
+                };
+            }
+            ProcessState::Unconfirmed { .. } => {
+                return ToolResult::error(
+                    ToolStatus::Failed,
+                    "process_unconfirmed",
+                    "退出或保存未确认，进程结果暂不可读取",
+                );
             }
             ProcessState::Consumed => return unknown(),
         };
@@ -264,16 +349,16 @@ impl ProcessSessions {
         let state = json!({"written_bytes":written,"write_complete":written == input.chars.len(),"close_stdin":input.close_stdin && write_error.is_none(),"terminate":input.terminate});
         let (result, completed) = if write_cancelled {
             (
-                complete(
-                    process,
-                    &input.session_id,
-                    true,
+                process.result(
                     ToolStatus::Cancelled,
+                    None,
                     write_error,
+                    false,
+                    &input.session_id,
                     state,
-                )
-                .await,
-                true,
+                    false,
+                ),
+                false,
             )
         } else {
             poll(
@@ -282,6 +367,7 @@ impl ProcessSessions {
                 PollInput {
                     wait,
                     terminate: input.terminate,
+                    kill_on_cancel: false,
                     error: write_error,
                     evidence: state,
                 },
@@ -290,57 +376,129 @@ impl ProcessSessions {
             )
             .await
         };
-        if result.cleanup_failed {
-            self.admission.block();
-        }
         if completed {
-            *locked = ProcessState::Consumed;
-            self.registry
-                .lock()
-                .await
-                .processes
-                .remove(&input.session_id);
+            if let Err(error) = finish(
+                &entry,
+                &input.session_id,
+                &mut locked,
+                &self.save,
+                &self.admission,
+                result.clone(),
+            )
+            .await
+            {
+                return storage_failure(error);
+            }
+            if !result.cleanup_failed
+                && let Err(error) = self.consume(&entry, &input.session_id, &mut locked).await
+            {
+                return storage_failure(error);
+            }
         }
         result
     }
 
-    pub async fn cleanup(&self, reason: &str) -> CleanupReport {
+    async fn consume(
+        &self,
+        entry: &ProcessEntry,
+        id: &str,
+        state: &mut ProcessState,
+    ) -> std::io::Result<()> {
+        if let Err(error) = save(&self.save, entry, id, ProcessChange::Consumed).await {
+            self.admission.block();
+            return Err(error);
+        }
+        *state = ProcessState::Consumed;
+        self.registry.lock().await.processes.remove(id);
+        Ok(())
+    }
+
+    pub async fn terminate(&self, id: &str) -> Result<(), String> {
+        let entry = self
+            .registry
+            .lock()
+            .await
+            .processes
+            .get(id)
+            .cloned()
+            .ok_or_else(|| "进程不属于当前会话或已经移除".to_owned())?;
+        entry.terminate.cancel();
+        let mut state = entry.state.lock().await;
+        match reap_entry(
+            &entry,
+            id,
+            &mut state,
+            &self.save,
+            &self.admission,
+            "user_terminate",
+        )
+        .await
+        {
+            Some(report) if report.cleanup_confirmed => Ok(()),
+            None if matches!(*state, ProcessState::Exited(_)) => Ok(()),
+            _ => Err("进程终止回收或保存未确认".into()),
+        }
+    }
+
+    pub async fn discard(&self, id: &str) -> Result<(), String> {
+        let entry = self
+            .registry
+            .lock()
+            .await
+            .processes
+            .get(id)
+            .cloned()
+            .ok_or_else(|| "进程不属于当前会话或已经移除".to_owned())?;
+        let mut state = entry.state.lock().await;
+        if !matches!(*state, ProcessState::Exited(_)) {
+            return Err("仅可收起已确认退出的进程结果".into());
+        }
+        self.consume(&entry, id, &mut state)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn cleanup(&self, reason: &str, scope: ProcessScope) -> CleanupReport {
         let mut report = CleanupReport {
             processes: Vec::new(),
             failed: false,
         };
-        let ProcessRegistry {
-            processes,
-            watchers,
-        } = std::mem::take(&mut *self.registry.lock().await);
-        for (id, entry) in processes {
+        let processes: Vec<_> = self
+            .registry
+            .lock()
+            .await
+            .processes
+            .iter()
+            .filter(|(_, entry)| match scope {
+                ProcessScope::All => true,
+                ProcessScope::Turn(turn) => entry.origin.turn == turn,
+            })
+            .map(|(id, entry)| (id.clone(), entry.clone()))
+            .collect();
+        for (_, entry) in &processes {
             entry.terminate.cancel();
-            let mut locked = entry.state.lock().await;
-            let result = match &mut *locked {
-                ProcessState::Running { process, .. } => {
-                    complete(
-                        process,
-                        &id,
-                        true,
-                        ToolStatus::Succeeded,
-                        None,
-                        json!({"automatic_cleanup":true,"reason":reason}),
-                    )
-                    .await
-                }
-                ProcessState::Exited(result) => result.clone(),
-                ProcessState::Consumed => continue,
-            };
-            report.failed |= result.cleanup_failed;
-            report.processes.push(ProcessCleanup {
-                session_id: id,
-                cleanup_confirmed: !result.cleanup_failed,
-                output: result.output.summary().to_owned(),
-            });
-            *locked = ProcessState::Consumed;
         }
-        for watcher in watchers {
-            if let Err(failure) = watcher.await {
+        for (id, entry) in processes {
+            let mut locked = entry.state.lock().await;
+            if let Some(cleanup) = reap_entry(
+                &entry,
+                &id,
+                &mut locked,
+                &self.save,
+                &self.admission,
+                reason,
+            )
+            .await
+            {
+                report.failed |= !cleanup.cleanup_confirmed;
+                report.processes.push(cleanup);
+            }
+            report.failed |= matches!(*locked, ProcessState::Unconfirmed { .. });
+            drop(locked);
+            let watcher = self.registry.lock().await.watchers.remove(&id);
+            if let Some(watcher) = watcher
+                && let Err(failure) = watcher.await
+            {
                 report.failed = true;
                 tracing::error!(%failure, "进程回收观察者异常结束");
             }
@@ -349,15 +507,101 @@ impl ProcessSessions {
     }
 }
 
+async fn save(
+    save: &SaveProcessFact,
+    entry: &ProcessEntry,
+    id: &str,
+    change: ProcessChange,
+) -> std::io::Result<()> {
+    save(ProcessFact {
+        session_id: id.to_owned(),
+        origin: entry.origin.clone(),
+        change,
+    })
+    .await
+}
+
+fn storage_failure(error: std::io::Error) -> ToolResult {
+    let mut result = ToolResult::error(
+        ToolStatus::Unconfirmed,
+        "process_storage",
+        &format!("进程事实保存未确认：{error}"),
+    );
+    result.cleanup_failed = true;
+    result
+}
+
+async fn finish(
+    entry: &ProcessEntry,
+    id: &str,
+    state: &mut ProcessState,
+    journal: &SaveProcessFact,
+    admission: &ToolAdmission,
+    result: ToolResult,
+) -> std::io::Result<()> {
+    let saved = save(journal, entry, id, ProcessChange::exited(&result)).await;
+    if saved.is_ok() && !result.cleanup_failed {
+        *state = ProcessState::Exited(result);
+    } else {
+        admission.block();
+        if let ProcessState::Running { process, _lease } =
+            std::mem::replace(state, ProcessState::Consumed)
+        {
+            *state = ProcessState::Unconfirmed {
+                _process: result.cleanup_failed.then_some(process),
+                _lease,
+                _result: result,
+            };
+        }
+    }
+    saved
+}
+
+async fn reap_entry(
+    entry: &ProcessEntry,
+    id: &str,
+    state: &mut ProcessState,
+    journal: &SaveProcessFact,
+    admission: &ToolAdmission,
+    reason: &str,
+) -> Option<ProcessCleanup> {
+    let ProcessState::Running { process, .. } = state else {
+        return None;
+    };
+    let result = complete(
+        process,
+        id,
+        true,
+        ToolStatus::Succeeded,
+        None,
+        json!({"automatic_cleanup":true,"reason":reason}),
+    )
+    .await;
+    let saved = finish(entry, id, state, journal, admission, result.clone()).await;
+    if let Err(error) = &saved {
+        tracing::error!(session_id = id, %error, "进程退出事实保存失败");
+    }
+    Some(ProcessCleanup {
+        session_id: id.to_owned(),
+        cleanup_confirmed: !result.cleanup_failed && saved.is_ok(),
+        output: result.output.summary().to_owned(),
+    })
+}
+
 fn unknown() -> ToolResult {
     ToolResult::error(
         ToolStatus::Failed,
         "unknown_session",
-        "进程会话不属于当前任务、已回收或不存在，命令未重放",
+        "进程会话不属于当前会话、已消费或不存在，命令未重放",
     )
 }
 
-async fn watch_exit(entry: Weak<ProcessEntry>, id: String, admission: ToolAdmission) {
+async fn watch_exit(
+    entry: Weak<ProcessEntry>,
+    id: String,
+    admission: ToolAdmission,
+    journal: SaveProcessFact,
+) {
     loop {
         tokio::time::sleep(PROCESS_POLL).await;
         let Some(entry) = entry.upgrade() else {
@@ -384,10 +628,9 @@ async fn watch_exit(entry: Weak<ProcessEntry>, id: String, admission: ToolAdmiss
             json!({"process_exit_observed":true}),
         )
         .await;
-        if result.cleanup_failed {
-            admission.block();
+        if let Err(error) = finish(&entry, &id, &mut locked, &journal, &admission, result).await {
+            tracing::error!(session_id = id, %error, "进程退出事实保存失败");
         }
-        *locked = ProcessState::Exited(result);
         return;
     }
 }
@@ -395,6 +638,7 @@ async fn watch_exit(entry: Weak<ProcessEntry>, id: String, admission: ToolAdmiss
 struct PollInput {
     wait: Duration,
     terminate: bool,
+    kill_on_cancel: bool,
     error: Option<String>,
     evidence: Value,
 }
@@ -409,6 +653,7 @@ async fn poll(
     let PollInput {
         wait,
         terminate,
+        kill_on_cancel,
         mut error,
         evidence,
     } = input;
@@ -428,7 +673,10 @@ async fn poll(
             result = tokio::time::timeout(wait, process.wait_empty()) => result,
             _ = cancel.cancelled() => {
                 status = ToolStatus::Cancelled;
-                completed = true;
+                if !kill_on_cancel {
+                    return (process.result(status, None, error.or_else(|| Some("本次轮询已取消，进程继续运行".into())),
+                        false, id, evidence, false), false);
+                }
                 error = Some(format!("{}；任务停止，关联进程组已请求终止",error.unwrap_or_default()));
                 Ok(Ok(()))
             },

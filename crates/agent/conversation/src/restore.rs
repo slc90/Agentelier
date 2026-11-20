@@ -19,6 +19,7 @@ pub struct RestoredSession {
     initial: InitialSession,
     history: ProtocolHistory,
     tasks: crate::tasks::TaskLedger,
+    pub processes: crate::ProcessLedger,
     publications: Vec<Arc<agentelier_llm_model::ProjectPublication>>,
     next_turn: u64,
     notice: Option<String>,
@@ -450,13 +451,36 @@ pub fn restore(
     let mut next_turn = 0;
     let mut notices = Vec::new();
     let mut historical_processes = BTreeMap::new();
+    let mut processes = crate::ProcessLedger::default();
     for record in records {
-        if record.session != initial.session || record.event.state().session != initial.session {
+        if record.session != initial.session || record.event.session() != initial.session {
             return Err(ConversationFailure::new("存档事件属于另一会话"));
         }
-        next_turn = next_turn.max(maximum(record.event.state()));
+        if let Some(snapshot) = record.event.state() {
+            next_turn = next_turn.max(maximum(snapshot));
+        }
         let prepared = matches!(&record.event, RecordEvent::RequestPrepared { .. });
         match record.event {
+            RecordEvent::Process { fact } => {
+                if matches!(fact.change, agentelier_tools::ProcessChange::Started)
+                    && !state
+                        .turn
+                        .iter()
+                        .map(Box::as_ref)
+                        .chain(&state.previous_turns)
+                        .any(|turn| {
+                            turn.id.0 == fact.origin.turn
+                                && turn.tools.iter().any(|tool| {
+                                    tool.retained
+                                        && tool.call_id == fact.origin.call_id
+                                        && tool.name == "exec_command"
+                                })
+                        })
+                {
+                    return Err(ConversationFailure::new("进程登记缺少已保存的创建调用"));
+                }
+                processes.apply(&fact)?;
+            }
             RecordEvent::ProjectPublished {
                 state: incoming,
                 publication,
@@ -1023,6 +1047,7 @@ pub fn restore(
                 notice,
                 results,
             } => {
+                processes.historical();
                 let recovered = match (recovered, results) {
                     (None, Some(results)) => {
                         let expected = pending.recover(&mut history, &mut state, retained_input)?;
@@ -1061,7 +1086,7 @@ pub fn restore(
             }
         }
     }
-    let mut normalized = !pending.0.is_empty();
+    let mut normalized = !pending.0.is_empty() || processes.has_active();
     let recovered_results = pending.recover(&mut history, &mut state, retained_input)?;
     recover_external_effects(
         &mut state,
@@ -1122,6 +1147,9 @@ pub fn restore(
         }
     }
     state.queue_paused |= !state.queue.is_empty();
+    for process in processes.views() {
+        historical_processes.remove(&process.session_id);
+    }
     for (id, origin) in historical_processes {
         let mut turns = state
             .turn
@@ -1215,11 +1243,13 @@ pub fn restore(
         &initial.settings.tools,
     )?;
     tasks.recover_interrupted();
+    processes.historical();
     Ok(RestoredSession {
         state,
         initial,
         history,
         tasks,
+        processes,
         publications,
         next_turn,
         notice: (!notices.is_empty()).then(|| notices.join("\n")),
@@ -1325,6 +1355,7 @@ impl Conversation {
         };
         self.next_turn = restored.next_turn;
         self.session = Some(ChatSession {
+            processes: restored.processes,
             memory: settings.memory.map(Arc::new),
             view: view.clone(),
             history: Some(restored.history),

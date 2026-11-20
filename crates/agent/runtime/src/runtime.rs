@@ -467,7 +467,7 @@ impl AgentRuntime {
                                         match applied.kind { recording::AppliedKind::Suspended => suspending = suspending.checked_sub(1).ok_or(RuntimeFailure::ModelState)?, recording::AppliedKind::Queue => pending_queue = false, recording::AppliedKind::Finished => finalizing = false }
                                         if applied.failed && let Some(control) = owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.as_ref() { control.cancel.cancel(); }
                                         if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && !pending_queue && !finalizing && !runtime_shutdown.is_cancelled() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools)?;
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store)?;
                                         }
                                     }
                                     Command::Created(result) => {
@@ -511,7 +511,7 @@ impl AgentRuntime {
                                             capture_delivery(emit(&publish, task.id, event), &mut delivery_failure);
                                         }
                                         if !finalizing && !pending_queue && suspending == 0 && delivery_failure.is_none() && !runtime_shutdown.is_cancelled() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools)?;
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store)?;
                                         }
                                     }
                                     Command::Session(command) => {
@@ -578,6 +578,11 @@ impl AgentRuntime {
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
                                             continue;
                                         }
+                                        if replacing && session_tools.as_ref().is_some_and(|(_, tools)| tools.process_views.borrow().has_active()) {
+                                            control.finished.cancel();
+                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("当前会话仍有进程活跃或回收未确认".into())))?;
+                                            continue;
+                                        }
                                         if model.is_some() || creating.is_some() || loading.is_some() || deleting.is_some() || suspending != 0 || finalizing || pending_queue {
                                             control.finished.cancel();
                                             let reason = if replacing { "任务正在回收或会话保存正在进行，暂不能替换会话" } else { "排队任务已经开始，当前发送未接纳，草稿保留" };
@@ -629,7 +634,7 @@ impl AgentRuntime {
                                                 match conversation.start(id, request) {
                                                     Ok(view) => {
                                                         let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
-                                                        let tools = tool_jobs::SessionTools::for_session(&mut session_tools, &view);
+                                                        let tools = tool_jobs::SessionTools::for_session(&mut session_tools, &view, &conversation, store.client());
                                                         control.turn.set((view.id, turn.id.0)).map_err(|_| RuntimeFailure::ModelState)?;
                                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?=Some(control.clone());
                                                         emit(
@@ -752,7 +757,7 @@ impl AgentRuntime {
                                             if current_subject != subject {
                                                 if model.is_some() { stop_model(&mut model, &mut progress_events, &mut conversation, &store, &publish).await?; }
                                                 if let Some(event) = conversation.suspend_queue()? {
-                                                    let session = event.state().session;
+                                                    let session = event.session();
                                                     recording::submit(recording::Pending::Suspended { session }, event, &store, &mut records);
                                                     suspending = suspending.checked_add(1).ok_or(RuntimeFailure::ModelState)?;
                                                 }
@@ -807,6 +812,7 @@ impl AgentRuntime {
                         }
                         if let Some(mut pending) = renaming { let result = pending.wait().await; let id = pending.id; capture_delivery(emit(&publish, id, AgentEventKind::Conversation(pending.complete(result))), &mut delivery_failure); }
                         if let Some(mut pending) = deleting { let result = pending.wait().await; let id = pending.id; capture_delivery(emit(&publish, id, AgentEventKind::Conversation(pending.complete(result, &mut conversation))), &mut delivery_failure); }
+                        drop(session_tools);
                         let stored = store.finish().await.map_err(RuntimeFailure::Store);
                         if let Some(pending) = loading && let Some(control) = pending.control { control.finished.cancel(); }
                         let pending_saved = if let Some(mut pending) = creating {

@@ -64,6 +64,9 @@ pub enum RecoveryEvidence {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RecordEvent {
+    Process {
+        fact: agentelier_tools::ProcessFact,
+    },
     ProjectPublished {
         state: StoredState,
         publication: Box<agentelier_llm_model::ProjectPublication>,
@@ -163,8 +166,16 @@ pub enum RecordEvent {
 }
 
 impl RecordEvent {
-    pub fn state(&self) -> &StoredState {
+    pub fn session(&self) -> SessionId {
         match self {
+            Self::Process { fact } => fact.origin.session,
+            _ => self.state().map_or(SessionId::nil(), |state| state.session),
+        }
+    }
+
+    pub fn state(&self) -> Option<&StoredState> {
+        match self {
+            Self::Process { .. } => None,
             Self::ProjectPublished { state, .. }
             | Self::RequestPrepared { state }
             | Self::RequestProgress { state }
@@ -185,7 +196,7 @@ impl RecordEvent {
             | Self::SteerApplied { state, .. }
             | Self::QueueChanged { state, .. }
             | Self::Finalized { state, .. }
-            | Self::Finished { state, .. } => state,
+            | Self::Finished { state, .. } => Some(state),
         }
     }
 }

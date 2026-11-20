@@ -137,7 +137,7 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
                 RecordKind::Event(mut event)
                     if parsed.initial.is_some()
                         && event.session == session
-                        && event.event.state().session == session =>
+                        && event.event.session() == session =>
                 {
                     event.sequence = record.sequence;
                     parsed.records.push(event)
@@ -336,7 +336,7 @@ pub(super) fn memory_cutoffs(root: &Path) -> io::Result<Vec<MemoryCutoff>> {
             let last_turn = parsed
                 .records
                 .iter()
-                .filter_map(|record| record.event.state().turn.as_ref().map(|turn| turn.id.0))
+                .filter_map(|record| record.event.state()?.turn.as_ref().map(|turn| turn.id.0))
                 .max()
                 .unwrap_or(0);
             cutoffs.push(MemoryCutoff {
@@ -438,11 +438,12 @@ pub(super) fn memory_source(
     let Some(last) = parsed.records.last() else {
         return Ok(None);
     };
-    if last
-        .event
-        .state()
-        .turn
-        .as_ref()
+    if parsed
+        .records
+        .iter()
+        .rev()
+        .find_map(|record| record.event.state())
+        .and_then(|state| state.turn.as_ref())
         .is_some_and(|turn| matches!(turn.status, TurnStatus::Running))
     {
         return Ok(None);
