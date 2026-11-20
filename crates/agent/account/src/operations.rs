@@ -16,6 +16,7 @@ pub struct AccountEvent {
     pub kind: AccountEventKind,
 }
 pub enum AccountEventKind {
+    SourceSettling,
     SourceChanged(Result<AccountSource, String>),
     SignOutProgress(SignOutStage),
     SignOutFailed(SignOutFailure),
@@ -67,6 +68,7 @@ pub enum AccountFailure {
     Storage(String),
     SignedOut,
     SigningOut,
+    SourceSettling,
 }
 impl fmt::Display for AccountFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -78,6 +80,7 @@ impl fmt::Display for AccountFailure {
             Self::Storage(message) => f.write_str(message),
             Self::SignedOut => f.write_str("账号正在退出或已退出，需要重新登录"),
             Self::SigningOut => f.write_str("退出尚未完成，禁止新的账号操作"),
+            Self::SourceSettling => f.write_str("正在回收旧账号的任务并保存待办"),
             Self::Delivery(DeliveryFailure::Closed) => f.write_str("认证结果接收端已关闭"),
             Self::Delivery(DeliveryFailure::Full) => f.write_str("认证结果队列已满"),
             Self::Delivery(DeliveryFailure::Wake) => {
@@ -94,6 +97,7 @@ pub enum AccountCommand {
     SignOut(u64),
     Credentials {
         codex: bool,
+        current: CancellationToken,
         intent: CredentialIntent,
         result: watch::Sender<Option<Result<UsableCredentials, SessionFailure>>>,
     },
@@ -199,9 +203,12 @@ impl Account {
                     delivery_failure = failure;
                 }
             }
-            AccountCommand::Credentials { codex, result, .. }
-                if codex != source.codex_selected() =>
-            {
+            AccountCommand::Credentials {
+                codex,
+                current,
+                result,
+                ..
+            } if current.is_cancelled() || codex != source.codex_selected() => {
                 result.send_replace(Some(Err(SessionFailure::new(
                     SessionFailureKind::Identity,
                     "凭据来源已变化，原请求已停止",
@@ -211,6 +218,7 @@ impl Account {
                 codex: true,
                 intent,
                 result,
+                ..
             } => {
                 let selection = source.clone();
                 let (snapshot, outcome) =

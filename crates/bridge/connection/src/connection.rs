@@ -828,7 +828,10 @@ impl Connection {
                         self.session_activity = *activity;
                         return Ok(Some(event));
                     }
-                    if matches!(kind, AccountEventKind::SourceChanged(_)) && event.operation_id == 0
+                    if matches!(
+                        kind,
+                        AccountEventKind::SourceSettling | AccountEventKind::SourceChanged(_)
+                    ) && event.operation_id == 0
                     {
                         return Ok(Some(event));
                     }

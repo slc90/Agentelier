@@ -10,8 +10,8 @@ mod tool_events;
 
 pub use access::{RunnerEvent, TurnImage, TurnRecord};
 pub use dispatch::{
-    SessionTaskAction, SessionTaskCommand, SessionTaskOutcome, ToolBatch, ToolCommand,
-    ToolDispatcher, ToolEvent, ToolJobRequest,
+    SessionTaskAction, SessionTaskCommand, SessionTaskOutcome, ToolAuthorization, ToolBatch,
+    ToolCommand, ToolDispatcher, ToolEvent, ToolJobRequest,
 };
 pub use runner::{IdleAction, run, run_idle};
 pub use tool_events::ToolWork;

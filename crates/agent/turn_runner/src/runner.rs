@@ -1,4 +1,4 @@
-use crate::dispatch::{SessionTaskCommand, ToolDispatcher, ToolEvent};
+use crate::dispatch::{SessionTaskCommand, ToolAuthorization, ToolDispatcher, ToolEvent};
 use crate::tool_events::ToolWork;
 use crate::{
     access::{RunnerEvent, TurnAccess},
@@ -400,6 +400,7 @@ async fn run_task(
     if let Err(failure) = settings.validate_source(identity.codex_identity()) {
         return Ok(TurnStatus::Failed(failure.to_string()));
     }
+    let tool_authorization = ToolAuthorization::new(credentials.clone(), identity.clone());
     let slug = settings.slug;
     let model = tokio::select! { biased;
         _ = cancel.cancelled() => return Ok(TurnStatus::Cancelled),
@@ -581,6 +582,7 @@ async fn run_task(
             calls,
             limited,
             &rejected,
+            &tool_authorization,
             progress,
             cancel,
         )

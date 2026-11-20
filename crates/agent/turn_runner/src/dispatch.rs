@@ -1,3 +1,4 @@
+use agentelier_account::{CredentialClient, ExecutionIdentity, SessionFailure};
 use agentelier_conversation::ConversationFailure;
 use agentelier_llm_model::FunctionCall;
 use agentelier_tools::{CleanupReport, ExecutionContext, ToolAdmission, ToolCatalog, ToolResult};
@@ -9,6 +10,26 @@ pub struct ToolBatch {
     pub calls: Vec<ToolJobRequest>,
     pub catalog: Arc<ToolCatalog>,
     pub context: Arc<ExecutionContext>,
+    pub authorization: ToolAuthorization,
+}
+
+#[derive(Clone)]
+pub struct ToolAuthorization {
+    credentials: CredentialClient,
+    identity: ExecutionIdentity,
+}
+
+impl ToolAuthorization {
+    pub(crate) fn new(credentials: CredentialClient, identity: ExecutionIdentity) -> Self {
+        Self {
+            credentials,
+            identity,
+        }
+    }
+
+    pub async fn validate(&self) -> Result<(), SessionFailure> {
+        self.credentials.validate_execution(&self.identity).await
+    }
 }
 
 pub struct ToolJobRequest {

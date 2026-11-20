@@ -4,7 +4,7 @@ use agentelier_tools::{
     ToolResult, ToolStatus,
 };
 use agentelier_turn_runner::{
-    ToolBatch, ToolCommand, ToolDispatcher, ToolEvent, ToolJobRequest, ToolWork,
+    ToolAuthorization, ToolBatch, ToolCommand, ToolDispatcher, ToolEvent, ToolJobRequest, ToolWork,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{
@@ -181,6 +181,7 @@ impl Execution {
                 previous,
                 admitted,
                 execution,
+                authorization: batch.authorization.clone(),
             };
             let admission = self.admission.clone();
             let processes = self.processes.clone();
@@ -263,6 +264,7 @@ struct Job {
     previous: Option<Arc<JobOrder>>,
     admitted: Option<OrderSignal>,
     execution: Option<agentelier_conversation::TaskExecution>,
+    authorization: ToolAuthorization,
 }
 
 struct RunningJob<'a> {
@@ -338,6 +340,17 @@ impl Job {
             || (admission.is_blocked() && self.policy != ToolAccess::ProcessControl)
         {
             return skipped();
+        }
+        if let Some(code) = admission.rejection(self.policy) {
+            return ToolResult::not_executed(code, "会话派发暂停，本次调用未执行");
+        }
+        let authorized = tokio::select! { biased;
+            _ = cancel.cancelled() => return skipped(),
+            _ = admission_stop.cancelled() => return skipped(),
+            result = self.authorization.validate() => result,
+        };
+        if let Err(failure) = authorized {
+            return ToolResult::not_executed("authorization_changed", &failure.to_string());
         }
         if let Some(code) = admission.rejection(self.policy) {
             return ToolResult::not_executed(code, "会话派发暂停，本次调用未执行");

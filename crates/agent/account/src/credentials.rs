@@ -23,6 +23,7 @@ struct ClientState {
     accepting: bool,
     ending: bool,
     codex_selected: bool,
+    source_settling: bool,
     invalidated: CancellationToken,
 }
 
@@ -55,6 +56,17 @@ impl ExecutionIdentity {
             ));
         }
         Ok(())
+    }
+
+    fn ensure_active(&self) -> Result<(), SessionFailure> {
+        if self.invalidated.is_cancelled() {
+            Err(SessionFailure::new(
+                SessionFailureKind::Identity,
+                "本次任务绑定的授权已失效",
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -107,6 +119,7 @@ impl CredentialClient {
                 accepting: true,
                 ending: false,
                 codex_selected,
+                source_settling: false,
                 invalidated: CancellationToken::new(),
             })),
             shutdown,
@@ -127,6 +140,24 @@ impl CredentialClient {
     }
     pub fn request(&self) -> Result<CredentialRequest, AccountFailure> {
         self.submit(CredentialIntent::Acquire)
+    }
+
+    pub async fn validate_execution(
+        &self,
+        identity: &ExecutionIdentity,
+    ) -> Result<(), SessionFailure> {
+        identity.ensure_active()?;
+        if identity.codex_identity().is_some() {
+            let request = self.request().map_err(|failure| {
+                SessionFailure::new(SessionFailureKind::Runtime, failure.to_string())
+            })?;
+            tokio::select! { biased;
+                _ = identity.invalidated() => identity.ensure_active(),
+                result = request.wait() => identity.validate(&result?),
+            }
+        } else {
+            Ok(())
+        }
     }
     pub fn recover(
         &self,
@@ -149,6 +180,9 @@ impl CredentialClient {
         if state.ending || !state.codex_selected && !state.accepting {
             return Err(AccountFailure::SignedOut);
         }
+        if state.source_settling {
+            return Err(AccountFailure::SourceSettling);
+        }
         state.flights.retain(|flight| {
             flight.result.borrow().is_none() && flight.result.has_changed().is_ok()
         });
@@ -162,6 +196,7 @@ impl CredentialClient {
         let (result, receiver) = watch::channel(None);
         (self.submit)(AccountCommand::Credentials {
             codex: state.codex_selected,
+            current: state.invalidated.clone(),
             intent: intent.clone(),
             result,
         })?;
@@ -186,6 +221,9 @@ impl CredentialClient {
         if state.ending {
             return Err(AccountFailure::SigningOut);
         }
+        if state.source_settling {
+            return Err(AccountFailure::SourceSettling);
+        }
         submit()
     }
     pub fn begin_sign_out(
@@ -196,6 +234,9 @@ impl CredentialClient {
             .state
             .lock()
             .map_err(|_| AccountFailure::CredentialState)?;
+        if state.source_settling {
+            return Err(AccountFailure::SourceSettling);
+        }
         submit()?;
         state.accepting = false;
         state.ending = true;
@@ -245,7 +286,24 @@ impl CredentialClient {
             state.flights.clear();
             state.invalidated = CancellationToken::new();
             state.codex_selected = selected;
+            state.source_settling = true;
         }
+        Ok(())
+    }
+
+    pub fn source_settling(&self) -> Result<bool, AccountFailure> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| AccountFailure::CredentialState)?
+            .source_settling)
+    }
+
+    pub fn finish_source_change(&self) -> Result<(), AccountFailure> {
+        self.state
+            .lock()
+            .map_err(|_| AccountFailure::CredentialState)?
+            .source_settling = false;
         Ok(())
     }
 }

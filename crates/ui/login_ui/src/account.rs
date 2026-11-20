@@ -15,6 +15,7 @@ const BUTTON_WIDTH: f32 = 168.0;
 #[reflect(Resource)]
 pub struct AccountState {
     pub(crate) codex: Option<CodexSource>,
+    pub(crate) source_settling: bool,
     pub account: Option<AccountSummary>,
     pub credentials: CredentialState,
     pub operation: Option<u64>,
@@ -35,6 +36,9 @@ impl AccountState {
     }
 
     pub fn model_unavailable_reason(&self) -> Option<&'static str> {
+        if self.source_settling {
+            return Some("正在回收旧账号的任务并保存待办");
+        }
         match self.codex.as_ref().map(|source| &source.status) {
             Some(CodexStatus::Read { expired: false, .. }) => None,
             Some(CodexStatus::Read { expired: true, .. }) => Some("请在 Codex 中恢复授权"),
@@ -207,6 +211,9 @@ fn identity(state: &AccountState) -> String {
         .unwrap_or_default()
 }
 fn status(state: &AccountState) -> &'static str {
+    if state.source_settling {
+        return "正在回收旧账号的任务并保存待办…";
+    }
     match state.phase {
         AccountPhase::Reading => return "正在读取账号…",
         AccountPhase::ChangingSource => return "正在更新凭据来源…",
@@ -381,6 +388,7 @@ fn button_state(state: &AccountState, action: ButtonAction) -> (bool, bool, bool
     (
         visible,
         state.runtime_failed
+            || state.source_settling
             || loading
             || browser_busy
             || (ending && !matches!(action, ButtonAction::Login(LoginAction::SignOut)))

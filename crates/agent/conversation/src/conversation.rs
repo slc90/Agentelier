@@ -243,6 +243,22 @@ impl Conversation {
             })
     }
 
+    pub fn retain_closed_processes(
+        &mut self,
+        id: SessionId,
+        mut processes: crate::ProcessLedger,
+    ) -> Result<crate::SessionProcesses, ConversationFailure> {
+        let session = self
+            .session
+            .as_mut()
+            .filter(|session| session.view.id == id)
+            .ok_or_else(|| ConversationFailure::new("账号切换时的进程记录属于另一会话"))?;
+        processes.historical();
+        let view = processes.projection(id);
+        session.processes = processes;
+        Ok(view)
+    }
+
     pub fn matches_task_execution(
         &self,
         session: SessionId,

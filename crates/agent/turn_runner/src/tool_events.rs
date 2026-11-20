@@ -2,8 +2,8 @@ use crate::{
     access::{RunnerEvent, TurnAccess},
     control,
     dispatch::{
-        SessionTaskAction, SessionTaskCommand, SessionTaskOutcome, ToolBatch, ToolCommand,
-        ToolDispatcher, ToolEvent, ToolJobRequest,
+        SessionTaskAction, SessionTaskCommand, SessionTaskOutcome, ToolAuthorization, ToolBatch,
+        ToolCommand, ToolDispatcher, ToolEvent, ToolJobRequest,
     },
     runner::publish,
     task_control::{self, PendingWait, TaskControlAction, WaitInterruption},
@@ -101,6 +101,7 @@ impl TurnTools {
         calls: Vec<agentelier_llm_model::FunctionCall>,
         limited: bool,
         rejected: &[String],
+        authorization: &ToolAuthorization,
         progress: &mpsc::Sender<RunnerEvent>,
         cancel: &CancellationToken,
     ) -> Result<(), ConversationFailure> {
@@ -188,6 +189,7 @@ impl TurnTools {
                     calls: jobs,
                     catalog,
                     context,
+                    authorization: authorization.clone(),
                 }))
                 .await?;
         }
@@ -196,7 +198,17 @@ impl TurnTools {
             let started = !cancel.is_cancelled()
                 && !steered
                 && start_call(active, id.clone(), None, true).await?;
-            let result = if started {
+            let checked = if started {
+                tokio::select! { biased;
+                    _ = cancel.cancelled() => None,
+                    result = authorization.validate() => Some(result),
+                }
+            } else {
+                None
+            };
+            let result = if let Some(Err(failure)) = checked {
+                ToolResult::not_executed("authorization_changed", &failure.to_string())
+            } else if matches!(checked, Some(Ok(()))) {
                 match task_control::control(active, dispatcher, control, &call.arguments).await? {
                     TaskControlAction::Return(result) => result,
                     TaskControlAction::Cancel(targets) => {

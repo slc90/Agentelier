@@ -236,13 +236,20 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             .map_err(|_| io::Error::other("账号交互状态锁已损坏"))?;
         let mut state = world.resource_mut::<AccountState>();
         match event.kind {
+            AccountEventKind::SourceSettling => {
+                state.source_settling = true;
+                state.feedback = None;
+            }
             AccountEventKind::SourceChanged(result) => {
                 if event.operation_id != 0 {
                     state.phase = AccountPhase::Idle;
                     state.operation = None;
                 }
                 match result {
-                    Ok(snapshot) => apply_source(&mut state, snapshot, event.operation_id),
+                    Ok(snapshot) => {
+                        state.source_settling = false;
+                        apply_source(&mut state, snapshot, event.operation_id);
+                    }
                     Err(failure) => {
                         error!(operation_id = event.operation_id, error = %failure, "凭据来源未能保存");
                         state.error = Some(failure.to_string());
@@ -411,6 +418,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         state.phase = AccountPhase::Idle;
         state.error = Some(failure.to_string());
         state.runtime_failed = true;
+        state.source_settling = false;
         error!(error = %failure, "认证后台运行失败");
         open = false;
     }

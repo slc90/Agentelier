@@ -114,7 +114,7 @@ Login 实现具体协议、身份与文件规则。Account 的 `Account` 持有 
 
 Account 的可克隆 CredentialClient 管理接纳、会话失效令牌和在途请求合并。它通过 Runtime 赋予的命令提交能力进入同一个有界队列，不反向依赖 Runtime。Token、会话代次和旋转待保存结果只留在执行侧；启动仅恢复文件，无周期保活。按需更新保存成功才交付凭据，取消等待者不丢弃已经开始的旋转。
 
-LLM Model 通过 Account 获取凭据，按选定来源请求 SIWC 或 Codex 的目录与 Responses，并管理一次有界认证恢复、SSE 完成判定及错误分类。Codex 会话固定来源、主体和工作区，旧 SIWC 会话保留原路由与工具契约。协议见[单次模型请求](modules/model-request.md)。
+LLM Model 通过 Account 获取凭据，按选定来源请求 SIWC 或 Codex 的目录与 Responses，并管理一次有界认证恢复、SSE 完成判定及错误分类。Codex 会话固定来源、主体和工作区，旧 SIWC 会话保留原路由与工具契约。工具实际执行前通过 CredentialClient 核对原任务授权。来源变化时 Runtime 等待旧任务、工具和队列记录收尾，随后让 Account 恢复凭据交付并向界面发布新状态。协议见[单次模型请求](modules/model-request.md)。
 
 Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模型任务和独立 Turn Runner。Runtime 拥有线程、队列、取消令牌、JoinHandle 及真实回收信号；账号处理期间模型任务仍可并发等待网络。它不包含 OAuth、认证文件实现或模型网络协议。依赖为 Runtime → Account → Login、Runtime → LLM Model → Account，以及 Runtime → Tools，以及 Runtime → Turn Runner → Conversation / LLM Model / Account，无循环。
 

@@ -44,6 +44,7 @@ impl AuthorizationLink {
     }
 }
 pub enum AccountEventKind {
+    SourceSettling,
     SourceChanged(Result<SourceSnapshot, BridgeFailure>),
     SignOutProgress(SignOutStage),
     SignOutFailed(BridgeFailure),
@@ -109,6 +110,7 @@ impl Error for BridgeFailure {}
 
 pub fn convert(kind: agentelier_account::AccountEventKind) -> AccountEventKind {
     match kind {
+        agentelier_account::AccountEventKind::SourceSettling => AccountEventKind::SourceSettling,
         agentelier_account::AccountEventKind::SourceChanged(result) => {
             AccountEventKind::SourceChanged(result.map(convert_source).map_err(BridgeFailure))
         }
