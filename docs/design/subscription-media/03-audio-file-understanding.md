@@ -20,7 +20,7 @@ flowchart TD
 
 ## 已知服务边界决定了不能直接照搬图片路线
 
-当前 SIWC 第三方授权公开限制排除了音频/视频输入、Files 上传 API 和转写 API。官方 Codex 的 `codex-rs` 已有 `InputAudio`、`LocalAudio`、工具音频结果载荷和转写请求实现，但这些**源码协议能力不等同于 Agentelier 使用现有 Codex OAuth 凭据已被授权调用**。
+迁移前的 SIWC 第三方授权公开限制排除了音频和视频输入、Files 上传 API 及转写 API。官方 Codex 的 `codex-rs` 已有 `InputAudio`、`LocalAudio`、工具音频结果载荷和转写请求实现。Agentelier 使用 Codex OAuth 调用音频服务的授权范围和可用性仍需实测。
 
 对于完整音频文件理解，需要先明确其中一种能实际工作的处理路径：
 

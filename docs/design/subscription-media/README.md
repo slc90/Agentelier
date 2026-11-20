@@ -2,17 +2,16 @@
 
 Agentelier 已经具备一个稳定的基本闭环：账号所有者交付凭据，LLM Model 生成冻结的 Responses 请求，Turn Runner 与会话所有者处理 Function Tool，Session Store 保存权威事件和不可变图片结果，Bridge 向 Bevy 界面投影安全状态。`gpt-6.2-sol` 的 `additional_tools` 与 `async: true` 已进入当前源码，不属于本次要重建的功能。
 
-新需求首先改变的是**模型服务可以使用哪一种授权**，随后才改变模型可以调用的媒体能力。一次通过官方 Codex OAuth 凭据开展的独立实验，已经得到普通 Responses 回复、`gpt-image-2` 有效 PNG，以及 `gpt-6-astra` 跨回合异步工具结果交付；目前 Agentelier 本身仍以第三方 Sign in with ChatGPT（SIWC）及 `api.openai.com/v1` 为运行路径。
+模型服务先从第三方 Sign in with ChatGPT（SIWC）迁移到 Codex OAuth，再接入媒体能力。独立实验已用官方 Codex OAuth 凭据取得普通 Responses 回复、`gpt-image-2` 有效 PNG，以及 `gpt-6-astra` 跨回合异步工具结果。Agentelier 已能选择并校验本地 Codex 凭据文件，当前模型请求仍走 SIWC。下图是完成迁移后的目标结构。
 
 ```mermaid
 flowchart TD
-    UI["Bevy · 登录选择与聊天"] --> Host["Agent Host / Bridge"]
+    UI["Bevy · Codex 凭据选择与聊天"] --> Host["Agent Host / Bridge"]
     Host --> Runtime["Agent Runtime / Turn Runner"]
-    Runtime --> Account["Account · 当前授权来源"]
-    Account --> SIWC["已有 SIWC 会话"]
-    Account --> Codex["用户指定的 Codex OAuth 凭据文件"]
-    Runtime --> Model["LLM Model · 按授权来源路由"]
-    Model --> SIWCAPI["SIWC Responses"]
+    Runtime --> Account["Account · Codex 执行身份"]
+    Account --> Codex["用户指定的 auth.json · 只读"]
+    Runtime --> Model["LLM Model"]
+    Model --> Account
     Model --> CodexAPI["Codex Responses"]
     Runtime --> Media["媒体工具与文件输入"]
     Media --> Images["GPT Image 2 · 生成结果"]
@@ -21,11 +20,11 @@ flowchart TD
     Store --> UI
 ```
 
-图中的两种授权来源**只允许显式选定一种参与当前执行**。图片生成依赖已经验证的 Codex 服务路径；音频文件的输入、转写和理解是独立流程，不能因图片生成功能成功而推定其服务授权也成立。账号切换、异步工具、媒体结果持久化继续服从同一会话所有者和存储确认边界。
+SIWC 在过渡期继续服务现有任务。Codex 接替模型目录、多轮对话、凭据更新及同步和原生异步工具后，应用下线 SIWC 登录和请求路径，既有存档仍由 Session Store 恢复。图片生成使用已验证的 Codex Images 路径，音频服务授权需要独立确认。账号切换、异步工具和媒体结果持久化沿用同一会话所有者和存储确认边界。
 
 ## 从现有能力到新增能力
 
-- **认证与模型路由**：为已有 SIWC 路径增加一条用户明确选择的 Codex OAuth 凭据来源。先采用已经验证过的本地 `auth.json` 只读方式；不把实验性文件导入自动解释成原生浏览器登录。
+- **认证与模型路由**采用用户明确选择的本地 Codex `auth.json`。迁移结束后，它是应用唯一的登录来源，签发和更新仍归 Codex 客户端。
 - **图片生成**：为 Agent 增加调用 `gpt-image-2` 的 Function Tool。生成的图片既是模型工具结果，也是可以在会话中查看、恢复和导出的持久媒体产物。
 - **音频文件理解**：用户提供现成音频文件，Agent 得到与原文件绑定的内容材料并可进行转写、总结、问答。具体音频服务入口须先确认可用授权；声学分析与仅基于文稿的分析要区分。
 
@@ -39,6 +38,8 @@ flowchart TD
 
 ## 已确定的范围
 
-本次只包含登录方式、GPT Image 2 图片生成、音频文件理解。保留现有 GPT-6 原生异步工具系统，不重复开发；不引入麦克风输入、实时语音、语音回答、Computer Use、浏览器自动化、图片编辑或 GIF 生成。原有 SIWC 不自动转换为 Codex OAuth，也不对老会话静默改写工具契约。
+本次范围涵盖认证迁移、GPT Image 2 图片生成和音频文件理解。GPT-6 原生异步工具系统继续沿用，旧会话按保留的模型与工具契约恢复。旧 SIWC 凭据文件留在原位。麦克风输入、实时语音、语音回答、Computer Use、浏览器自动化、图片编辑和 GIF 生成留在本方案范围之外。
+
+认证迁移与媒体接入的顺序见[实施总览](../../../plans/subscription-media/00-overview.md)。
 
 实施与验收以 Windows x64 / DX12、Rust Workspace 和当前 Bevy/Widgetry/BRP 工程规则为准。新增界面行为使用实际应用与 BRP 验证，**不生成 Unit Test、Integration Test、Benchmark 或 Example 代码**。
