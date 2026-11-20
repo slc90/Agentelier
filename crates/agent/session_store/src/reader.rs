@@ -356,7 +356,7 @@ pub struct MemorySourceSnapshot {
     pub activity_ms: u64,
     pub work_directory: PathBuf,
     pub model: String,
-    pub turns: Vec<(u64, Box<agentelier_conversation::TurnView>)>,
+    pub turns: Vec<agentelier_conversation::MemorySourceTurn>,
 }
 
 pub(super) fn memory_sessions(root: &Path) -> io::Result<Vec<SessionId>> {
@@ -419,7 +419,6 @@ pub(super) fn memory_source(
     root: &Path,
     session: SessionId,
 ) -> io::Result<Option<MemorySourceSnapshot>> {
-    use agentelier_conversation::TurnStatus;
     let parsed = match crate::attachments::session_directory(root, session)
         .and_then(|directory| read(&directory, session))
     {
@@ -435,46 +434,26 @@ pub(super) fn memory_source(
     if parsed.summary.deleted {
         return Ok(None);
     }
-    let Some(last) = parsed.records.last() else {
-        return Ok(None);
-    };
-    if parsed
-        .records
-        .iter()
-        .rev()
-        .find_map(|record| record.event.state())
-        .and_then(|state| state.turn.as_ref())
-        .is_some_and(|turn| matches!(turn.status, TurnStatus::Running))
-    {
-        return Ok(None);
-    }
-    let activity_ms = last.at_ms.max(parsed.summary.last_activity_ms);
     let initial = parsed
         .initial
         .ok_or_else(|| io::Error::other("记忆来源缺少会话初始记录"))?;
-    let mut turns = Vec::new();
-    for record in parsed.records {
-        if let RecordEvent::Finished { state, .. } | RecordEvent::Finalized { state, .. } =
-            record.event
-            && let Some(turn) = state.turn
-            && !matches!(turn.status, TurnStatus::Running)
-        {
-            if turns.last().is_some_and(
-                |(_, last): &(u64, Box<agentelier_conversation::TurnView>)| last.id == turn.id,
-            ) {
-                // The first terminal record fixes the turn's evidence and reset boundary.
-                continue;
-            }
-            turns.push((record.sequence, turn));
-        }
-    }
+    let turns =
+        agentelier_conversation::memory_evidence(parsed.records).map_err(io::Error::other)?;
     if turns.is_empty() {
         return Ok(None);
+    }
+    let mut revision = Sha256::new();
+    revision.update(session.as_bytes());
+    let mut activity_ms = 0;
+    for turn in &turns {
+        revision.update(turn.input_sequence.to_le_bytes());
+        revision.update(turn.evidence_sequence.to_le_bytes());
+        activity_ms = activity_ms.max(turn.activity_ms);
     }
     Ok(Some(MemorySourceSnapshot {
         session,
         sequence: parsed.sequence,
-        revision: parsed.prefix_digest,
+        revision: revision.finalize().into(),
         activity_ms,
         work_directory: initial.settings.working_directory,
         model: initial.settings.slug,

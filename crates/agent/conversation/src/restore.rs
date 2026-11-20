@@ -452,6 +452,7 @@ pub fn restore(
     let mut notices = Vec::new();
     let mut historical_processes = BTreeMap::new();
     let mut processes = crate::ProcessLedger::default();
+    let mut finalized_without_join = false;
     for record in records {
         if record.session != initial.session || record.event.session() != initial.session {
             return Err(ConversationFailure::new("存档事件属于另一会话"));
@@ -1020,6 +1021,7 @@ pub fn restore(
                 state: incoming,
                 history: finalized,
             } => {
+                finalized_without_join = true;
                 if pending.0.values().any(|response| response.in_history) {
                     return Err(ConversationFailure::new("终态不能替换尚未收齐结果的历史"));
                 }
@@ -1031,6 +1033,7 @@ pub fn restore(
                 state: mut incoming,
                 history: finished,
             } => {
+                finalized_without_join = false;
                 if let Some(finished) = finished.filter(|_| pending.0.is_empty()) {
                     history = finished;
                 } else {
@@ -1047,6 +1050,7 @@ pub fn restore(
                 notice,
                 results,
             } => {
+                finalized_without_join = false;
                 processes.historical();
                 let recovered = match (recovered, results) {
                     (None, Some(results)) => {
@@ -1086,7 +1090,7 @@ pub fn restore(
             }
         }
     }
-    let mut normalized = !pending.0.is_empty() || processes.has_active();
+    let mut normalized = !pending.0.is_empty() || processes.has_active() || finalized_without_join;
     let recovered_results = pending.recover(&mut history, &mut state, retained_input)?;
     recover_external_effects(
         &mut state,

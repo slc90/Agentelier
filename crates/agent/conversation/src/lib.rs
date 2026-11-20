@@ -8,6 +8,7 @@ pub use project_context::{PreparedRequestFact, ProjectCandidate, ProjectContextS
 mod archive;
 mod control;
 mod conversation;
+mod memory_evidence;
 mod processes;
 mod queue;
 mod restore;
@@ -15,6 +16,7 @@ mod result_budget;
 mod task_policy;
 mod tasks;
 pub use archive::ArchiveEntry;
+pub use memory_evidence::{MemorySourceTurn, memory_evidence};
 pub use processes::ProcessLedger;
 pub use restore::{RestoredSession, restore};
 pub use task_policy::{TaskPolicy, TaskPolicyChange};

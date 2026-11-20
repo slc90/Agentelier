@@ -121,13 +121,10 @@ pub fn extraction_prompt(
     let redactor = Redactor::new()?;
     let mut evidence = Vec::new();
     let mut used = 0;
-    for (_, turn) in source
-        .turns
-        .iter()
-        .rev()
-        .take_while(|(sequence, _)| *sequence > claim.cutoff)
-        .filter(|(_, turn)| turn.input_id.0 > claim.cutoff_turn)
-    {
+    for source_turn in source.turns.iter().rev().filter(|turn| {
+        turn.input_sequence > claim.cutoff && turn.turn.input_id.0 > claim.cutoff_turn
+    }) {
+        let turn = &source_turn.turn;
         let mut items = turn_evidence(turn, &redactor, claim.cutoff == 0);
         while let Some(item) = items.pop() {
             let size = serde_json::to_vec(&item).map_err(io::Error::other)?.len() + 1;
@@ -179,7 +176,12 @@ fn turn_evidence(turn: &TurnView, redactor: &Redactor, include_assistant: bool) 
         .iter()
         .filter(|tool| tool.retained && !crate::tools::is_memory_tool(&tool.name))
     {
-        let text = format!("{} {}", tool.name, tool.output.as_deref().unwrap_or(""));
+        let text = format!(
+            "{} [{:?}] {}",
+            tool.name,
+            tool.status,
+            tool.output.as_deref().unwrap_or("")
+        );
         ordered.push((
             tool.request_index,
             tool.output_index.saturating_add(1),
@@ -199,6 +201,13 @@ fn turn_evidence(turn: &TurnView, redactor: &Redactor, include_assistant: bool) 
     }
     ordered.sort_by_key(|(request, output, _)| (*request, *output));
     items.extend(ordered.into_iter().map(|(_, _, evidence)| evidence));
+    items.extend(turn.process_cleanup.iter().map(|process| {
+        let text = format!(
+            "进程 {} 回收已确认={} {}",
+            process.session_id, process.cleanup_confirmed, process.output
+        );
+        item("process_observation", &text)
+    }));
     items.push(match &turn.status {
         TurnStatus::Completed => item("status", "completed"),
         TurnStatus::Cancelled => item("status", "cancelled"),
