@@ -35,7 +35,7 @@ flowchart LR
 
 一次任务开始时，以当前 CredentialClient 获取的授权来源、账号/工作区、认证生命周期以及模型配置共同形成执行身份。模型目录、连接验证、聊天 Responses、图片生成必须从同一来源派生服务地址与可用能力。
 
-- Codex 来源使用 Codex 服务域的模型/Responses 路由。已有实验对 `gpt-6-astra` 的异步工具调用使用同一 WebSocket 跨回合回传 `call_id`；实现时应为实际可用的连接和续接方式建立明确适配，而不能把 SIWC HTTP 的全部字段原封不动套上去。
+- Codex 来源使用 Codex 服务域的模型和 Responses 路由。新建 `gpt-6-astra` 会话使用 Responses WebSocket，按同连接上已确认的上一响应续接，并按原 `call_id` 回传结果。其他 Codex 模型和旧平铺会话保留 HTTP 路径。
 - 图片生成以现有 Function Tool 契约调用 Codex Images 服务。
 - 模型能力按实际服务目录、协议响应与实测结果判断，不通过 `gpt-6` 字符串前缀推断。现有工具目录冻结、调用身份校验、持久化回执和跨 Turn 结果交付继续生效。
 

@@ -19,6 +19,8 @@ pub(super) type RetainedResults = BTreeMap<String, ToolResult>;
 
 #[derive(Clone)]
 pub(super) struct SessionTools {
+    pub(super) model_connection:
+        Arc<tokio::sync::Mutex<agentelier_llm_model::GenerationConnection>>,
     pub(super) admission: ToolAdmission,
     pub(super) processes: Arc<ProcessSessions>,
     pub(super) process_views: tokio::sync::watch::Receiver<agentelier_conversation::ProcessLedger>,
@@ -75,6 +77,7 @@ impl SessionTools {
         let work = Arc::new(tokio::sync::Mutex::new(ToolWork::new(incoming)));
         let worker = tokio::spawn(run(commands, events, processes.clone(), admission.clone()));
         let tools = Self {
+            model_connection: Arc::default(),
             processes,
             admission,
             process_views,

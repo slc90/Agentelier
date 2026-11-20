@@ -6,8 +6,9 @@ mod operations;
 mod source;
 
 pub use agentelier_login::{
-    AuthenticatedRequest, CodexIdentity, CredentialState, RemoteRevocation, RestoredAccount,
-    SessionActivity, SessionFailure, SessionFailureKind, SignOutStage, UsableCredentials,
+    AuthenticatedRequest, CodexIdentity, CredentialState, CredentialVersion, RemoteRevocation,
+    RestoredAccount, SessionActivity, SessionFailure, SessionFailureKind, SignOutStage,
+    UsableCredentials,
 };
 pub use credentials::{CredentialClient, CredentialIntent, CredentialRequest, ExecutionIdentity};
 pub use operations::{

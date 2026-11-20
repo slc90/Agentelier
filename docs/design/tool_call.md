@@ -65,7 +65,7 @@ Direct Mode 使用 Responses 的结构化 `function_call`。`llm_model` 在现�
 
 ### 当前模型的兼容性在哪里确认
 
-新建 `gpt-6.2-sol` 会话在每次请求的 `input` 首项用 `additional_tools` 提供冻结目录。`exec_command`、`view_image`、`search_memory` 和 `read_memory` 声明 `async: true`。补丁、进程输入和记忆修改保持同步，已适配的 MCP 调用可以声明异步并使用独占许可。Extension 默认按同步声明，提供者可以显式声明异步资格。其他模型及旧平铺会话使用同步声明。运行时使用完整调用返回的模式和已登记的并发策略，下一请求只等待同步调用的结果；较早启动的异步调用可以继续执行。
+SIWC 新建 `gpt-6.2-sol` 会话在 `input` 首项用 `additional_tools` 提供冻结目录。Codex 新建 `gpt-6-astra` 会话通过 Responses WebSocket 的顶层 `tools` 提供同一类冻结目录。`exec_command`、`view_image`、`search_memory` 和 `read_memory` 声明 `async: true`。补丁、进程输入和记忆修改保持同步，已适配的 MCP 调用可以声明异步并使用独占许可。Extension 默认按同步声明，提供者可以显式声明异步资格。其他模型及旧平铺会话使用同步声明。运行时使用完整调用返回的模式和已登记的并发策略，下一请求只等待同步调用的结果；较早启动的异步调用可以继续执行。
 
 首先使用当前选中的模型和已有账号，在真实应用中确认“声明工具 → 返回 function_call → 接收 function_call_output → 继续回答”成立。模型目录里的 `code_mode_only` 记录不替代这次验证。
 

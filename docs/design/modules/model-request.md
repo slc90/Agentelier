@@ -38,7 +38,7 @@ ModelFailure 保留分类、可取得的 HTTP 状态、结构化代码、请求�
 
 `chat_ui::ModelState` 保存目录、当前选择、操作及安全展示结果；BSN 构造模型 ComboBox、按钮、状态区与 WidgetryScrollArea。最终正文在 PostUpdate 的 UiSystems::Content 前更新，切换设置页不取消请求，返回时按当前投影重建。数据环境仍为启动时已占用的目录，更改下次目录不改变正在执行的请求。
 
-Runtime (`agentelier_agent_runtime`) 负责 ModelControl、Tokio 任务启动、取消及 JoinHandle 回收，不实现 HTTP/SSE。Connection (`agentelier_bridge_connection`) 关联模型操作 ID，调用 LLM Model Bridge 转换结果并封装为 BridgeEventKind::Model。账号状态事件由 Account Bridge 独立转换；模型库依赖 Account、Prompts 和 Tools 的描述类型，不依赖 Login、Runtime 或 Bridge，也不执行工具。
+Runtime (`agentelier_agent_runtime`) 负责 ModelControl、Tokio 任务启动、取消及 JoinHandle 回收。会话运行资源持有可复用的连接状态，Responses 传输由 LLM Model 实现。Connection (`agentelier_bridge_connection`) 关联模型操作 ID，调用 LLM Model Bridge 转换结果并封装为 BridgeEventKind::Model。账号状态事件由 Account Bridge 独立转换；模型库依赖 Account、Prompts 和 Tools 的描述类型，不依赖 Login、Runtime 或 Bridge，也不执行工具。
 
 ## 请求边界
 
@@ -54,17 +54,23 @@ LLM Model 以 ModelRequest::Catalog 读取全部可显示模型，以 Verify 携
 
 聊天 GenerationRequest 额外携带固定的 InstructionSnapshot。生成前核对快照，并通过其统一 `messages()` 映射将基础覆盖及有序补充文本构造成 `developer` 输入消息，再追加 ProtocolHistory 和当前用户输入；基础与补充槽位不对应不同协议优先级。默认空配置保持原有请求行为。指令材料解析与保存归 Prompts，LLM Model 不读提示词文件，不在模型连接验证中自动注入准备区指令。
 
-聊天请求携带会话冻结的 Function Tool 声明、自动选择和 `parallel_tool_calls: true`。SIWC 新建 `gpt-6.2-sol` 会话把目录作为 `input` 首个 developer `additional_tools` 项，具备异步资格的叶子带 `async: true`，顶层 `tools` 字段省略。固定指令、记忆、技能、协议历史和本轮输入随原顺序排列，材料索引记录实际位置。Codex HTTP 路径、其他模型和旧平铺会话使用同步声明。HTTP 聊天使用 `store: false`、`stream: true` 和完整的 `input`，省略 `previous_response_id`。独立的目录与连接验证不附带工具。
+聊天请求携带会话冻结的 Function Tool 声明、自动选择和 `parallel_tool_calls: true`。SIWC 新建 `gpt-6.2-sol` 会话把目录作为 `input` 首个 developer `additional_tools` 项，具备异步资格的叶子带 `async: true`，顶层 `tools` 字段省略。固定指令、记忆、技能、协议历史和本轮输入随原顺序排列，材料索引记录实际位置。Codex 新建 `gpt-6-astra` 会话使用 WebSocket 的 `response.create` 和顶层 `tools`，具备异步资格的声明携带 `async: true`。其他 Codex 模型和旧平铺会话使用 HTTP 同步声明。HTTP 聊天使用 `store: false`、`stream: true` 和完整的 `input`，省略 `previous_response_id`。独立的目录与连接验证不附带工具。
 
-SSE 函数参数增量只更新展示。模型层核对完整流项与 `response.completed.output` 的身份、名称、namespace、参数和异步模式。原生路径按无 namespace 的工具名称匹配冻结目录。返回 `async: true` 的调用需要相应声明，省略标志或返回 `false` 按同步处理。请求拒绝沿用实际服务错误。协议历史原样重放 `function_call`，并以 `call_id` 关联 `function_call_output`。普通工具使用有界 JSON 字符串，图片结果使用 `input_text` 和 `input_image` 内容数组。同步调用结果确认追加后才能构建下一次请求；未配对的异步调用保留在冻结请求中。请求在途期间到达的结果只确认保存，待响应接纳或请求停止后按保存序号追加。
+SSE 和 WebSocket 共享 Responses 事件解析。函数参数增量只更新展示。模型层核对完整流项与 `response.completed.output` 的身份、名称、namespace、参数和异步模式。原生路径按无 namespace 的工具名称匹配冻结目录。返回 `async: true` 的调用需要相应声明，省略标志或返回 `false` 按同步处理。请求拒绝沿用实际服务错误。协议历史原样重放 `function_call`，并以 `call_id` 关联 `function_call_output`。普通工具使用有界 JSON 字符串，图片结果使用 `input_text` 和 `input_image` 内容数组。同步调用结果确认追加后才能构建下一次请求；未配对的异步调用保留在冻结请求中。请求在途期间到达的结果只确认保存，待响应接纳或请求停止后按保存序号追加。
 
 新原生会话将同步的任务查询和等待随冻结工具目录发送。会话在构建请求时固定任务登记边界；模型通过后续完整请求引用列表公开的任务 ID。同批列表可以观察新任务，等待只能使用请求冻结时已有的任务。
 
-历史允许完整响应和工具结果分开追加，并用原始调用身份校验结果的唯一性。准备请求时固定持久历史的位置、实际覆盖项和所含结果的 `call_id`。这些材料和已序列化的请求字节随本次请求保持固定。只有接纳本次完整合法响应才确认其中的结果已经用于成功请求。当前发送入口仍要求批次结果全部收齐。
+历史允许完整响应和工具结果分开追加，并用原始调用身份校验结果的唯一性。准备请求时固定持久历史的位置、实际覆盖项和所含结果的 `call_id`。这些材料和已序列化的请求字节随本次请求保持固定。只有接纳本次完整合法响应才确认其中的结果已经用于成功请求。继续发送前需收齐同步调用的结果，开放的异步调用可以跨请求和 Turn。
 
-图片 data URL 由协议适配根据不可变载荷的实际 MIME 与编码生成，detail 固定 high。完整请求通过 32 MiB 有界 Writer 序列化，预算计入 Base64、工具声明、指令与全部历史；超限为任务协议错误，不裁剪历史。发送使用已校验的序列化字节，不把内容数组二次转成字符串。DEBUG 只保留 call_id、MIME、尺寸、摘要、字节数和结构检查，禁止完整 Base64 或请求正文。
+图片 data URL 由协议适配根据不可变载荷的实际 MIME 与编码生成，detail 固定 high。完整请求通过 32 MiB 有界 Writer 序列化，预算计入 Base64、工具声明、指令与全部历史；超限为任务协议错误，不裁剪历史。HTTP 与全量 WebSocket 请求使用冻结字节。WebSocket 续接从同一输入取新增项并保持内容数组原样。DEBUG 只保留 call_id、MIME、尺寸、摘要、字节数和结构检查，禁止完整 Base64 或请求正文。
 
 模型目录仅在实际 input_modalities 是非空字符串数组时取得明确图片能力，包含 image 为支持，不包含为不支持；缺失或无法解释为未知。该可选信息经 Bridge 和 UI 进入会话固定设置；未知不被推断为支持或拒绝。服务真实拒绝仍沿既有 HTTP 类别与请求标识返回，不自动换模型、账号或协议。
+
+## Codex WebSocket 续接
+
+Model 按当前 Codex 凭据发起 HTTPS Upgrade，沿用认证、TLS 和代理设置。每次请求仍冻结 `store: false` 的全量载荷，用于本地历史与预算核对。连接可在同一运行会话的连续 Turn 中复用。仅当冻结输入以前次已确认的完整输入和响应输出开头时，才发送 `previous_response_id` 和新增输入。当前请求重新携带该次适用的工具声明和压缩配置。工具结果以原 `call_id` 进入新增输入。
+
+前缀变化时从全量冻结输入建立新响应链。连接关闭、来源失效或 Token 版本变化时旧响应 ID 不再参与请求。重开会话或换用新连接时可从已保存历史重放。取消或失败丢弃在途连接，已接纳的历史仍由本地持久记录决定。网络错误在发送后传播到当前任务，避免将交付状态不明的请求自动重发。
 
 ## 任务内固定执行身份
 
@@ -84,7 +90,7 @@ ProtocolHistory 按内容估算新增项，不累计 transport ID 或外层 JSON
 
 冻结请求记录精确的开放调用集合。集合为空时，聊天请求携带 `context_management=[{type: "compaction", compact_threshold: ...}]`。开放调用或已接受的单次无压缩继续使本次请求省略该配置，冻结后状态变化不改写请求。已经交付 session_id 的函数调用已闭合，进程是否存活不参与判断。阈值取实际模型自动阈值与有效窗口的较小值，缺失自动阈值时使用有效窗口；低于服务要求的 1,000 token 或能力未知时拒绝启动。当前 API 地址、认证所有者、固定任务身份和请求设置不变，没有独立压缩请求、显式触发项或文本摘要备用路径。
 
-SSE 允许 compaction 与助手、reasoning、function_call 混排，支持一份完整响应包含多个压缩项。每个压缩项验证非空 encrypted_content 及可选身份，并保留原始字段；最终 response.completed 的有序 output 是权威结果，流增量仍只用于展示和身份核对。压缩输出只投影阶段，密文仅保留在协议存档。冻结时已有未配对调用，或者输出在新调用之后才给出压缩项，都会使整个完整响应在正常接纳前失败。单次无压缩继续中收到压缩项同样失败。
+Responses 流允许 compaction 与助手、reasoning、function_call 混排，支持一份完整响应包含多个压缩项。每个压缩项验证非空 encrypted_content 及可选身份，并保留原始字段；最终 response.completed 的有序 output 是权威结果，流增量仍只用于展示和身份核对。压缩输出只投影阶段，密文仅保留在协议存档。冻结时已有未配对调用，或者输出在新调用之后才给出压缩项，都会使整个完整响应在正常接纳前失败。单次无压缩继续中收到压缩项同样失败。
 
 恢复时按原调用身份补齐唯一 output。存在 ToolReturned 时使用其已保存的载荷，缺失结果使用由登记或开始事实确定的中断说明。已开始发送且没有完整响应的请求保留未知结果，后续用户发送可以重放已保存的 output。完整响应先存档再执行工具。Conversation 在接纳合法响应后为安全压缩准备检查点。Runner 等待单写入者确认后才安装工作窗口和派发该响应的新调用。压缩项之后的开放调用和检查点冻结后的尾部保留原始顺序。原始响应、助手正文、工具事实与附件仍完整存档。固定指令和工具声明仍随每次请求提供，不写入工作历史重复累积。
 
@@ -94,7 +100,7 @@ SSE 允许 compaction 与助手、reasoning、function_call 混排，支持一�
 
 模型层 prepare 是唯一请求构造入口，输出私有冻结字节和 RequestProjection（工具契约、基础摘要、有序协议类型、载荷大小与 SHA-256）。generate 仅消费 PreparedGeneration，认证恢复使用同一字节。类型化项目项序列化为 user，基础保持 developer，完整请求保留 32 MiB 有界序列化。冻结时还有开放调用，则把预留结果的协议字节和继续余量一并纳入发送前检查。
 
-generate 在进入 HTTP 发送阶段和取得响应头时分别发布 Sending 与 ResponseReceived，包括非成功 HTTP 状态。Runner 将这些事实交回运行时，Conversation 按当前 Turn 合并并生成待持久化的请求记录。认证内部重发使用同一请求身份与冻结字节，核对界面展示最近一次实际 HTTP 状态。
+generate 在进入发送阶段后发布 Sending，HTTP 收到响应头后发布实际状态，WebSocket 成功发送后记录已升级的传输状态。Runner 将这些事实交回运行时，Conversation 按当前 Turn 合并并生成待持久化的请求记录。HTTP 认证重发复用原始字节。WebSocket 在重新认证并建立新连接后使用同一冻结载荷的全量输入。
 
 ## Skills 调度材料
 

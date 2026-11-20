@@ -1,3 +1,4 @@
+use crate::codex_socket;
 use crate::model::{
     ModelFailure, ModelFailureKind, ModelRoute, acquire, http_failure, network, recover,
     request_id, with_response,
@@ -13,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+pub(super) const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 
 struct RequestBytes(Vec<u8>);
@@ -92,6 +93,9 @@ pub struct PreparedGeneration {
     tools: Arc<ToolCatalog>,
 }
 
+#[derive(Default)]
+pub struct GenerationConnection(Option<codex_socket::Continuation>);
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SkillMaterial {
     #[serde(default)]
@@ -109,6 +113,11 @@ impl RequestProjection {
 
     pub fn validate_request_materials(&self) -> Result<(), ModelFailure> {
         use sha2::{Digest, Sha256};
+        if self.tool_contract == ToolContract::CodexWebSocket && self.route != ModelRoute::Codex {
+            return Err(crate::model::protocol(
+                "Codex WebSocket 请求缺少 Codex 授权来源",
+            ));
+        }
         if self
             .fixed_bytes
             .is_some_and(|fixed| fixed > self.payload_bytes)
@@ -226,10 +235,17 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         .validate()
         .map_err(|_| ModelFailure::new(ModelFailureKind::Protocol, "会话指令快照无效"))?;
     let contract = generation.tools.contract();
+    if contract == ToolContract::CodexWebSocket
+        && generation.route.tool_contract(&generation.slug) != contract
+    {
+        return Err(crate::model::protocol(
+            "冻结的 Codex WebSocket 契约与模型路径不一致",
+        ));
+    }
     let declarations = tool_declarations(&generation.tools);
     let mut input = Vec::new();
     let top_level_tools = match contract {
-        ToolContract::Flat => Some(declarations),
+        ToolContract::Flat | ToolContract::CodexWebSocket => Some(declarations),
         ToolContract::AdditionalTools => {
             input.push(serde_json::json!({
                 "type": "additional_tools",
@@ -309,6 +325,9 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         payload["reasoning"] = serde_json::json!({"effort": effort});
     }
     generation.route.responses_payload(&mut payload);
+    if contract == ToolContract::CodexWebSocket {
+        payload["type"] = serde_json::json!("response.create");
+    }
     let mut body = RequestBytes(Vec::new());
     serde_json::to_writer(&mut body, &payload).map_err(|error| {
         ModelFailure::new(
@@ -379,18 +398,56 @@ fn tool_declarations(catalog: &ToolCatalog) -> serde_json::Value {
 }
 
 pub async fn generate(
+    connection: GenerationConnection,
     credentials: CredentialClient,
     generation: PreparedGeneration,
     identity: &ExecutionIdentity,
     progress: Sender<StreamEvent>,
-) -> Result<GenerationResult, ModelFailure> {
+) -> Result<(GenerationResult, GenerationConnection), ModelFailure> {
+    let websocket = generation.projection.tool_contract == ToolContract::CodexWebSocket;
+    let request = async {
+        generate_inner(
+            connection,
+            credentials,
+            generation,
+            identity,
+            progress,
+            websocket,
+        )
+        .await
+    };
+    if websocket {
+        tokio::select! { biased;
+            _ = identity.invalidated() => Err(ModelFailure::new(
+                ModelFailureKind::Authentication, "Codex 授权来源已断开，模型连接已停止"
+            )),
+            result = request => result,
+        }
+    } else {
+        request.await
+    }
+}
+
+async fn generate_inner(
+    mut connection: GenerationConnection,
+    credentials: CredentialClient,
+    generation: PreparedGeneration,
+    identity: &ExecutionIdentity,
+    progress: Sender<StreamEvent>,
+    websocket: bool,
+) -> Result<(GenerationResult, GenerationConnection), ModelFailure> {
     let client = Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT)
-        .read_timeout(STREAM_IDLE_TIMEOUT)
-        .build()
-        .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "无法建立安全模型客户端"))?;
+        .read_timeout(STREAM_IDLE_TIMEOUT);
+    let client = if websocket {
+        client.http1_only()
+    } else {
+        client
+    }
+    .build()
+    .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "无法建立安全模型客户端"))?;
     let mut current = acquire(&credentials).await?;
     identity.validate(&current).map_err(|failure| {
         ModelFailure::new(ModelFailureKind::Authentication, failure.to_string())
@@ -416,47 +473,24 @@ pub async fn generate(
             .send(StreamEvent::Sending)
             .await
             .map_err(|_| crate::model::protocol("模型进度接收端已关闭"))?;
-        let response = tokio::time::timeout(
-            STREAM_IDLE_TIMEOUT,
-            generation
-                .projection
-                .route
-                .responses(&client, &current)
-                .body(generation.body.clone())
-                .send(),
-        )
-        .await
-        .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "等待模型响应超时"))?
-        .map_err(network)?;
-        progress
-            .send(StreamEvent::ResponseReceived {
-                status: response.status().as_u16(),
-            })
-            .await
-            .map_err(|_| crate::model::protocol("模型进度接收端已关闭"))?;
-        let outcome = if response.status().is_success() {
-            let status = response.status().as_u16();
-            let id = request_id(&response);
-            consume(
-                response,
+        let outcome = if websocket {
+            codex_socket::generate(
+                connection.0.take(),
+                &client,
+                &generation.body,
+                &generation.tools,
+                &current,
+                identity,
                 &mut request,
-                Some(&progress),
-                Some(&generation.tools),
+                &progress,
             )
             .await
-            .map_err(|failure| with_response(failure, status, id))
+            .map(|(result, continuation)| {
+                connection.0 = Some(continuation);
+                result
+            })
         } else {
-            let failure = http_failure(response).await;
-            if let Some(usage) = failure.usage.clone() {
-                progress
-                    .send(StreamEvent::Usage {
-                        response_id: failure.response_id.clone(),
-                        usage: *usage,
-                    })
-                    .await
-                    .map_err(|_| crate::model::protocol("模型用量接收端已关闭"))?;
-            }
-            Err(failure)
+            generate_http(&client, &generation, &current, &mut request, &progress).await
         };
         match outcome {
             Ok(result) => {
@@ -469,7 +503,7 @@ pub async fn generate(
                         "完成响应缺少无状态续接所需的加密推理项",
                     ));
                 }
-                return Ok(result);
+                return Ok((result, connection));
             }
             Err(failure) => {
                 if let Some(replacement) =
@@ -481,5 +515,51 @@ pub async fn generate(
                 }
             }
         }
+    }
+}
+
+async fn generate_http(
+    client: &Client,
+    generation: &PreparedGeneration,
+    current: &agentelier_account::UsableCredentials,
+    request: &mut AuthenticatedRequest,
+    progress: &Sender<StreamEvent>,
+) -> Result<GenerationResult, ModelFailure> {
+    let response = tokio::time::timeout(
+        STREAM_IDLE_TIMEOUT,
+        generation
+            .projection
+            .route
+            .responses(client, current)
+            .body(generation.body.clone())
+            .send(),
+    )
+    .await
+    .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "等待模型响应超时"))?
+    .map_err(network)?;
+    progress
+        .send(StreamEvent::ResponseReceived {
+            status: response.status().as_u16(),
+        })
+        .await
+        .map_err(|_| crate::model::protocol("模型进度接收端已关闭"))?;
+    if response.status().is_success() {
+        let status = response.status().as_u16();
+        let id = request_id(&response);
+        consume(response, request, Some(progress), Some(&generation.tools))
+            .await
+            .map_err(|failure| with_response(failure, status, id))
+    } else {
+        let failure = http_failure(response).await;
+        if let Some(usage) = failure.usage.clone() {
+            progress
+                .send(StreamEvent::Usage {
+                    response_id: failure.response_id.clone(),
+                    usage: *usage,
+                })
+                .await
+                .map_err(|_| crate::model::protocol("模型用量接收端已关闭"))?;
+        }
+        Err(failure)
     }
 }

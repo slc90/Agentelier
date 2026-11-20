@@ -63,6 +63,7 @@ impl ModelTask {
                         tools.dispatcher.clone(),
                         tools.work.clone(),
                         task_actions,
+                        tools.model_connection.clone(),
                     )
                     .await;
                     Some(TaskResult::Chat(outcome))

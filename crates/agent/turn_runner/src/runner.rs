@@ -10,7 +10,9 @@ use agentelier_conversation::RecordEvent;
 use agentelier_conversation::{
     ConversationFailure, InputDecision, MAX_TURN_REQUESTS, SteerInput, TurnStatus,
 };
-use agentelier_llm_model::{GenerationResult, ModelFailure, ModelFailureKind};
+use agentelier_llm_model::{
+    GenerationConnection, GenerationResult, ModelFailure, ModelFailureKind,
+};
 use agentelier_tools::ExecutionContext;
 use std::sync::Arc;
 
@@ -39,7 +41,11 @@ async fn request_once(
     progress: &mpsc::Sender<RunnerEvent>,
     steers: &mut mpsc::Receiver<SteerInput>,
     jobs: &mut TurnTools,
-) -> Result<Option<Result<GenerationResult, ModelFailure>>, ConversationFailure> {
+    connection: &mut GenerationConnection,
+) -> Result<
+    Option<Result<(GenerationResult, GenerationConnection), ModelFailure>>,
+    ConversationFailure,
+> {
     let (sender, mut events) = mpsc::channel(MODEL_PROGRESS_CAPACITY);
     let request = match active.call(|mut turn| turn.request()).await {
         Ok(request) => request,
@@ -70,7 +76,13 @@ async fn request_once(
     publish(progress, cancel).await?;
     let mut stopped_by_resources = false;
     let outcome = {
-        let generation = agentelier_llm_model::generate(credentials, prepared, identity, sender);
+        let generation = agentelier_llm_model::generate(
+            std::mem::take(connection),
+            credentials,
+            prepared,
+            identity,
+            sender,
+        );
         tokio::pin!(generation);
         loop {
             tokio::select! { biased;
@@ -165,6 +177,7 @@ pub async fn run(
     dispatcher: ToolDispatcher,
     work: Arc<tokio::sync::Mutex<ToolWork>>,
     controls: mpsc::Receiver<SessionTaskCommand>,
+    connection: Arc<tokio::sync::Mutex<GenerationConnection>>,
 ) -> Result<(), ConversationFailure> {
     let active = TurnAccess::new(progress.clone());
     let (turn_id, native) = active
@@ -189,6 +202,8 @@ pub async fn run(
             .await?;
     }
     let mut jobs = TurnTools::new(work.lock_owned().await, controls, turn_id);
+    let mut session_connection = connection.lock().await;
+    let mut connection = std::mem::take(&mut *session_connection);
     let mut outcome = if admitted.is_ok() {
         run_task(
             &active,
@@ -200,6 +215,7 @@ pub async fn run(
             user_skills_root,
             memory,
             &mut jobs,
+            &mut connection,
         )
         .await
     } else {
@@ -273,6 +289,7 @@ pub async fn run(
             TurnStatus::Failed(failure.to_string())
         }
     };
+    let keep_connection = matches!(status, TurnStatus::Completed | TurnStatus::Limited);
     let finalized = active
         .call(move |mut turn| {
             turn.finish(status)?;
@@ -295,6 +312,8 @@ pub async fn run(
                 turn.finish(TurnStatus::Failed(failure.to_string()))
             })
             .await?;
+    } else if keep_connection {
+        *session_connection = connection;
     }
     Ok(())
 }
@@ -342,6 +361,7 @@ async fn run_task(
     user_skills_root: std::path::PathBuf,
     memory: Option<agentelier_memory::MemoryClient>,
     jobs: &mut TurnTools,
+    connection: &mut GenerationConnection,
 ) -> Result<TurnStatus, ConversationFailure> {
     if cancel.is_cancelled() {
         return Ok(TurnStatus::Cancelled);
@@ -491,7 +511,7 @@ async fn run_task(
             requests_used,
         ));
         jobs.boundary(active, dispatcher, progress, cancel).await?;
-        let result = match request_once(
+        let (result, next_connection) = match request_once(
             active,
             dispatcher,
             credentials.clone(),
@@ -500,6 +520,7 @@ async fn run_task(
             progress,
             steers,
             jobs,
+            connection,
         )
         .await?
         {
@@ -551,6 +572,7 @@ async fn run_task(
                 Ok((compaction, changed, acceptance.delivery.rejected))
             })
             .await?;
+        *connection = next_connection;
         if tasks_changed {
             active.publish_tasks().await?;
         }

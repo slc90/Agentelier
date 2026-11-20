@@ -16,7 +16,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、账号界面，Bevy/Bridge 衔接及浏览器/剪贴板交互 |
 | `crates/agent/login/` | `agentelier_login` | 数据环境、OAuth、Token、身份校验、认证文件与受保护原子提交 |
 | `crates/agent/account/` | `agentelier_account` | 账号操作与会话状态、共享凭据门控和按需续期协调 |
-| `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录与窗口能力、Responses/SSE、响应使用量和模型错误语义 |
+| `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录与窗口能力、Responses 的 HTTP/SSE 与 WebSocket 传输、响应使用量和模型错误语义 |
 | `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的聊天会话、Turn 身份、工作窗口计量、压缩检查点及恢复、展示记录与结果收敛 |
 | `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话日志、恢复读取、执行事件追加、独立名称与删除元数据、受控会话清理、不可变图片附件、单写入者、提交确认与存储收尾 |
 | `crates/agent/memory/` | `agentelier_memory` | 数据目录级 SQLite、会话提取证据及状态、全局记忆候选选择、Markdown 发布与恢复、历史记忆检索、详情读取与显式修订工具，已发布材料的安全展示数据 |
@@ -114,7 +114,7 @@ Login 实现具体协议、身份与文件规则。Account 的 `Account` 持有 
 
 Account 的可克隆 CredentialClient 管理接纳、会话失效令牌和在途请求合并。它通过 Runtime 赋予的命令提交能力进入同一个有界队列，不反向依赖 Runtime。Token、会话代次和旋转待保存结果只留在执行侧；启动仅恢复文件，无周期保活。按需更新保存成功才交付凭据，取消等待者不丢弃已经开始的旋转。
 
-LLM Model 通过 Account 获取凭据，按选定来源请求 SIWC 或 Codex 的目录与 Responses，并管理一次有界认证恢复、SSE 完成判定及错误分类。Codex 会话固定来源、主体和工作区，旧 SIWC 会话保留原路由与工具契约。工具实际执行前通过 CredentialClient 核对原任务授权。来源变化时 Runtime 等待旧任务、工具和队列记录收尾，随后让 Account 恢复凭据交付并向界面发布新状态。协议见[单次模型请求](modules/model-request.md)。
+LLM Model 通过 Account 获取凭据，按选定来源请求 SIWC 或 Codex 的目录与 Responses，并管理一次有界认证恢复、流式响应完成判定及错误分类。Codex 会话固定来源、主体和工作区，旧 SIWC 会话保留原路由与工具契约。工具实际执行前通过 CredentialClient 核对原任务授权。来源变化时 Runtime 等待旧任务、工具和队列记录收尾，随后让 Account 恢复凭据交付并向界面发布新状态。协议见[单次模型请求](modules/model-request.md)。
 
 Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模型任务和独立 Turn Runner。Runtime 拥有线程、队列、取消令牌、JoinHandle 及真实回收信号；账号处理期间模型任务仍可并发等待网络。它不包含 OAuth、认证文件实现或模型网络协议。依赖为 Runtime → Account → Login、Runtime → LLM Model → Account，以及 Runtime → Tools，以及 Runtime → Turn Runner → Conversation / LLM Model / Account，无循环。
 
@@ -177,7 +177,7 @@ flowchart LR
 
 Conversation 固定 Session 的模型与推理设置，始终持有会话历史、前台状态和任务账本。Runtime 串行处理 Runner 对当前 Turn 的操作，并持有任务句柄、取消令牌与回收信号。Runner 获取冻结材料、驱动模型和工具，并等待实际保存回执。Runner 每任务通过同一 CredentialClient 捕获当前凭据身份，模型请求核对账号与认证生命周期。账号变化保留本地记录并持久暂停队列。当前支持一个内存 Session 的连续多轮交流，空闲时可确认新建或重置为全新身份与空历史。
 
-LLM Model 解析 Responses 输出项、内容段、公开 phase 和文本增量；只有 response.completed 及可接受完整输出才成功。聊天无总生成时长限制，合法 SSE 活动维持 120 秒空闲期限；连接验证仍保留原总超时。聊天启用固定 Direct function tools；LLM Model 只解析调用和映射结果，Runner 在完整响应和身份检查后执行。普通拒绝正文正常展示。任务 join 后才释放操作占用，失败/取消保留已经显示的部分回复。
+LLM Model 解析 Responses 输出项、内容段、公开 phase 和文本增量；只有 response.completed 及可接受完整输出才成功。聊天无总生成时长限制，合法流式事件维持 120 秒空闲期限；连接验证仍保留原总超时。聊天启用固定 Direct function tools；LLM Model 只解析调用和映射结果，Runner 在完整响应和身份检查后执行。普通拒绝正文正常展示。任务 join 后才释放操作占用，失败/取消保留已经显示的部分回复。
 
 网络任务经容量为 32 的有界 Tokio 通道传递文本变化。Runner 将增量交给运行时的会话所有者，Runtime 从最新状态生成累计展示快照。Bridge 合并可替换快照，并通过可靠队列送达任务回执和终态。任务账本另按会话 UUID 和修订投影，独立于当前前台操作。AgentHost 每次更新最多消费 32 项，仍有消息时继续唤醒。
 
@@ -207,7 +207,7 @@ Connection 创建本次运行共享的 OperationSequence；普通请求与恢复
 
 ## Direct 工具往返
 
-会话创建时固定只读工具目录，请求声明与分发共用它。SIWC 的新建 `gpt-6.2-sol` 会话把冻结工具目录作为每个请求的 developer `additional_tools` 首项。Codex HTTP 会话、其他模型和旧平铺会话使用同步契约。Tools 不依赖模型、账号、Bridge 或 Bevy。四项内置工具提供会话范围的 PowerShell 进程登记、标准输入、UTF-8 文件补丁和静态 PNG/JPEG 图片结果。编译进程序的提供者可通过 ToolRegistration 配对声明和执行器，恢复时由 Conversation 按工具来源和保存的声明重新绑定。Runner 每任务最多发送 32 次模型请求并接纳 64 次工具调用。完整响应持久确认后，Runtime 按会话许可准入各调用，最多 8 个普通执行；经登记的异步只读可并行，副作用调用按接纳顺序独占。超出单轮预算时整批写入未执行结果后触限。完整响应和逐项工具结果分别确认进入历史。原生会话在发送下一请求前等待同步调用结果，较早 Turn 的异步调用可继续执行。任务查询、有界等待及取消由 Runner 读取会话账本并响应实际保存事件，不占普通工具工作槽。Runtime 接纳会话侧控制，停止全部会暂停新派发并取消本次持有的执行。在途请求保持冻结，晚到结果先保存，并在完整响应接纳或请求结束失败后追加。正常 final 经持久确认并回收前台后释放唯一前台槽。会话保留后台执行与进程，空闲完成只保存并更新任务区。用户发言或明确处理结果才续接。Conversation 在接纳候选响应和用户材料时保护未交付的结果余量，模型层冻结本次请求的开放调用和 Inline 配置。安全压缩按已确认的协议前缀替换窗口，并保留尾部调用与结果关联。失败或停止保留已确认历史，已有响应提交的任务禁用原样重试。调用和正文按任务内请求序号区分，接收中的参数仅用于展示。
+会话创建时固定只读工具目录，请求声明与分发共用它。SIWC 的新建 `gpt-6.2-sol` 会话把冻结工具目录作为每个请求的 developer `additional_tools` 首项。Codex 的新建 `gpt-6-astra` 会话通过 WebSocket 的顶层 `tools` 声明原生异步。Runtime 随会话保存连接，Runner 在响应和工具登记持久确认后推进续接。Codex HTTP 会话、其他模型和旧平铺会话使用同步契约。Tools 不依赖模型、账号、Bridge 或 Bevy。四项内置工具提供会话范围的 PowerShell 进程登记、标准输入、UTF-8 文件补丁和静态 PNG/JPEG 图片结果。编译进程序的提供者可通过 ToolRegistration 配对声明和执行器，恢复时由 Conversation 按工具来源和保存的声明重新绑定。Runner 每任务最多发送 32 次模型请求并接纳 64 次工具调用。完整响应持久确认后，Runtime 按会话许可准入各调用，最多 8 个普通执行；经登记的异步只读可并行，副作用调用按接纳顺序独占。超出单轮预算时整批写入未执行结果后触限。完整响应和逐项工具结果分别确认进入历史。原生会话在发送下一请求前等待同步调用结果，较早 Turn 的异步调用可继续执行。任务查询、有界等待及取消由 Runner 读取会话账本并响应实际保存事件，不占普通工具工作槽。Runtime 接纳会话侧控制，停止全部会暂停新派发并取消本次持有的执行。在途请求保持冻结，晚到结果先保存，并在完整响应接纳或请求结束失败后追加。正常 final 经持久确认并回收前台后释放唯一前台槽。会话保留后台执行与进程，空闲完成只保存并更新任务区。用户发言或明确处理结果才续接。Conversation 在接纳候选响应和用户材料时保护未交付的结果余量，模型层冻结本次请求的开放调用和 Inline 配置。安全压缩按已确认的协议前缀替换窗口，并保留尾部调用与结果关联。失败或停止保留已确认历史，已有响应提交的任务禁用原样重试。调用和正文按任务内请求序号区分，接收中的参数仅用于展示。
 
 Steer 通过容量 8 的任务输入通道交给 Runner，由 Conversation 裁决接纳、应用和最终关门。Stop 仍走取消令牌。Connection 的容量 32 可靠结果队列承载接纳、应用和任务投影，正文快照可合并。Runtime 收尾期间持续排空事件至真实回收，UI 用草稿修订和输入身份关联回执。
 

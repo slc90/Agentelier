@@ -12,6 +12,7 @@ use bevy_widgetry::text_field::{AutoSize, WidgetryReadOnlyTextField, WidgetryTex
 const GAP: f32 = 8.0;
 const MIN_ROWS: usize = 3;
 const MAX_ROWS: usize = 12;
+const HTTP_SWITCHING_PROTOCOLS: u16 = 101;
 
 #[derive(Clone, Reflect, PartialEq, Eq)]
 pub struct ChatPublication {
@@ -199,7 +200,10 @@ fn synchronize(world: &mut World) -> Result {
         let (turn, request) = list[index];
         let status = request
             .response_status
-            .map(|status| format!("已收到 HTTP 响应 {status}（不表示模型完成或遵守规则）"))
+            .map(|status| match status {
+                HTTP_SWITCHING_PROTOCOLS => "已通过 Codex WebSocket 发送请求".into(),
+                _ => format!("已收到 HTTP 响应 {status}（不表示模型完成或遵守规则）"),
+            })
             .unwrap_or_else(|| {
                 if request.sending_started {
                     "已开始发送；尚无响应事实".into()
@@ -208,7 +212,7 @@ fn synchronize(world: &mut World) -> Result {
                 }
             });
         metadata = format!(
-            "请求 {}/{} · Turn {} / 请求 {} · 窗口 {}\n{status}\n载荷 {} bytes · SHA256 {}",
+            "请求 {}/{} · Turn {} / 请求 {} · 窗口 {}\n{status}\n冻结载荷 {} bytes · SHA256 {}",
             index + 1,
             list.len(),
             turn.id,

@@ -405,11 +405,7 @@ impl Conversation {
             ToolCatalog::with_extensions(
                 &settings.working_directory,
                 settings.image_input,
-                if settings.codex.is_none() && settings.slug == "gpt-6.2-sol" {
-                    agentelier_tools::ToolContract::AdditionalTools
-                } else {
-                    agentelier_tools::ToolContract::Flat
-                },
+                settings.model_route().tool_contract(&settings.slug),
                 self.extensions.iter().chain(discovered),
             )
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?,

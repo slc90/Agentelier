@@ -37,13 +37,15 @@ SIWC HTTP 继续使用 `store: false`、`stream: true` 和完整有序的 `input
 
 新建 `gpt-6.2-sol` 会话将冻结的工具目录作为每次 HTTP 请求 `input` 的首项。该项使用 `type: "additional_tools"`、`role: "developer"` 和 `tools` 数组。顶层省略 `tools`，符合资格的 Function Tool 保留 `async: true`，叶子名称、参数 schema 和执行器参数沿用原契约。[Responses 请求结构](https://developers.openai.com/api/reference/resources/responses/methods/create)
 
-每次全量重放从同一冻结目录生成这一项，后面依次使用已有指令、上下文和协议历史顺序。工具声明是请求材料，应用历史只保存实际发生的协议内容。完整调用按 `name` 绑定本次请求目录，未知名称或意外 namespace 在派发前拒绝。保留原始调用项及 `call_id`，已有平铺同步存档继续按保存契约重放。正式验收仍需要在应用的会话路径上观察服务调用和真实结果交付。
+SIWC 每次全量重放从同一冻结目录生成这一项，后面依次使用已有指令、上下文和协议历史顺序。Codex 新建 `gpt-6-astra` 会话使用 WebSocket 的顶层 `tools`。当本地历史确认前一响应且完整输入仍可从该响应续接时，采用同连接的 `previous_response_id` 和新增输入。[Codex 续接边界](../modules/model-request.md#codex-websocket-续接)
+
+工具声明是请求材料，应用历史只保存实际发生的协议内容。完整调用按 `name` 绑定本次请求目录，未知名称或意外 namespace 在派发前拒绝。保留原始调用项及 `call_id`，已有平铺同步存档继续按保存契约重放。
 
 声明资格和实际返回模式分开处理：
 
 - 同步声明不能接受服务端突然返回 `async: true`；在完整响应提交和工具派发之前报告协议错误。
 - 已声明异步而最终调用省略标志或返回 `false` 时，按同步依赖处理并保留诊断事实；不擅自假设服务端已解除了等待。
-- SSE 的完整调用项与最终响应必须在调用身份、名称、完整参数和异步模式上相容。`response.completed.output` 是提交依据；增量展示不触发副作用。
+- 流中的完整调用项与最终响应必须在调用身份、名称、完整参数和异步模式上相容。`response.completed.output` 是提交依据；增量展示不触发副作用。
 - 同一响应、历史重放或重复流事件中的同一 `call_id` 不得再次启动。相同完成事实可幂等归并；同 ID 不同来源或载荷是冲突。
 
 第一版明确等待完整响应验证、保存之后再启动工具。它比完整流项到达就启动稍晚，却沿用了项目已经存在的“先保存合法响应，再允许副作用”的边界。Codex 的早派发实现可作为后续性能研究材料，当前不会同时引入这个额外失败窗口。

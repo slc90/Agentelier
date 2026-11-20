@@ -5,6 +5,7 @@ use crate::model::{
 use crate::protocol::{ProtocolItem, ProtocolOutput};
 use agentelier_account::AuthenticatedRequest;
 use agentelier_tools::{ToolCatalog, ToolContract, ToolDefinition, ToolMode};
+use bytes::Bytes;
 use reqwest::Response;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -13,7 +14,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::time::{Instant, timeout_at};
 
 pub(crate) const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
-const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -396,7 +397,7 @@ impl Sse {
 }
 
 pub(crate) async fn consume(
-    mut response: Response,
+    response: Response,
     request: &mut AuthenticatedRequest,
     progress: Option<&Sender<StreamEvent>>,
     tools: Option<&ToolCatalog>,
@@ -420,246 +421,286 @@ pub(crate) async fn consume(
         failure.message = format!("模型服务未返回 SSE 事件流（{mime}）：{}", failure.message);
         return Err(failure);
     }
-    let mut parser = Sse::default();
+    let mut stream = SseStream {
+        response,
+        parser: Sse::default(),
+        chunk: Bytes::new().into_iter(),
+        received: 0,
+        deadline: Instant::now() + STREAM_IDLE_TIMEOUT,
+        progress: progress.is_some(),
+    };
+    consume_events(&mut stream, id, request, progress, tools).await
+}
+
+struct SseStream {
+    response: Response,
+    parser: Sse,
+    chunk: bytes::buf::IntoIter<Bytes>,
+    received: usize,
+    deadline: Instant,
+    progress: bool,
+}
+
+pub(super) trait EventStream: Send {
+    fn next_event(&mut self) -> impl Future<Output = Result<Option<String>, ModelFailure>> + Send;
+}
+
+impl EventStream for SseStream {
+    async fn next_event(&mut self) -> Result<Option<String>, ModelFailure> {
+        loop {
+            for byte in self.chunk.by_ref() {
+                let event = self.parser.push(byte)?;
+                if std::mem::take(&mut self.parser.comment_activity) || event.is_some() {
+                    self.deadline = Instant::now() + STREAM_IDLE_TIMEOUT;
+                }
+                if event.is_some() {
+                    return Ok(event);
+                }
+            }
+            let chunk = if self.progress {
+                timeout_at(self.deadline, self.response.chunk())
+                    .await
+                    .map_err(|_| {
+                        ModelFailure::new(ModelFailureKind::Network, "模型事件流空闲超时")
+                    })?
+            } else {
+                self.response.chunk().await
+            }
+            .map_err(network)?;
+            let Some(chunk) = chunk else {
+                return Ok(None);
+            };
+            self.received = self.received.saturating_add(chunk.len());
+            if self.received > MAX_STREAM_BYTES {
+                return Err(protocol("模型事件流超过允许大小"));
+            }
+            self.chunk = chunk.into_iter();
+        }
+    }
+}
+
+pub(crate) async fn consume_events(
+    stream: &mut impl EventStream,
+    id: Option<String>,
+    request: &mut AuthenticatedRequest,
+    progress: Option<&Sender<StreamEvent>>,
+    tools: Option<&ToolCatalog>,
+) -> Result<GenerationResult, ModelFailure> {
     let mut completed_reasoning = HashMap::new();
     let mut observed: HashMap<usize, Value> = HashMap::new();
     let mut completed_calls = HashSet::new();
     let mut completed_arguments = HashSet::new();
     let mut received = 0usize;
-    let mut deadline = Instant::now() + STREAM_IDLE_TIMEOUT;
-    loop {
-        let chunk = if progress.is_some() {
-            timeout_at(deadline, response.chunk())
-                .await
-                .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "模型事件流空闲超时"))?
-        } else {
-            response.chunk().await
+    while let Some(data) = stream.next_event().await.map_err(|mut failure| {
+        failure.request_id = id.clone();
+        failure
+    })? {
+        received = received.saturating_add(data.len());
+        if data.len() > MAX_EVENT_BYTES || received > MAX_STREAM_BYTES {
+            return Err(protocol("模型事件超过允许大小"));
         }
-        .map_err(|error| {
-            let mut failure = network(error);
-            failure.request_id = id.clone();
-            failure
-        })?;
-        let Some(chunk) = chunk else {
-            break;
-        };
-        received = received.saturating_add(chunk.len());
-        if received > MAX_STREAM_BYTES {
-            return Err(protocol("模型事件流超过允许大小"));
+        let event: Value =
+            serde_json::from_str(&data).map_err(|_| protocol("模型事件不是有效 JSON"))?;
+        let kind = field(&event, "type")?;
+        if matches!(
+            kind,
+            "response.completed" | "response.failed" | "response.incomplete" | "error"
+        ) {
+            let response = event.get("response").unwrap_or(&event);
+            if let Some(usage) = crate::ResponseUsage::parse(response)? {
+                publish(
+                    progress,
+                    StreamEvent::Usage {
+                        response_id: response
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .filter(|id| !id.is_empty())
+                            .map(str::to_owned),
+                        usage,
+                    },
+                )
+                .await?;
+            }
         }
-        for byte in chunk {
-            let data = parser.push(byte)?;
-            if std::mem::take(&mut parser.comment_activity) {
-                deadline = Instant::now() + STREAM_IDLE_TIMEOUT;
+        match kind {
+            "response.completed" => {
+                return completed(
+                    event
+                        .get("response")
+                        .ok_or_else(|| protocol("完成事件缺少响应对象"))?,
+                    &completed_reasoning,
+                    &observed,
+                    &completed_calls,
+                    &completed_arguments,
+                    tools,
+                );
             }
-            let Some(data) = data else {
-                continue;
-            };
-            let event: Value =
-                serde_json::from_str(&data).map_err(|_| protocol("模型事件不是有效 JSON"))?;
-            let kind = field(&event, "type")?;
-            deadline = Instant::now() + STREAM_IDLE_TIMEOUT;
-            if matches!(
-                kind,
-                "response.completed" | "response.failed" | "response.incomplete" | "error"
-            ) {
-                let response = event.get("response").unwrap_or(&event);
-                if let Some(usage) = crate::ResponseUsage::parse(response)? {
-                    publish(
-                        progress,
-                        StreamEvent::Usage {
-                            response_id: response
-                                .get("id")
-                                .and_then(Value::as_str)
-                                .filter(|id| !id.is_empty())
-                                .map(str::to_owned),
-                            usage,
-                        },
-                    )
-                    .await?;
-                }
+            "response.failed" => {
+                return Err(service_failure(
+                    event.get("response").unwrap_or(&event),
+                    None,
+                    id,
+                    "模型请求失败",
+                ));
             }
-            match kind {
-                "response.completed" => {
-                    return completed(
-                        event
-                            .get("response")
-                            .ok_or_else(|| protocol("完成事件缺少响应对象"))?,
-                        &completed_reasoning,
-                        &observed,
-                        &completed_calls,
-                        &completed_arguments,
-                        tools,
-                    );
+            "response.incomplete" => {
+                let reason = event
+                    .pointer("/response/incomplete_details/reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("服务未提供原因");
+                let mut failure = ModelFailure::new(
+                    ModelFailureKind::Incomplete,
+                    format!("模型请求未完成：{}", diagnostic(reason)),
+                );
+                failure.request_id = id;
+                return Err(failure);
+            }
+            "error" => {
+                let status = event
+                    .get("status_code")
+                    .and_then(Value::as_u64)
+                    .or_else(|| event.get("status").and_then(Value::as_u64))
+                    .and_then(|status| u16::try_from(status).ok());
+                return Err(service_failure(&event, status, id, "模型服务返回错误事件"));
+            }
+            "response.output_item.added" | "response.output_item.done" => {
+                request.mark_output_started();
+                let item = event
+                    .get("item")
+                    .ok_or_else(|| protocol("输出事件缺少 item"))?;
+                let output_index = index(&event, "output_index")?;
+                if let Some(previous) = observed.get(&output_index)
+                    && (previous.get("id") != item.get("id")
+                        || field(previous, "type")? != field(item, "type")?)
+                {
+                    return Err(protocol("模型输出项身份冲突"));
                 }
-                "response.failed" => {
-                    return Err(service_failure(
-                        event.get("response").unwrap_or(&event),
-                        None,
-                        id,
-                        "模型请求失败",
-                    ));
+                if let Some(previous) = observed.get(&output_index)
+                    && field(item, "type")? == "function_call"
+                    && (field(previous, "call_id")? != field(item, "call_id")?
+                        || field(previous, "name")? != field(item, "name")?)
+                {
+                    return Err(protocol("工具调用身份在接收期间变化"));
                 }
-                "response.incomplete" => {
-                    let reason = event
-                        .pointer("/response/incomplete_details/reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or("服务未提供原因");
-                    let mut failure = ModelFailure::new(
-                        ModelFailureKind::Incomplete,
-                        format!("模型请求未完成：{}", diagnostic(reason)),
-                    );
-                    failure.request_id = id;
-                    return Err(failure);
-                }
-                "error" => {
-                    let status = event
-                        .get("status_code")
-                        .and_then(Value::as_u64)
-                        .and_then(|status| u16::try_from(status).ok());
-                    return Err(service_failure(&event, status, id, "模型服务返回错误事件"));
-                }
-                "response.output_item.added" | "response.output_item.done" => {
-                    request.mark_output_started();
-                    let item = event
-                        .get("item")
-                        .ok_or_else(|| protocol("输出事件缺少 item"))?;
-                    let output_index = index(&event, "output_index")?;
-                    if let Some(previous) = observed.get(&output_index)
-                        && (previous.get("id") != item.get("id")
-                            || field(previous, "type")? != field(item, "type")?)
-                    {
-                        return Err(protocol("模型输出项身份冲突"));
+                let item_kind = field(item, "type")?;
+                if item_kind == "function_call" {
+                    if tools.is_none() {
+                        return Err(protocol("连接验证未声明工具，不能处理工具输出"));
                     }
-                    if let Some(previous) = observed.get(&output_index)
-                        && field(item, "type")? == "function_call"
-                        && (field(previous, "call_id")? != field(item, "call_id")?
-                            || field(previous, "name")? != field(item, "name")?)
-                    {
-                        return Err(protocol("工具调用身份在接收期间变化"));
-                    }
-                    let item_kind = field(item, "type")?;
-                    if item_kind == "function_call" {
-                        if tools.is_none() {
-                            return Err(protocol("连接验证未声明工具，不能处理工具输出"));
-                        }
-                        let call = function_call(item, output_index)?;
-                        if let Some(previous) = observed.get(&output_index) {
-                            let previous = function_call(previous, output_index)?;
-                            if previous.namespace.is_some()
-                                && call.namespace.is_some()
-                                && previous.namespace != call.namespace
-                            {
-                                return Err(protocol("工具调用 namespace 在接收期间变化"));
-                            }
-                            if kind == "response.output_item.added" {
-                                continue;
-                            }
-                            if completed_calls.contains(&output_index) {
-                                previous.validate_complete_item(&call)?;
-                                continue;
-                            }
-                            if completed_arguments.contains(&output_index)
-                                && previous.arguments != call.arguments
-                            {
-                                return Err(protocol("完整工具调用与已完成的流式参数冲突"));
-                            }
-                        }
-                        if kind == "response.output_item.done" {
-                            completed_calls.insert(output_index);
-                            completed_arguments.insert(output_index);
-                        }
-                        observed.insert(output_index, item.clone());
-                        publish(progress, StreamEvent::FunctionCall(call)).await?;
-                        continue;
-                    }
-                    observed.insert(output_index, item.clone());
-                    match item_kind {
-                        "compaction" => {
-                            if kind == "response.output_item.done" {
-                                crate::CompactionItem::parse(item.clone())?;
-                            }
-                            publish(progress, StreamEvent::Compacting).await?;
-                        }
-                        "message" => {
-                            publish(
-                                progress,
-                                StreamEvent::Item(message(item, index(&event, "output_index")?)?),
-                            )
-                            .await?
-                        }
-                        "reasoning" => {
-                            if kind == "response.output_item.done" {
-                                completed_reasoning
-                                    .insert(field(item, "id")?.to_owned(), item.clone());
-                            }
-                        }
-                        _ => return Err(protocol("不支持该模型输出类型")),
-                    }
-                }
-                "response.function_call_arguments.delta"
-                | "response.function_call_arguments.done" => {
-                    request.mark_output_started();
-                    let output_index = index(&event, "output_index")?;
-                    let item = observed
-                        .get_mut(&output_index)
-                        .ok_or_else(|| protocol("工具参数缺少对应调用"))?;
-                    if field(item, "type")? != "function_call"
-                        || field(item, "id")? != field(&event, "item_id")?
-                    {
-                        return Err(protocol("工具参数身份不匹配"));
-                    }
-                    if completed_arguments.contains(&output_index) {
-                        if kind.ends_with(".done")
-                            && field(&event, "arguments")? == field(item, "arguments")?
+                    let call = function_call(item, output_index)?;
+                    if let Some(previous) = observed.get(&output_index) {
+                        let previous = function_call(previous, output_index)?;
+                        if previous.namespace.is_some()
+                            && call.namespace.is_some()
+                            && previous.namespace != call.namespace
                         {
+                            return Err(protocol("工具调用 namespace 在接收期间变化"));
+                        }
+                        if kind == "response.output_item.added" {
                             continue;
                         }
-                        return Err(protocol("已完成的工具参数在接收期间变化"));
+                        if completed_calls.contains(&output_index) {
+                            previous.validate_complete_item(&call)?;
+                            continue;
+                        }
+                        if completed_arguments.contains(&output_index)
+                            && previous.arguments != call.arguments
+                        {
+                            return Err(protocol("完整工具调用与已完成的流式参数冲突"));
+                        }
                     }
-                    let arguments = if kind.ends_with(".delta") {
-                        format!("{}{}", field(item, "arguments")?, field(&event, "delta")?)
-                    } else {
+                    if kind == "response.output_item.done" {
+                        completed_calls.insert(output_index);
                         completed_arguments.insert(output_index);
-                        field(&event, "arguments")?.to_owned()
-                    };
-                    item["arguments"] = Value::String(arguments);
-                    publish(
-                        progress,
-                        StreamEvent::FunctionCall(function_call(item, output_index)?),
-                    )
-                    .await?;
+                    }
+                    observed.insert(output_index, item.clone());
+                    publish(progress, StreamEvent::FunctionCall(call)).await?;
+                    continue;
                 }
-                "response.content_part.added" | "response.content_part.done" => {
-                    request.mark_output_started();
-                    let part = event
-                        .get("part")
-                        .ok_or_else(|| protocol("输出事件缺少 part"))?;
-                    publish(
-                        progress,
-                        StreamEvent::Part {
-                            item_id: field(&event, "item_id")?.to_owned(),
-                            output_index: index(&event, "output_index")?,
-                            part: text_part(part, index(&event, "content_index")?)?,
-                        },
-                    )
-                    .await?;
+                observed.insert(output_index, item.clone());
+                match item_kind {
+                    "compaction" => {
+                        if kind == "response.output_item.done" {
+                            crate::CompactionItem::parse(item.clone())?;
+                        }
+                        publish(progress, StreamEvent::Compacting).await?;
+                    }
+                    "message" => {
+                        publish(
+                            progress,
+                            StreamEvent::Item(message(item, index(&event, "output_index")?)?),
+                        )
+                        .await?
+                    }
+                    "reasoning" => {
+                        if kind == "response.output_item.done" {
+                            completed_reasoning.insert(field(item, "id")?.to_owned(), item.clone());
+                        }
+                    }
+                    _ => return Err(protocol("不支持该模型输出类型")),
                 }
-                "response.output_text.delta" | "response.refusal.delta" => {
-                    request.mark_output_started();
-                    publish(
-                        progress,
-                        StreamEvent::Delta {
-                            item_id: field(&event, "item_id")?.to_owned(),
-                            output_index: index(&event, "output_index")?,
-                            content_index: index(&event, "content_index")?,
-                            text: field(&event, "delta")?.to_owned(),
-                        },
-                    )
-                    .await?;
-                }
-                _ => {}
             }
+            "response.function_call_arguments.delta" | "response.function_call_arguments.done" => {
+                request.mark_output_started();
+                let output_index = index(&event, "output_index")?;
+                let item = observed
+                    .get_mut(&output_index)
+                    .ok_or_else(|| protocol("工具参数缺少对应调用"))?;
+                if field(item, "type")? != "function_call"
+                    || field(item, "id")? != field(&event, "item_id")?
+                {
+                    return Err(protocol("工具参数身份不匹配"));
+                }
+                if completed_arguments.contains(&output_index) {
+                    if kind.ends_with(".done")
+                        && field(&event, "arguments")? == field(item, "arguments")?
+                    {
+                        continue;
+                    }
+                    return Err(protocol("已完成的工具参数在接收期间变化"));
+                }
+                let arguments = if kind.ends_with(".delta") {
+                    format!("{}{}", field(item, "arguments")?, field(&event, "delta")?)
+                } else {
+                    completed_arguments.insert(output_index);
+                    field(&event, "arguments")?.to_owned()
+                };
+                item["arguments"] = Value::String(arguments);
+                publish(
+                    progress,
+                    StreamEvent::FunctionCall(function_call(item, output_index)?),
+                )
+                .await?;
+            }
+            "response.content_part.added" | "response.content_part.done" => {
+                request.mark_output_started();
+                let part = event
+                    .get("part")
+                    .ok_or_else(|| protocol("输出事件缺少 part"))?;
+                publish(
+                    progress,
+                    StreamEvent::Part {
+                        item_id: field(&event, "item_id")?.to_owned(),
+                        output_index: index(&event, "output_index")?,
+                        part: text_part(part, index(&event, "content_index")?)?,
+                    },
+                )
+                .await?;
+            }
+            "response.output_text.delta" | "response.refusal.delta" => {
+                request.mark_output_started();
+                publish(
+                    progress,
+                    StreamEvent::Delta {
+                        item_id: field(&event, "item_id")?.to_owned(),
+                        output_index: index(&event, "output_index")?,
+                        content_index: index(&event, "content_index")?,
+                        text: field(&event, "delta")?.to_owned(),
+                    },
+                )
+                .await?;
+            }
+            _ => {}
         }
     }
     let mut failure = ModelFailure::new(

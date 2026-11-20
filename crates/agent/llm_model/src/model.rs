@@ -1,6 +1,7 @@
 use agentelier_account::{
     AuthenticatedRequest, CredentialClient, ExecutionIdentity, UsableCredentials,
 };
+use agentelier_tools::ToolContract;
 use reqwest::{Client, RequestBuilder, Response};
 use serde::Deserialize;
 use serde_json::Value;
@@ -10,7 +11,7 @@ use std::{error::Error, fmt};
 const MODELS_URL: &str = "https://api.openai.com/v1/models";
 const RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 const CODEX_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
-const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
+pub(super) const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 const CODEX_CATALOG_VERSION: &str = "0.171.0";
 const INPUT: &str = "请简短回复，确认连接正常";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -27,6 +28,14 @@ pub enum ModelRoute {
 }
 
 impl ModelRoute {
+    pub fn tool_contract(self, slug: &str) -> ToolContract {
+        match (self, slug) {
+            (Self::Siwc, "gpt-6.2-sol") => ToolContract::AdditionalTools,
+            (Self::Codex, "gpt-6-astra") => ToolContract::CodexWebSocket,
+            _ => ToolContract::Flat,
+        }
+    }
+
     pub(crate) fn of(credentials: &UsableCredentials) -> Self {
         if credentials.version().codex_identity().is_some() {
             Self::Codex
@@ -63,7 +72,10 @@ impl ModelRoute {
             .header(reqwest::header::CONTENT_TYPE, "application/json")
     }
 
-    fn authorize(request: RequestBuilder, credentials: &UsableCredentials) -> RequestBuilder {
+    pub(super) fn authorize(
+        request: RequestBuilder,
+        credentials: &UsableCredentials,
+    ) -> RequestBuilder {
         let request = request.bearer_auth(credentials.access_token());
         match credentials.version().codex_identity() {
             Some(identity) => request

@@ -21,6 +21,7 @@ pub enum ToolContract {
     #[default]
     Flat,
     AdditionalTools,
+    CodexWebSocket,
     #[serde(rename = "native_async")]
     ExperimentalNamespace,
 }
@@ -32,7 +33,7 @@ impl ToolContract {
 
     pub fn namespace(self) -> Option<&'static str> {
         match self {
-            Self::Flat | Self::AdditionalTools => None,
+            Self::Flat | Self::AdditionalTools | Self::CodexWebSocket => None,
             Self::ExperimentalNamespace => Some("agentelier"),
         }
     }
