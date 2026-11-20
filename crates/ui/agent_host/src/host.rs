@@ -240,6 +240,14 @@ impl AgentHost {
         self.submit(|connection| connection.request_session(action))
     }
 
+    pub fn request_task_action(
+        &self,
+        session: SessionId,
+        action: agentelier_conversation_bridge::TaskAction,
+    ) -> Result<u64> {
+        self.submit(|connection| connection.request_task_action(session, action))
+    }
+
     pub fn model_busy(&self) -> Result<bool> {
         Ok(self.state()?.model_busy)
     }

@@ -397,6 +397,28 @@ impl Connection {
         self.queue_controls.insert(id, kind);
         Ok(id)
     }
+
+    pub fn request_task_action(
+        &mut self,
+        session: SessionId,
+        action: agentelier_conversation_bridge::TaskAction,
+    ) -> Result<u64, BridgeFailure> {
+        if self.stopping
+            || self.failure.is_some()
+            || self.sign_out.is_some()
+            || self.pending.is_some()
+        {
+            return Err(BridgeFailure("当前执行连接不能接纳任务控制".into()));
+        }
+        let id = self
+            .operations
+            .allocate()
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.runtime
+            .request_task_action(id, session, action)
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        Ok(id)
+    }
     pub fn model_busy(&self) -> bool {
         self.model.is_some()
     }
@@ -655,7 +677,13 @@ impl Connection {
                             return Ok(Some(event));
                         }
                         BridgeEventKind::Conversation(kind) => {
-                            if event.operation_id == 0 && matches!(kind, agentelier_conversation_bridge::ConversationEvent::Tasks(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveCleanup(_) | agentelier_conversation_bridge::ConversationEvent::Archives(_) | agentelier_conversation_bridge::ConversationEvent::Opened(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveFailed(_)) {
+                            if matches!(
+                                kind,
+                                agentelier_conversation_bridge::ConversationEvent::TaskAction(_)
+                            ) {
+                                return Ok(Some(event));
+                            }
+                            if event.operation_id == 0 && matches!(kind, agentelier_conversation_bridge::ConversationEvent::Tasks(_) | agentelier_conversation_bridge::ConversationEvent::Processes(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveCleanup(_) | agentelier_conversation_bridge::ConversationEvent::Archives(_) | agentelier_conversation_bridge::ConversationEvent::Opened(_) | agentelier_conversation_bridge::ConversationEvent::ArchiveFailed(_)) {
                                 if let agentelier_conversation_bridge::ConversationEvent::Opened(view) = kind { self.reserved_queue.extend(view.queue.iter().map(|input| input.operation_id)); }
                                 return Ok(Some(event));
                             }

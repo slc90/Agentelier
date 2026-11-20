@@ -22,3 +22,6 @@ pub use conversation::ArchiveEntry;
 pub use conversation::SessionId;
 
 pub use conversation::{ContextLimits, ContextView};
+pub use conversation::{
+    SessionProcess, SessionProcesses, TaskAction, TaskActionOutcome, TaskActionReceipt, TaskId,
+};

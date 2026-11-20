@@ -480,7 +480,7 @@ pub fn restore(
                 {
                     return Err(ConversationFailure::new("进程登记缺少已保存的创建调用"));
                 }
-                processes.apply(&fact)?;
+                processes.apply(&fact, record.sequence)?;
             }
             RecordEvent::ProjectPublished {
                 state: incoming,

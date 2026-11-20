@@ -213,6 +213,8 @@ Steer 通过容量 8 的任务输入通道交给 Runner，由 Conversation 裁�
 
 长期记忆由现有后台工作者消费 Store 的来源快照。Conversation 按原 Turn 组装已结束前台、已保存工具结果和已终结进程的连续证据前缀，读取水位与来源修订分别跟踪。来源 cutoff 依据原输入身份。
 
+会话任务和进程更新经 Connection 的可靠事件与唤醒到达任务区，匹配会话 UUID 与各自修订。任务区控制用稳定任务或进程实例进入 Runtime，回执与正文的 operation 分开关联。
+
 ## 会话队列与唯一活动任务
 
 Conversation 保存 FIFO 待办和暂停状态。Connection 从统一操作序列预留待办任务身份。容量 16 的会话控制通道传递排队、移除与继续。Runtime 在回收旧任务并确认终态后按队列状态串行启动下一条，Stop 和 Steer 使用共享活动控制槽核对新身份。

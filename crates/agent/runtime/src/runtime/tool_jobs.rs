@@ -56,7 +56,9 @@ impl SessionTools {
                 }
                 let mut result = Ok(());
                 update.send_if_modified(|ledger| {
-                    result = ledger.apply(&fact).map_err(std::io::Error::other);
+                    result = ledger
+                        .apply(&fact, commit.sequence)
+                        .map_err(std::io::Error::other);
                     result.is_ok()
                 });
                 result

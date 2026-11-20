@@ -1,4 +1,6 @@
-pub use agentelier_conversation::{ContextLimits, SessionId};
+pub use agentelier_conversation::{
+    ContextLimits, SessionId, TaskAction, TaskActionOutcome, TaskActionReceipt, TaskId,
+};
 use agentelier_prompts::{InstructionMessage, InstructionSnapshot};
 use std::sync::Arc;
 
@@ -13,6 +15,9 @@ pub struct SessionSettings {
     pub working_directory: std::path::PathBuf,
 }
 pub enum ConversationRequest {
+    ProcessResults {
+        session: SessionId,
+    },
     Open {
         session: SessionId,
     },
@@ -86,12 +91,38 @@ pub struct SessionTask {
     pub call_id: String,
     pub tool: String,
     pub status: String,
+    pub source: &'static str,
+    pub argument_bytes: Option<usize>,
+    pub delivery: &'static str,
+    pub cancelling: bool,
 }
 
 pub struct SessionTasks {
     pub session: SessionId,
     pub revision: u64,
     pub tasks: Vec<SessionTask>,
+    pub background_paused: bool,
+    pub queue_paused: bool,
+    pub external_unconfirmed: Vec<String>,
+}
+
+#[derive(Clone)]
+pub struct SessionProcess {
+    pub id: String,
+    pub instance: SessionId,
+    pub turn: u64,
+    pub call_id: String,
+    pub phase: &'static str,
+    pub exit_code: Option<i64>,
+    pub readable: bool,
+    pub truncated: bool,
+    pub decoding_replaced: bool,
+}
+
+pub struct SessionProcesses {
+    pub session: SessionId,
+    pub revision: u64,
+    pub processes: Vec<SessionProcess>,
 }
 #[derive(Clone, Copy)]
 pub enum SteerState {
@@ -286,6 +317,8 @@ fn project_context(state: agentelier_conversation::ProjectContextState) -> Proje
 }
 
 pub enum ConversationEvent {
+    Processes(SessionProcesses),
+    TaskAction(TaskActionReceipt),
     Tasks(SessionTasks),
     ArchiveCleanup(Vec<String>),
     Deleted {
@@ -339,6 +372,9 @@ impl ConversationEvent {
 
 pub fn request(request: ConversationRequest) -> agentelier_conversation::ConversationRequest {
     match request {
+        ConversationRequest::ProcessResults { session } => {
+            agentelier_conversation::ConversationRequest::ProcessResults { session }
+        }
         ConversationRequest::Delete { session } => {
             agentelier_conversation::ConversationRequest::Delete { session }
         }
@@ -647,10 +683,37 @@ fn tool_status(status: agentelier_conversation::ToolStatus) -> &'static str {
 
 pub fn convert(event: agentelier_conversation::ConversationEvent) -> ConversationEvent {
     match event {
+        agentelier_conversation::ConversationEvent::TaskAction(receipt) => {
+            ConversationEvent::TaskAction(receipt)
+        }
+        agentelier_conversation::ConversationEvent::Processes(snapshot) => {
+            ConversationEvent::Processes(SessionProcesses {
+                session: snapshot.session,
+                revision: snapshot.revision,
+                processes: snapshot
+                    .processes
+                    .into_iter()
+                    .map(|p| SessionProcess {
+                        id: p.session_id,
+                        instance: p.origin.instance,
+                        turn: p.origin.turn,
+                        call_id: p.origin.call_id,
+                        phase: p.phase.as_str(),
+                        exit_code: p.exit_code,
+                        readable: p.readable,
+                        truncated: p.truncated,
+                        decoding_replaced: p.decoding_replaced,
+                    })
+                    .collect(),
+            })
+        }
         agentelier_conversation::ConversationEvent::Tasks(update) => {
             ConversationEvent::Tasks(SessionTasks {
                 session: update.session,
                 revision: update.revision,
+                background_paused: update.background_paused,
+                queue_paused: update.queue_paused,
+                external_unconfirmed: update.external_unconfirmed,
                 tasks: update
                     .tasks
                     .into_iter()
@@ -662,6 +725,15 @@ pub fn convert(event: agentelier_conversation::ConversationEvent) -> Conversatio
                         call_id: task.call_id,
                         tool: task.tool,
                         status: tool_status(task.status).into(),
+                        source: task.source,
+                        argument_bytes: task.argument_bytes,
+                        cancelling: task.cancelling,
+                        delivery: match task.delivery {
+                            agentelier_conversation::TaskDelivery::AwaitingResult => "awaiting",
+                            agentelier_conversation::TaskDelivery::Saved => "saved",
+                            agentelier_conversation::TaskDelivery::Appended => "pending",
+                            agentelier_conversation::TaskDelivery::Delivered => "delivered",
+                        },
                     })
                     .collect(),
             })

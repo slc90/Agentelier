@@ -52,6 +52,18 @@ pub enum ProcessPhase {
     Consumed,
 }
 
+impl ProcessPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Exited => "exited",
+            Self::CleanupUnconfirmed => "cleanup_unconfirmed",
+            Self::HistoricalUnconfirmed => "historical_unconfirmed",
+            Self::Consumed => "consumed",
+        }
+    }
+}
+
 #[derive(Clone, Serialize)]
 pub struct ProcessView {
     pub session_id: String,

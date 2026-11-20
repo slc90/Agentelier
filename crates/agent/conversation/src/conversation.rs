@@ -30,6 +30,9 @@ pub struct SessionSettings {
     pub working_directory: std::path::PathBuf,
 }
 pub enum ConversationRequest {
+    ProcessResults {
+        session: SessionId,
+    },
     Open {
         session: SessionId,
     },
@@ -130,6 +133,8 @@ pub struct SessionView {
     pub task_policy: Box<crate::TaskPolicy>,
 }
 pub enum ConversationEvent {
+    Processes(crate::SessionProcesses),
+    TaskAction(crate::TaskActionReceipt),
     ArchiveCleanup(Vec<String>),
     Deleted {
         session: SessionId,
@@ -200,6 +205,18 @@ impl Conversation {
                 session.processes.clone()
             })
     }
+
+    pub fn matches_task_execution(
+        &self,
+        session: SessionId,
+        task: crate::TaskId,
+        instance: SessionId,
+    ) -> bool {
+        self.session
+            .as_ref()
+            .filter(|current| current.view.id == session)
+            .is_some_and(|current| current.tasks.matches_execution(task, instance))
+    }
     pub fn with_extensions(extensions: Vec<ToolRegistration>) -> Self {
         Self {
             extensions: extensions.into(),
@@ -224,7 +241,7 @@ impl Conversation {
     pub fn tasks(&self) -> Option<crate::SessionTasks> {
         self.session
             .as_ref()
-            .map(|session| session.tasks.view(session.view.id))
+            .map(|session| session.tasks.view(&session.view, &session.tools))
     }
 
     pub fn settle_tasks(&mut self, sequence: u64) -> bool {
@@ -498,6 +515,9 @@ impl Conversation {
         request: ConversationRequest,
     ) -> Result<SessionView, ConversationFailure> {
         match request {
+            ConversationRequest::ProcessResults { .. } => {
+                Err(ConversationFailure::new("已保存结果可随下一条消息使用"))
+            }
             ConversationRequest::Send { session, input } => self.begin(operation, session, input),
             ConversationRequest::ContinueWithoutCompaction {
                 session,

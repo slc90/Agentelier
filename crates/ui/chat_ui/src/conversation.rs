@@ -191,6 +191,10 @@ pub struct ChatTask {
     pub call_id: String,
     pub tool: String,
     pub status: String,
+    pub source: String,
+    pub argument_bytes: Option<usize>,
+    pub delivery: String,
+    pub cancelling: bool,
 }
 impl ChatState {
     fn can_send(
@@ -275,6 +279,7 @@ pub(crate) fn install(app: &mut App) {
     crate::request_inspection::install(app);
     crate::tool_timeline::install(app);
     crate::queue::install(app);
+    crate::task_panel::install(app);
     app.init_resource::<SessionUiStates>()
         .init_resource::<ChatState>()
         .init_resource::<InputIntents>()
@@ -328,6 +333,7 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
                 }) as Box<dyn SceneList>)}
             }
             Name("ChatMessageScroll") crate::reading::ChatReadingScroll Node { width: percent(100), height: px(0), flex_basis: px(0), flex_grow: 1.0, flex_shrink: 1.0, min_height: px(0) }--
+            @crate::task_panel::panel()--
             @crate::queue::panel()--
             @WidgetryTextField {
                 @value: {draft}, @multiline: true,
@@ -371,6 +377,7 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
         .as_ref()
         .map(|session| session.id);
     if previous != Some(next.id) {
+        crate::task_panel::bind(world, Some(next.id));
         let saved = {
             let mut state = world.resource_mut::<ChatState>();
             let saved = SessionUiState {
@@ -415,6 +422,28 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
     Ok(())
 }
 
+pub(crate) fn process_results(world: &mut World, session: SessionId) {
+    let state = world.resource::<ChatState>();
+    if state.operation.is_some()
+        || state.replacement.is_some()
+        || !state
+            .session
+            .as_ref()
+            .is_some_and(|current| current.id == session && !current.execution_blocked)
+        || !state.tasks.iter().any(|task| task.delivery == "pending")
+    {
+        return;
+    }
+    let result = world
+        .resource::<AgentHost>()
+        .request_conversation(ConversationRequest::ProcessResults { session });
+    let mut state = world.resource_mut::<ChatState>();
+    match result {
+        Ok(id) => state.operation = Some(id),
+        Err(failure) => state.input_feedback = Some(failure.to_string()),
+    }
+}
+
 fn forget_session(world: &mut World, session: SessionId) -> Result {
     world.resource_mut::<SessionUiStates>().0.remove(&session);
     let current = world
@@ -433,6 +462,7 @@ fn forget_session(world: &mut World, session: SessionId) -> Result {
                 .map_err(|failure| failure.into_bevy_error())?;
         }
         *world.resource_mut::<ChatState>() = default();
+        crate::task_panel::bind(world, None);
     }
     Ok(())
 }
@@ -1120,6 +1150,14 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         .drain()
         .collect();
     for event in events {
+        if let ConversationEvent::Processes(update) = event.kind {
+            crate::task_panel::processes(world, update);
+            continue;
+        }
+        if let ConversationEvent::TaskAction(receipt) = event.kind {
+            crate::task_panel::receipt(world, event.operation_id, receipt);
+            continue;
+        }
         if let ConversationEvent::Tasks(update) = event.kind {
             let mut state = world.resource_mut::<ChatState>();
             if state
@@ -1128,7 +1166,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 .is_some_and(|session| session.id == update.session)
                 && state
                     .task_revision
-                    .is_none_or(|revision| update.revision > revision)
+                    .is_none_or(|revision| update.revision >= revision)
             {
                 state.tasks = update
                     .tasks
@@ -1141,9 +1179,22 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                         call_id: task.call_id,
                         tool: task.tool,
                         status: task.status,
+                        source: task.source.to_owned(),
+                        argument_bytes: task.argument_bytes,
+                        delivery: task.delivery.to_owned(),
+                        cancelling: task.cancelling,
                     })
                     .collect();
                 state.task_revision = Some(update.revision);
+                if let Some(session) = &mut state.session {
+                    session.queue_paused = update.queue_paused;
+                }
+                crate::task_panel::policy(
+                    world,
+                    update.background_paused,
+                    update.external_unconfirmed,
+                );
+                crate::queue::reconcile(world)?;
             }
             continue;
         }
@@ -1358,6 +1409,8 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 "聊天操作未被接纳"
             ),
             ConversationEvent::Tasks(_)
+            | ConversationEvent::Processes(_)
+            | ConversationEvent::TaskAction(_)
             | ConversationEvent::Updated(_)
             | ConversationEvent::Archives(_)
             | ConversationEvent::Opened(_)
@@ -1401,6 +1454,8 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 world.resource_mut::<ChatState>().session = Some(project(view)?);
             }
             ConversationEvent::Tasks(_)
+            | ConversationEvent::Processes(_)
+            | ConversationEvent::TaskAction(_)
             | ConversationEvent::InputReceipt(_)
             | ConversationEvent::Archives(_)
             | ConversationEvent::Opened(_)

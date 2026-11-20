@@ -140,10 +140,13 @@ enum Command {
     ModelFinished(ModelJoin),
     Stream(Option<RunnerEvent>),
     Session(SessionCommand),
-    TaskControl {
+    TaskAction {
+        id: u64,
         session: SessionId,
-        command: agentelier_turn_runner::SessionTaskCommand,
+        action: agentelier_conversation::TaskAction,
     },
+    TaskActionFinished(u64, agentelier_conversation::TaskActionReceipt),
+    ProcessesChanged,
     Conversation {
         id: u64,
         control: ModelControl,
@@ -268,7 +271,8 @@ impl AgentRuntime {
                         let mut account = Account::new(credentials_path, owner_credentials.clone());
                         let mut delivery_failure = None;
                         let mut model: Option<ModelTask> = None;
-                        let mut session_tools = None;
+                        let mut session_tools: Option<(SessionId, tool_jobs::SessionTools)> = None;
+                        let mut task_receipts = task_control::Receipts::new();
                         let mut conversation = Conversation::with_extensions(agentelier_memory::registrations(
                             memory.as_ref().ok().map(Memory::client),
                         ));
@@ -302,6 +306,20 @@ impl AgentRuntime {
                                     result = records.join_next(), if !records.is_empty() => match result {
                                         Some(result) => Command::Recorded(result),
                                         None => return Err(RuntimeFailure::ModelState),
+                                    },
+                                    receipt = task_receipts.join_next(), if !task_receipts.is_empty() => {
+                                        let (id, receipt) = receipt.ok_or(RuntimeFailure::ModelState)?
+                                            .map_err(|_| RuntimeFailure::ModelState)?;
+                                        Command::TaskActionFinished(id, receipt)
+                                    },
+                                    changed = async {
+                                        match session_tools.as_mut() {
+                                            Some((_, tools)) => tools.process_views.changed().await,
+                                            None => std::future::pending().await,
+                                        }
+                                    } => {
+                                        changed.map_err(|_| RuntimeFailure::ModelState)?;
+                                        Command::ProcessesChanged
                                     },
                                     result = async { match &mut creating {
                                         Some(pending) => pending.wait().await,
@@ -453,6 +471,10 @@ impl AgentRuntime {
                                         if opened {
                                             session_tools = None;
                                             model_task::publish_tasks(&conversation, &publish)?;
+                                            if let Some(view) = conversation.current() {
+                                                let processes = conversation.restored_processes().projection(view.id);
+                                                emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Processes(processes)))?;
+                                            }
                                         }
                                         if opened && catalog.is_none() {
                                             match store.client().scan() {
@@ -536,18 +558,22 @@ impl AgentRuntime {
                                             Err(event) => emit(&publish,event.id,AgentEventKind::Conversation(ConversationEvent::Queue(*event)))?,
                                         }
                                     }
-                                    Command::TaskControl { session, command } => {
+                                    Command::ProcessesChanged => {
+                                        if let Some((session, tools)) = &session_tools {
+                                            let processes = tools.process_views.borrow().projection(*session);
+                                            emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Processes(processes)))?;
+                                        }
+                                    }
+                                    Command::TaskActionFinished(id, receipt) => {
+                                        model_task::publish_tasks(&conversation, &publish)?;
+                                        emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::TaskAction(receipt)))?;
+                                    }
+                                    Command::TaskAction { id, session, action } => {
                                         if creating.is_some() || loading.is_some() || deleting.is_some() || finalizing || suspending != 0 || pending_queue {
-                                            drop(command.reply.send(Err(agentelier_conversation::ConversationFailure::new("会话变更或保存正在进行"))));
-                                        } else if let Some(model) = &model {
-                                            if model.control.turn.get().is_none_or(|(current, _)| *current != session) {
-                                                drop(command.reply.send(Err(agentelier_conversation::ConversationFailure::new("当前运行不属于目标会话"))));
-                                            } else if let Err(failure) = model.control.task_actions.try_send(command) {
-                                                drop(failure.into_inner().reply.send(Err(agentelier_conversation::ConversationFailure::new("任务控制入口当前不可用"))));
-                                            }
+                                            task_control::reject(&mut task_receipts, id, session, "会话变更或保存正在进行");
                                         } else {
-                                            let result = task_control::idle(&mut conversation, session, command.action, &store).await;
-                                            drop(command.reply.send(result));
+                                            let tools = session_tools.as_ref().filter(|(current, _)| *current == session).map(|(_, tools)| tools);
+                                            task_control::dispatch(&mut task_receipts, id, session, action, &mut conversation, model.as_ref(), tools, &store).await;
                                         }
                                     }
                                     Command::Stream(event) => {
@@ -581,6 +607,11 @@ impl AgentRuntime {
                                         if replacing && session_tools.as_ref().is_some_and(|(_, tools)| tools.process_views.borrow().has_active()) {
                                             control.finished.cancel();
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("当前会话仍有进程活跃或回收未确认".into())))?;
+                                            continue;
+                                        }
+                                        if replacing && !task_receipts.is_empty() {
+                                            control.finished.cancel();
+                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("仍有任务控制正在确认结果".into())))?;
                                             continue;
                                         }
                                         if model.is_some() || creating.is_some() || loading.is_some() || deleting.is_some() || suspending != 0 || finalizing || pending_queue {
@@ -629,7 +660,7 @@ impl AgentRuntime {
                                                     }
                                                 }
                                             }
-                                            request @ (ConversationRequest::Send { .. } | ConversationRequest::Retry { .. } | ConversationRequest::ContinueWithoutCompaction { .. }) => {
+                                            request @ (ConversationRequest::Send { .. } | ConversationRequest::Retry { .. } | ConversationRequest::ContinueWithoutCompaction { .. } | ConversationRequest::ProcessResults { .. }) => {
                                                 if current_subject.is_none() { control.finished.cancel(); emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("请先登录当前账号后再开始任务".into())))?; continue; }
                                                 match conversation.start(id, request) {
                                                     Ok(view) => {
@@ -812,6 +843,12 @@ impl AgentRuntime {
                         }
                         if let Some(mut pending) = renaming { let result = pending.wait().await; let id = pending.id; capture_delivery(emit(&publish, id, AgentEventKind::Conversation(pending.complete(result))), &mut delivery_failure); }
                         if let Some(mut pending) = deleting { let result = pending.wait().await; let id = pending.id; capture_delivery(emit(&publish, id, AgentEventKind::Conversation(pending.complete(result, &mut conversation))), &mut delivery_failure); }
+                        while let Some(receipt) = task_receipts.join_next().await {
+                            if let Err(failure) = receipt {
+                                tracing::error!(%failure, "任务控制收尾失败");
+                                delivery_failure = delivery_failure.or(Some(RuntimeFailure::ModelState));
+                            }
+                        }
                         drop(session_tools);
                         let stored = store.finish().await.map_err(RuntimeFailure::Store);
                         if let Some(pending) = loading && let Some(control) = pending.control { control.finished.cancel(); }
@@ -946,25 +983,17 @@ impl AgentRuntime {
             self.send(command)
         }
     }
-    pub fn control_tasks(
+    pub fn request_task_action(
         &self,
+        id: u64,
         session: SessionId,
-        action: agentelier_turn_runner::SessionTaskAction,
-    ) -> Result<
-        tokio::sync::oneshot::Receiver<
-            Result<
-                agentelier_turn_runner::SessionTaskOutcome,
-                agentelier_conversation::ConversationFailure,
-            >,
-        >,
-        RuntimeFailure,
-    > {
-        let (reply, result) = tokio::sync::oneshot::channel();
-        self.submit(Command::TaskControl {
+        action: agentelier_conversation::TaskAction,
+    ) -> Result<(), RuntimeFailure> {
+        self.submit(Command::TaskAction {
+            id,
             session,
-            command: agentelier_turn_runner::SessionTaskCommand { action, reply },
-        })?;
-        Ok(result)
+            action,
+        })
     }
 
     pub fn rename_session(

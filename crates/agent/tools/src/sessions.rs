@@ -413,15 +413,23 @@ impl ProcessSessions {
         Ok(())
     }
 
-    pub async fn terminate(&self, id: &str) -> Result<(), String> {
-        let entry = self
-            .registry
+    async fn control_entry(
+        &self,
+        id: &str,
+        instance: uuid::Uuid,
+    ) -> Result<Arc<ProcessEntry>, String> {
+        self.registry
             .lock()
             .await
             .processes
             .get(id)
+            .filter(|entry| entry.origin.instance == instance)
             .cloned()
-            .ok_or_else(|| "进程不属于当前会话或已经移除".to_owned())?;
+            .ok_or_else(|| "进程不属于当前会话、执行实例已变化或登记已移除".to_owned())
+    }
+
+    pub async fn terminate(&self, id: &str, instance: uuid::Uuid) -> Result<(), String> {
+        let entry = self.control_entry(id, instance).await?;
         entry.terminate.cancel();
         let mut state = entry.state.lock().await;
         match reap_entry(
@@ -440,22 +448,22 @@ impl ProcessSessions {
         }
     }
 
-    pub async fn discard(&self, id: &str) -> Result<(), String> {
-        let entry = self
-            .registry
-            .lock()
-            .await
-            .processes
-            .get(id)
-            .cloned()
-            .ok_or_else(|| "进程不属于当前会话或已经移除".to_owned())?;
+    pub async fn read_exit(
+        &self,
+        id: &str,
+        instance: uuid::Uuid,
+        discard: bool,
+    ) -> Result<Option<String>, String> {
+        let entry = self.control_entry(id, instance).await?;
         let mut state = entry.state.lock().await;
-        if !matches!(*state, ProcessState::Exited(_)) {
-            return Err("仅可收起已确认退出的进程结果".into());
-        }
+        let ProcessState::Exited(result) = &*state else {
+            return Err("进程尚无可读取的已确认退出结果".into());
+        };
+        let output = (!discard).then(|| result.output.summary().to_owned());
         self.consume(&entry, id, &mut state)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(output)
     }
 
     pub async fn cleanup(&self, reason: &str, scope: ProcessScope) -> CleanupReport {

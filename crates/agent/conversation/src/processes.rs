@@ -3,24 +3,27 @@ use agentelier_tools::{ProcessChange, ProcessFact, ProcessPhase, ProcessView};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Default)]
-pub struct ProcessLedger(BTreeMap<String, ProcessView>);
+pub struct ProcessLedger {
+    views: BTreeMap<String, ProcessView>,
+    revision: u64,
+}
 
 impl ProcessLedger {
-    pub fn apply(&mut self, fact: &ProcessFact) -> Result<(), ConversationFailure> {
+    pub fn apply(&mut self, fact: &ProcessFact, sequence: u64) -> Result<(), ConversationFailure> {
         let failure = || ConversationFailure::new("进程事实与已登记的来源或状态不一致");
         match &fact.change {
             ProcessChange::Started => {
-                if self.0.contains_key(&fact.session_id)
+                if self.views.contains_key(&fact.session_id)
                     || uuid::Uuid::parse_str(&fact.session_id).is_err()
                 {
                     return Err(failure());
                 }
-                self.0
+                self.views
                     .insert(fact.session_id.clone(), ProcessView::registered(fact));
             }
             change => {
                 let view = self
-                    .0
+                    .views
                     .get_mut(&fact.session_id)
                     .filter(|view| view.origin == fact.origin)
                     .ok_or_else(failure)?;
@@ -35,11 +38,12 @@ impl ProcessLedger {
                 view.apply(change);
             }
         }
+        self.revision = self.revision.max(sequence);
         Ok(())
     }
 
     pub fn historical(&mut self) {
-        for process in self.0.values_mut() {
+        for process in self.views.values_mut() {
             if matches!(
                 process.phase,
                 ProcessPhase::Running | ProcessPhase::CleanupUnconfirmed
@@ -51,7 +55,7 @@ impl ProcessLedger {
     }
 
     pub fn views(&self) -> impl Iterator<Item = &ProcessView> {
-        self.0.values()
+        self.views.values()
     }
 
     pub fn has_active(&self) -> bool {
@@ -61,5 +65,17 @@ impl ProcessLedger {
                 ProcessPhase::Running | ProcessPhase::CleanupUnconfirmed
             )
         })
+    }
+
+    pub fn projection(&self, session: crate::SessionId) -> crate::SessionProcesses {
+        crate::SessionProcesses {
+            session,
+            revision: self.revision,
+            processes: self
+                .views()
+                .filter(|process| process.phase != ProcessPhase::Consumed)
+                .cloned()
+                .collect(),
+        }
     }
 }

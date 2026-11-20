@@ -15,6 +15,7 @@ mod queue;
 mod reading;
 mod reasoning;
 mod request_inspection;
+mod task_panel;
 mod tool_timeline;
 mod working_directory;
 

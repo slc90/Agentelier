@@ -180,9 +180,12 @@ pub struct SessionTaskView {
     pub call_id: String,
     pub tool: String,
     pub status: ToolStatus,
+    pub source: &'static str,
+    pub argument_bytes: Option<usize>,
+    pub delivery: TaskDelivery,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskDelivery {
     AwaitingResult,
@@ -227,6 +230,9 @@ pub struct SessionTasks {
     pub session: SessionId,
     pub revision: u64,
     pub tasks: Vec<SessionTaskView>,
+    pub background_paused: bool,
+    pub queue_paused: bool,
+    pub external_unconfirmed: Vec<String>,
 }
 
 #[derive(Default)]
@@ -236,6 +242,11 @@ pub(crate) struct TaskLedger {
 }
 
 impl TaskLedger {
+    pub(crate) fn matches_execution(&self, task: TaskId, instance: Uuid) -> bool {
+        self.tasks
+            .iter()
+            .any(|entry| entry.registration.execution == TaskExecution { task, instance })
+    }
     pub(crate) fn prepare(
         &self,
         calls: &[FunctionCall],
@@ -694,12 +705,17 @@ impl TaskLedger {
         }
     }
 
-    pub(crate) fn view(&self, session: SessionId) -> SessionTasks {
+    pub(crate) fn view(
+        &self,
+        session: &crate::SessionView,
+        tools: &agentelier_tools::ToolCatalog,
+    ) -> SessionTasks {
         let tasks = self
             .tasks
             .iter()
             .map(|task| {
                 let registration = &task.registration;
+                let report = task.report(tools);
                 SessionTaskView {
                     cancelling: task.cancellation_requested && task.in_progress(),
                     task: registration.execution.task,
@@ -709,13 +725,24 @@ impl TaskLedger {
                     call_id: registration.call_id.clone(),
                     tool: registration.tool.clone(),
                     status: task.status,
+                    source: report.source,
+                    argument_bytes: report.argument_bytes,
+                    delivery: report.delivery,
                 }
             })
             .collect();
         SessionTasks {
-            session,
+            session: session.id,
             revision: self.revision,
             tasks,
+            background_paused: session.task_policy.background_paused,
+            queue_paused: session.queue_paused,
+            external_unconfirmed: session
+                .task_policy
+                .external_unconfirmed
+                .iter()
+                .cloned()
+                .collect(),
         }
     }
 }

@@ -289,6 +289,7 @@ impl TurnTools {
             .call(move |mut turn| turn.apply_task_policy(&change))
             .await?;
         dispatcher.task_policy(policy);
+        active.publish_tasks().await?;
         Ok(())
     }
 
