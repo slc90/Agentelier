@@ -1,4 +1,6 @@
-use agentelier_conversation::{InitialSession, RecordEvent, SessionId, SessionRecord, StoredImage};
+use agentelier_conversation::{
+    AudioAttachment, InitialSession, RecordEvent, SessionId, SessionRecord, StoredImage,
+};
 use agentelier_tools::ImagePayload;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -54,6 +56,11 @@ pub struct RenameCommit {
 }
 
 enum Command {
+    AudioDraft(
+        SessionId,
+        Option<crate::audio::ImportedAudio>,
+        oneshot::Sender<io::Result<Option<AudioAttachment>>>,
+    ),
     Delete(SessionId, oneshot::Sender<io::Result<DeleteCommit>>),
     Rename(SessionId, String, oneshot::Sender<io::Result<RenameCommit>>),
     Scan(oneshot::Sender<io::Result<ArchiveCatalog>>),
@@ -91,6 +98,30 @@ enum Command {
 pub struct SessionStoreClient(mpsc::Sender<Command>);
 
 impl SessionStoreClient {
+    pub async fn change_audio_draft(
+        &self,
+        session: SessionId,
+        path: Option<PathBuf>,
+    ) -> io::Result<Option<AudioAttachment>> {
+        let audio = if let Some(path) = path {
+            Some(
+                tokio::task::spawn_blocking(move || crate::audio::import(&path))
+                    .await
+                    .map_err(io::Error::other)??,
+            )
+        } else {
+            None
+        };
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::AudioDraft(session, audio, reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("音频附件提交未返回结果"))?
+    }
+
     pub fn delete(
         &self,
         session: SessionId,
@@ -332,6 +363,20 @@ impl SessionStore {
                         }
                         Command::ReadGenerated(session, image, reply) => {
                             let _closed = reply.send(crate::attachments::read_generated(&root, session, &image));
+                        }
+                        Command::AudioDraft(session, audio, reply) => {
+                            let result = (|| {
+                                let attachment = if let Some(audio) = audio {
+                                    crate::attachments::save_audio(&root, session, &audio)?;
+                                    Some(audio.attachment)
+                                } else { None };
+                                let commit = writer.append(&root, RecordEvent::AudioDraft { session, attachment: attachment.clone() })?;
+                                if let Some(failure) = commit.summary_failure {
+                                    error!(session_id = %session, error = %failure, "会话草稿音频已提交，摘要更新失败");
+                                }
+                                Ok(attachment)
+                            })();
+                            let _closed = reply.send(result);
                         }
                         Command::Create(initial, reply) => {
                             let result = create(&root, *initial);

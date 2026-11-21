@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 pub struct RestoredSession {
+    audio_draft: Option<crate::AudioAttachment>,
     pub state: StoredState,
     initial: InitialSession,
     history: ProtocolHistory,
@@ -452,6 +453,8 @@ pub fn restore(
     let mut notices = Vec::new();
     let mut historical_processes = BTreeMap::new();
     let mut generated_images = HashMap::new();
+    let mut audio_draft: Option<crate::AudioAttachment> = None;
+    let mut audio_ids = HashSet::new();
     let mut processes = crate::ProcessLedger::default();
     let mut finalized_without_join = false;
     for record in records {
@@ -463,6 +466,15 @@ pub fn restore(
         }
         let prepared = matches!(&record.event, RecordEvent::RequestPrepared { .. });
         match record.event {
+            RecordEvent::AudioDraft { attachment, .. } => {
+                if let Some(audio) = &attachment {
+                    audio.validate()?;
+                    if !audio_ids.insert(audio.id) {
+                        return Err(ConversationFailure::new("存档重复登记同一音频附件"));
+                    }
+                }
+                audio_draft = attachment;
+            }
             RecordEvent::Process { fact } => {
                 if matches!(fact.change, agentelier_tools::ProcessChange::Started)
                     && !state
@@ -646,6 +658,18 @@ pub fn restore(
                     return Err(ConversationFailure::new("存档在未封闭响应之后开始另一任务"));
                 }
                 let mut incoming = incoming;
+                if let Some(turn) = incoming.turn.as_ref() {
+                    if turn.is_retry {
+                        if turn.audio != state.turn.as_ref().and_then(|prior| prior.audio.clone()) {
+                            return Err(ConversationFailure::new("重试的音频附件来源不一致"));
+                        }
+                    } else if let Some(audio) = &turn.audio {
+                        if turn.result_continuation || audio_draft.as_ref() != Some(audio) {
+                            return Err(ConversationFailure::new("音频附件没有对应的会话草稿记录"));
+                        }
+                        audio_draft = None;
+                    }
+                }
                 incoming.task_policy.external_unconfirmed =
                     std::mem::take(&mut state.task_policy.external_unconfirmed);
                 retained_input = incoming
@@ -1281,6 +1305,7 @@ pub fn restore(
     tasks.recover_interrupted();
     processes.historical();
     Ok(RestoredSession {
+        audio_draft,
         state,
         initial,
         history,
@@ -1387,6 +1412,7 @@ impl Conversation {
             }),
             turn: restored.state.turn,
             previous_turns: restored.state.previous_turns,
+            audio_draft: restored.audio_draft,
             committed_items: restored.state.committed_items,
             execution_blocked: restored.state.execution_blocked,
             process_cleanup_unconfirmed: false,

@@ -2,6 +2,7 @@
 compile_error!("This application supports Windows x64 only");
 
 mod attachments;
+mod audio;
 mod deletion;
 mod journal;
 mod reader;

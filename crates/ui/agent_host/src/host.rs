@@ -182,6 +182,10 @@ impl AgentHost {
         self.submit(|connection| connection.request_image_attachment(session, call, action))
     }
 
+    pub fn change_audio_draft(&self, session: SessionId, path: Option<PathBuf>) -> Result<u64> {
+        self.submit(|connection| connection.change_audio_draft(session, path))
+    }
+
     pub fn mcp_config(&self, change: agentelier_bridge_connection::ConfigChange) -> Result<u64> {
         self.submit(|connection| connection.mcp_config(change))
     }

@@ -118,6 +118,8 @@ LLM Model 通过 Account 获取凭据，请求 Codex 的目录与 Responses，�
 
 `generate_image` 通过同一任务授权访问 Codex Images。LLM Model 负责图像请求和返回验证，Tools 描述调用，Runtime 沿原工具派发与取消规则执行。Turn Runner 等待 Session Store 确认原图及可用的模型回看附件，再将它们与原调用关联到可恢复的工具结果。Chat UI 通过同一调用身份请求 Runtime 从已确认附件生成显示资源或另存原件。详见[图片生成](subscription-media/02-image-generation.md)。
 
+Chat UI 通过 Widgetry 选择本地音频。Session Store 后台核对 WAV 或 MP3 实际内容，并以不可变字节和草稿记录提交。Conversation 将已确认的草稿附件与用户输入绑定，Bridge 仅传递展示元数据。详见[音频文件理解](subscription-media/03-audio-file-understanding.md)。
+
 Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模型任务和独立 Turn Runner。Runtime 拥有线程、队列、取消令牌、JoinHandle 及真实回收信号；账号处理期间模型任务仍可并发等待网络。它不包含 OAuth、认证文件实现或模型网络协议。依赖为 Runtime → Account → Login、Runtime → LLM Model → Account，以及 Runtime → Tools，以及 Runtime → Turn Runner → Conversation / LLM Model / Account，无循环。
 
 来源断开或文件失效时，共享门控暂停新凭据交付，Runtime 停止旧模型任务并回收工具。队列暂停和已接纳结果持久确认后，账号区显示新的来源状态。详见[认证运行与凭据管理](modules/authentication.md)。

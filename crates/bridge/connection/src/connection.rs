@@ -77,6 +77,7 @@ pub struct Connection {
     pending_mcp: HashSet<u64>,
     pending_memory: HashSet<u64>,
     pending_images: HashSet<u64>,
+    pending_audio: HashMap<u64, SessionId>,
 }
 impl Connection {
     pub fn start(
@@ -161,6 +162,7 @@ impl Connection {
             pending_mcp: HashSet::new(),
             pending_memory: HashSet::new(),
             pending_images: HashSet::new(),
+            pending_audio: HashMap::new(),
         })
     }
     pub fn request_memory(&mut self, request: crate::MemoryRequest) -> Result<u64, BridgeFailure> {
@@ -195,6 +197,25 @@ impl Connection {
             .request_image_attachment(id, session, call, action)
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
         self.pending_images.insert(id);
+        Ok(id)
+    }
+
+    pub fn change_audio_draft(
+        &mut self,
+        session: SessionId,
+        path: Option<PathBuf>,
+    ) -> Result<u64, BridgeFailure> {
+        if self.stopping || self.failure.is_some() {
+            return Err(BridgeFailure("执行连接已经关闭".into()));
+        }
+        let id = self
+            .operations
+            .allocate()
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.runtime
+            .change_audio_draft(id, session, path)
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.pending_audio.insert(id, session);
         Ok(id)
     }
 
@@ -460,6 +481,16 @@ impl Connection {
         match received {
             Ok(event) => {
                 if let BridgeEventKind::Conversation(kind) = &event.kind {
+                    if let agentelier_conversation_bridge::ConversationEvent::AudioDraft {
+                        session,
+                        ..
+                    } = kind.as_ref()
+                    {
+                        if self.pending_audio.remove(&event.operation_id) != Some(*session) {
+                            return self.protocol_failure();
+                        }
+                        return Ok(Some(event));
+                    }
                     let kind = kind.as_ref();
                     if let agentelier_conversation_bridge::ConversationEvent::Renamed {
                         session,

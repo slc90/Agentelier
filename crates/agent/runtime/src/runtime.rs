@@ -3,8 +3,8 @@ use agentelier_account::{
 };
 use agentelier_conversation::SessionId;
 use agentelier_conversation::{
-    Conversation, ConversationEvent, ConversationFailure, ConversationRequest, MAX_PENDING_STEERS,
-    SessionCommand, SteerInput,
+    AudioAttachment, Conversation, ConversationEvent, ConversationFailure, ConversationRequest,
+    MAX_PENDING_STEERS, SessionCommand, SteerInput,
 };
 use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
 use agentelier_memory::Memory;
@@ -113,6 +113,8 @@ enum Command {
     Memory(u64, MemoryRequest),
     ImageAttachment(u64, SessionId, String, ImageAttachmentAction),
     ImageAttachmentFinished(u64, io::Result<ImageAttachmentReply>),
+    AudioDraft(u64, SessionId, Option<PathBuf>),
+    AudioDraftFinished(u64, SessionId, io::Result<Option<AudioAttachment>>),
     McpMaterialFinished(Result<agentelier_mcp::MaterialReply, String>),
     McpConfig(u64, agentelier_mcp::ConfigChange),
     McpStatus(Vec<agentelier_mcp::ConnectionStatus>),
@@ -256,6 +258,7 @@ impl AgentRuntime {
                         let mut mcp_settings = agentelier_mcp::ConfigStore::open(&data_root);
                         let mut material: Option<PendingMaterial> = None;
                         let mut image_attachments = tokio::task::JoinSet::new();
+                        let mut audio_drafts = tokio::task::JoinSet::new();
                         let mut mcp_connections = agentelier_mcp::Connections::default();
                         if let Ok(servers) = mcp_settings.servers() {
                             mcp_connections.configure(servers);
@@ -298,6 +301,11 @@ impl AgentRuntime {
                                         let (id, result) = result.ok_or(RuntimeFailure::ModelState)?
                                             .map_err(|_| RuntimeFailure::ModelState)?;
                                         Command::ImageAttachmentFinished(id, result)
+                                    },
+                                    result = audio_drafts.join_next(), if !audio_drafts.is_empty() => {
+                                        let (id, session, result) = result.ok_or(RuntimeFailure::ModelState)?
+                                            .map_err(|_| RuntimeFailure::ModelState)?;
+                                        Command::AudioDraftFinished(id, session, result)
                                     },
                                     status = mcp_connections.changed() => Command::McpStatus(status),
                                     result = async { match &mut catalog {
@@ -358,6 +366,23 @@ impl AgentRuntime {
                                     },
                                 };
                                 match command {
+                                    Command::AudioDraft(id, session, path) => {
+                                        if !audio_drafts.is_empty() || !conversation.is_current(session) {
+                                            let result = Err("会话已变化或上一次音频操作尚未结束".into());
+                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::AudioDraft { session, result }))?;
+                                        } else {
+                                            let client = store.client();
+                                            audio_drafts.spawn(async move { (id, session, client.change_audio_draft(session, path).await) });
+                                        }
+                                    }
+                                    Command::AudioDraftFinished(id, session, result) => {
+                                        match &result {
+                                            Ok(draft) => { conversation.apply_audio_draft(session, draft.clone()); }
+                                            Err(failure) => error!(operation_id = id, session_id = %session, error = %failure, "草稿音频提交失败"),
+                                        }
+                                        let result = result.map_err(|failure| failure.to_string());
+                                        emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::AudioDraft { session, result }))?;
+                                    }
                                     Command::ImageAttachment(id, session, call, action) => {
                                         if let Some(image) = conversation.generated_image(session, &call) {
                                             let client = store.client();
@@ -866,6 +891,13 @@ impl AgentRuntime {
                                 Ok((_, Ok(_))) => {}
                             }
                         }
+                        while let Some(result) = audio_drafts.join_next().await {
+                            match result {
+                                Ok((id, session, Err(failure))) => error!(operation_id = id, session_id = %session, error = %failure, "关闭期间草稿音频提交失败"),
+                                Err(failure) => error!(error = %failure, "关闭期间草稿音频执行异常结束"),
+                                Ok((_, _, Ok(_))) => {}
+                            }
+                        }
                         let mcp_finished = mcp_connections.shutdown().await;
                         let memory_worker_finished = if let Some(worker) = memory_worker {
                             worker.stop().await
@@ -954,6 +986,15 @@ impl AgentRuntime {
         action: ImageAttachmentAction,
     ) -> Result<(), RuntimeFailure> {
         self.send(Command::ImageAttachment(id, session, call, action))
+    }
+
+    pub fn change_audio_draft(
+        &self,
+        id: u64,
+        session: SessionId,
+        path: Option<PathBuf>,
+    ) -> Result<(), RuntimeFailure> {
+        self.send(Command::AudioDraft(id, session, path))
     }
 
     pub fn mcp_material(

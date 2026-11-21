@@ -97,6 +97,7 @@ image = { version = "0.25.9", default-features = false, features = [
   "png",
   "jpeg",
 ] }
+symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "wav", "pcm", "id3v2"] }
 url = "2.5"
 uritemplate = { package = "uritemplate-next", version = "0.2.0" }
 time = { version = "0.3", default-features = false, features = ["parsing"] }

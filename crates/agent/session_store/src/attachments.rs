@@ -1,4 +1,6 @@
-use agentelier_conversation::{SessionId, StoredImage};
+use agentelier_conversation::{
+    AudioAttachment, MAX_AUDIO_BYTES, MAX_SESSION_AUDIO_BYTES, SessionId, StoredImage,
+};
 use agentelier_tools::{
     ImageDescriptor, ImagePayload, MAX_ENCODED_IMAGE_BYTES, MAX_ORIGINAL_IMAGE_BYTES,
     MAX_SESSION_ORIGINAL_IMAGE_BYTES, MAX_TOOL_BODY_BYTES, OriginalImage,
@@ -153,6 +155,70 @@ fn write_encoded(
             }
         }
     }
+}
+
+pub(super) fn audio_file(name: &str) -> bool {
+    name.strip_prefix("audio-")
+        .and_then(|name| name.rsplit_once('.'))
+        .is_some_and(|(digest, extension)| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                && matches!(extension, "wav" | "mp3")
+        })
+}
+
+fn audio_filename(attachment: &AudioAttachment) -> io::Result<String> {
+    attachment.validate().map_err(io::Error::other)?;
+    Ok(format!(
+        "audio-{}.{}",
+        attachment.digest,
+        attachment.format.extension()
+    ))
+}
+
+fn read_audio_file(path: &Path, attachment: &AudioAttachment) -> io::Result<Vec<u8>> {
+    let bytes = read_encoded(path, attachment.encoded_bytes, MAX_AUDIO_BYTES)?;
+    if bytes.len() != attachment.encoded_bytes
+        || crate::audio::checksum(&bytes) != attachment.digest
+    {
+        return Err(io::Error::other("已保存音频的长度或摘要不符"));
+    }
+    Ok(bytes)
+}
+
+pub(super) fn read_audio(
+    root: &Path,
+    session: SessionId,
+    attachment: &AudioAttachment,
+) -> io::Result<Vec<u8>> {
+    let name = audio_filename(attachment)?;
+    let directory = attachment_directory(root, session, false)?;
+    read_audio_file(&directory.join(name), attachment)
+}
+
+pub(super) fn save_audio(
+    root: &Path,
+    session: SessionId,
+    audio: &crate::audio::ImportedAudio,
+) -> io::Result<()> {
+    let name = audio_filename(&audio.attachment)?;
+    let directory = attachment_directory(root, session, true)?;
+    let mut used = audio.attachment.encoded_bytes as u64;
+    for entry in fs::read_dir(&directory)? {
+        let entry = entry?;
+        let filename = entry.file_name();
+        if filename != name.as_str() && filename.to_str().is_some_and(audio_file) {
+            used = used.saturating_add(entry.metadata()?.len());
+        }
+    }
+    if used > MAX_SESSION_AUDIO_BYTES {
+        return Err(io::Error::other("音频附件超过会话 128 MiB 累计限额"));
+    }
+    write_encoded(&directory.join(name), &audio.bytes, |path| {
+        read_audio_file(path, &audio.attachment).map(drop)
+    })
 }
 
 const GENERATED_PREFIX: &str = "generated-";

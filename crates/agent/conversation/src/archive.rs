@@ -74,6 +74,10 @@ pub enum RecoveryEvidence {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RecordEvent {
+    AudioDraft {
+        session: SessionId,
+        attachment: Option<crate::AudioAttachment>,
+    },
     Process {
         fact: agentelier_tools::ProcessFact,
     },
@@ -181,13 +185,14 @@ impl RecordEvent {
     pub fn session(&self) -> SessionId {
         match self {
             Self::Process { fact } => fact.origin.session,
+            Self::AudioDraft { session, .. } => *session,
             _ => self.state().map_or(SessionId::nil(), |state| state.session),
         }
     }
 
     pub fn state(&self) -> Option<&StoredState> {
         match self {
-            Self::Process { .. } => None,
+            Self::Process { .. } | Self::AudioDraft { .. } => None,
             Self::ProjectPublished { state, .. }
             | Self::RequestPrepared { state }
             | Self::RequestProgress { state }

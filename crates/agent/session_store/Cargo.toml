@@ -10,6 +10,7 @@ agentelier_tools = { path = "../tools" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+symphonia.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 tracing.workspace = true

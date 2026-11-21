@@ -6,6 +6,7 @@ mod project_context;
 pub use agentelier_llm_model::PublicationKind;
 pub use project_context::{PreparedRequestFact, ProjectCandidate, ProjectContextState};
 mod archive;
+mod audio;
 mod control;
 mod conversation;
 mod memory_evidence;
@@ -17,6 +18,10 @@ mod task_actions;
 mod task_policy;
 mod tasks;
 pub use archive::ArchiveEntry;
+pub use audio::{
+    AudioAttachment, AudioFormat, AudioId, MAX_AUDIO_BYTES, MAX_AUDIO_NAME_CHARS,
+    MAX_SESSION_AUDIO_BYTES,
+};
 pub use memory_evidence::{MemorySourceTurn, memory_evidence};
 pub use processes::ProcessLedger;
 pub use restore::{RestoredSession, restore};

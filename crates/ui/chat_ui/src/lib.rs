@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod active_input;
 mod archives;
+mod audio_attachment;
 pub use archives::{ArchiveChoice, ArchiveState};
 mod conversation;
 mod generated_image;

@@ -124,6 +124,7 @@ pub struct ChatTurn {
     pub input_id: u64,
     pub is_retry: bool,
     pub input: String,
+    pub audio: Option<crate::audio_attachment::ChatAudio>,
     pub messages: Vec<ChatMessage>,
     pub status: ChatTurnStatus,
     pub request_items: Vec<ChatHistoryItem>,
@@ -154,6 +155,7 @@ pub struct ChatSession {
     pub instruction_snapshot: String,
     pub turn: Option<ChatTurn>,
     pub previous_turns: Vec<ChatTurn>,
+    pub audio_draft: Option<crate::audio_attachment::ChatAudio>,
     pub committed_items: Vec<ChatHistoryItem>,
     pub execution_blocked: bool,
     pub tool_catalog: Vec<(String, String)>,
@@ -305,6 +307,7 @@ pub(crate) fn install(app: &mut App) {
     crate::project_context::install(app);
     crate::request_inspection::install(app);
     crate::tool_timeline::install(app);
+    crate::audio_attachment::install(app);
     crate::queue::install(app);
     crate::task_panel::install(app);
     app.init_resource::<SessionUiStates>()
@@ -362,6 +365,7 @@ pub(crate) fn panel(state: &ChatState, account: &AccountState) -> impl Scene {
             Name("ChatMessageScroll") crate::reading::ChatReadingScroll Node { width: percent(100), height: px(0), flex_basis: px(0), flex_grow: 1.0, flex_shrink: 1.0, min_height: px(0) }--
             @crate::task_panel::panel()--
             @crate::queue::panel()--
+            @crate::audio_attachment::panel()--
             @WidgetryTextField {
                 @value: {draft}, @multiline: true,
                 @auto_size: {Some(AutoSize { min_rows: COMPOSER_MIN_ROWS, max_rows: COMPOSER_MAX_ROWS })},
@@ -803,6 +807,12 @@ fn sync_draft(world: &mut World, draft: String) -> Result {
 }
 
 fn send(world: &mut World) -> Result {
+    if world
+        .resource::<crate::audio_attachment::AudioDraftState>()
+        .busy()
+    {
+        return Ok(());
+    }
     if world.resource::<ChatState>().operation.is_some() {
         return steer(world);
     }
@@ -818,8 +828,9 @@ fn send(world: &mut World) -> Result {
     let session = state
         .session
         .as_ref()
-        .ok_or_else(|| io::Error::other("发送消息缺少聊天会话"))?
-        .id;
+        .ok_or_else(|| io::Error::other("发送消息缺少聊天会话"))?;
+    let audio = session.audio_draft.as_ref().map(|audio| audio.id);
+    let session = session.id;
     let input = state.draft.clone();
     let submitted = PendingDraft {
         id: 0,
@@ -828,7 +839,11 @@ fn send(world: &mut World) -> Result {
     };
     let result = world
         .resource::<AgentHost>()
-        .request_conversation(ConversationRequest::Send { session, input });
+        .request_conversation(ConversationRequest::Send {
+            session,
+            input,
+            audio,
+        });
     let mut state = world.resource_mut::<ChatState>();
     match result {
         Ok(id) => {
@@ -1071,6 +1086,7 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
         is_retry: turn.is_retry,
         operation_id: turn.operation_id,
         input: turn.input,
+        audio: turn.audio.map(Into::into),
         messages: turn
             .messages
             .into_iter()
@@ -1174,6 +1190,7 @@ fn project(session: SessionView) -> Result<ChatSession> {
         ),
         instruction_snapshot: serde_json::to_string_pretty(session.settings.instructions.as_ref())?,
         turn: session.turn.map(|turn| project_turn(*turn)).transpose()?,
+        audio_draft: session.audio_draft.map(Into::into),
         previous_turns: session
             .previous_turns
             .into_iter()
@@ -1194,6 +1211,10 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         .drain()
         .collect();
     for event in events {
+        if let ConversationEvent::AudioDraft { session, result } = event.kind {
+            crate::audio_attachment::receipt(world, event.operation_id, session, result);
+            continue;
+        }
         if let ConversationEvent::IdleUpdated(view) = event.kind {
             let state = world.resource::<ChatState>();
             if state.operation.is_none()
@@ -1466,6 +1487,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 "聊天操作未被接纳"
             ),
             ConversationEvent::Tasks(_)
+            | ConversationEvent::AudioDraft { .. }
             | ConversationEvent::IdleUpdated(_)
             | ConversationEvent::Processes(_)
             | ConversationEvent::TaskAction(_)
@@ -1512,6 +1534,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 world.resource_mut::<ChatState>().session = Some(project(view)?);
             }
             ConversationEvent::Tasks(_)
+            | ConversationEvent::AudioDraft { .. }
             | ConversationEvent::IdleUpdated(_)
             | ConversationEvent::Processes(_)
             | ConversationEvent::TaskAction(_)
@@ -1543,6 +1566,9 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         .last()
         .map(|failure| failure.reason.clone())
     {
+        world
+            .resource_mut::<crate::audio_attachment::AudioDraftState>()
+            .host_failed(&reason);
         world.resource_mut::<crate::ArchiveState>().loading = false;
         world.resource_mut::<crate::ArchiveState>().refreshing = false;
         crate::session_actions::failed(world, &reason);
@@ -1567,6 +1593,7 @@ enum RowContent {
     Plain(String),
     Assistant { label: String, source: String },
     Tool(ChatTool),
+    Audio(crate::audio_attachment::ChatAudio),
 }
 
 fn reconcile(world: &mut World) -> Result {
@@ -1592,7 +1619,17 @@ fn reconcile(world: &mut World) -> Result {
                     item_id: None,
                 };
                 if !turn.result_continuation && !desired.iter().any(|(key, _)| key == &user_key) {
-                    desired.push((user_key, RowContent::Plain(format!("你\n{}", turn.input))));
+                    desired.push((
+                        user_key.clone(),
+                        RowContent::Plain(format!("你\n{}", turn.input)),
+                    ));
+                    if let Some(audio) = &turn.audio {
+                        let key = ChatRow {
+                            item_id: Some(format!("audio-{}", audio.id)),
+                            ..user_key
+                        };
+                        desired.push((key, RowContent::Audio(audio.clone())));
+                    }
                 }
                 if turn.messages.is_empty() && turn.tools.is_empty() {
                     desired.push((
@@ -1689,6 +1726,7 @@ fn reconcile(world: &mut World) -> Result {
             if let Some((entity, _)) = existing.iter().find(|(_, row)| *row == key) {
                 ordered.push(*entity);
                 match content {
+                    RowContent::Audio(_) => {}
                     RowContent::Tool(tool) => crate::tool_timeline::set_tool(world, *entity, tool)?,
                     RowContent::Plain(text) => {
                         world
@@ -1725,6 +1763,10 @@ fn reconcile(world: &mut World) -> Result {
                         .unwrap_or_else(|| key.item_id.clone().unwrap_or_else(|| "user".into()))
                 );
                 let entity = match content {
+                    RowContent::Audio(audio) => world.commands().spawn_scene_with_error_handler(bsn! {
+                        @crate::audio_attachment::card(audio)
+                        Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
+                    }).id(),
                     RowContent::Tool(tool) => {
                         let expanded = state.expanded_tools.contains(&name);
                         let card_key = name.clone();
@@ -1872,6 +1914,7 @@ fn update(
     account: Res<AccountState>,
     archives: Res<crate::ArchiveState>,
     activity: Res<HostActivity>,
+    audio: Res<crate::audio_attachment::AudioDraftState>,
     buttons: Query<(Entity, &ChatAction)>,
     mut texts: Query<(
         &mut Text,
@@ -1887,6 +1930,7 @@ fn update(
         && !account.is_changed()
         && !activity.is_changed()
         && !archives.is_changed()
+        && !audio.is_changed()
     {
         return;
     }
@@ -1921,7 +1965,8 @@ fn update(
             ChatAction::Retry => can_retry(&state, &model, &account, &activity),
             ChatAction::Queue => !account.runtime_failed && crate::queue::can_enqueue(&state),
             ChatAction::Send => {
-                state.can_send(&model, &account, &activity) || state.can_steer(&account)
+                !audio.busy()
+                    && (state.can_send(&model, &account, &activity) || state.can_steer(&account))
             }
             ChatAction::Stop => {
                 !state.cancelling

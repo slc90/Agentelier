@@ -31,6 +31,7 @@ pub enum ConversationRequest {
     Send {
         session: SessionId,
         input: String,
+        audio: Option<agentelier_conversation::AudioId>,
     },
     Retry {
         session: SessionId,
@@ -197,6 +198,7 @@ pub struct TurnView {
     pub input_id: u64,
     pub is_retry: bool,
     pub input: String,
+    pub audio: Option<AudioAttachmentView>,
     pub messages: Vec<MessageView>,
     pub status: TurnStatus,
     pub request_items: Vec<HistoryItem>,
@@ -254,11 +256,35 @@ pub struct SessionView {
     pub settings: SessionSettings,
     pub turn: Option<Box<TurnView>>,
     pub previous_turns: Vec<TurnView>,
+    pub audio_draft: Option<AudioAttachmentView>,
     pub committed_items: Vec<HistoryItem>,
     pub execution_blocked: bool,
     pub tool_catalog: Vec<(String, String)>,
     pub queue: Vec<QueuedInput>,
     pub queue_paused: bool,
+}
+
+#[derive(Clone)]
+pub struct AudioAttachmentView {
+    pub id: agentelier_conversation::AudioId,
+    pub name: String,
+    pub mime: &'static str,
+    pub digest: String,
+    pub encoded_bytes: usize,
+    pub duration_ms: u64,
+}
+
+impl From<agentelier_conversation::AudioAttachment> for AudioAttachmentView {
+    fn from(audio: agentelier_conversation::AudioAttachment) -> Self {
+        Self {
+            id: audio.id,
+            name: audio.name,
+            mime: audio.format.mime(),
+            digest: audio.digest,
+            encoded_bytes: audio.encoded_bytes,
+            duration_ms: audio.duration_ms,
+        }
+    }
 }
 #[derive(Clone)]
 pub enum ProjectCollectionStatus {
@@ -328,6 +354,10 @@ fn project_context(state: agentelier_conversation::ProjectContextState) -> Proje
 }
 
 pub enum ConversationEvent {
+    AudioDraft {
+        session: SessionId,
+        result: Result<Option<AudioAttachmentView>, String>,
+    },
     IdleUpdated(SessionView),
     Processes(SessionProcesses),
     TaskAction(TaskActionReceipt),
@@ -425,9 +455,15 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
             turn: agentelier_conversation::TurnId(turn),
             failed_request,
         },
-        ConversationRequest::Send { session, input } => {
-            agentelier_conversation::ConversationRequest::Send { session, input }
-        }
+        ConversationRequest::Send {
+            session,
+            input,
+            audio,
+        } => agentelier_conversation::ConversationRequest::Send {
+            session,
+            input,
+            audio,
+        },
     }
 }
 
@@ -522,6 +558,7 @@ fn view(session: agentelier_conversation::SessionView) -> SessionView {
         },
         turn: session.turn.map(|turn| Box::new(turn_view(*turn))),
         previous_turns: session.previous_turns.into_iter().map(turn_view).collect(),
+        audio_draft: session.audio_draft.map(Into::into),
         committed_items: session
             .committed_items
             .into_iter()
@@ -652,6 +689,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
         is_retry: turn.is_retry,
         operation_id: turn.operation_id,
         input: turn.input,
+        audio: turn.audio.map(Into::into),
         messages: turn
             .messages
             .into_iter()
@@ -709,6 +747,12 @@ pub fn convert(event: agentelier_conversation::ConversationEvent) -> Conversatio
     match event {
         agentelier_conversation::ConversationEvent::IdleUpdated(state) => {
             ConversationEvent::IdleUpdated(view(state))
+        }
+        agentelier_conversation::ConversationEvent::AudioDraft { session, result } => {
+            ConversationEvent::AudioDraft {
+                session,
+                result: result.map(|draft| draft.map(Into::into)),
+            }
         }
         agentelier_conversation::ConversationEvent::TaskAction(receipt) => {
             ConversationEvent::TaskAction(receipt)
