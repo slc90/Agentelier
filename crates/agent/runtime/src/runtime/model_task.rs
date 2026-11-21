@@ -35,6 +35,22 @@ pub(super) struct ModelTask {
     pub(super) handle: tokio::task::JoinHandle<Option<TaskResult>>,
 }
 impl ModelTask {
+    pub(super) fn check_instance(&self, conversation: &Conversation) -> Result<(), RuntimeFailure> {
+        if !self.chat {
+            return Ok(());
+        }
+        let bound = self.control.turn.get().ok_or(RuntimeFailure::ModelState)?;
+        if conversation.root_instance(bound.session) == Some(bound.instance) {
+            Ok(())
+        } else {
+            Err(ConversationFailure::new(format!(
+                "忽略旧 Root 实例的执行事件：session={}, instance={}, turn={}",
+                bound.session, bound.instance, bound.turn,
+            ))
+            .into())
+        }
+    }
+
     pub(super) fn start(
         id: u64,
         control: ModelControl,
@@ -402,6 +418,9 @@ pub(super) async fn stop_model(
     store: &agentelier_session_store::SessionStore,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
+    if let Some(task) = model.as_ref() {
+        task.check_instance(conversation)?;
+    }
     if let Some(task) = model.take() {
         task.control.cancel.cancel();
         debug!(operation_id = task.id, "已请求取消模型操作，等待执行体结束");
@@ -509,10 +528,7 @@ pub(super) fn start_queued(
         store.client(),
     );
     let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
-    control
-        .turn
-        .set((view.id, turn.id.0))
-        .map_err(|_| RuntimeFailure::ModelState)?;
+    control.bind_root(conversation, view.id, turn.id.0)?;
     *shared.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control.clone());
     emit(
         publish,

@@ -1,5 +1,7 @@
 use super::ModelControl;
-use agentelier_conversation::{Conversation, ConversationEvent, RestoredSession, SessionId};
+use agentelier_conversation::{
+    AgentId, Conversation, ConversationEvent, RestoredSession, SessionId,
+};
 use agentelier_session_store::SessionStore;
 use std::io;
 use tokio::sync::oneshot;
@@ -54,9 +56,17 @@ impl Loading {
         match result {
             Ok(restored) => {
                 let tools = mcp.restore_registrations(restored.tool_definitions());
-                let view = conversation.install_restored(restored, &tools);
-                tracing::info!(session_id = %view.id, "本地会话已打开，未启动模型或待办");
-                ConversationEvent::Opened(view)
+                let agent = AgentId::for_root(self.session);
+                match conversation.install_restored(restored, &tools) {
+                    Ok((view, instance)) => {
+                        tracing::info!(operation_id = self.id, session_id = %view.id, agent_id = %agent, agent_path = "root", runtime_instance = %instance, model = %view.settings.slug, effort = ?view.settings.effort, "本地会话已打开并登记 Root Agent");
+                        ConversationEvent::Opened(view)
+                    }
+                    Err(failure) => {
+                        tracing::error!(operation_id = self.id, session_id = %self.session, agent_id = %agent, agent_path = "root", error = %failure, "打开本地会话时 Root Agent 登记失败");
+                        ConversationEvent::ArchiveFailed(format!("无法登记 Root Agent：{failure}"))
+                    }
+                }
             }
             Err(failure) => {
                 ConversationEvent::ArchiveFailed(format!("无法打开本地会话：{failure}"))

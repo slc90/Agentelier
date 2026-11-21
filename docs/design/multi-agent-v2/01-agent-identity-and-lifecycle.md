@@ -29,6 +29,8 @@ flowchart TD
 
 ## Registry 的责任
 
+当前已接入内存身份登记。Root 映射到现有 Session UUID，创建或重置须等初始存档确认后登记，打开同一会话沿用该映射。每次打开分配新的 Runtime 实例标识。子 Agent 的标识、路径及昵称可以在 Registry 预留、提交或释放，子 Agent 身份存档属于后续增量。
+
 Registry 管理同一 Session 的 Agent Tree 索引：路径到 Agent、Agent 到父节点、子节点集合、角色与当前状态。它还负责预留 Spawn 名额、分配路径/昵称、维护总量和深度约束，并记录 Runtime 是否驻留的索引。
 
 Registry 不拥有会话历史，也不保存 OS 进程或 JoinHandle。它通过 Agent Control 与 Conversation、Session Store 协作。恢复时先从持久化 Agent 图重建身份，再按需恢复 Runtime。

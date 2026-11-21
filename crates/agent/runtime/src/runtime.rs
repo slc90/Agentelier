@@ -2,10 +2,9 @@ use agentelier_account::{
     Account, AccountCommand, AccountEffect, AccountEvent, AccountEventKind, AccountFailure,
     CredentialClient, LoginPrompt, LogoutCompletion, RefreshCompletion,
 };
-use agentelier_conversation::SessionId;
 use agentelier_conversation::{
-    AudioId, Conversation, ConversationEvent, ConversationFailure, ConversationRequest,
-    MAX_PENDING_STEERS, SessionCommand, SteerInput,
+    AgentRuntimeId, AudioId, Conversation, ConversationEvent, ConversationFailure,
+    ConversationRequest, MAX_PENDING_STEERS, SessionCommand, SessionId, SteerInput,
 };
 use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
 use agentelier_memory::Memory;
@@ -187,16 +186,46 @@ pub struct AgentRuntime {
 
 type SharedModel = Arc<Mutex<Option<ModelControl>>>;
 
+struct RootTurn {
+    session: SessionId,
+    turn: u64,
+    instance: AgentRuntimeId,
+}
+
 #[derive(Clone)]
 struct ModelControl {
     id: u64,
-    turn: Arc<OnceLock<(SessionId, u64)>>,
+    turn: Arc<OnceLock<RootTurn>>,
     cancel: CancellationToken,
     finished: CancellationToken,
     steers: mpsc::Sender<SteerInput>,
     task_actions: mpsc::Sender<agentelier_turn_runner::SessionTaskCommand>,
 }
 impl ModelControl {
+    fn bind_root(
+        &self,
+        conversation: &Conversation,
+        session: SessionId,
+        turn: u64,
+    ) -> Result<(), RuntimeFailure> {
+        let instance = conversation
+            .root_instance(session)
+            .ok_or(RuntimeFailure::ModelState)?;
+        self.turn
+            .set(RootTurn {
+                session,
+                turn,
+                instance,
+            })
+            .map_err(|_| RuntimeFailure::ModelState)
+    }
+
+    fn matches_turn(&self, session: SessionId, turn: u64) -> bool {
+        self.turn
+            .get()
+            .is_some_and(|bound| bound.session == session && bound.turn == turn)
+    }
+
     fn new(
         id: u64,
     ) -> (
@@ -673,6 +702,7 @@ impl AgentRuntime {
                                     Command::ModelFinished(result) => {
                                         let task =
                                             model.take().ok_or(RuntimeFailure::ModelState)?;
+                                        task.check_instance(&conversation)?;
                                         debug!(operation_id = task.id, "模型操作已真实结束并回收");
                                         drain_progress(&mut conversation, task.id, &mut progress_events, &store, &publish)?;
                                         let event = complete(&mut conversation, task.id, task.chat, result)?;
@@ -753,6 +783,7 @@ impl AgentRuntime {
                                                 .as_ref()
                                                 .filter(|task| task.chat)
                                                 .ok_or(RuntimeFailure::ModelState)?;
+                                            task.check_instance(&conversation)?;
                                             progress(&mut conversation, task.id, event, &store, &publish)?;
                                         } else {
                                             progress_events = None;
@@ -859,7 +890,7 @@ impl AgentRuntime {
                                                     Ok(view) => {
                                                         let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
                                                         let tools = tool_jobs::SessionTools::for_session(&mut session_tools, &view, &conversation, store.client());
-                                                        control.turn.set((view.id, turn.id.0)).map_err(|_| RuntimeFailure::ModelState)?;
+                                                        control.bind_root(&conversation, view.id, turn.id.0)?;
                                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?=Some(control.clone());
                                                         emit(
                                                             &publish,
@@ -1297,7 +1328,7 @@ impl AgentRuntime {
                     && !control.cancel.is_cancelled()
                     && !control.finished.is_cancelled()
                     && control.id == input.operation_id
-                    && control.turn.get() == Some(&(input.session, input.turn.0))
+                    && control.matches_turn(input.session, input.turn.0)
             })
             .ok_or(AccountFailure::Busy)?;
         control
@@ -1319,7 +1350,7 @@ impl AgentRuntime {
         let model = self.active_model()?;
         let Some(control) = model.as_ref().filter(|control| {
             control.id == operation
-                && control.turn.get() == Some(&(session, turn))
+                && control.matches_turn(session, turn)
                 && !control.finished.is_cancelled()
         }) else {
             return Ok(false);

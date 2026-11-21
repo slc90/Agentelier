@@ -1,6 +1,7 @@
 use crate::active::{ActiveState, ActiveTurn};
 use crate::control::SteerView;
 use crate::queue::QueuedInput;
+use crate::{AgentId, AgentRegistry, AgentRegistryError, AgentRuntimeId};
 use agentelier_llm_model::{OutputMessage, ProtocolHistory, ProtocolItemSummary};
 use agentelier_prompts::{InstructionMessage, InstructionSnapshot};
 use agentelier_tools::{ToolCatalog, ToolRegistration, ToolStatus};
@@ -9,7 +10,7 @@ use std::{error::Error, fmt};
 
 pub use uuid::Uuid as SessionId;
 pub const MAX_TURN_REQUESTS: u32 = 32;
-#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TurnId(pub u64);
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -237,6 +238,8 @@ pub struct Conversation {
     pub(crate) next_turn: u64,
     pub(crate) extensions: Arc<[ToolRegistration]>,
     pub(crate) queue_pause_revision: u64,
+    agents: AgentRegistry,
+    root_instance: Option<AgentRuntimeId>,
 }
 
 impl Conversation {
@@ -292,6 +295,7 @@ impl Conversation {
     }
 
     pub fn remove(&mut self, id: SessionId) {
+        self.agents.retire_session(id);
         if self
             .session
             .as_ref()
@@ -299,6 +303,7 @@ impl Conversation {
         {
             self.session = None;
             self.next_turn = 0;
+            self.root_instance = None;
         }
     }
     pub fn current(&self) -> Option<SessionView> {
@@ -429,6 +434,9 @@ impl Conversation {
             ));
         }
         let id = SessionId::new_v4();
+        self.agents
+            .ensure_available(id, AgentId::for_root(id))
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
         settings
             .instructions
             .validate()
@@ -498,11 +506,33 @@ impl Conversation {
         })
     }
 
-    pub fn install(&mut self, prepared: PreparedSession) -> SessionView {
+    pub fn install(
+        &mut self,
+        prepared: PreparedSession,
+    ) -> Result<(SessionView, AgentRuntimeId), AgentRegistryError> {
         let view = prepared.session.view.clone();
+        let instance = self.register_root(view.id)?;
         self.session = Some(prepared.session);
         self.next_turn = 0;
-        view
+        Ok((view, instance))
+    }
+
+    pub(crate) fn register_root(
+        &mut self,
+        session: SessionId,
+    ) -> Result<AgentRuntimeId, AgentRegistryError> {
+        self.agents
+            .register_root(session, AgentId::for_root(session))?;
+        let instance = AgentRuntimeId::allocate();
+        self.root_instance = Some(instance);
+        Ok(instance)
+    }
+
+    pub fn root_instance(&self, session: SessionId) -> Option<AgentRuntimeId> {
+        self.session
+            .as_ref()
+            .filter(|current| current.view.id == session)?;
+        self.root_instance
     }
 
     pub fn prepare_reset(

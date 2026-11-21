@@ -185,6 +185,8 @@ flowchart LR
 
 Conversation 固定 Session 的模型与推理设置，始终持有会话历史、前台状态和任务账本。Runtime 串行处理 Runner 对当前 Turn 的操作，并持有任务句柄、取消令牌与回收信号。Runner 获取冻结材料、驱动模型和工具，并等待实际保存回执。Runner 每任务通过同一 CredentialClient 捕获当前凭据身份，模型请求核对账号与认证生命周期。账号变化保留本地记录并持久暂停队列。当前支持一个内存 Session 的连续多轮交流，空闲时可确认新建或重置为全新身份与空历史。
 
+Conversation 的内存 Agent Registry 管理 Session 内的 Root 身份及子 Agent 身份预留。Root 使用 Session UUID 映射其稳定标识与历史，Runtime 用每次打开时分配的实例标识核对执行事件。详见 [聊天会话与协议历史](modules/conversation.md#设置与生命周期)。
+
 LLM Model 解析 Responses 输出项、内容段、公开 phase 和文本增量；只有 response.completed 及可接受完整输出才成功。聊天无总生成时长限制，合法流式事件维持 120 秒空闲期限；连接验证仍保留原总超时。聊天启用固定 Direct function tools；LLM Model 只解析调用和映射结果，Runner 在完整响应和身份检查后执行。普通拒绝正文正常展示。任务 join 后才释放操作占用，失败/取消保留已经显示的部分回复。
 
 网络任务经容量为 32 的有界 Tokio 通道传递文本变化。Runner 将增量交给运行时的会话所有者，Runtime 从最新状态生成累计展示快照。Bridge 合并可替换快照，并通过可靠队列送达任务回执和终态。任务账本另按会话 UUID 和修订投影，独立于当前前台操作。AgentHost 每次更新最多消费 32 项，仍有消息时继续唤醒。

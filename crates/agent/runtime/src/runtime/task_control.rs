@@ -85,7 +85,7 @@ pub(super) async fn dispatch(
             .control
             .turn
             .get()
-            .is_none_or(|(current, _)| *current != session)
+            .is_none_or(|bound| bound.session != session)
         {
             return reject(receipts, id, session, "当前运行不属于目标会话");
         }

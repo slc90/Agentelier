@@ -1,6 +1,7 @@
 use super::ModelControl;
 use agentelier_conversation::{
-    Conversation, ConversationEvent, ConversationFailure, ConversationRequest, PreparedSession,
+    AgentId, Conversation, ConversationEvent, ConversationFailure, ConversationRequest,
+    PreparedSession,
 };
 use agentelier_session_store::{Commit, SessionStore};
 use std::io;
@@ -70,8 +71,16 @@ impl Creation {
         if let Some(failure) = commit.summary_failure {
             error!(session_id = %commit.session, error = %failure, "会话初始记录已保存，摘要更新失败，可从记录重建");
         }
-        let view = conversation.install(self.prepared);
-        info!(operation_id = self.id, session_id = %view.id, sequence = commit.sequence, "会话初始存档已提交并打开");
-        ConversationEvent::Created(view)
+        let agent = AgentId::for_root(commit.session);
+        match conversation.install(self.prepared) {
+            Ok((view, instance)) => {
+                info!(operation_id = self.id, session_id = %view.id, agent_id = %agent, agent_path = "root", runtime_instance = %instance, model = %view.settings.slug, effort = ?view.settings.effort, sequence = commit.sequence, "会话初始存档已提交并登记 Root Agent");
+                ConversationEvent::Created(view)
+            }
+            Err(failure) => {
+                error!(operation_id = self.id, session_id = %commit.session, agent_id = %agent, agent_path = "root", error = %failure, "会话已保存，Root Agent 登记失败");
+                ConversationEvent::Rejected(format!("会话已保存，但无法登记 Root Agent：{failure}"))
+            }
+        }
     }
 }

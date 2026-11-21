@@ -2,6 +2,11 @@
 compile_error!("This application supports Windows x64 only");
 
 mod active;
+mod agent_registry;
+pub use agent_registry::{
+    AgentId, AgentIdentity, AgentOrigin, AgentPath, AgentRegistry, AgentRegistryError,
+    AgentReservation, AgentRuntimeId, AgentThreadId, ChildRegistration,
+};
 mod project_context;
 pub use agentelier_llm_model::PublicationKind;
 pub use project_context::{PreparedRequestFact, ProjectCandidate, ProjectContextState};

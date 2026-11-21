@@ -1413,7 +1413,8 @@ impl Conversation {
         &mut self,
         mut restored: RestoredSession,
         tools: &[agentelier_tools::ToolRegistration],
-    ) -> SessionView {
+    ) -> Result<(SessionView, crate::AgentRuntimeId), crate::AgentRegistryError> {
+        let instance = self.register_root(restored.state.session)?;
         for turn in restored
             .state
             .previous_turns
@@ -1527,6 +1528,6 @@ impl Conversation {
             active: None,
             tasks: restored.tasks,
         });
-        view
+        Ok((view, instance))
     }
 }
