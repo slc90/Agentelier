@@ -344,7 +344,7 @@ impl ToolCatalog {
     ) -> Result<Self, ToolFailure> {
         let mut tools = Self::builtins(directory, image_input);
         if codex_images {
-            tools.push(ToolRegistration::process(
+            let mut registration = ToolRegistration::process(
                 ToolDefinition {
                     name: crate::GENERATE_IMAGE_TOOL.into(),
                     description: "Generate one image from a text prompt using GPT Image 2 when the user asks for an image. Saves the original as a conversation attachment and returns its metadata and local path. Editing and reference images are unavailable.".into(),
@@ -357,7 +357,9 @@ impl ToolCatalog {
                 },
                 Executor::CodexImage,
                 ToolAccess::SharedRead,
-            ));
+            );
+            registration.image_result = image_input != Some(false);
+            tools.push(registration);
         }
         if !contract.is_flat() {
             tools.extend(

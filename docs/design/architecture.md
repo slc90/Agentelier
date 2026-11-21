@@ -116,7 +116,7 @@ Account 的可克隆 CredentialClient 管理接纳、会话失效令牌和在途
 
 LLM Model 通过 Account 获取凭据，请求 Codex 的目录与 Responses，并管理一次有界认证恢复、流式响应完成判定及错误分类。会话固定 Codex 主体和工作区。缺少可核对身份的旧 SIWC 会话保留展示、附件及请求契约，作为只读历史恢复。工具实际执行前通过 CredentialClient 核对原任务授权。来源变化时 Runtime 等待旧任务、工具和队列记录收尾，随后让 Account 恢复凭据交付并向界面发布新状态。协议见[单次模型请求](modules/model-request.md)。
 
-`generate_image` 通过同一任务授权访问 Codex Images。LLM Model 负责图像请求和返回验证，Tools 描述调用，Runtime 沿原工具派发与取消规则执行。Turn Runner 等待 Session Store 确认原图，再写入可恢复的工具结果。详见[图片生成](subscription-media/02-image-generation.md)。
+`generate_image` 通过同一任务授权访问 Codex Images。LLM Model 负责图像请求和返回验证，Tools 描述调用，Runtime 沿原工具派发与取消规则执行。Turn Runner 等待 Session Store 确认原图及可用的模型回看附件，再将它们与原调用关联到可恢复的工具结果。详见[图片生成](subscription-media/02-image-generation.md)。
 
 Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模型任务和独立 Turn Runner。Runtime 拥有线程、队列、取消令牌、JoinHandle 及真实回收信号；账号处理期间模型任务仍可并发等待网络。它不包含 OAuth、认证文件实现或模型网络协议。依赖为 Runtime → Account → Login、Runtime → LLM Model → Account，以及 Runtime → Tools，以及 Runtime → Turn Runner → Conversation / LLM Model / Account，无循环。
 

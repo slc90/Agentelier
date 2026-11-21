@@ -27,6 +27,19 @@ pub(crate) struct ToolResultEntry {
     pub(crate) saved: Option<u64>,
 }
 
+fn image_budget_fits(
+    history: &ProtocolHistory,
+    results: &std::collections::BTreeMap<String, ToolResultEntry>,
+    output: &ToolPayload,
+) -> bool {
+    history.image_bytes_with(
+        results
+            .values()
+            .map(|entry| &entry.output)
+            .chain(std::iter::once(output)),
+    ) <= MAX_SESSION_IMAGE_BYTES
+}
+
 pub struct ActiveTurn<'a> {
     pub(crate) state: &'a mut ActiveState,
     pub(crate) view: &'a mut SessionView,
@@ -1009,12 +1022,7 @@ impl ActiveTurn<'_> {
             return Err(ConversationFailure::new("同一调用收到互相冲突的工具结果"));
         }
         if result.output.image().is_some()
-            && self.history.image_bytes_with(
-                self.results
-                    .values()
-                    .map(|entry| &entry.output)
-                    .chain(std::iter::once(&result.output)),
-            ) > MAX_SESSION_IMAGE_BYTES
+            && !image_budget_fits(self.history, self.results, &result.output)
         {
             result = result.reject_image_budget();
         }
@@ -1035,6 +1043,10 @@ impl ActiveTurn<'_> {
             },
         );
         Ok(Some((result.status, result.output)))
+    }
+
+    pub fn can_retain_image(&self, output: &ToolPayload) -> bool {
+        image_budget_fits(self.history, self.results, output)
     }
 
     pub fn confirm_response_history(

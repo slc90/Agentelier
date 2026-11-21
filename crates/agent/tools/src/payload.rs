@@ -177,6 +177,26 @@ impl OriginalImage {
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+
+    pub fn into_model_image(self) -> io::Result<ImagePayload> {
+        let image = self.descriptor;
+        if image.validate().is_ok() {
+            let mime = match image.extension()? {
+                "png" => "image/png",
+                "jpg" => "image/jpeg",
+                _ => return Err(io::Error::other("模型图片格式无效")),
+            };
+            return Ok(ImagePayload {
+                bytes: self.bytes,
+                mime,
+                digest: image.digest,
+                width: image.width,
+                height: image.height,
+            });
+        }
+        let (decoded, mime) = decode(&self.bytes, MAX_ORIGINAL_IMAGE_EDGE)?;
+        crate::image::normalize(decoded, mime == "image/png").map_err(io::Error::other)
+    }
 }
 
 #[derive(Clone)]

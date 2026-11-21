@@ -180,12 +180,13 @@ pub(super) fn generated_file(name: &str) -> bool {
         && matches!(extension, "png" | "jpg")
 }
 
-fn verify_original(path: &Path, image: &ImageDescriptor) -> io::Result<()> {
+fn read_original(path: &Path, image: &ImageDescriptor) -> io::Result<OriginalImage> {
     let bytes = read_encoded(path, image.encoded_bytes, MAX_ORIGINAL_IMAGE_BYTES)?;
-    if OriginalImage::decode(bytes)?.descriptor() != image {
+    let original = OriginalImage::decode(bytes)?;
+    if original.descriptor() != image {
         return Err(io::Error::other("已保存的生成图片不符合内容引用"));
     }
-    Ok(())
+    Ok(original)
 }
 
 pub(super) fn validate_generated(
@@ -193,9 +194,17 @@ pub(super) fn validate_generated(
     session: SessionId,
     image: &ImageDescriptor,
 ) -> io::Result<()> {
+    read_generated(root, session, image).map(drop)
+}
+
+pub(super) fn read_generated(
+    root: &Path,
+    session: SessionId,
+    image: &ImageDescriptor,
+) -> io::Result<OriginalImage> {
     let name = generated_filename(image)?;
     let directory = attachment_directory(root, session, false)?;
-    verify_original(&directory.join(name), image)
+    read_original(&directory.join(name), image)
 }
 
 pub(super) fn save_generated(
@@ -218,7 +227,9 @@ pub(super) fn save_generated(
     if used.saturating_add(image.encoded_bytes as u64) > MAX_SESSION_ORIGINAL_IMAGE_BYTES {
         return Err(io::Error::other("生成原图超过会话 256 MiB 累计限额"));
     }
-    write_encoded(&path, original.bytes(), |path| verify_original(path, image))?;
+    write_encoded(&path, original.bytes(), |path| {
+        read_original(path, image).map(drop)
+    })?;
     Ok(root
         .join("sessions")
         .join(session.to_string())

@@ -165,14 +165,20 @@ fn decode(
         DynamicImage::from_decoder(decoder).map_err(|error| failure("image_decode", error))?;
     decoded.apply_orientation(orientation);
     control.check()?;
-    let resized = if width.max(height) > MAX_EDGE {
+    let image = normalize(decoded, format == ImageFormat::Png)?;
+    control.check()?;
+    Ok((image, width, height, source_digest))
+}
+
+pub(crate) fn normalize(decoded: DynamicImage, png: bool) -> Result<ImagePayload, ToolFailure> {
+    let resized = if decoded.width().max(decoded.height()) > MAX_EDGE {
         decoded.resize(MAX_EDGE, MAX_EDGE, image::imageops::FilterType::Triangle)
     } else {
         decoded
     };
     let (sent_width, sent_height) = (resized.width(), resized.height());
     let mut encoded = Encoded(Vec::new());
-    let mime = if format == ImageFormat::Png {
+    let mime = if png {
         let pixels = resized.to_rgba8();
         image::codecs::png::PngEncoder::new(&mut encoded)
             .write_image(
@@ -189,20 +195,14 @@ fn decode(
             .map_err(|error| failure("image_encode", error))?;
         "image/jpeg"
     };
-    control.check()?;
     let digest = format!("{:x}", Sha256::digest(&encoded.0));
-    Ok((
-        ImagePayload {
-            bytes: encoded.0,
-            mime,
-            digest,
-            width: sent_width,
-            height: sent_height,
-        },
-        width,
-        height,
-        source_digest,
-    ))
+    Ok(ImagePayload {
+        bytes: encoded.0,
+        mime,
+        digest,
+        width: sent_width,
+        height: sent_height,
+    })
 }
 
 pub async fn from_mcp_bytes(

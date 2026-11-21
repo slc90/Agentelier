@@ -1,5 +1,5 @@
 use crate::{
-    access::{RunnerEvent, TurnAccess},
+    access::{GeneratedImageFeedback, RunnerEvent, TurnAccess},
     control,
     dispatch::{
         SessionTaskAction, SessionTaskCommand, SessionTaskOutcome, ToolAuthorization, ToolBatch,
@@ -735,7 +735,11 @@ async fn save_call(
 ) -> Result<(), ConversationFailure> {
     let (result, generated_image) =
         persist_generated_image(active, session, call_id, result).await?;
-    let (result, storage_failure) = persist_image(active, session, result).await;
+    let (result, storage_failure) = if generated_image.is_some() {
+        (result, None)
+    } else {
+        persist_image(active, session, result).await
+    };
     let outcome = retain_call(active, dispatcher, call_id.to_owned(), result).await?;
     if let Some(failure) = storage_failure {
         return Err(ConversationFailure::new(format!(
@@ -781,32 +785,58 @@ async fn persist_generated_image(
     let turn = active
         .call(move |turn| turn.generated_image_turn(&id))
         .await?;
-    let path = match active
-        .persist_generated_image(session, call_id.to_owned(), image.clone())
+    let descriptor = image.descriptor().clone();
+    let saved = match active
+        .persist_generated_image(session, call_id.to_owned(), image)
         .await
     {
-        Ok(path) => path,
+        Ok(saved) => saved,
         Err(failure) => {
             return Ok((
                 ToolResult::error(
                     ToolStatus::Failed,
                     "image_storage",
-                    &format!("已生成图片，但原图保存失败：{failure}"),
+                    &format!("已生成图片，但无法确认存档原图：{failure}"),
                 ),
                 None,
             ));
         }
     };
-    let descriptor = image.descriptor().clone();
-    result.output = serde_json::json!({
+    let mut metadata = serde_json::json!({
         "ok": true,
         "model": GENERATED_IMAGE_MODEL,
         "original": descriptor,
-        "path": path.to_string_lossy(),
-        "visual_input": false
-    })
-    .to_string()
-    .into();
+        "path": saved.path.to_string_lossy(),
+        "visual_input": true
+    });
+    result.output = match saved.feedback {
+        GeneratedImageFeedback::Ready(image) => {
+            let summary = metadata.to_string();
+            let payload = ToolPayload::Image {
+                summary: summary.clone(),
+                image: image.clone(),
+            };
+            if active
+                .call(move |turn| Ok(turn.can_retain_image(&payload)))
+                .await?
+            {
+                match active.persist_image(session, summary.clone(), image).await {
+                    Ok(image) => ToolPayload::Image { summary, image },
+                    Err(failure) => {
+                        unavailable_feedback(&mut metadata, &format!("保存模型图片失败：{failure}"))
+                    }
+                }
+            } else {
+                unavailable_feedback(&mut metadata, "会话图片输入超过 16 MiB")
+            }
+        }
+        GeneratedImageFeedback::Unsupported => {
+            unavailable_feedback(&mut metadata, "当前模型不支持图片输入")
+        }
+        GeneratedImageFeedback::Unavailable(failure) => {
+            unavailable_feedback(&mut metadata, &failure)
+        }
+    };
     Ok((
         result,
         Some(GeneratedImage {
@@ -816,6 +846,12 @@ async fn persist_generated_image(
             image: descriptor,
         }),
     ))
+}
+
+fn unavailable_feedback(metadata: &mut serde_json::Value, message: &str) -> ToolPayload {
+    metadata["visual_input"] = serde_json::Value::Bool(false);
+    metadata["visual_input_error"] = message.into();
+    metadata.to_string().into()
 }
 
 async fn append_saved_results(active: &TurnAccess) -> Result<(), ConversationFailure> {

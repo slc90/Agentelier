@@ -8,7 +8,10 @@ mod runner;
 mod task_control;
 mod tool_events;
 
-pub use access::{RunnerEvent, TurnGeneratedImage, TurnImage, TurnRecord};
+pub use access::{
+    GeneratedImageFeedback, RunnerEvent, SavedGeneratedImage, TurnGeneratedImage, TurnImage,
+    TurnRecord,
+};
 pub use dispatch::{
     SessionTaskAction, SessionTaskCommand, SessionTaskOutcome, ToolAuthorization, ToolBatch,
     ToolCommand, ToolDispatcher, ToolEvent, ToolJobRequest,

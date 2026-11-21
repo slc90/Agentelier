@@ -79,6 +79,11 @@ enum Command {
         Arc<agentelier_tools::OriginalImage>,
         oneshot::Sender<io::Result<PathBuf>>,
     ),
+    ReadGenerated(
+        SessionId,
+        agentelier_tools::ImageDescriptor,
+        oneshot::Sender<io::Result<agentelier_tools::OriginalImage>>,
+    ),
     Append(Box<RecordEvent>, oneshot::Sender<io::Result<Commit>>),
 }
 
@@ -238,6 +243,21 @@ impl SessionStoreClient {
             .await
             .map_err(|_| io::Error::other("生成原图写入未返回结果"))?
     }
+
+    pub async fn read_generated(
+        &self,
+        session: SessionId,
+        image: agentelier_tools::ImageDescriptor,
+    ) -> io::Result<agentelier_tools::OriginalImage> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::ReadGenerated(session, image, reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("生成原图读取未返回结果"))?
+    }
 }
 
 pub struct SessionStore {
@@ -309,6 +329,9 @@ impl SessionStore {
                                 Err(failure) => error!(session_id = %session, error = %failure, "会话生成原图提交失败"),
                             }
                             let _closed = reply.send(result);
+                        }
+                        Command::ReadGenerated(session, image, reply) => {
+                            let _closed = reply.send(crate::attachments::read_generated(&root, session, &image));
                         }
                         Command::Create(initial, reply) => {
                             let result = create(&root, *initial);

@@ -46,7 +46,18 @@ pub struct TurnGeneratedImage {
     pub session: SessionId,
     pub call_id: String,
     pub image: Arc<OriginalImage>,
-    pub reply: oneshot::Sender<Result<std::path::PathBuf, ConversationFailure>>,
+    pub reply: oneshot::Sender<Result<SavedGeneratedImage, ConversationFailure>>,
+}
+
+pub struct SavedGeneratedImage {
+    pub path: std::path::PathBuf,
+    pub feedback: GeneratedImageFeedback,
+}
+
+pub enum GeneratedImageFeedback {
+    Unsupported,
+    Ready(Arc<ImagePayload>),
+    Unavailable(String),
 }
 
 pub(crate) struct TurnAccess {
@@ -119,7 +130,7 @@ impl TurnAccess {
         session: SessionId,
         call_id: String,
         image: Arc<OriginalImage>,
-    ) -> Result<std::path::PathBuf, ConversationFailure> {
+    ) -> Result<SavedGeneratedImage, ConversationFailure> {
         let (reply, result) = oneshot::channel();
         self.sender
             .send(RunnerEvent::GeneratedImage(TurnGeneratedImage {

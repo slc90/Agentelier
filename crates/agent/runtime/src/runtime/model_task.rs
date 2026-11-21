@@ -1,8 +1,13 @@
 use super::{AgentEvent, AgentEventKind, ModelControl, RuntimeFailure, SharedModel, emit};
 use agentelier_account::{CredentialClient, DeliveryFailure};
-use agentelier_conversation::{Conversation, ConversationEvent, ConversationFailure, SteerInput};
+use agentelier_conversation::{
+    Conversation, ConversationEvent, ConversationFailure, SessionId, SteerInput,
+};
 use agentelier_llm_model::{ModelFailure, ModelFailureKind, ModelRequest, ModelResult};
-use agentelier_turn_runner::RunnerEvent;
+use agentelier_session_store::SessionStoreClient;
+use agentelier_tools::OriginalImage;
+use agentelier_turn_runner::{GeneratedImageFeedback, RunnerEvent, SavedGeneratedImage};
+use std::{io, sync::Arc};
 use tokio::sync::mpsc;
 use tracing::debug;
 
@@ -167,18 +172,22 @@ pub(super) fn progress(
             } else {
                 conversation.active_turn(id)
             };
-            let valid = target.is_ok_and(|turn| {
-                turn.session_id() == session && turn.generated_image_turn(&call_id).is_ok()
-            });
-            if !valid {
+            let Ok(turn) = target.and_then(|turn| {
+                if turn.session_id() != session {
+                    return Err(ConversationFailure::new("生成原图不属于当前会话"));
+                }
+                turn.generated_image_turn(&call_id)?;
+                Ok(turn)
+            }) else {
                 drop(reply.send(Err(ConversationFailure::new(
                     "原图不属于当前会话的图片调用",
                 ))));
                 return Ok(());
-            }
+            };
+            let image_input = turn.settings().image_input;
             let store = store.client();
             tokio::spawn(async move {
-                let result = store.save_generated(session, image).await;
+                let result = save_generated(&store, session, image, image_input).await;
                 drop(
                     reply.send(
                         result.map_err(|failure| ConversationFailure::new(failure.to_string())),
@@ -218,6 +227,35 @@ pub(super) fn progress(
             AgentEventKind::Conversation(ConversationEvent::InputReceipt(receipt)),
         ),
     }
+}
+
+async fn save_generated(
+    store: &SessionStoreClient,
+    session: SessionId,
+    image: Arc<OriginalImage>,
+    image_input: Option<bool>,
+) -> io::Result<SavedGeneratedImage> {
+    let descriptor = image.descriptor().clone();
+    let path = store.save_generated(session, image).await?;
+    let feedback = if image_input == Some(false) {
+        GeneratedImageFeedback::Unsupported
+    } else {
+        let original = store
+            .read_generated(session, descriptor)
+            .await
+            .map_err(|failure| io::Error::other(format!("读取已保存原图失败：{failure}")))?;
+        let result = tokio::task::spawn_blocking(move || original.into_model_image())
+            .await
+            .map_err(io::Error::other)
+            .and_then(std::convert::identity);
+        match result {
+            Ok(image) => GeneratedImageFeedback::Ready(Arc::new(image)),
+            Err(failure) => {
+                GeneratedImageFeedback::Unavailable(format!("派生模型图片失败：{failure}"))
+            }
+        }
+    };
+    Ok(SavedGeneratedImage { path, feedback })
 }
 
 pub(super) fn publish_tasks(
