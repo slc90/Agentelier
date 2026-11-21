@@ -424,6 +424,39 @@ impl ToolCatalog {
         self.tools.iter().map(|tool| &tool.definition)
     }
 
+    pub fn inherited(
+        &self,
+        allowed: &std::collections::BTreeSet<String>,
+        model_contract: ToolContract,
+        image_input: Option<bool>,
+    ) -> Self {
+        let contract = if self.contract == model_contract {
+            self.contract
+        } else {
+            ToolContract::Flat
+        };
+        let tools = self
+            .tools
+            .iter()
+            .filter(|tool| {
+                allowed.contains(&tool.definition.name)
+                    && !(contract.is_flat() && matches!(&tool.executor, Executor::TaskControl(_)))
+                    && !(image_input == Some(false) && tool.definition.name == "view_image")
+            })
+            .cloned()
+            .map(|mut tool| {
+                if contract.is_flat() {
+                    tool.definition.mode = ToolMode::Synchronous;
+                }
+                if image_input == Some(false) {
+                    tool.image_result = false;
+                }
+                tool
+            })
+            .collect();
+        Self { contract, tools }
+    }
+
     pub fn rebind(&self, saved: &[ToolDefinition]) -> Result<Self, ToolFailure> {
         let mut seen = HashSet::new();
         let mut tools = Vec::with_capacity(saved.len());

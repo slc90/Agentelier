@@ -13,7 +13,7 @@ pub struct HistoryAppend {
     pub end: usize,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ProtocolItemSummary {
     Project {
         publication: u64,
@@ -80,6 +80,20 @@ impl ProtocolOutput {
 pub struct ProtocolHistory(Vec<ProtocolItem>);
 
 impl ProtocolHistory {
+    pub fn fork_at(&self, boundary: &[ProtocolItemSummary]) -> Result<Self, crate::ModelFailure> {
+        let prefix = self
+            .0
+            .get(..boundary.len())
+            .ok_or_else(|| crate::model::protocol("Fork 边界已不在当前协议历史"))?;
+        let fork = Self(prefix.to_vec());
+        if fork.summary() != boundary || fork.has_open_calls() {
+            return Err(crate::model::protocol(
+                "Fork 边界与冻结请求不符或存在未闭合的工具调用",
+            ));
+        }
+        Ok(fork)
+    }
+
     pub fn position(&self) -> usize {
         self.0.len()
     }
