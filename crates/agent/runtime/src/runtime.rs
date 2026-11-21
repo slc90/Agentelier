@@ -17,6 +17,7 @@ mod deleting;
 mod image_attachment;
 pub use image_attachment::{ImageAttachmentAction, ImageAttachmentReply};
 mod interrupt_agent;
+mod list_agents;
 mod loading;
 mod mailbox;
 mod memory;
@@ -346,6 +347,7 @@ impl AgentRuntime {
                         extensions.push(mailbox::registration(mailbox_sender.clone(), agentelier_conversation::DeliveryMode::TriggerTurn));
                         extensions.push(wait_agent::registration(mailbox_sender.clone()));
                         extensions.push(interrupt_agent::registration(mailbox_sender.clone()));
+                        extensions.push(list_agents::registration(mailbox_sender.clone()));
                         let mut conversation = Conversation::with_extensions(extensions);
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {

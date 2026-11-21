@@ -81,6 +81,15 @@ impl Children {
                     .await;
                 drop(request.reply.send(result));
             }
+            mailbox::Command::List(request) => {
+                let origin = &request.origin;
+                let result = self
+                    .mailbox_caller(conversation, root_task, origin.session, TurnId(origin.turn))
+                    .and_then(|(session, caller)| {
+                        request.snapshot(conversation.agent_registry(), session, caller)
+                    });
+                request.respond(result);
+            }
         }
     }
 
