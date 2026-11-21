@@ -5,6 +5,7 @@ mod active_input;
 mod archives;
 pub use archives::{ArchiveChoice, ArchiveState};
 mod conversation;
+mod generated_image;
 mod mcp;
 mod mcp_materials;
 mod memory;

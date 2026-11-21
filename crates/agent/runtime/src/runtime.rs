@@ -11,6 +11,8 @@ use agentelier_memory::Memory;
 use agentelier_turn_runner::RunnerEvent;
 mod creation;
 mod deleting;
+mod image_attachment;
+pub use image_attachment::{ImageAttachmentAction, ImageAttachmentReply};
 mod loading;
 mod memory;
 pub use memory::{MemoryReply, MemoryRequest};
@@ -50,6 +52,7 @@ pub enum AgentEventKind {
     McpStatus(Vec<agentelier_mcp::ConnectionStatus>),
     McpMaterial(Result<agentelier_mcp::MaterialReply, String>),
     Memory(Result<MemoryReply, String>),
+    ImageAttachment(Result<ImageAttachmentReply, String>),
 }
 #[derive(Debug)]
 pub enum RuntimeFailure {
@@ -108,6 +111,8 @@ enum Command {
     McpMaterial(u64, agentelier_mcp::MaterialRequest),
     CancelMcpMaterial(u64),
     Memory(u64, MemoryRequest),
+    ImageAttachment(u64, SessionId, String, ImageAttachmentAction),
+    ImageAttachmentFinished(u64, io::Result<ImageAttachmentReply>),
     McpMaterialFinished(Result<agentelier_mcp::MaterialReply, String>),
     McpConfig(u64, agentelier_mcp::ConfigChange),
     McpStatus(Vec<agentelier_mcp::ConnectionStatus>),
@@ -250,6 +255,7 @@ impl AgentRuntime {
                         ));
                         let mut mcp_settings = agentelier_mcp::ConfigStore::open(&data_root);
                         let mut material: Option<PendingMaterial> = None;
+                        let mut image_attachments = tokio::task::JoinSet::new();
                         let mut mcp_connections = agentelier_mcp::Connections::default();
                         if let Ok(servers) = mcp_settings.servers() {
                             mcp_connections.configure(servers);
@@ -288,6 +294,11 @@ impl AgentRuntime {
                                             None => std::future::pending().await,
                                         }
                                     } => Command::McpMaterialFinished(reply),
+                                    result = image_attachments.join_next(), if !image_attachments.is_empty() => {
+                                        let (id, result) = result.ok_or(RuntimeFailure::ModelState)?
+                                            .map_err(|_| RuntimeFailure::ModelState)?;
+                                        Command::ImageAttachmentFinished(id, result)
+                                    },
                                     status = mcp_connections.changed() => Command::McpStatus(status),
                                     result = async { match &mut catalog {
                                         Some(reply) => reply.await.unwrap_or_else(|_| Err(io::Error::other("会话目录读取未返回结果"))),
@@ -347,6 +358,23 @@ impl AgentRuntime {
                                     },
                                 };
                                 match command {
+                                    Command::ImageAttachment(id, session, call, action) => {
+                                        if let Some(image) = conversation.generated_image(session, &call) {
+                                            let client = store.client();
+                                            let root = data_root.clone();
+                                            image_attachments.spawn(async move {
+                                                (id, image_attachment::execute(client, root, session, image, action).await)
+                                            });
+                                        } else {
+                                            emit(&publish, id, AgentEventKind::ImageAttachment(Err("当前会话没有这张已确认的生成图片".into())))?;
+                                        }
+                                    }
+                                    Command::ImageAttachmentFinished(id, result) => {
+                                        if let Err(failure) = &result {
+                                            error!(operation_id = id, error = %failure, "处理生成图片附件失败");
+                                        }
+                                        emit(&publish, id, AgentEventKind::ImageAttachment(result.map_err(|failure| failure.to_string())))?;
+                                    }
                                     Command::Memory(id, MemoryRequest::Reset) => {
                                         tracing::info!(operation_id = id, "已确认长期记忆重置，等待后台收敛");
                                         let result = memory::reset(memory.as_ref().ok(), &mut memory_worker, &store.client()).await;
@@ -831,6 +859,13 @@ impl AgentRuntime {
                                 error!(operation_id = job.id, "关闭时 MCP 材料请求任务异常结束");
                             }
                         }
+                        while let Some(result) = image_attachments.join_next().await {
+                            match result {
+                                Ok((id, Err(failure))) => error!(operation_id = id, error = %failure, "关闭期间处理生成图片附件失败"),
+                                Err(failure) => error!(error = %failure, "关闭期间生成图片附件任务异常结束"),
+                                Ok((_, Ok(_))) => {}
+                            }
+                        }
                         let mcp_finished = mcp_connections.shutdown().await;
                         let memory_worker_finished = if let Some(worker) = memory_worker {
                             worker.stop().await
@@ -909,6 +944,16 @@ impl AgentRuntime {
 
     pub fn request_memory(&self, id: u64, request: MemoryRequest) -> Result<(), RuntimeFailure> {
         self.send(Command::Memory(id, request))
+    }
+
+    pub fn request_image_attachment(
+        &self,
+        id: u64,
+        session: SessionId,
+        call: String,
+        action: ImageAttachmentAction,
+    ) -> Result<(), RuntimeFailure> {
+        self.send(Command::ImageAttachment(id, session, call, action))
     }
 
     pub fn mcp_material(

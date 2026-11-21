@@ -72,7 +72,16 @@ pub struct ChatTool {
     pub arguments_truncated: bool,
     pub status: String,
     pub output: Option<String>,
+    pub generated_image: Option<ChatGeneratedImage>,
     pub retained: bool,
+}
+
+#[derive(Clone, Reflect, PartialEq)]
+pub struct ChatGeneratedImage {
+    pub digest: String,
+    pub width: u32,
+    pub height: u32,
+    pub mime: String,
 }
 #[derive(Clone, Reflect)]
 pub struct ChatProcessCleanup {
@@ -1048,6 +1057,12 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
                 arguments_truncated: tool.arguments_truncated,
                 status: tool.status,
                 output: tool.output,
+                generated_image: tool.generated_image.map(|image| ChatGeneratedImage {
+                    digest: image.digest,
+                    width: image.width,
+                    height: image.height,
+                    mime: image.mime,
+                }),
                 retained: tool.retained,
             })
             .collect(),
@@ -1713,8 +1728,9 @@ fn reconcile(world: &mut World) -> Result {
                     RowContent::Tool(tool) => {
                         let expanded = state.expanded_tools.contains(&name);
                         let card_key = name.clone();
+                        let session = key.session;
                         world.commands().spawn_scene_with_error_handler(bsn! {
-                            @crate::tool_timeline::card(card_key,tool,expanded)
+                            @crate::tool_timeline::card(card_key,session,tool,expanded)
                             Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
                         }).id()
                     }

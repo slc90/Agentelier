@@ -451,6 +451,7 @@ pub fn restore(
     let mut next_turn = 0;
     let mut notices = Vec::new();
     let mut historical_processes = BTreeMap::new();
+    let mut generated_images = HashMap::new();
     let mut processes = crate::ProcessLedger::default();
     let mut finalized_without_join = false;
     for record in records {
@@ -907,10 +908,11 @@ pub fn restore(
                         tool.call_id == call_id && tool.request_index == response.request_index
                     })
                     .ok_or_else(|| ConversationFailure::new("工具结果缺少展示身份"))?;
-                if let Some(image) = generated_image
-                    && !image.matches(turn.id, tool, status)
-                {
-                    return Err(ConversationFailure::new("生成原图与存档工具结果身份不符"));
+                if let Some(image) = generated_image {
+                    if !image.matches(turn.id, tool, status) {
+                        return Err(ConversationFailure::new("生成原图与存档工具结果身份不符"));
+                    }
+                    generated_images.insert(call_id.clone(), image.image);
                 }
                 if matches!(
                     initial
@@ -1261,6 +1263,16 @@ pub fn restore(
         return Err(ConversationFailure::new("恢复的工作上下文超过会话图片预算"));
     }
     state.committed_items = history.summary();
+    for tool in state
+        .turn
+        .iter_mut()
+        .map(Box::as_mut)
+        .chain(&mut state.previous_turns)
+        .flat_map(|turn| &mut turn.tools)
+        .filter(|tool| tool.retained)
+    {
+        tool.generated_image = generated_images.remove(&tool.call_id);
+    }
     state.context.refresh(
         &history,
         &initial.settings.instructions,

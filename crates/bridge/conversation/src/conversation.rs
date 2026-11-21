@@ -80,7 +80,16 @@ pub struct ToolView {
     pub arguments_truncated: bool,
     pub status: String,
     pub output: Option<String>,
+    pub generated_image: Option<GeneratedImageView>,
     pub retained: bool,
+}
+
+#[derive(Clone)]
+pub struct GeneratedImageView {
+    pub digest: String,
+    pub width: u32,
+    pub height: u32,
+    pub mime: String,
 }
 
 pub struct SessionTask {
@@ -628,6 +637,12 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
                 arguments: tool.arguments,
                 arguments_truncated: tool.arguments_truncated,
                 output: tool.output,
+                generated_image: tool.generated_image.map(|image| GeneratedImageView {
+                    digest: image.digest,
+                    width: image.width,
+                    height: image.height,
+                    mime: image.mime,
+                }),
                 retained: tool.retained,
                 status: tool_status(tool.status).into(),
             })

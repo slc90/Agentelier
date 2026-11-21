@@ -106,6 +106,8 @@ pub struct ToolView {
     pub arguments_truncated: bool,
     pub status: ToolStatus,
     pub output: Option<String>,
+    #[serde(skip)]
+    pub generated_image: Option<agentelier_tools::ImageDescriptor>,
     pub retained: bool,
 }
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -285,6 +287,26 @@ impl Conversation {
     }
     pub fn current(&self) -> Option<SessionView> {
         self.session.as_ref().map(|session| session.view.clone())
+    }
+
+    pub fn generated_image(
+        &self,
+        session: SessionId,
+        call_id: &str,
+    ) -> Option<agentelier_tools::ImageDescriptor> {
+        let view = &self
+            .session
+            .as_ref()
+            .filter(|chat| chat.view.id == session)?
+            .view;
+        view.turn
+            .iter()
+            .map(Box::as_ref)
+            .chain(&view.previous_turns)
+            .flat_map(|turn| &turn.tools)
+            .find(|tool| tool.retained && tool.call_id == call_id)?
+            .generated_image
+            .clone()
     }
 
     pub fn tasks(&self) -> Option<crate::SessionTasks> {

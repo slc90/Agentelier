@@ -748,6 +748,7 @@ async fn save_call(
     }
     if let Some((status, output)) = outcome {
         let id = call_id.to_owned();
+        let image_record = generated_image.clone();
         let event = active
             .call(move |turn| {
                 Ok(RecordEvent::ToolReturned {
@@ -755,7 +756,7 @@ async fn save_call(
                     call_id: id,
                     status,
                     output: agentelier_llm_model::ArchivedPayload::capture(&output),
-                    generated_image,
+                    generated_image: image_record,
                     execution,
                 })
             })
@@ -763,7 +764,9 @@ async fn save_call(
         let sequence = active.record(event).await?;
         let id = call_id.to_owned();
         if active
-            .call(move |mut turn| turn.confirm_result_saved(&id, execution, status, sequence))
+            .call(move |mut turn| {
+                turn.confirm_result_saved(&id, execution, status, sequence, generated_image)
+            })
             .await?
         {
             active.publish_tasks().await?;

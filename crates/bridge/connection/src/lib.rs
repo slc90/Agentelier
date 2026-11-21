@@ -4,7 +4,8 @@ compile_error!("This application supports Windows x64 only");
 mod connection;
 
 pub use agentelier_agent_runtime::{
-    MemoryDetail, MemoryInspection, MemoryReply, MemoryRequest, MemorySource,
+    ImageAttachmentAction, ImageAttachmentReply, MemoryDetail, MemoryInspection, MemoryReply,
+    MemoryRequest, MemorySource,
 };
 
 pub use agentelier_agent_runtime::{

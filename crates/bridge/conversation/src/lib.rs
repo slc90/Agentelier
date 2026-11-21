@@ -8,8 +8,9 @@ pub use conversation::{
 };
 
 pub use conversation::{
-    ConversationEvent, ConversationRequest, HistoryItem, MessageView, RequestMemory, RequestView,
-    SessionSettings, SessionView, ToolView, TurnStatus, TurnView, convert, request,
+    ConversationEvent, ConversationRequest, GeneratedImageView, HistoryItem, MessageView,
+    RequestMemory, RequestView, SessionSettings, SessionView, ToolView, TurnStatus, TurnView,
+    convert, request,
 };
 
 pub use conversation::{InputDecision, InputReceipt, SteerState, SteerView};

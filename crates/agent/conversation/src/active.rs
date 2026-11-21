@@ -752,6 +752,7 @@ impl ActiveTurn<'_> {
             arguments_truncated,
             status,
             output: None,
+            generated_image: None,
             retained: false,
         };
         if let Some(index) = existing {
@@ -966,6 +967,7 @@ impl ActiveTurn<'_> {
         execution: Option<crate::TaskExecution>,
         status: ToolStatus,
         sequence: u64,
+        generated_image: Option<crate::GeneratedImage>,
     ) -> Result<bool, ConversationFailure> {
         let result = self
             .results
@@ -973,7 +975,20 @@ impl ActiveTurn<'_> {
             .filter(|entry| entry.saved.is_none())
             .ok_or_else(|| ConversationFailure::new("保存回执缺少唯一工具载荷"))?;
         result.saved = Some(sequence);
-        self.confirm_task_status(call_id, execution, status, sequence)
+        let changed = self.confirm_task_status(call_id, execution, status, sequence)?;
+        if let Some(generated) = generated_image {
+            let tool = self
+                .view
+                .turn
+                .iter_mut()
+                .map(Box::as_mut)
+                .chain(&mut self.view.previous_turns)
+                .flat_map(|turn| &mut turn.tools)
+                .find(|tool| tool.retained && tool.call_id == call_id)
+                .ok_or_else(|| ConversationFailure::new("保存回执缺少图片调用"))?;
+            tool.generated_image = Some(generated.image);
+        }
+        Ok(changed)
     }
 
     pub fn tool_started(&mut self, call_id: &str) -> Result<(), ConversationFailure> {

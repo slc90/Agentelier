@@ -1,8 +1,11 @@
 use crate::conversation::{ChatState, ChatTool};
+use crate::generated_image;
+use agentelier_conversation_bridge::SessionId;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy::ui_widgets::Activate;
 use bevy_widgetry::button::WidgetryButton;
+use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{AutoSize, WidgetryReadOnlyTextField, WidgetryTextFieldHeadless};
 
@@ -15,6 +18,8 @@ const DETAIL_MAX_ROWS: usize = 12;
 #[reflect(Component)]
 pub(crate) struct ToolCard {
     key: String,
+    #[reflect(ignore)]
+    session: SessionId,
     tool: ChatTool,
     expanded: bool,
 }
@@ -26,11 +31,12 @@ struct ToolDetails;
 struct ToggleLabel;
 
 pub(crate) fn install(app: &mut App) {
+    generated_image::install(app);
     app.register_type::<ToolCard>()
         .add_systems(PostUpdate, synchronize.before(UiSystems::Content));
 }
 
-pub(crate) fn card(key: String, tool: ChatTool, expanded: bool) -> impl Scene {
+pub(crate) fn card(key: String, session: SessionId, tool: ChatTool, expanded: bool) -> impl Scene {
     let toggle_label = if expanded {
         "收起工具详情"
     } else {
@@ -41,7 +47,7 @@ pub(crate) fn card(key: String, tool: ChatTool, expanded: bool) -> impl Scene {
     let toggle_name = format!("ToolToggle-{key}");
     let detail_name = format!("ToolDetails-{key}");
     bsn! {
-        template(move |_| Ok(ToolCard {key:key.clone(), tool:tool.clone(), expanded}))
+        template(move |_| Ok(ToolCard {key:key.clone(), session, tool:tool.clone(), expanded}))
         Node { width: percent(100), min_width: px(0), flex_shrink: 0.0, flex_direction: FlexDirection::Column, row_gap: px(CARD_GAP), padding: UiRect::all(px(CARD_GAP)) }
         Children [
             Text(summary) WidgetryText ToolSummary--
@@ -85,6 +91,29 @@ fn summary(tool: &ChatTool) -> String {
         .output
         .as_deref()
         .and_then(|output| serde_json::from_str::<serde_json::Value>(output).ok());
+    if tool.name == "generate_image" && tool.source.as_deref() == Some("GPT Image 2") {
+        let prompt = serde_json::from_str::<serde_json::Value>(&tool.arguments)
+            .ok()
+            .and_then(|value| {
+                value["prompt"]
+                    .as_str()
+                    .map(|prompt| preview(&prompt.split_whitespace().collect::<Vec<_>>().join(" ")))
+            });
+        let label = if tool.status == "running" {
+            "生成中"
+        } else {
+            status(&tool.status)
+        };
+        let failure = process
+            .as_ref()
+            .and_then(|value| value["error"]["message"].as_str())
+            .map(preview);
+        return [Some(format!("生成图片 · {label}")), prompt, failure]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
     let process_state = process
         .as_ref()
         .and_then(|value| value.get("data"))
@@ -208,6 +237,17 @@ fn synchronize(world: &mut World) -> Result {
             .get::<Children>(root)
             .map(|children| children.to_vec())
             .unwrap_or_default();
+        if let Some(image) = card.tool.generated_image.clone()
+            && !children
+                .iter()
+                .any(|child| world.get::<generated_image::ImageCard>(*child).is_some())
+        {
+            let call = card.tool.call_id.clone();
+            world.commands().spawn_scene_with_error_handler(bsn! {
+                @generated_image::card(card.session,call,image)
+                ChildOf(root)
+            });
+        }
         for child in children {
             if world.get::<ToolSummary>(child).is_some() {
                 let mut text = world

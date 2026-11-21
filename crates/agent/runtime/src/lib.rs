@@ -11,8 +11,8 @@ pub use agentelier_memory::{MemoryDetail, MemoryInspection, MemorySource};
 pub use operations::OperationSequence;
 
 pub use runtime::{
-    AgentEvent, AgentEventKind, AgentRuntime, DeliveryFailure, MemoryReply, MemoryRequest,
-    RuntimeFailure,
+    AgentEvent, AgentEventKind, AgentRuntime, DeliveryFailure, ImageAttachmentAction,
+    ImageAttachmentReply, MemoryReply, MemoryRequest, RuntimeFailure,
 };
 
 pub use agentelier_mcp::{ConnectionState, ConnectionStatus};
