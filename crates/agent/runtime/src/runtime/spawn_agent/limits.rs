@@ -7,6 +7,7 @@ pub(super) struct Limits {
     total: usize,
     concurrent: usize,
     depth: usize,
+    pub(super) resident: usize,
 }
 
 impl Default for Limits {
@@ -15,6 +16,7 @@ impl Default for Limits {
             total: 32,
             concurrent: 4,
             depth: 4,
+            resident: 8,
         }
     }
 }
@@ -26,11 +28,13 @@ impl Limits {
             total: Self::read("AGENTELIER_AGENT_TOTAL", defaults.total)?,
             concurrent: Self::read("AGENTELIER_AGENT_CONCURRENT", defaults.concurrent)?,
             depth: Self::read("AGENTELIER_AGENT_DEPTH", defaults.depth)?,
+            resident: Self::read("AGENTELIER_AGENT_RESIDENT", defaults.resident)?,
         };
         tracing::debug!(
             total = limits.total,
             concurrent = limits.concurrent,
             depth = limits.depth,
+            resident = limits.resident,
             "子 Agent 资源限制已配置"
         );
         Ok(limits)
@@ -54,6 +58,7 @@ pub(super) enum Capacity {
     Total(usize),
     Concurrent(usize),
     Depth(usize),
+    Resident(usize),
 }
 
 impl Capacity {
@@ -62,6 +67,7 @@ impl Capacity {
             Self::Total(_) => "agent_total_limit",
             Self::Concurrent(_) => "agent_concurrent_limit",
             Self::Depth(_) => "agent_depth_limit",
+            Self::Resident(_) => "agent_residency_limit",
         };
         ToolResult::not_executed(code, &self.to_string())
     }
@@ -73,6 +79,9 @@ impl fmt::Display for Capacity {
             Self::Total(limit) => write!(formatter, "会话已达到子 Agent 总量上限 {limit}"),
             Self::Concurrent(limit) => write!(formatter, "会话已达到子 Agent 执行并发上限 {limit}"),
             Self::Depth(limit) => write!(formatter, "子 Agent 派生将超过树深度上限 {limit}"),
+            Self::Resident(limit) => {
+                write!(formatter, "子 Agent 驻留上限 {limit} 已满且没有可卸载实例")
+            }
         }
     }
 }

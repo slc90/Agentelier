@@ -95,6 +95,10 @@ pub(super) fn registration(
 pub(super) struct MailboxActivity(HashMap<AgentId, watch::Sender<u64>>);
 
 impl MailboxActivity {
+    pub(super) fn forget(&mut self, agent: AgentId) {
+        self.0.remove(&agent);
+    }
+
     pub(super) fn notify(&self, receiver: AgentId, sequence: u64) {
         if let Some(watch) = self.0.get(&receiver) {
             watch.send_replace(sequence);

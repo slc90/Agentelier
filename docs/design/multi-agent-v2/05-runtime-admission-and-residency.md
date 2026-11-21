@@ -26,6 +26,8 @@ Root 深度为 0，且不计入子 Agent 总量或并发。已登记身份持续
 
 驻留限制控制内存中加载的子 Agent Runtime 数量，不改变 Agent Tree 总量。Root 始终驻留；正在执行、正在关闭、持有未确认资源或处于关键持久化提交过程中的 Agent 不可卸载。空闲且状态已保存的 Agent 可以成为卸载候选。
 
+运行结束并确认保存后，子 Conversation 继续驻留，已有实例可承接 Follow-up。默认最多驻留 8 个子 Agent，可用 `AGENTELIER_AGENT_RESIDENT` 调整。满额时按路径顺序选择首个已确认空闲的实例，提交 `AgentEviction` 后核对实例并释放驻留。身份、配置、历史和所有 Mail 一直由会话存档管理。Agent Control 串行执行卸载和新准入。
+
 驻留管理要保护目标 Runtime 的唯一实例身份。卸载流程应取得独占驻留门闩，确认该 Agent 仍是 Registry 当前实例，停止接纳新执行，等待当前操作结束，将 Mailbox 未消费消息转移到持久层，保存有效配置与环境绑定，关闭 Runner/Runtime，最后从驻留表移除。任何阶段失败都保留明确错误和可恢复状态，不释放尚未确认的容量。
 
 ## 冷恢复

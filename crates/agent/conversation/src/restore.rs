@@ -636,6 +636,7 @@ pub fn restore(
                         RecordEvent::AgentCreated { .. }
                             | RecordEvent::AgentExecution { .. }
                             | RecordEvent::AgentStopRequested { .. }
+                            | RecordEvent::AgentEviction { .. }
                             | RecordEvent::AgentTurn { .. }
                             | RecordEvent::Mailbox { .. }
                     )
@@ -646,6 +647,23 @@ pub fn restore(
                 }
                 if let RecordEvent::MailboxInput { claim, note, .. } = event.as_ref() {
                     check_mailbox_note(&mailboxes, *claim, agent, note)?;
+                }
+            }
+            RecordEvent::AgentEviction { agent, .. } => {
+                if !agent_positions
+                    .get(&agent)
+                    .and_then(|position| agents.get(*position))
+                    .is_some_and(|(_, state)| {
+                        matches!(
+                            state,
+                            crate::AgentState::Waiting
+                                | crate::AgentState::Completed
+                                | crate::AgentState::Interrupted
+                                | crate::AgentState::Failed(_)
+                        )
+                    })
+                {
+                    return Err(ConversationFailure::new("卸载存档缺少空闲子 Agent 身份"));
                 }
             }
             RecordEvent::Mailbox { event, .. } => {

@@ -93,6 +93,11 @@ pub enum RecordEvent {
         session: SessionId,
         stop: crate::AgentStop,
     },
+    AgentEviction {
+        session: SessionId,
+        agent: crate::AgentId,
+        instance: crate::AgentRuntimeId,
+    },
     AgentTurn {
         session: SessionId,
         agent: crate::AgentId,
@@ -232,6 +237,7 @@ impl RecordEvent {
             Self::AgentCreated { session, .. }
             | Self::AgentExecution { session, .. }
             | Self::AgentStopRequested { session, .. }
+            | Self::AgentEviction { session, .. }
             | Self::AgentTurn { session, .. }
             | Self::Mailbox { session, .. }
             | Self::AudioDraft { session, .. }
@@ -246,6 +252,7 @@ impl RecordEvent {
             Self::AgentCreated { .. }
             | Self::AgentExecution { .. }
             | Self::AgentStopRequested { .. }
+            | Self::AgentEviction { .. }
             | Self::AgentTurn { .. }
             | Self::Mailbox { .. }
             | Self::Process { .. }

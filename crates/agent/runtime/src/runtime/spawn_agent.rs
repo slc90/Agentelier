@@ -28,6 +28,7 @@ const MAX_TITLE_CHARS: usize = 128;
 mod inbox;
 mod interrupt;
 mod limits;
+mod residency;
 mod wake;
 
 #[derive(Clone, Deserialize)]
@@ -200,7 +201,7 @@ pub(super) struct Children {
     stop: CancellationToken,
     active: HashMap<AgentId, ChildHandle>,
     mailbox: MailboxActivity,
-    parked: HashMap<AgentId, Box<Conversation>>,
+    parked: HashMap<AgentId, residency::ResidentChild>,
     waiters: HashMap<AgentId, CancellationToken>,
     finishing: HashMap<AgentId, FinishedChild>,
     limits: limits::Limits,
@@ -320,6 +321,7 @@ impl Children {
             .inspect_err(|failure| {
                 tracing::debug!(session_id = %session, agent_id = %parent, turn_id = turn.0, call_id = %origin.call_id, status = ?failure.status, "子 Agent 资源准入被拒绝");
             })?;
+        self.check_residency_capacity(conversation.agent_registry(), session)?;
         let id = AgentId::allocate();
         let request = &spec.arguments;
         let reservation = conversation
@@ -560,6 +562,13 @@ impl Children {
         conversation: &mut Conversation,
     ) -> Result<Option<AgentId>, RuntimeFailure> {
         let identity = &finished.identity;
+        let node = conversation
+            .agent_registry()
+            .get(identity.session, identity.id)
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+        if node.residency != agentelier_conversation::AgentResidency::Resident(finished.instance) {
+            return Err(ConversationFailure::new("子 Agent 收尾属于已替换的驻留实例").into());
+        }
         self.clear_wait(identity.id);
         let cancelled = self
             .active
@@ -612,13 +621,15 @@ impl Children {
         if let Some(delivery) = delivery {
             self.mailbox.notify(delivery.receiver, sequence);
         }
-        conversation
-            .agent_registry_mut()
-            .detach(identity.session, identity.id, finished.instance)
-            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
         self.active.remove(&identity.id);
-        if let Some(residence) = finished.residence {
-            self.parked.insert(identity.id, residence);
+        if let Some(history) = finished.residence {
+            self.parked.insert(
+                identity.id,
+                residency::ResidentChild {
+                    instance: finished.instance,
+                    history,
+                },
+            );
         }
         Ok(resume.then_some(identity.id))
     }

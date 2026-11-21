@@ -1,8 +1,8 @@
 use super::super::child_runtime::Execution;
 use super::{ChildHandle, ChildTurn, Children, SpawnEnvironment, apply_execution};
 use agentelier_conversation::{
-    AgentId, AgentIdentity, AgentMessage, AgentState, Conversation, ConversationFailure,
-    MailboxEvent, MessageClaim, SessionId,
+    AgentId, AgentIdentity, AgentMessage, AgentResidency, AgentState, Conversation,
+    ConversationFailure, MailboxEvent, MessageClaim, SessionId,
 };
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -32,6 +32,19 @@ impl Children {
             .find(|message| message.mode == agentelier_conversation::DeliveryMode::TriggerTurn)
             .cloned()
             .ok_or_else(|| ConversationFailure::new("子 Agent 启动缺少任务来源"))?;
+        let resident = match conversation
+            .agent_registry()
+            .get(session, id)
+            .map_err(failure)?
+            .residency
+        {
+            AgentResidency::Resident(instance) => Some(instance),
+            AgentResidency::Unloaded => {
+                self.reserve_residency(conversation, environment.store, session)
+                    .await?;
+                None
+            }
+        };
         let mailbox = self
             .mailbox
             .subscribe(id, conversation.mailboxes().revision());
@@ -53,10 +66,14 @@ impl Children {
                 .await?;
             claims.push(claim);
         }
-        let instance = conversation
-            .agent_registry_mut()
-            .attach(session, id)
-            .map_err(failure)?;
+        let instance = if let Some(instance) = resident {
+            instance
+        } else {
+            conversation
+                .agent_registry_mut()
+                .attach(session, id)
+                .map_err(failure)?
+        };
         if let Err(error) = apply_execution(
             environment.store,
             conversation,
@@ -66,10 +83,12 @@ impl Children {
         )
         .await
         {
-            conversation
-                .agent_registry_mut()
-                .detach(session, id, instance)
-                .map_err(failure)?;
+            if resident.is_none() {
+                conversation
+                    .agent_registry_mut()
+                    .detach(session, id, instance)
+                    .map_err(failure)?;
+            }
             return Err(error);
         }
         let stop = self.stop.child_token();
@@ -85,7 +104,7 @@ impl Children {
                 cleanup_unconfirmed: false,
             },
         );
-        tracing::info!(session_id = %session, agent_id = %id, agent_path = %identity.path, turn_id = turn_id.0, model = %turn.view().settings.slug, effort = ?turn.view().settings.effort, role = %identity.role, "子 Agent 已启动独立执行轮次");
+        tracing::info!(session_id = %session, agent_id = %id, agent_path = %identity.path, runtime_instance = %instance, turn_id = turn_id.0, model = %turn.view().settings.slug, effort = ?turn.view().settings.effort, role = %identity.role, "子 Agent 已启动独立执行轮次");
         self.jobs.spawn(
             Execution {
                 identity,
@@ -159,12 +178,20 @@ impl Children {
         let parked = self.parked.get_mut(&id).ok_or_else(|| {
             ConversationFailure::new("子 Agent 历史尚未恢复，任务仍保留在 Mailbox")
         })?;
-        let view = ChildTurn::start(parked, identity.thread.session_id(), task, operation)?;
+        if node.residency != AgentResidency::Resident(parked.instance) {
+            return Err(ConversationFailure::new("子 Agent 驻留实例已变化"));
+        }
+        let view = ChildTurn::start(
+            &mut parked.history,
+            identity.thread.session_id(),
+            task,
+            operation,
+        )?;
         let history = self
             .parked
             .remove(&id)
             .ok_or_else(|| ConversationFailure::new("唤醒时缺少已准备的 Agent 历史"))?;
-        let turn = ChildTurn::from_started(*history, view, operation);
+        let turn = ChildTurn::from_started(*history.history, view, operation);
         self.launch_turn(
             conversation,
             identity,

@@ -43,7 +43,8 @@ impl fmt::Display for AgentThreadId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
 pub struct AgentRuntimeId(Uuid);
 
 impl AgentRuntimeId {
