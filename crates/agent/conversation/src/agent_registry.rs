@@ -1,5 +1,6 @@
 use crate::{SessionId, TurnId};
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::{BTreeMap, HashMap, hash_map::Entry};
+use std::str::FromStr;
 use std::{error::Error, fmt};
 use uuid::Uuid;
 
@@ -48,8 +49,10 @@ impl fmt::Display for AgentRuntimeId {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(transparent)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(try_from = "String")]
 pub struct AgentPath(String);
 
 impl AgentPath {
@@ -62,16 +65,55 @@ impl AgentPath {
     }
 
     fn child(&self, segment: &str) -> Result<Self, AgentRegistryError> {
-        if segment.is_empty()
-            || segment.len() > Self::MAX_SEGMENT_BYTES
-            || self.0.len() + 1 + segment.len() > Self::MAX_PATH_BYTES
-            || !segment
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        if !Self::valid_segment(segment) || self.0.len() + 1 + segment.len() > Self::MAX_PATH_BYTES
         {
             return Err(AgentRegistryError::InvalidPath);
         }
         Ok(Self(format!("{self}/{segment}")))
+    }
+
+    fn valid_segment(segment: &str) -> bool {
+        !segment.is_empty()
+            && segment.len() <= Self::MAX_SEGMENT_BYTES
+            && segment
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    }
+
+    fn contains(&self, candidate: &Self) -> bool {
+        candidate
+            .0
+            .strip_prefix(&self.0)
+            .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('/'))
+    }
+
+    fn validate(raw: &str) -> Result<(), AgentRegistryError> {
+        let mut segments = raw.split('/');
+        if raw.len() > Self::MAX_PATH_BYTES
+            || segments.next() != Some(Self::ROOT)
+            || !segments.all(Self::valid_segment)
+        {
+            return Err(AgentRegistryError::InvalidPath);
+        }
+        Ok(())
+    }
+}
+
+impl FromStr for AgentPath {
+    type Err = AgentRegistryError;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        Self::validate(raw)?;
+        Ok(Self(raw.to_owned()))
+    }
+}
+
+impl TryFrom<String> for AgentPath {
+    type Error = AgentRegistryError;
+
+    fn try_from(raw: String) -> Result<Self, Self::Error> {
+        Self::validate(&raw)?;
+        Ok(Self(raw))
     }
 }
 
@@ -94,9 +136,52 @@ pub struct AgentIdentity {
     pub thread: AgentThreadId,
     pub parent: Option<AgentId>,
     pub path: AgentPath,
+    pub depth: u16,
     pub nickname: String,
     pub role: String,
     pub origin: AgentOrigin,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AgentState {
+    Starting,
+    Running,
+    Waiting,
+    Completed,
+    Interrupted,
+    Failed(String),
+    Closed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentResidency {
+    Unloaded,
+    Resident(AgentRuntimeId),
+}
+
+#[derive(Debug)]
+pub struct AgentNode {
+    pub identity: AgentIdentity,
+    pub state: AgentState,
+    pub residency: AgentResidency,
+}
+
+impl AgentNode {
+    fn new(identity: AgentIdentity, state: AgentState) -> Self {
+        Self {
+            identity,
+            state,
+            residency: AgentResidency::Unloaded,
+        }
+    }
+
+    fn ensure_open(&self) -> Result<(), AgentRegistryError> {
+        if self.state == AgentState::Closed {
+            Err(AgentRegistryError::ClosedAgent(self.identity.id))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 pub struct ChildRegistration {
@@ -138,7 +223,17 @@ pub enum AgentRegistryError {
     UnknownAgent(AgentId),
     UnknownReservation(AgentId),
     DuplicatePath(AgentPath),
+    UnknownPath(AgentPath),
     InvalidPath,
+    InvalidTarget,
+    NicknameTarget,
+    ClosedAgent(AgentId),
+    SelfParent(AgentId),
+    AlreadyResident(AgentId),
+    StaleInstance {
+        id: AgentId,
+        instance: AgentRuntimeId,
+    },
 }
 
 impl fmt::Display for AgentRegistryError {
@@ -165,7 +260,16 @@ impl fmt::Display for AgentRegistryError {
             Self::UnknownAgent(id) => write!(f, "未登记 Agent {id}"),
             Self::UnknownReservation(id) => write!(f, "Agent {id} 没有待提交的预留"),
             Self::DuplicatePath(path) => write!(f, "Agent 路径已占用：{path}"),
+            Self::UnknownPath(path) => write!(f, "当前会话没有 Agent 路径 {path}"),
             Self::InvalidPath => f.write_str("Agent 路径不符合格式或长度限制"),
+            Self::InvalidTarget => f.write_str("Agent 目标为空或超出长度限制"),
+            Self::NicknameTarget => f.write_str("Agent 目标必须使用完整路径或 ID，不能使用昵称"),
+            Self::ClosedAgent(id) => write!(f, "Agent {id} 已关闭"),
+            Self::SelfParent(id) => write!(f, "Agent {id} 不能将自己登记为父节点"),
+            Self::AlreadyResident(id) => write!(f, "Agent {id} 已有驻留实例"),
+            Self::StaleInstance { id, instance } => {
+                write!(f, "Agent {id} 的运行实例 {instance} 已失效")
+            }
         }
     }
 }
@@ -174,21 +278,23 @@ impl Error for AgentRegistryError {}
 
 enum Registration {
     Reserved { identity: AgentIdentity, key: Uuid },
-    Committed(AgentIdentity),
+    Committed(AgentNode),
     Retired(SessionId),
 }
 
 impl Registration {
     fn session(&self) -> SessionId {
         match self {
-            Self::Reserved { identity, .. } | Self::Committed(identity) => identity.session,
+            Self::Reserved { identity, .. } => identity.session,
+            Self::Committed(node) => node.identity.session,
             Self::Retired(session) => *session,
         }
     }
 
     fn identity(&self) -> Option<&AgentIdentity> {
         match self {
-            Self::Reserved { identity, .. } | Self::Committed(identity) => Some(identity),
+            Self::Reserved { identity, .. } => Some(identity),
+            Self::Committed(node) => Some(&node.identity),
             Self::Retired(_) => None,
         }
     }
@@ -198,6 +304,7 @@ impl Registration {
 pub struct AgentRegistry {
     roots: HashMap<SessionId, AgentId>,
     entries: HashMap<AgentId, Registration>,
+    paths: HashMap<SessionId, BTreeMap<AgentPath, AgentId>>,
 }
 
 impl AgentRegistry {
@@ -205,20 +312,68 @@ impl AgentRegistry {
         self.roots.get(&session).copied()
     }
 
-    pub fn get(
-        &self,
-        session: SessionId,
-        id: AgentId,
-    ) -> Result<&AgentIdentity, AgentRegistryError> {
+    pub fn get(&self, session: SessionId, id: AgentId) -> Result<&AgentNode, AgentRegistryError> {
         let entry = self
             .entries
             .get(&id)
             .ok_or(AgentRegistryError::UnknownAgent(id))?;
         ensure_session(id, entry.session(), session)?;
         match entry {
-            Registration::Committed(identity) => Ok(identity),
-            _ => Err(AgentRegistryError::UnknownAgent(id)),
+            Registration::Committed(node) => Ok(node),
+            Registration::Retired(_) => Err(AgentRegistryError::ClosedAgent(id)),
+            Registration::Reserved { .. } => Err(AgentRegistryError::UnknownAgent(id)),
         }
+    }
+
+    pub fn resolve(
+        &self,
+        session: SessionId,
+        caller: AgentId,
+        target: &str,
+    ) -> Result<&AgentNode, AgentRegistryError> {
+        self.get(session, caller)?.ensure_open()?;
+        let target = target.trim();
+        if target.is_empty() || target.len() > AgentPath::MAX_PATH_BYTES {
+            return Err(AgentRegistryError::InvalidTarget);
+        }
+        let id = if let Ok(id) = Uuid::parse_str(target) {
+            AgentId(id)
+        } else if target == AgentPath::ROOT || target.contains('/') {
+            let path: AgentPath = target.parse()?;
+            self.paths
+                .get(&session)
+                .and_then(|paths| paths.get(&path))
+                .copied()
+                .filter(|id| matches!(self.entries.get(id), Some(Registration::Committed(_))))
+                .ok_or(AgentRegistryError::UnknownPath(path))?
+        } else {
+            return Err(AgentRegistryError::NicknameTarget);
+        };
+        let node = self.get(session, id)?;
+        node.ensure_open()?;
+        Ok(node)
+    }
+
+    pub fn subtree(
+        &self,
+        session: SessionId,
+        parent: AgentId,
+    ) -> Result<impl Iterator<Item = &AgentNode>, AgentRegistryError> {
+        let path = &self.get(session, parent)?.identity.path;
+        Ok(self
+            .paths
+            .get(&session)
+            .into_iter()
+            .flat_map(move |paths| paths.range(path.clone()..))
+            .filter_map(move |(candidate, id)| {
+                if !path.contains(candidate) {
+                    return None;
+                }
+                match self.entries.get(id) {
+                    Some(Registration::Committed(node)) => Some(node),
+                    _ => None,
+                }
+            }))
     }
 
     pub fn register_root(
@@ -238,19 +393,28 @@ impl AgentRegistry {
             };
         }
         self.ensure_available(session, id)?;
+        let path = AgentPath::root();
         self.roots.insert(session, id);
+        self.paths
+            .entry(session)
+            .or_default()
+            .insert(path.clone(), id);
         self.entries.insert(
             id,
-            Registration::Committed(AgentIdentity {
-                id,
-                session,
-                thread: AgentThreadId(id.0),
-                parent: None,
-                path: AgentPath::root(),
-                nickname: "root".into(),
-                role: "root".into(),
-                origin: AgentOrigin::Root,
-            }),
+            Registration::Committed(AgentNode::new(
+                AgentIdentity {
+                    id,
+                    session,
+                    thread: AgentThreadId(id.0),
+                    parent: None,
+                    path,
+                    depth: 0,
+                    nickname: "root".into(),
+                    role: "root".into(),
+                    origin: AgentOrigin::Root,
+                },
+                AgentState::Waiting,
+            )),
         );
         Ok(())
     }
@@ -261,17 +425,24 @@ impl AgentRegistry {
         parent: AgentId,
         request: ChildRegistration,
     ) -> Result<AgentReservation, AgentRegistryError> {
-        let path = self.get(session, parent)?.path.child(&request.segment)?;
+        if request.id == parent {
+            return Err(AgentRegistryError::SelfParent(parent));
+        }
+        let node = self.get(session, parent)?;
+        node.ensure_open()?;
+        let path = node.identity.path.child(&request.segment)?;
+        let depth = node.identity.depth + 1;
         self.ensure_available(session, request.id)?;
-        let identities = || {
-            self.entries
-                .values()
-                .filter_map(Registration::identity)
-                .filter(|identity| identity.session == session)
-        };
-        if identities().any(|identity| identity.path == path) {
+        let paths = self.paths.entry(session).or_default();
+        if paths.contains_key(&path) {
             return Err(AgentRegistryError::DuplicatePath(path));
         }
+        let identities = || {
+            paths
+                .values()
+                .filter_map(|id| self.entries.get(id))
+                .filter_map(Registration::identity)
+        };
         let base = request.nickname.trim();
         let base = if base.is_empty() {
             request.segment.as_str()
@@ -284,12 +455,14 @@ impl AgentRegistry {
             nickname = format!("{base}-{suffix}");
             suffix += 1;
         }
+        paths.insert(path.clone(), request.id);
         let identity = AgentIdentity {
             id: request.id,
             session,
             thread: AgentThreadId(request.id.0),
             parent: Some(parent),
             path,
+            depth,
             nickname,
             role: request.role,
             origin: AgentOrigin::Spawn {
@@ -310,17 +483,22 @@ impl AgentRegistry {
 
     pub fn commit(&mut self, reservation: AgentReservation) -> Result<(), AgentRegistryError> {
         let entry = self.reservation(&reservation)?;
-        *entry.into_mut() = Registration::Committed(reservation.identity);
+        *entry.into_mut() =
+            Registration::Committed(AgentNode::new(reservation.identity, AgentState::Starting));
         Ok(())
     }
 
     pub fn release(&mut self, reservation: AgentReservation) -> Result<(), AgentRegistryError> {
         self.reservation(&reservation)?.remove();
+        if let Some(paths) = self.paths.get_mut(&reservation.identity.session) {
+            paths.remove(&reservation.identity.path);
+        }
         Ok(())
     }
 
     pub(crate) fn retire_session(&mut self, session: SessionId) {
         self.roots.remove(&session);
+        self.paths.remove(&session);
         self.entries.retain(|_, entry| {
             if entry.session() != session {
                 return true;
@@ -331,6 +509,66 @@ impl AgentRegistry {
             *entry = Registration::Retired(session);
             true
         });
+    }
+
+    pub fn set_state(
+        &mut self,
+        session: SessionId,
+        id: AgentId,
+        state: AgentState,
+    ) -> Result<(), AgentRegistryError> {
+        let node = self.node_mut(session, id)?;
+        if node.state != state {
+            node.ensure_open()?;
+            node.state = state;
+        }
+        Ok(())
+    }
+
+    pub fn attach(
+        &mut self,
+        session: SessionId,
+        id: AgentId,
+    ) -> Result<AgentRuntimeId, AgentRegistryError> {
+        let node = self.node_mut(session, id)?;
+        node.ensure_open()?;
+        if node.residency != AgentResidency::Unloaded {
+            return Err(AgentRegistryError::AlreadyResident(id));
+        }
+        let instance = AgentRuntimeId::allocate();
+        node.residency = AgentResidency::Resident(instance);
+        Ok(instance)
+    }
+
+    pub fn detach(
+        &mut self,
+        session: SessionId,
+        id: AgentId,
+        instance: AgentRuntimeId,
+    ) -> Result<(), AgentRegistryError> {
+        let node = self.node_mut(session, id)?;
+        if node.residency != AgentResidency::Resident(instance) {
+            return Err(AgentRegistryError::StaleInstance { id, instance });
+        }
+        node.residency = AgentResidency::Unloaded;
+        Ok(())
+    }
+
+    fn node_mut(
+        &mut self,
+        session: SessionId,
+        id: AgentId,
+    ) -> Result<&mut AgentNode, AgentRegistryError> {
+        let entry = self
+            .entries
+            .get_mut(&id)
+            .ok_or(AgentRegistryError::UnknownAgent(id))?;
+        ensure_session(id, entry.session(), session)?;
+        match entry {
+            Registration::Committed(node) => Ok(node),
+            Registration::Retired(_) => Err(AgentRegistryError::ClosedAgent(id)),
+            Registration::Reserved { .. } => Err(AgentRegistryError::UnknownAgent(id)),
+        }
     }
 
     pub(crate) fn ensure_available(

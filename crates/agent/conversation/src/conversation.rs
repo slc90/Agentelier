@@ -1,7 +1,9 @@
 use crate::active::{ActiveState, ActiveTurn};
 use crate::control::SteerView;
 use crate::queue::QueuedInput;
-use crate::{AgentId, AgentRegistry, AgentRegistryError, AgentRuntimeId};
+use crate::{
+    AgentId, AgentRegistry, AgentRegistryError, AgentResidency, AgentRuntimeId, AgentState,
+};
 use agentelier_llm_model::{OutputMessage, ProtocolHistory, ProtocolItemSummary};
 use agentelier_prompts::{InstructionMessage, InstructionSnapshot};
 use agentelier_tools::{ToolCatalog, ToolRegistration, ToolStatus};
@@ -239,7 +241,6 @@ pub struct Conversation {
     pub(crate) extensions: Arc<[ToolRegistration]>,
     pub(crate) queue_pause_revision: u64,
     agents: AgentRegistry,
-    root_instance: Option<AgentRuntimeId>,
 }
 
 impl Conversation {
@@ -303,7 +304,6 @@ impl Conversation {
         {
             self.session = None;
             self.next_turn = 0;
-            self.root_instance = None;
         }
     }
     pub fn current(&self) -> Option<SessionView> {
@@ -511,28 +511,59 @@ impl Conversation {
         prepared: PreparedSession,
     ) -> Result<(SessionView, AgentRuntimeId), AgentRegistryError> {
         let view = prepared.session.view.clone();
-        let instance = self.register_root(view.id)?;
+        let instance = self.activate_root(&view)?;
         self.session = Some(prepared.session);
         self.next_turn = 0;
         Ok((view, instance))
     }
 
-    pub(crate) fn register_root(
+    pub(crate) fn activate_root(
         &mut self,
-        session: SessionId,
+        view: &SessionView,
     ) -> Result<AgentRuntimeId, AgentRegistryError> {
+        let root = AgentId::for_root(view.id);
+        self.agents.register_root(view.id, root)?;
+        self.sync_root_state(view)?;
+        if let Some(current) = &self.session
+            && let Some(instance) = self.root_instance(current.view.id)
+        {
+            let session = current.view.id;
+            self.agents
+                .detach(session, AgentId::for_root(session), instance)?;
+        }
+        self.agents.attach(view.id, root)
+    }
+
+    pub fn sync_root_state(&mut self, view: &SessionView) -> Result<(), AgentRegistryError> {
+        let state = match view.turn.as_ref().map(|turn| &turn.status) {
+            None => AgentState::Waiting,
+            Some(TurnStatus::Running) => AgentState::Running,
+            Some(TurnStatus::Completed) => AgentState::Completed,
+            Some(TurnStatus::Cancelled) => AgentState::Interrupted,
+            Some(TurnStatus::Limited) => AgentState::Failed("模型达到本轮执行预算".into()),
+            Some(TurnStatus::Failed(reason)) => AgentState::Failed(reason.clone()),
+        };
         self.agents
-            .register_root(session, AgentId::for_root(session))?;
-        let instance = AgentRuntimeId::allocate();
-        self.root_instance = Some(instance);
-        Ok(instance)
+            .set_state(view.id, AgentId::for_root(view.id), state)
+    }
+
+    pub fn agent_registry(&self) -> &AgentRegistry {
+        &self.agents
     }
 
     pub fn root_instance(&self, session: SessionId) -> Option<AgentRuntimeId> {
         self.session
             .as_ref()
             .filter(|current| current.view.id == session)?;
-        self.root_instance
+        match self
+            .agents
+            .get(session, AgentId::for_root(session))
+            .ok()?
+            .residency
+        {
+            AgentResidency::Resident(instance) => Some(instance),
+            AgentResidency::Unloaded => None,
+        }
     }
 
     pub fn prepare_reset(

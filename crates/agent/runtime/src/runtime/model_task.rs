@@ -346,6 +346,23 @@ pub(super) fn complete(
     }
 }
 
+pub(super) fn settle_root(
+    conversation: &mut Conversation,
+    view: &agentelier_conversation::SessionView,
+    operation_id: u64,
+) -> Result<(), ConversationFailure> {
+    conversation
+        .sync_root_state(view)
+        .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+    let id = agentelier_conversation::AgentId::for_root(view.id);
+    let root = conversation
+        .agent_registry()
+        .resolve(view.id, id, "root")
+        .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+    debug!(session_id = %view.id, agent_id = %root.identity.id, agent_path = %root.identity.path, depth = root.identity.depth, state = ?root.state, residency = ?root.residency, operation_id, "Root Agent 已结算执行终态");
+    Ok(())
+}
+
 pub(super) async fn drive_idle(
     conversation: &mut Conversation,
     tools: &super::tool_jobs::SessionTools,
@@ -484,6 +501,9 @@ pub(super) async fn stop_model(
                 }
             }
         }
+        if let AgentEventKind::Conversation(ConversationEvent::Finished(view)) = &event {
+            settle_root(conversation, view, task.id)?;
+        }
         let delivery = emit(publish, task.id, event);
         if let Some(failure) = progress_failure {
             return Err(failure);
@@ -527,8 +547,7 @@ pub(super) fn start_queued(
         conversation,
         store.client(),
     );
-    let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
-    control.bind_root(conversation, view.id, turn.id.0)?;
+    control.bind_root(conversation, &view)?;
     *shared.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control.clone());
     emit(
         publish,

@@ -29,7 +29,7 @@ flowchart TD
 
 ## Registry 的责任
 
-当前已接入内存身份登记。Root 映射到现有 Session UUID，创建或重置须等初始存档确认后登记，打开同一会话沿用该映射。每次打开分配新的 Runtime 实例标识。子 Agent 的标识、路径及昵称可以在 Registry 预留、提交或释放，子 Agent 身份存档属于后续增量。
+当前已接入内存身份登记和树索引。Root 映射到现有 Session UUID，创建或重置须等初始存档确认后登记，打开同一会话沿用该映射。每次打开分配新的 Runtime 实例标识。子 Agent 的标识、路径及昵称可以在 Registry 预留、提交或释放，子 Agent 身份存档属于后续增量。路径以 `root` 开头，子段使用小写 ASCII、数字和连字符。目标解析接受完整路径或 Agent ID，子树遍历按完整路径段匹配。
 
 Registry 管理同一 Session 的 Agent Tree 索引：路径到 Agent、Agent 到父节点、子节点集合、角色与当前状态。它还负责预留 Spawn 名额、分配路径/昵称、维护总量和深度约束，并记录 Runtime 是否驻留的索引。
 
@@ -37,7 +37,7 @@ Registry 不拥有会话历史，也不保存 OS 进程或 JoinHandle。它通�
 
 ## 状态与驻留是两个维度
 
-Agent 业务状态表达任务生命周期，例如 `Starting`、`Running`、`Waiting`、`Completed`、`Interrupted`、`Failed`、`Evicted`。实际状态集合在实施时需与 Codex v2 语义和 Agentelier 可持久化状态统一，避免把瞬时状态无限扩张。
+Agent 业务状态表达任务生命周期。内存 Registry 当前支持 `Starting`、`Running`、`Waiting`、`Completed`、`Interrupted`、`Failed` 和 `Closed`。
 
 驻留状态独立表达 Runtime 是否在内存中：`Resident` 或 `Unloaded`，以及创建/卸载过程中的过渡状态。一个已完成 Agent 可以仍然驻留以供后续消息使用；一个等待消息的 Agent 可以被卸载；一个正在执行的 Agent 不能被普通空闲卸载策略回收。
 

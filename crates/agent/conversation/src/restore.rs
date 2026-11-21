@@ -1414,7 +1414,6 @@ impl Conversation {
         mut restored: RestoredSession,
         tools: &[agentelier_tools::ToolRegistration],
     ) -> Result<(SessionView, crate::AgentRuntimeId), crate::AgentRegistryError> {
-        let instance = self.register_root(restored.state.session)?;
         for turn in restored
             .state
             .previous_turns
@@ -1516,6 +1515,7 @@ impl Conversation {
             queue_paused: restored.state.queue_paused,
             task_policy: Box::new(restored.state.task_policy),
         };
+        let instance = self.activate_root(&view)?;
         self.next_turn = restored.next_turn;
         self.session = Some(ChatSession {
             idle: None,

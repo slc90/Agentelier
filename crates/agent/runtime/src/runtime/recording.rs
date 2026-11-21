@@ -140,7 +140,10 @@ pub(super) fn apply(
                 None
             };
             let event = match view {
-                Some(view) => ConversationEvent::Finished(view),
+                Some(view) => {
+                    super::model_task::settle_root(conversation, &view, id)?;
+                    ConversationEvent::Finished(view)
+                }
                 None => ConversationEvent::Rejected("任务已回收，当前会话已变化".into()),
             };
             emit(publish, id, AgentEventKind::Conversation(event))?;

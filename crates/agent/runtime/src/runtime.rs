@@ -204,10 +204,11 @@ struct ModelControl {
 impl ModelControl {
     fn bind_root(
         &self,
-        conversation: &Conversation,
-        session: SessionId,
-        turn: u64,
+        conversation: &mut Conversation,
+        view: &agentelier_conversation::SessionView,
     ) -> Result<(), RuntimeFailure> {
+        let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?.id.0;
+        let session = view.id;
         let instance = conversation
             .root_instance(session)
             .ok_or(RuntimeFailure::ModelState)?;
@@ -217,7 +218,12 @@ impl ModelControl {
                 turn,
                 instance,
             })
-            .map_err(|_| RuntimeFailure::ModelState)
+            .map_err(|_| RuntimeFailure::ModelState)?;
+        conversation
+            .sync_root_state(view)
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+        debug!(session_id = %session, runtime_instance = %instance, turn_id = turn, "Root Agent 开始执行");
+        Ok(())
     }
 
     fn matches_turn(&self, session: SessionId, turn: u64) -> bool {
@@ -888,9 +894,8 @@ impl AgentRuntime {
                                                 }
                                                 match conversation.start(id, request) {
                                                     Ok(view) => {
-                                                        let turn = view.turn.as_ref().ok_or(RuntimeFailure::ModelState)?;
                                                         let tools = tool_jobs::SessionTools::for_session(&mut session_tools, &view, &conversation, store.client());
-                                                        control.bind_root(&conversation, view.id, turn.id.0)?;
+                                                        control.bind_root(&mut conversation, &view)?;
                                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?=Some(control.clone());
                                                         emit(
                                                             &publish,
