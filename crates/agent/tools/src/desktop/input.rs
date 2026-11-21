@@ -6,6 +6,10 @@ use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 use winsafe::{HwKbMouse, MOUSEINPUT, co};
 
+mod keyboard;
+use keyboard::HeldKey;
+pub use keyboard::Key;
+
 const WHEEL_UNITS_PER_DETENT: i32 = 120;
 const CANCELLATION_POLL: Duration = Duration::from_millis(10);
 const DOUBLE_CLICK_GAP: Duration = Duration::from_millis(25);
@@ -72,6 +76,7 @@ pub enum ScrollAxis {
 pub struct DesktopInput {
     cancel: CancellationToken,
     buttons: Vec<MouseButton>,
+    keys: Vec<HeldKey>,
 }
 
 impl DesktopInput {
@@ -79,6 +84,7 @@ impl DesktopInput {
         Self {
             cancel,
             buttons: Vec::new(),
+            keys: Vec::new(),
         }
     }
 
@@ -163,6 +169,12 @@ impl DesktopInput {
     }
 
     pub fn release_all(&mut self) -> Result<(), ToolFailure> {
+        let keys = self.release_keys(0);
+        let buttons = self.release_buttons();
+        after_cleanup(keys, buttons)
+    }
+
+    fn release_buttons(&mut self) -> Result<(), ToolFailure> {
         let mut errors = Vec::new();
         for index in (0..self.buttons.len()).rev() {
             let button = self.buttons[index];
@@ -209,13 +221,7 @@ impl DesktopInput {
         self.mouse_down(button)?;
         let result = action(self);
         let release = self.mouse_up(button);
-        match (result, release) {
-            (Ok(()), result) | (result, Ok(())) => result,
-            (Err(error), Err(release)) => Err(ToolFailure::new(
-                release.code,
-                format!("{error}；释放 {button:?} 失败：{release}"),
-            )),
-        }
+        after_cleanup(result, release)
     }
 
     fn check_cancel(&self) -> Result<(), ToolFailure> {
@@ -265,4 +271,17 @@ fn input_failed(error: impl std::fmt::Display) -> ToolFailure {
         "desktop_input_failed",
         format!("Windows 输入调用失败：{error}"),
     )
+}
+
+fn after_cleanup(
+    result: Result<(), ToolFailure>,
+    cleanup: Result<(), ToolFailure>,
+) -> Result<(), ToolFailure> {
+    match (result, cleanup) {
+        (Ok(()), result) | (result, Ok(())) => result,
+        (Err(error), Err(cleanup)) => Err(ToolFailure::new(
+            "desktop_input_cleanup",
+            format!("{error}；输入清理失败：{cleanup}"),
+        )),
+    }
 }

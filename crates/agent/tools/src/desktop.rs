@@ -9,7 +9,7 @@ pub use capture::{
     Capture, ScreenPoint, ScreenshotPixel, WindowPoint, capture_desktop, capture_window,
     window_to_screen,
 };
-pub use input::{DesktopInput, MouseButton, PointerTarget, ScrollAxis, cursor_position};
+pub use input::{DesktopInput, Key, MouseButton, PointerTarget, ScrollAxis, cursor_position};
 
 const ACTIVATION_TIMEOUT: Duration = Duration::from_millis(300);
 const ACTIVATION_POLL_INTERVAL: Duration = Duration::from_millis(10);
