@@ -8,7 +8,9 @@ use std::{error::Error, fmt};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+mod logout;
 mod renewal;
+pub use logout::LogoutCompletion;
 pub use renewal::{RefreshAttempt, RefreshCompletion};
 use renewal::{Renewal, Waiter};
 
@@ -26,6 +28,10 @@ pub enum AccountEventKind {
     LoginWaiting(LoginPrompt),
     SourceSettling,
     SourceChanged(Result<AccountSource, String>),
+    LogoutFinished {
+        source: AccountSource,
+        remote_warning: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -68,6 +74,8 @@ impl Error for AccountFailure {}
 pub enum AccountCommand {
     CompleteLogin(u64, Result<CodexOAuthCredentials, String>),
     CompleteRefresh(Result<RefreshCompletion, String>),
+    BeginLogout(u64),
+    CompleteLogout(u64, Result<LogoutCompletion, String>),
     Credentials {
         current: CancellationToken,
         intent: CredentialIntent,
@@ -79,6 +87,7 @@ pub enum AccountEffect {
     None,
     Event(AccountEvent),
     Refresh(RefreshAttempt),
+    LogoutSettling(u64),
 }
 
 pub struct Account {
@@ -87,6 +96,7 @@ pub struct Account {
     current: Option<CodexOAuthCredentials>,
     snapshot: Option<AccountSource>,
     renewal: Renewal,
+    signing_out: bool,
 }
 
 impl Account {
@@ -97,10 +107,14 @@ impl Account {
             current: None,
             snapshot: None,
             renewal: Renewal::default(),
+            signing_out: false,
         }
     }
 
     pub fn codex_identity(&self) -> Option<&crate::CodexIdentity> {
+        if self.signing_out {
+            return None;
+        }
         self.snapshot
             .as_ref()
             .and_then(AccountSource::codex_identity)
@@ -178,6 +192,8 @@ impl Account {
                 }
             }
             AccountCommand::CompleteRefresh(result) => self.complete_refresh(result).await,
+            AccountCommand::BeginLogout(id) => self.begin_logout(id),
+            AccountCommand::CompleteLogout(id, result) => self.complete_logout(id, result),
             AccountCommand::Credentials {
                 current,
                 intent,
@@ -199,6 +215,9 @@ impl Account {
         snapshot: AccountSource,
         new_login: bool,
     ) -> Result<AccountEffect, AccountFailure> {
+        if self.signing_out {
+            return Ok(AccountEffect::None);
+        }
         let previous = self.snapshot.as_ref();
         let replaced = new_login
             || previous.is_some_and(|old| old.codex_identity() != snapshot.codex_identity());

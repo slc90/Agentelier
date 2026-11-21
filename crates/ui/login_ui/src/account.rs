@@ -16,6 +16,7 @@ pub struct AccountState {
     pub(crate) source_settling: bool,
     pub(crate) operation: Option<u64>,
     pub(crate) waiting: bool,
+    pub(crate) signing_out: bool,
     pub(crate) error: Option<String>,
     pub runtime_failed: bool,
 }
@@ -26,6 +27,9 @@ impl AccountState {
     }
 
     pub fn model_unavailable_reason(&self) -> Option<&'static str> {
+        if self.signing_out {
+            return Some("正在退出登录");
+        }
         if self.source_settling {
             return Some("正在回收旧账号的任务并保存待办");
         }
@@ -64,6 +68,7 @@ pub(crate) enum CodexStatus {
 enum ButtonAction {
     Login,
     CancelLogin,
+    Logout,
 }
 
 impl ButtonAction {
@@ -71,20 +76,24 @@ impl ButtonAction {
         match self {
             Self::Login => "使用 ChatGPT 登录",
             Self::CancelLogin => "取消登录",
+            Self::Logout => "退出登录",
         }
     }
 
     fn visible(self, state: &AccountState) -> bool {
         match self {
             Self::Login => state.model_identity().is_none(),
-            Self::CancelLogin => state.operation.is_some() && !state.source_settling,
+            Self::CancelLogin => {
+                state.operation.is_some() && !state.signing_out && !state.source_settling
+            }
+            Self::Logout => state.codex.is_some(),
         }
     }
 
     fn disabled(self, state: &AccountState, model_busy: bool) -> bool {
         state.runtime_failed
             || match self {
-                Self::Login => state.is_busy() || model_busy,
+                Self::Login | Self::Logout => state.is_busy() || model_busy,
                 Self::CancelLogin => state.source_settling,
             }
     }
@@ -101,6 +110,7 @@ impl AccountText {
     fn content(self, state: &AccountState) -> String {
         let source = state.codex.as_ref();
         match self {
+            Self::Status if state.signing_out => "正在退出登录并收尾…".into(),
             Self::Status if state.source_settling => "正在回收旧账号的任务并保存待办…".into(),
             Self::Status if state.waiting => "正在等待浏览器授权…".into(),
             Self::Status if state.operation.is_some() => "正在准备浏览器登录…".into(),
@@ -183,7 +193,8 @@ pub(crate) fn account_panel(state: &AccountState, model_busy: bool) -> impl Scen
             Node { flex_wrap: FlexWrap::Wrap, column_gap: px(ACCOUNT_GAP), row_gap: px(ACCOUNT_GAP) }
             Children [
                 @button(state, ButtonAction::Login, "AccountLogin", model_busy)--
-                @button(state, ButtonAction::CancelLogin, "AccountCancelLogin", model_busy)
+                @button(state, ButtonAction::CancelLogin, "AccountCancelLogin", model_busy)--
+                @button(state, ButtonAction::Logout, "AccountLogout", model_busy)
             ]
         ]
     }
@@ -203,6 +214,7 @@ fn activate(
     match action {
         ButtonAction::Login => commands.queue(crate::authentication::begin_login),
         ButtonAction::CancelLogin => commands.queue(crate::authentication::cancel_login),
+        ButtonAction::Logout => commands.queue(crate::authentication::logout),
     }
     Ok(())
 }
@@ -233,7 +245,11 @@ fn update_panel(
         WidgetryButtonLoading::set(
             &mut commands,
             entity,
-            matches!(action, ButtonAction::Login) && state.operation.is_some(),
+            match action {
+                ButtonAction::Login => state.operation.is_some() && !state.signing_out,
+                ButtonAction::Logout => state.signing_out,
+                ButtonAction::CancelLogin => false,
+            },
         );
     }
 }

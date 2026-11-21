@@ -126,11 +126,11 @@ Chat UI 通过 Widgetry 选择本地音频。Session Store 后台核对 WAV 或 
 
 Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模型任务和独立 Turn Runner。Runtime 拥有线程、队列、取消令牌、JoinHandle 及真实回收信号；账号处理期间模型任务仍可并发等待网络。它不包含 OAuth、认证文件实现或模型网络协议。依赖为 Runtime → Account → Login、Runtime → LLM Model → Account，以及 Runtime → Tools，以及 Runtime → Turn Runner → Conversation / LLM Model / Account，无循环。
 
-登录更替或账号失效时，共享门控暂停新凭据交付，Runtime 停止旧模型任务并回收工具。队列暂停和已接纳结果持久确认后，账号区显示新的来源状态。详见[认证运行与凭据管理](modules/authentication.md)。
+退出、登录更替或账号失效时，共享门控暂停新凭据交付，Runtime 停止旧模型任务并回收工具。退出在队列暂停和已接纳结果持久确认后尝试撤销远端授权并清除本地凭据。账号区随后显示新的来源状态。详见[认证运行与凭据管理](modules/authentication.md)。
 
 ## Bridge 按业务转换，共用连接协调
 
-Account Bridge 将 AccountEventKind 转为自己的账号事件和安全摘要，投影浏览器等待、账号状态和操作错误；LLM Model Bridge 将模型结果转换为自己的回复、错误及完成/取消类型。两者都不执行后台业务，不持有 Agent 的执行状态或 UI 的展示状态。
+Account Bridge 将 AccountEventKind 转为自己的账号事件和安全摘要，投影浏览器等待、账号状态、退出结果和操作错误；LLM Model Bridge 将模型结果转换为自己的回复、错误及完成/取消类型。两者都不执行后台业务，不持有 Agent 的执行状态或 UI 的展示状态。
 
 Connection 只包装和调用对应业务转换，返回带 operation_id 的 BridgeEvent；BridgeEventKind 区分 Account 与 Model。它分配操作身份、隔离迟到结果、协调在途操作、转发控制命令并持有连接收尾句柄，不实现字段投影或业务错误分类。UI 显式消费连接封装和相应业务类型。
 

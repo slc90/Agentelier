@@ -16,8 +16,10 @@ use url::{Url, form_urlencoded};
 use winsafe::{self as win, co, prelude::*};
 
 mod refresh;
+mod revoke;
 mod store;
 pub use refresh::RefreshFailure;
+pub use revoke::RevocationFailure;
 pub use store::{CredentialStore, CredentialStoreFailure};
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";

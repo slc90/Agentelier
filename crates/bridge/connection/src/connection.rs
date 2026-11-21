@@ -312,6 +312,14 @@ impl Connection {
         }
         Ok(())
     }
+    pub fn logout(&mut self) -> Result<u64, BridgeFailure> {
+        let id = self.allocate()?;
+        self.runtime
+            .logout(id)
+            .map_err(|error| BridgeFailure(error.to_string()))?;
+        self.pending = Some(id);
+        Ok(id)
+    }
     pub fn request_model(
         &mut self,
         request: agentelier_llm_model_bridge::ModelRequest,
@@ -752,7 +760,11 @@ impl Connection {
                     BridgeEventKind::Account(kind) => kind,
                 };
                 if self.pending == Some(event.operation_id)
-                    && matches!(kind, AccountEventKind::SourceChanged(_))
+                    && matches!(
+                        kind,
+                        AccountEventKind::SourceChanged(_)
+                            | AccountEventKind::LogoutFinished { .. }
+                    )
                 {
                     self.pending = None;
                 }

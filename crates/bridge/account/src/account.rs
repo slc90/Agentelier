@@ -19,6 +19,10 @@ pub enum AccountEventKind {
     },
     SourceSettling,
     SourceChanged(Result<SourceSnapshot, BridgeFailure>),
+    LogoutFinished {
+        source: SourceSnapshot,
+        remote_warning: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -42,6 +46,13 @@ pub fn convert(kind: agentelier_account::AccountEventKind) -> AccountEventKind {
         agentelier_account::AccountEventKind::SourceChanged(result) => {
             AccountEventKind::SourceChanged(result.map(convert_source).map_err(BridgeFailure))
         }
+        agentelier_account::AccountEventKind::LogoutFinished {
+            source,
+            remote_warning,
+        } => AccountEventKind::LogoutFinished {
+            source: convert_source(source),
+            remote_warning,
+        },
     }
 }
 

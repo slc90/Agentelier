@@ -38,7 +38,7 @@ impl Waiter {
 
 pub(super) struct Rotation {
     previous: CodexOAuthCredentials,
-    replacement: CodexOAuthCredentials,
+    pub(super) replacement: CodexOAuthCredentials,
 }
 
 #[derive(Default)]

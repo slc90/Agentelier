@@ -2,7 +2,7 @@ use super::{CodexOAuthCredentials, OAuthTokens};
 use crate::{CodexAccountSummary, CodexReadFailure, DataEnvironment};
 use serde::Deserialize;
 use std::fmt;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tempfile::NamedTempFile;
@@ -16,6 +16,7 @@ pub enum CredentialStoreFailure {
     Format,
     Invalid(CodexReadFailure),
     Write(io::Error),
+    Remove(io::Error),
 }
 
 impl fmt::Display for CredentialStoreFailure {
@@ -25,6 +26,7 @@ impl fmt::Display for CredentialStoreFailure {
             Self::Format => f.write_str("本地 Codex OAuth 凭据文件格式无效"),
             Self::Invalid(error) => error.fmt(f),
             Self::Write(error) => write!(f, "无法保存本地 Codex OAuth 凭据：{error}"),
+            Self::Remove(error) => write!(f, "无法清除本地 Codex OAuth 凭据：{error}"),
         }
     }
 }
@@ -79,7 +81,7 @@ impl CredentialStore {
     }
 
     pub fn save(&self, credentials: &CodexOAuthCredentials) -> Result<(), CredentialStoreFailure> {
-        let _writer = self.lock_writer()?;
+        let _writer = self.lock_writer().map_err(CredentialStoreFailure::Write)?;
         self.write(credentials)
     }
 
@@ -88,7 +90,7 @@ impl CredentialStore {
         expected: &CodexOAuthCredentials,
         replacement: &CodexOAuthCredentials,
     ) -> Result<bool, CredentialStoreFailure> {
-        let _writer = self.lock_writer()?;
+        let _writer = self.lock_writer().map_err(CredentialStoreFailure::Write)?;
         if self.load()?.as_ref() != Some(expected) {
             return Ok(false);
         }
@@ -96,10 +98,23 @@ impl CredentialStore {
         Ok(true)
     }
 
-    fn lock_writer(&self) -> Result<MutexGuard<'_, ()>, CredentialStoreFailure> {
+    pub fn clear(&self) -> Result<(), CredentialStoreFailure> {
+        let _writer = self.lock_writer().map_err(CredentialStoreFailure::Remove)?;
+        let root = self.environment.root();
+        match fs::remove_file(root.join(FILE_NAME)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => root
+                .metadata()
+                .map(|_| ())
+                .map_err(CredentialStoreFailure::Remove),
+            Err(error) => Err(CredentialStoreFailure::Remove(error)),
+        }
+    }
+
+    fn lock_writer(&self) -> io::Result<MutexGuard<'_, ()>> {
         self.writer
             .lock()
-            .map_err(|_| CredentialStoreFailure::Write(io::Error::other("本地凭据写入状态不可用")))
+            .map_err(|_| io::Error::other("本地凭据写入状态不可用"))
     }
 
     fn write(&self, credentials: &CodexOAuthCredentials) -> Result<(), CredentialStoreFailure> {

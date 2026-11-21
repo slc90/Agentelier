@@ -53,12 +53,36 @@ pub(crate) fn cancel_login(world: &mut World) -> Result {
     };
     let host = world.resource::<AgentHost>();
     if !state.source_settling
+        && !state.signing_out
         && !state.runtime_failed
         && !host.is_stopping()?
         && let Err(failure) = host.cancel_login(id)
     {
         error!(operation_id = id, error = %failure, "无法取消浏览器登录");
         world.resource_mut::<AccountState>().error = Some(failure.to_string());
+    }
+    Ok(())
+}
+
+pub(crate) fn logout(world: &mut World) -> Result {
+    let state = world.resource::<AccountState>();
+    let host = world.resource::<AgentHost>();
+    if state.is_busy() || state.runtime_failed || host.is_stopping()? {
+        return Ok(());
+    }
+    let result = host.logout();
+    let mut state = world.resource_mut::<AccountState>();
+    match result {
+        Ok(id) => {
+            state.operation = Some(id);
+            state.signing_out = true;
+            state.error = None;
+            info!(operation_id = id, "用户请求退出 ChatGPT 登录");
+        }
+        Err(failure) => {
+            error!(error = %failure, "无法开始退出登录");
+            state.error = Some(failure.to_string());
+        }
     }
     Ok(())
 }
@@ -85,6 +109,21 @@ fn receive(
                 }
             }
             AccountEventKind::SourceSettling => state.source_settling = true,
+            AccountEventKind::LogoutFinished {
+                source,
+                remote_warning,
+            } => {
+                state.operation = None;
+                state.signing_out = false;
+                state.source_settling = false;
+                state.error = match (source, remote_warning) {
+                    (SourceSnapshot::Unavailable(local), Some(remote)) => {
+                        Some(format!("{local}\n{remote}"))
+                    }
+                    (_, remote) => remote.clone(),
+                };
+                apply_source(&mut state, source, event.operation_id);
+            }
             AccountEventKind::SourceChanged(result) => {
                 if event.operation_id != 0 {
                     state.operation = None;
@@ -109,6 +148,7 @@ fn receive(
         state.error = Some(failure.reason.to_string());
         state.runtime_failed = true;
         state.waiting = false;
+        state.signing_out = false;
         state.source_settling = false;
         error!(error = %failure.reason, "认证后台运行失败");
     }

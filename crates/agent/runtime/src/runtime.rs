@@ -1,6 +1,6 @@
 use agentelier_account::{
-    Account, AccountCommand, AccountEffect, AccountEventKind, AccountFailure, CredentialClient,
-    LoginPrompt, RefreshCompletion,
+    Account, AccountCommand, AccountEffect, AccountEvent, AccountEventKind, AccountFailure,
+    CredentialClient, LoginPrompt, LogoutCompletion, RefreshCompletion,
 };
 use agentelier_conversation::SessionId;
 use agentelier_conversation::{
@@ -109,6 +109,11 @@ struct PendingMaterial {
     cancel: CancellationToken,
     task: tokio::task::JoinHandle<Result<agentelier_mcp::MaterialReply, String>>,
 }
+enum SourceSettlement {
+    Publish(AccountEvent),
+    Logout(u64),
+}
+
 enum Command {
     McpMaterial(u64, agentelier_mcp::MaterialRequest),
     CancelMcpMaterial(u64),
@@ -283,7 +288,8 @@ impl AgentRuntime {
                         let mut account = Account::new(owner_credentials.clone(), environment);
                         let mut login = None;
                         let mut refresh: Option<tokio::task::JoinHandle<RefreshCompletion>> = None;
-                        let mut pending_source: Option<agentelier_account::AccountEvent> = None;
+                        let mut logout: Option<(u64, tokio::task::JoinHandle<LogoutCompletion>)> = None;
+                        let mut pending_source: Option<SourceSettlement> = None;
                         let mut delivery_failure = None;
                         let mut model: Option<ModelTask> = None;
                         let mut session_tools: Option<(SessionId, tool_jobs::SessionTools)> = None;
@@ -311,6 +317,18 @@ impl AgentRuntime {
                                         refresh = None;
                                         Command::Account(AccountCommand::CompleteRefresh(
                                             completed.map_err(|_| "凭据续期后台任务异常结束".into()),
+                                        ))
+                                    },
+                                    completed = async {
+                                        match &mut logout {
+                                            Some((id, task)) => (*id, task.await),
+                                            None => std::future::pending().await,
+                                        }
+                                    }, if logout.is_some() => {
+                                        logout = None;
+                                        Command::Account(AccountCommand::CompleteLogout(
+                                            completed.0,
+                                            completed.1.map_err(|_| "退出登录后台任务异常结束".into()),
                                         ))
                                     },
                                     reply = async {
@@ -894,17 +912,21 @@ impl AgentRuntime {
                                         emit(&publish, id, AgentEventKind::Account(AccountEventKind::LoginWaiting(prompt)))?;
                                     }
                                     Command::Account(command) => {
-                                        let mut source_event = match account.handle(command).await? {
-                                            AccountEffect::Event(event) => Some(event),
+                                        let (mut source_event, logout_request) = match account.handle(command).await? {
+                                            AccountEffect::Event(event) => (Some(event), None),
                                             AccountEffect::Refresh(attempt) => {
                                                 refresh = Some(tokio::spawn(attempt.run()));
-                                                None
+                                                (None, None)
                                             }
-                                            AccountEffect::None => None,
+                                            AccountEffect::LogoutSettling(id) => (None, Some(id)),
+                                            AccountEffect::None => (None, None),
                                         };
                                         let settling = owner_credentials.source_settling()?;
-                                        let starting_settlement = settling && pending_source.is_none();
-                                        if settling
+                                        let starting_settlement = settling && pending_source.is_none() && logout.is_none();
+                                        if let Some(id) = logout_request {
+                                            pending_source = Some(SourceSettlement::Logout(id));
+                                            emit(&publish, id, AgentEventKind::Account(AccountEventKind::SourceSettling))?;
+                                        } else if settling
                                             && source_event.as_ref().is_some_and(|event| matches!(event.kind, AccountEventKind::SourceChanged(Ok(_))))
                                             && let Some(event) = source_event.take()
                                         {
@@ -912,7 +934,7 @@ impl AgentRuntime {
                                                 emit(&publish, 0, AgentEventKind::Account(AccountEventKind::SourceSettling))?;
                                                 debug!("凭据来源已变化，开始回收旧任务并保存待办");
                                             }
-                                            pending_source = Some(event);
+                                            pending_source = Some(SourceSettlement::Publish(event));
                                         }
                                         if starting_settlement {
                                             if model.is_some() { stop_model(&mut model, &mut progress_events, &mut conversation, &store, &publish).await?; }
@@ -937,11 +959,20 @@ impl AgentRuntime {
                                     }
                                 }
                                 if suspending == 0 && !pending_queue && !finalizing
-                                    && let Some(event) = pending_source.take()
+                                    && (refresh.is_none() || matches!(pending_source, Some(SourceSettlement::Publish(_))))
+                                    && let Some(settlement) = pending_source.take()
                                 {
-                                    owner_credentials.finish_source_change()?;
-                                    debug!("旧账号任务收尾完成，已发布当前凭据来源");
-                                    emit(&publish, event.operation_id, AgentEventKind::Account(event.kind))?;
+                                    match settlement {
+                                        SourceSettlement::Publish(event) => {
+                                            owner_credentials.finish_source_change()?;
+                                            debug!("旧账号任务收尾完成，已发布当前凭据来源");
+                                            emit(&publish, event.operation_id, AgentEventKind::Account(event.kind))?;
+                                        }
+                                        SourceSettlement::Logout(id) => {
+                                            let attempt = account.logout_attempt(id);
+                                            logout = Some((id, tokio::spawn(attempt.run())));
+                                        }
+                                    }
                                 }
                                 if delivery_failure.is_some() {
                                     break;
@@ -1013,6 +1044,21 @@ impl AgentRuntime {
                             }
                         }
                         let stored = store.finish().await.map_err(RuntimeFailure::Store);
+                        let logout_completion = match logout {
+                            Some((id, task)) => Some((id, task.await.map_err(|_| "退出登录后台任务异常结束".into()))),
+                            None if stored.is_ok() && execution.is_ok() && delivery_failure.is_none() => {
+                                match pending_source {
+                                    Some(SourceSettlement::Logout(id)) => Some((id, Ok(account.logout_attempt(id).run().await))),
+                                    _ => None,
+                                }
+                            }
+                            None => None,
+                        };
+                        if let Some((id, completed)) = logout_completion
+                            && let Err(failure) = account.handle(AccountCommand::CompleteLogout(id, completed)).await
+                        {
+                            capture_delivery(Err(failure.into()), &mut delivery_failure);
+                        }
                         if let Some(pending) = loading && let Some(control) = pending.control { control.finished.cancel(); }
                         let pending_saved = if let Some(mut pending) = creating {
                             let saved = pending.wait().await;
@@ -1134,6 +1180,9 @@ impl AgentRuntime {
     }
     pub fn cancel_login(&self, id: u64) -> Result<(), RuntimeFailure> {
         self.submit(Command::CancelLogin(id))
+    }
+    pub fn logout(&self, id: u64) -> Result<(), RuntimeFailure> {
+        self.send(Command::Account(AccountCommand::BeginLogout(id)))
     }
     pub fn credentials(&self) -> CredentialClient {
         self.credentials.clone()

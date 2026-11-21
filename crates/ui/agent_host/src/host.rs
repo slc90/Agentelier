@@ -154,6 +154,9 @@ impl AgentHost {
     pub fn cancel_login(&self, id: u64) -> Result {
         self.submit(|connection| connection.cancel_login(id))
     }
+    pub fn logout(&self) -> Result<u64> {
+        self.submit(Connection::logout)
+    }
     pub fn request_memory(
         &self,
         request: agentelier_bridge_connection::MemoryRequest,
