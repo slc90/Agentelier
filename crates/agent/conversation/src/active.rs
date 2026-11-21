@@ -655,6 +655,37 @@ impl ActiveTurn<'_> {
         self.tools.clone()
     }
 
+    pub fn can_apply_mailbox(&self) -> bool {
+        self.history_confirmed() && !self.history.has_open_calls()
+    }
+
+    pub fn apply_mailbox(
+        &mut self,
+        delivery: crate::ClaimedMessage,
+    ) -> Result<crate::RecordEvent, ConversationFailure> {
+        if !self.can_apply_mailbox() || self.turn_id()? != delivery.claim.turn.0 {
+            return Err(ConversationFailure::new(
+                "当前轮次不是可接纳 Agent 消息的请求边界",
+            ));
+        }
+        let note = delivery.message.render();
+        let retained_user = !self.state.input_retained;
+        if retained_user {
+            *self.history = self.history.with_user(&self.input()?);
+            self.state.input_retained = true;
+        }
+        *self.history = self.history.with_user(&note);
+        self.view.committed_items = self.history.summary();
+        self.begin_history_commit();
+        Ok(crate::RecordEvent::MailboxInput {
+            state: self.stored_state(),
+            history: self.archive(),
+            claim: delivery.claim,
+            note,
+            retained_user,
+        })
+    }
+
     fn check_steer_capacity(&self, new_input: Option<&str>) -> Result<(), ConversationFailure> {
         if !self.history.has_open_calls() {
             return Ok(());

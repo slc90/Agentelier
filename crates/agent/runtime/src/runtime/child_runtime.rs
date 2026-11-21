@@ -69,6 +69,7 @@ pub(super) struct Execution {
     pub(super) commands: mpsc::Receiver<Preparation>,
     pub(super) mailbox: tokio::sync::watch::Receiver<u64>,
     pub(super) claim: MessageClaim,
+    pub(super) mailbox_commands: mpsc::Sender<super::mailbox::Command>,
 }
 
 pub(super) struct FinishedChild {
@@ -165,6 +166,12 @@ impl Execution {
                         None => std::future::pending().await,
                     }
                 } => match event {
+                    Some(agentelier_turn_runner::RunnerEvent::Inbox(request)) => {
+                        if let Err(failure) = self.mailbox_commands.try_send(super::mailbox::Command::Inbox(request))
+                            && let super::mailbox::Command::Inbox(request) = failure.into_inner() {
+                            request.close();
+                        }
+                    }
                     Some(event) => {
                         if let Err(failure) = model_task::progress(&mut conversation, operation, event, &store, &internal_only) {
                             first_failure.get_or_insert(failure);

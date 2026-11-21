@@ -96,6 +96,13 @@ pub enum RecordEvent {
         session: SessionId,
         event: crate::MailboxEvent,
     },
+    MailboxInput {
+        state: StoredState,
+        history: agentelier_llm_model::ProtocolArchive,
+        claim: crate::MessageClaim,
+        note: String,
+        retained_user: bool,
+    },
     AudioDraft {
         session: SessionId,
         attachment: Option<crate::AudioAttachment>,
@@ -255,6 +262,7 @@ impl RecordEvent {
             | Self::Sealed { state, .. }
             | Self::SteerAccepted { state }
             | Self::SteerApplied { state, .. }
+            | Self::MailboxInput { state, .. }
             | Self::QueueChanged { state, .. }
             | Self::Finalized { state, .. }
             | Self::Finished { state, .. } => Some(state),

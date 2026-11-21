@@ -110,6 +110,10 @@ pub(super) fn progress(
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
     match event {
+        RunnerEvent::Inbox(request) => {
+            request.close();
+            Ok(())
+        }
         RunnerEvent::Edit(edit) => {
             edit.apply(conversation, id);
             Ok(())

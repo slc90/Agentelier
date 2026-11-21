@@ -9,8 +9,8 @@ mod task_control;
 mod tool_events;
 
 pub use access::{
-    GeneratedImageFeedback, RunnerEvent, SavedGeneratedImage, TurnGeneratedImage, TurnImage,
-    TurnRecord,
+    GeneratedImageFeedback, InboxAction, InboxRequest, RunnerEvent, SavedGeneratedImage,
+    TurnGeneratedImage, TurnImage, TurnRecord,
 };
 pub use dispatch::{
     SessionTaskAction, SessionTaskCommand, SessionTaskOutcome, ToolAuthorization, ToolBatch,

@@ -415,6 +415,24 @@ fn recover_external_effects(
     }
 }
 
+fn check_mailbox_note(
+    mailboxes: &crate::Mailboxes,
+    claim: crate::MessageClaim,
+    receiver: crate::AgentId,
+    note: &str,
+) -> Result<(), ConversationFailure> {
+    if claim.receiver != receiver
+        || !mailboxes.find(claim.message).is_some_and(|entry| {
+            entry.message.receiver == receiver
+                && entry.status == crate::MessageStatus::Claimed(claim.turn)
+                && entry.message.render() == note
+        })
+    {
+        return Err(ConversationFailure::new("邮箱输入缺少对应的领取或来源记录"));
+    }
+    Ok(())
+}
+
 pub fn restore(
     initial: InitialSession,
     records: Vec<SessionRecord>,
@@ -542,6 +560,9 @@ pub fn restore(
                     return Err(ConversationFailure::new(
                         "子 Agent 轮次记录的所属线程或状态不匹配",
                     ));
+                }
+                if let RecordEvent::MailboxInput { claim, note, .. } = event.as_ref() {
+                    check_mailbox_note(&mailboxes, *claim, agent, note)?;
                 }
             }
             RecordEvent::Mailbox { event, .. } => {
@@ -1189,6 +1210,41 @@ pub fn restore(
             } => {
                 if pending.has_barrier() {
                     return Err(ConversationFailure::new("补充输入应用于未封闭响应"));
+                }
+                history = applied;
+                retained_input = true;
+                covered_sequence = record.sequence;
+                merge(&mut state, incoming);
+            }
+            RecordEvent::MailboxInput {
+                state: incoming,
+                history: applied,
+                claim,
+                note,
+                retained_user,
+            } => {
+                check_mailbox_note(
+                    &mailboxes,
+                    claim,
+                    crate::AgentId::for_root(initial.session),
+                    &note,
+                )?;
+                let turn = incoming
+                    .turn
+                    .as_ref()
+                    .filter(|turn| turn.id == claim.turn)
+                    .ok_or_else(|| ConversationFailure::new("邮箱输入缺少同一 Turn"))?;
+                let users = [turn.input.as_str(), note.as_str()];
+                let expected = if retained_user {
+                    &users[..]
+                } else {
+                    &users[1..]
+                };
+                if pending.has_barrier()
+                    || retained_user == retained_input
+                    || !applied.appends_users(&history, expected)
+                {
+                    return Err(ConversationFailure::new("邮箱输入与确认历史前缀不一致"));
                 }
                 history = applied;
                 retained_input = true;

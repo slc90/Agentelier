@@ -37,6 +37,8 @@ Agent Tree 使用所属 Session、不可变父级关系、规范路径和深度�
 
 Conversation 可为已确认的调用步骤准备子 Agent 配置和独立历史。配置记录来源、项目发布、Skills 与权限边界。完整历史 Fork 使用冻结请求的闭合前缀，Fresh Context 从当前项目材料重新开始。运行时在创建子 Agent 时使用该准备结果。详见 [创建子 Agent 时如何形成独立上下文](../multi-agent-v2/02-spawn-context-and-config.md)。
 
+协作消息在请求边界进入接收方历史。Conversation 保留原用户输入、发送 Agent 及来源 Turn，验证应用事件只在已确认历史后追加对应消息。Runner 等待历史与消费回执后才发送模型请求。
+
 每轮请求从同一 Session 捕获设置及历史快照。准备区变化只影响下次创建。新会话的 SessionSettings 固定 Codex 主体与工作区。任务在首次请求前取得匹配的 ExecutionIdentity，普通请求、自动压缩和工具反馈共用该身份。账号变化保留历史。缺少可核对绑定的旧会话以只读方式恢复，原始工具结果继续归属原调用。普通请求携带服务端 Inline 压缩阈值，完整响应与工具结果封闭后持久保存检查点；失败保留已提交记录，不使用文本摘要重试。
 
 SessionSettings 还持有已解析的完整 InstructionSnapshot，创建时核对版本内容哈希及基础槽位。每轮请求克隆该快照，TurnView 另保留其有序请求指令消息。指令不提交进 ProtocolHistory，LLM Model 在历史前单独注入；多轮不会累计重复指令。重置复制当前会话设置，重试也不重新解析准备区。类型及材料保存关系见[提示词管理](prompts.md)。

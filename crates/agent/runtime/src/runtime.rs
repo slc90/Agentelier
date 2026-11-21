@@ -160,6 +160,7 @@ enum Command {
     },
     ModelFinished(ModelJoin),
     SpawnAgent(Box<spawn_agent::Invocation>),
+    Mailbox(mailbox::Command),
     ChildFinished(Result<child_runtime::FinishedChild, tokio::task::JoinError>),
     Stream(Option<RunnerEvent>),
     Session(SessionCommand),
@@ -335,9 +336,11 @@ impl AgentRuntime {
                         let mut session_tools: Option<(SessionId, tool_jobs::SessionTools)> = None;
                         let mut task_receipts = task_control::Receipts::new();
                         let (spawn_sender, mut spawn_requests) = mpsc::channel(COMMAND_CAPACITY);
+                        let (mailbox_sender, mut mailbox_requests) = mpsc::channel(SESSION_COMMAND_CAPACITY);
                         let mut children = spawn_agent::Children::default();
                         let mut extensions = agentelier_memory::registrations(memory.as_ref().ok().map(Memory::client));
                         extensions.push(spawn_agent::registration(spawn_sender, owner_credentials.clone(), data_root.join("prompts.json")));
+                        extensions.push(mailbox::registration(mailbox_sender.clone()));
                         let mut conversation = Conversation::with_extensions(extensions);
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
@@ -435,6 +438,7 @@ impl AgentRuntime {
                                         None => std::future::pending().await,
                                     }} => Command::ModelFinished(result),
                                     Some(invocation) = spawn_requests.recv() => Command::SpawnAgent(Box::new(invocation)),
+                                    Some(command) = mailbox_requests.recv() => Command::Mailbox(command),
                                     Some(result) = children.jobs.join_next(), if !children.jobs.is_empty() => Command::ChildFinished(result),
                                     command = session_incoming.recv(), if !pending_queue => match command {
                                         Some(command) => Command::Session(command),
@@ -456,7 +460,11 @@ impl AgentRuntime {
                                             credentials: &owner_credentials,
                                             operations: &operations,
                                             skills_root: &data_root.join("skills"),
+                                            mailbox_commands: &mailbox_sender,
                                         }).await;
+                                    }
+                                    Command::Mailbox(command) => {
+                                        children.mailbox_command(command, &mut conversation, model.as_ref(), &store.client()).await;
                                     }
                                     Command::ChildFinished(result) => {
                                         children.finish(result, &store.client(), &mut conversation).await?;
@@ -807,7 +815,9 @@ impl AgentRuntime {
                                         }
                                     }
                                     Command::Stream(event) => {
-                                        if let Some(event) = event {
+                                        if let Some(RunnerEvent::Inbox(request)) = event {
+                                            children.inbox(request, &mut conversation, model.as_ref(), &store.client()).await;
+                                        } else if let Some(event) = event {
                                             let task = model
                                                 .as_ref()
                                                 .filter(|task| task.chat)
@@ -1055,6 +1065,7 @@ impl AgentRuntime {
                             }
                         }
                         drop(spawn_requests);
+                        drop(mailbox_requests);
                         capture_delivery(
                             children.stop(&store.client(), &mut conversation).await,
                             &mut delivery_failure,

@@ -500,6 +500,7 @@ async fn run_task(
                 control::receipt(progress, id, InputDecision::Applied).await?;
             }
         }
+        active.apply_inbox().await?;
         requests_used += 1;
         let epoch = memory
             .as_ref()

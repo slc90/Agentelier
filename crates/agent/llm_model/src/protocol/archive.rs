@@ -88,6 +88,16 @@ pub struct ProtocolArchive {
 }
 
 impl ProtocolArchive {
+    pub fn appends_users(&self, previous: &Self, users: &[&str]) -> bool {
+        self.items
+            .strip_prefix(previous.items.as_slice())
+            .is_some_and(|added| {
+                added.len() == users.len() && added.iter().zip(users).all(|(item, expected)| {
+                matches!(item, ArchivedItem::User { text } if text == expected)
+            })
+            })
+    }
+
     pub fn prefix_fingerprint(&self, covered: usize) -> Result<String, crate::ModelFailure> {
         use sha2::{Digest, Sha256};
 

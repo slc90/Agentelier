@@ -1,5 +1,5 @@
 use super::child_runtime::{ChildTurn, Execution, FinishedChild};
-use super::mailbox::MailboxActivity;
+use super::mailbox::{self, MailboxActivity};
 use super::{ModelTask, RuntimeFailure};
 use agentelier_account::{CredentialClient, ExecutionIdentity};
 use agentelier_conversation::{
@@ -24,6 +24,8 @@ use tokio_util::sync::CancellationToken;
 
 const TOOL: &str = "spawn_agent";
 const MAX_TITLE_CHARS: usize = 128;
+
+mod inbox;
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -199,6 +201,7 @@ pub(super) struct Children {
 
 struct ChildHandle {
     thread: SessionId,
+    turn: TurnId,
     commands: mpsc::Sender<Preparation>,
     stop: CancellationToken,
 }
@@ -208,6 +211,7 @@ pub(super) struct SpawnEnvironment<'a> {
     pub(super) credentials: &'a CredentialClient,
     pub(super) operations: &'a crate::OperationSequence,
     pub(super) skills_root: &'a Path,
+    pub(super) mailbox_commands: &'a mpsc::Sender<mailbox::Command>,
 }
 
 impl Children {
@@ -466,6 +470,7 @@ impl Children {
                     id,
                     ChildHandle {
                         thread,
+                        turn: claim.turn,
                         commands,
                         stop: stop.clone(),
                     },
@@ -484,6 +489,7 @@ impl Children {
                         commands: incoming,
                         mailbox,
                         claim,
+                        mailbox_commands: environment.mailbox_commands.clone(),
                     }
                     .run(),
                 );

@@ -13,6 +13,36 @@ pub enum RunnerEvent {
     Progress,
     TaskProgress,
     Receipt(InputReceipt),
+    Inbox(InboxRequest),
+}
+
+pub struct InboxRequest {
+    pub thread: SessionId,
+    pub turn: agentelier_conversation::TurnId,
+    pub action: InboxAction,
+}
+
+pub enum InboxAction {
+    Take(
+        oneshot::Sender<
+            Result<Option<agentelier_conversation::ClaimedMessage>, ConversationFailure>,
+        >,
+    ),
+    Consumed {
+        claim: agentelier_conversation::MessageClaim,
+        reply: oneshot::Sender<Result<(), ConversationFailure>>,
+    },
+}
+
+impl InboxRequest {
+    pub fn close(self) {
+        match self.action {
+            InboxAction::Take(reply) => drop(reply.send(Ok(None))),
+            InboxAction::Consumed { reply, .. } => {
+                drop(reply.send(Err(ConversationFailure::new("邮箱已停止接纳消费回执"))))
+            }
+        }
+    }
 }
 
 type Edit = dyn for<'a> FnOnce(Result<ActiveTurn<'a>, ConversationFailure>) + Send;
@@ -67,6 +97,57 @@ pub(crate) struct TurnAccess {
 impl TurnAccess {
     pub(crate) fn new(sender: mpsc::Sender<RunnerEvent>) -> Self {
         Self { sender }
+    }
+
+    pub(crate) async fn apply_inbox(&self) -> Result<(), ConversationFailure> {
+        let scope = self
+            .call(|turn| {
+                Ok(turn
+                    .can_apply_mailbox()
+                    .then(|| (turn.session_id(), turn.turn_id())))
+            })
+            .await?;
+        let Some((thread, turn)) = scope else {
+            return Ok(());
+        };
+        let turn = agentelier_conversation::TurnId(turn?);
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(RunnerEvent::Inbox(InboxRequest {
+                thread,
+                turn,
+                action: InboxAction::Take(reply),
+            }))
+            .await
+            .map_err(|_| ConversationFailure::new("轮次邮箱接收端已关闭"))?;
+        let Some(message) = result
+            .await
+            .map_err(|_| ConversationFailure::new("轮次邮箱未返回领取结果"))??
+        else {
+            return Ok(());
+        };
+        let claim = message.claim;
+        let record = self
+            .call(move |mut turn| turn.apply_mailbox(message))
+            .await?;
+        let sequence = self.record(record).await?;
+        self.call(move |mut turn| {
+            turn.confirm_history_commit(sequence);
+            Ok(())
+        })
+        .await?;
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(RunnerEvent::Inbox(InboxRequest {
+                thread,
+                turn,
+                action: InboxAction::Consumed { claim, reply },
+            }))
+            .await
+            .map_err(|_| ConversationFailure::new("邮箱消费回执接收端已关闭"))?;
+        result
+            .await
+            .map_err(|_| ConversationFailure::new("邮箱未确认消费"))?
     }
 
     pub(crate) async fn call<T: Send + 'static>(

@@ -43,6 +43,20 @@ pub struct AgentMessage {
     pub text: String,
 }
 
+impl AgentMessage {
+    pub fn render(&self) -> String {
+        format!(
+            "Message from collaborating Agent {} (message {}, source Turn {}):\n{}",
+            self.sender, self.id, self.turn.0, self.text
+        )
+    }
+}
+
+pub struct ClaimedMessage {
+    pub claim: MessageClaim,
+    pub message: AgentMessage,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MessageClaim {
     pub receiver: AgentId,
@@ -92,6 +106,30 @@ impl Mailboxes {
         self.messages.get(&id)
     }
 
+    pub fn find_source(
+        &self,
+        sender: AgentId,
+        turn: TurnId,
+        call_id: &str,
+    ) -> Option<&MailboxEntry> {
+        self.messages.values().find(|entry| {
+            entry.message.sender == sender
+                && entry.message.turn == turn
+                && entry.message.call_id == call_id
+        })
+    }
+
+    pub fn next_for_turn(&self, receiver: AgentId, turn: TurnId) -> Option<&MailboxEntry> {
+        self.messages
+            .values()
+            .filter(|entry| {
+                entry.message.receiver == receiver
+                    && !matches!(entry.status, MessageStatus::Consumed(_))
+                    && entry.status != MessageStatus::Claimed(turn)
+            })
+            .min_by_key(|entry| entry.queued_at)
+    }
+
     pub fn oldest(&self, receiver: AgentId) -> Option<&MailboxEntry> {
         self.messages
             .values()
@@ -127,6 +165,9 @@ impl Mailboxes {
                     || message.call_id.trim().is_empty()
                     || message.text.trim().is_empty()
                     || message.text.chars().count() > MAX_AGENT_MESSAGE_CHARS
+                    || message.text.chars().any(|character| {
+                        character.is_control() && !matches!(character, '\t' | '\r' | '\n')
+                    })
                 {
                     return Err(ConversationFailure::new("消息缺少有效身份、来源或正文"));
                 }
@@ -144,9 +185,12 @@ impl Mailboxes {
             }
             MailboxEvent::Claimed { claim } => {
                 if claim.turn.0 == 0
-                    || !self.oldest(claim.receiver).is_some_and(|entry| {
-                        entry.message.id == claim.message && entry.status == MessageStatus::Pending
-                    })
+                    || !self
+                        .next_for_turn(claim.receiver, claim.turn)
+                        .is_some_and(|entry| {
+                            entry.message.id == claim.message
+                                && entry.status == MessageStatus::Pending
+                        })
                 {
                     return Err(ConversationFailure::new(
                         "消息领取与 Mailbox 当前顺序不一致",
