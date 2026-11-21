@@ -15,7 +15,9 @@ use tokio_util::sync::CancellationToken;
 use url::{Url, form_urlencoded};
 use winsafe::{self as win, co, prelude::*};
 
+mod refresh;
 mod store;
+pub use refresh::RefreshFailure;
 pub use store::{CredentialStore, CredentialStoreFailure};
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -80,7 +82,7 @@ struct TokenResponse {
     expires_in: Option<u64>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct OAuthTokens {
     #[serde(default)]
     id_token: String,
@@ -91,7 +93,7 @@ struct OAuthTokens {
     expires_at: u64,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct CodexOAuthCredentials {
     tokens: OAuthTokens,
     summary: CodexAccountSummary,
@@ -115,13 +117,12 @@ impl CodexOAuthCredentials {
     }
 
     fn from_tokens(mut tokens: OAuthTokens) -> Result<Self, CodexReadFailure> {
-        let (mut summary, claim_expiry) = summarize_tokens(
+        let (summary, claim_expiry) = summarize_tokens(
             &tokens.id_token,
             &tokens.access_token,
             &tokens.refresh_token,
         )?;
         tokens.expires_at = tokens.expires_at.min(claim_expiry);
-        summary.expired = tokens.expires_at <= unix_time()?;
         Ok(Self { tokens, summary })
     }
 
@@ -240,6 +241,7 @@ impl BrowserLogin {
 fn token_client() -> Result<Client, OAuthFailure> {
     Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
         .timeout(TOKEN_TIMEOUT)
         .build()
         .map_err(OAuthFailure::Exchange)

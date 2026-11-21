@@ -9,8 +9,6 @@ pub(crate) const ISSUER: &str = "https://auth.openai.com";
 pub struct CodexAccountSummary {
     pub identity: CodexIdentity,
     pub email: Option<String>,
-    #[serde(skip)]
-    pub expired: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -70,7 +68,6 @@ pub(crate) fn summarize_tokens(
     {
         return Err(CodexReadFailure::IdentityMismatch);
     }
-    let now = unix_time()?;
     Ok((
         CodexAccountSummary {
             identity: CodexIdentity {
@@ -83,7 +80,6 @@ pub(crate) fn summarize_tokens(
                     && !email.chars().any(char::is_whitespace)
                     && !email.chars().any(char::is_control)
             }),
-            expired: access.exp <= now,
         },
         access.exp,
     ))

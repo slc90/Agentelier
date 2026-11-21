@@ -8,6 +8,10 @@ use std::{error::Error, fmt};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+mod renewal;
+pub use renewal::{RefreshAttempt, RefreshCompletion};
+use renewal::{Renewal, Waiter};
+
 pub struct AccountEvent {
     pub operation_id: u64,
     pub kind: AccountEventKind,
@@ -62,8 +66,8 @@ impl fmt::Display for AccountFailure {
 impl Error for AccountFailure {}
 
 pub enum AccountCommand {
-    ReadSource,
     CompleteLogin(u64, Result<CodexOAuthCredentials, String>),
+    CompleteRefresh(Result<RefreshCompletion, String>),
     Credentials {
         current: CancellationToken,
         intent: CredentialIntent,
@@ -71,11 +75,18 @@ pub enum AccountCommand {
     },
 }
 
+pub enum AccountEffect {
+    None,
+    Event(AccountEvent),
+    Refresh(RefreshAttempt),
+}
+
 pub struct Account {
     credentials: CredentialClient,
     store: CredentialStore,
     current: Option<CodexOAuthCredentials>,
     snapshot: Option<AccountSource>,
+    renewal: Renewal,
 }
 
 impl Account {
@@ -85,6 +96,7 @@ impl Account {
             store: CredentialStore::new(environment),
             current: None,
             snapshot: None,
+            renewal: Renewal::default(),
         }
     }
 
@@ -115,29 +127,30 @@ impl Account {
             .map_err(|failure| failure.to_string())
     }
 
+    pub async fn restore(&mut self) -> Result<AccountEffect, AccountFailure> {
+        let store = self.store.clone();
+        let loaded = tokio::task::spawn_blocking(move || store.load())
+            .await
+            .map_err(|_| AccountFailure::Task)?;
+        let snapshot = match loaded {
+            Ok(credentials) => {
+                self.current = credentials;
+                self.current
+                    .as_ref()
+                    .map_or(AccountSource::Disconnected, |current| {
+                        AccountSource::Codex(current.summary().clone())
+                    })
+            }
+            Err(failure) => AccountSource::Unavailable(failure.to_string()),
+        };
+        self.observe(0, snapshot, false)
+    }
+
     pub async fn handle(
         &mut self,
         command: AccountCommand,
-    ) -> Result<Option<AccountEvent>, AccountFailure> {
+    ) -> Result<AccountEffect, AccountFailure> {
         match command {
-            AccountCommand::ReadSource => {
-                let store = self.store.clone();
-                let loaded = tokio::task::spawn_blocking(move || store.load())
-                    .await
-                    .map_err(|_| AccountFailure::Task)?;
-                let snapshot = match loaded {
-                    Ok(credentials) => {
-                        self.current = credentials;
-                        self.current
-                            .as_ref()
-                            .map_or(AccountSource::Disconnected, |current| {
-                                AccountSource::Codex(current.summary().clone())
-                            })
-                    }
-                    Err(failure) => AccountSource::Unavailable(failure.to_string()),
-                };
-                self.observe(0, snapshot, false)
-            }
             AccountCommand::CompleteLogin(id, result) => {
                 let result = match result {
                     Ok(credentials) => {
@@ -155,58 +168,29 @@ impl Account {
                     Ok(credentials) => {
                         let snapshot = AccountSource::Codex(credentials.summary().clone());
                         self.current = Some(credentials);
+                        self.renewal.unsaved = None;
                         self.observe(id, snapshot, true)
                     }
-                    Err(failure) => Ok(Some(AccountEvent {
+                    Err(failure) => Ok(AccountEffect::Event(AccountEvent {
                         operation_id: id,
                         kind: AccountEventKind::SourceChanged(Err(failure)),
                     })),
                 }
             }
+            AccountCommand::CompleteRefresh(result) => self.complete_refresh(result).await,
             AccountCommand::Credentials {
                 current,
                 intent,
                 result,
             } => {
-                if current.is_cancelled() {
-                    result.send_replace(Some(Err(SessionFailure::new(
-                        "凭据来源已变化，原请求已停止",
-                    ))));
-                    return Ok(None);
-                }
-                let Some(credentials) = self.current.as_ref() else {
-                    result.send_replace(Some(Err(SessionFailure::new("请先使用 ChatGPT 登录"))));
-                    return Ok(None);
-                };
-                let mut summary = credentials.summary().clone();
-                let outcome = self.acquire(credentials, intent);
-                if let Ok(expired) = credentials.is_expired() {
-                    summary.expired = expired;
-                }
-                let event = self.observe(0, AccountSource::Codex(summary), false)?;
-                result.send_replace(Some(outcome));
-                Ok(event)
+                self.request_credentials(Waiter {
+                    current,
+                    intent,
+                    result,
+                })
+                .await
             }
         }
-    }
-
-    fn acquire(
-        &self,
-        credentials: &CodexOAuthCredentials,
-        intent: CredentialIntent,
-    ) -> Result<UsableCredentials, SessionFailure> {
-        let current = UsableCredentials::from_oauth(credentials)?;
-        if let CredentialIntent::Recover(rejected) = intent {
-            if rejected.identity() != current.version().identity() {
-                return Err(SessionFailure::new(
-                    "Codex 凭据的账号或工作区已变化，原请求已停止",
-                ));
-            }
-            if &rejected == current.version() {
-                return Err(SessionFailure::new("Codex OAuth 凭据未更新，请重新登录"));
-            }
-        }
-        Ok(current)
     }
 
     fn observe(
@@ -214,17 +198,17 @@ impl Account {
         operation_id: u64,
         snapshot: AccountSource,
         new_login: bool,
-    ) -> Result<Option<AccountEvent>, AccountFailure> {
+    ) -> Result<AccountEffect, AccountFailure> {
         let previous = self.snapshot.as_ref();
         let replaced = new_login
             || previous.is_some_and(|old| old.codex_identity() != snapshot.codex_identity());
         self.credentials
             .update_source(matches!(snapshot, AccountSource::Codex(_)), replaced)?;
         if operation_id == 0 && previous == Some(&snapshot) {
-            return Ok(None);
+            return Ok(AccountEffect::None);
         }
         self.snapshot = Some(snapshot.clone());
-        Ok(Some(AccountEvent {
+        Ok(AccountEffect::Event(AccountEvent {
             operation_id,
             kind: AccountEventKind::SourceChanged(Ok(snapshot)),
         }))

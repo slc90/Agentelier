@@ -99,6 +99,7 @@ dependencies = [
  "agentelier_login",
  "tokio",
  "tokio-util",
+ "tracing",
 ]
 
 [[package]]

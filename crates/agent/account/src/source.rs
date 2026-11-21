@@ -11,7 +11,7 @@ pub enum AccountSource {
 impl AccountSource {
     pub fn codex_identity(&self) -> Option<&CodexIdentity> {
         match self {
-            Self::Codex(summary) if !summary.expired => Some(&summary.identity),
+            Self::Codex(summary) => Some(&summary.identity),
             _ => None,
         }
     }

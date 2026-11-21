@@ -1,5 +1,6 @@
 use agentelier_account::{
-    Account, AccountCommand, AccountEventKind, AccountFailure, CredentialClient, LoginPrompt,
+    Account, AccountCommand, AccountEffect, AccountEventKind, AccountFailure, CredentialClient,
+    LoginPrompt, RefreshCompletion,
 };
 use agentelier_conversation::SessionId;
 use agentelier_conversation::{
@@ -281,6 +282,7 @@ impl AgentRuntime {
                         let mut finalizing = false;
                         let mut account = Account::new(owner_credentials.clone(), environment);
                         let mut login = None;
+                        let mut refresh: Option<tokio::task::JoinHandle<RefreshCompletion>> = None;
                         let mut pending_source: Option<agentelier_account::AccountEvent> = None;
                         let mut delivery_failure = None;
                         let mut model: Option<ModelTask> = None;
@@ -291,7 +293,7 @@ impl AgentRuntime {
                         ));
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
-                            if let Some(event) = account.handle(AccountCommand::ReadSource).await? {
+                            if let AccountEffect::Event(event) = account.restore().await? {
                                 owner_credentials.finish_source_change()?;
                                 emit(&publish, event.operation_id, AgentEventKind::Account(event.kind))?;
                             }
@@ -300,6 +302,17 @@ impl AgentRuntime {
                                 let command = tokio::select! { biased;
                                     _ = runtime_shutdown.cancelled() => break,
                                     update = account_login::next(&mut login), if login.is_some() => update,
+                                    completed = async {
+                                        match &mut refresh {
+                                            Some(task) => task.await,
+                                            None => std::future::pending().await,
+                                        }
+                                    }, if refresh.is_some() => {
+                                        refresh = None;
+                                        Command::Account(AccountCommand::CompleteRefresh(
+                                            completed.map_err(|_| "凭据续期后台任务异常结束".into()),
+                                        ))
+                                    },
                                     reply = async {
                                         match &mut material {
                                             Some(job) => (&mut job.task).await.unwrap_or_else(|_| Err("MCP 材料请求任务异常结束".into())),
@@ -881,7 +894,14 @@ impl AgentRuntime {
                                         emit(&publish, id, AgentEventKind::Account(AccountEventKind::LoginWaiting(prompt)))?;
                                     }
                                     Command::Account(command) => {
-                                        let mut source_event = account.handle(command).await?;
+                                        let mut source_event = match account.handle(command).await? {
+                                            AccountEffect::Event(event) => Some(event),
+                                            AccountEffect::Refresh(attempt) => {
+                                                refresh = Some(tokio::spawn(attempt.run()));
+                                                None
+                                            }
+                                            AccountEffect::None => None,
+                                        };
                                         let settling = owner_credentials.source_settling()?;
                                         let starting_settlement = settling && pending_source.is_none();
                                         if settling
@@ -932,6 +952,12 @@ impl AgentRuntime {
                         .await;
                         if let Some(login) = login {
                             login.finish().await;
+                        }
+                        if let Some(refresh) = refresh {
+                            let completed = refresh.await.map_err(|_| "凭据续期后台任务异常结束".into());
+                            if let Err(failure) = account.handle(AccountCommand::CompleteRefresh(completed)).await {
+                                capture_delivery(Err(failure.into()), &mut delivery_failure);
+                            }
                         }
                         capture_delivery(
                             stop_model(

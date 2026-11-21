@@ -122,7 +122,6 @@ fn apply_source(state: &mut AccountState, snapshot: &SourceSnapshot, operation_i
             subject: summary.subject.clone(),
             workspace_id: summary.workspace_id.clone(),
             email: summary.email.clone(),
-            expired: summary.expired,
         }),
         SourceSnapshot::Unavailable(message) => {
             error!(operation_id, error = %message, "本地 Codex OAuth 凭据不可用");

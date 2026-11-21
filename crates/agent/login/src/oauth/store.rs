@@ -4,6 +4,7 @@ use serde::Deserialize;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, Read, Write};
+use std::sync::{Arc, Mutex, MutexGuard};
 use tempfile::NamedTempFile;
 
 const FILE_NAME: &str = "codex-oauth.json";
@@ -37,15 +38,21 @@ struct StoredCredentials {
 }
 
 #[derive(Clone)]
-pub struct CredentialStore(DataEnvironment);
+pub struct CredentialStore {
+    environment: DataEnvironment,
+    writer: Arc<Mutex<()>>,
+}
 
 impl CredentialStore {
     pub fn new(environment: DataEnvironment) -> Self {
-        Self(environment)
+        Self {
+            environment,
+            writer: Arc::new(Mutex::new(())),
+        }
     }
 
     pub fn load(&self) -> Result<Option<CodexOAuthCredentials>, CredentialStoreFailure> {
-        let file = match File::open(self.0.root().join(FILE_NAME)) {
+        let file = match File::open(self.environment.root().join(FILE_NAME)) {
             Ok(file) => file,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(CredentialStoreFailure::Read(error)),
@@ -72,11 +79,35 @@ impl CredentialStore {
     }
 
     pub fn save(&self, credentials: &CodexOAuthCredentials) -> Result<(), CredentialStoreFailure> {
+        let _writer = self.lock_writer()?;
+        self.write(credentials)
+    }
+
+    pub fn replace_if_current(
+        &self,
+        expected: &CodexOAuthCredentials,
+        replacement: &CodexOAuthCredentials,
+    ) -> Result<bool, CredentialStoreFailure> {
+        let _writer = self.lock_writer()?;
+        if self.load()?.as_ref() != Some(expected) {
+            return Ok(false);
+        }
+        self.write(replacement)?;
+        Ok(true)
+    }
+
+    fn lock_writer(&self) -> Result<MutexGuard<'_, ()>, CredentialStoreFailure> {
+        self.writer
+            .lock()
+            .map_err(|_| CredentialStoreFailure::Write(io::Error::other("本地凭据写入状态不可用")))
+    }
+
+    fn write(&self, credentials: &CodexOAuthCredentials) -> Result<(), CredentialStoreFailure> {
         let bytes = serde_json::to_vec(credentials).map_err(|_| CredentialStoreFailure::Format)?;
         if bytes.len() as u64 > MAX_CREDENTIAL_BYTES {
             return Err(CredentialStoreFailure::Format);
         }
-        let root = self.0.root();
+        let root = self.environment.root();
         let mut temporary = NamedTempFile::with_prefix_in(".codex-oauth-", root)
             .map_err(CredentialStoreFailure::Write)?;
         temporary

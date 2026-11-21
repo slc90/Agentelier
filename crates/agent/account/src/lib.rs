@@ -11,7 +11,7 @@ pub use agentelier_login::{
 };
 pub use credentials::{CredentialClient, CredentialIntent, CredentialRequest, ExecutionIdentity};
 pub use operations::{
-    Account, AccountCommand, AccountEvent, AccountEventKind, AccountFailure, DeliveryFailure,
-    LoginPrompt,
+    Account, AccountCommand, AccountEffect, AccountEvent, AccountEventKind, AccountFailure,
+    DeliveryFailure, LoginPrompt, RefreshAttempt, RefreshCompletion,
 };
 pub use source::AccountSource;

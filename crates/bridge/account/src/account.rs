@@ -10,7 +10,6 @@ pub struct CodexSummary {
     pub subject: String,
     pub workspace_id: String,
     pub email: Option<String>,
-    pub expired: bool,
 }
 
 pub enum AccountEventKind {
@@ -53,7 +52,6 @@ fn convert_source(source: agentelier_account::AccountSource) -> SourceSnapshot {
             subject: summary.identity.subject,
             workspace_id: summary.identity.workspace_id,
             email: summary.email,
-            expired: summary.expired,
         }),
         agentelier_account::AccountSource::Unavailable(failure) => {
             SourceSnapshot::Unavailable(failure)

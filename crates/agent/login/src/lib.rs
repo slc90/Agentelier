@@ -9,6 +9,6 @@ pub use codex::{CodexAccountSummary, CodexIdentity, CodexReadFailure};
 pub use data_directory::{DataEnvironment, validate_data_directory};
 pub use oauth::{
     BrowserLogin, CODEX_ORIGINATOR, CodexOAuthCredentials, CredentialStore, CredentialStoreFailure,
-    OAuthFailure,
+    OAuthFailure, RefreshFailure,
 };
 pub use session::{AuthenticatedRequest, CredentialVersion, SessionFailure, UsableCredentials};

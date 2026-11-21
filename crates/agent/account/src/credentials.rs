@@ -76,13 +76,17 @@ pub struct CredentialRequest {
 impl CredentialRequest {
     pub async fn wait(mut self) -> Outcome {
         loop {
+            let result = match self.result.borrow_and_update().clone() {
+                Some(Err(failure)) => return Err(failure),
+                result => result,
+            };
             if self.invalidated.is_cancelled() {
                 return Err(SessionFailure::new("该请求所属会话已结束，不能交付旧凭据"));
             }
             if self.shutdown.is_cancelled() {
                 return Err(SessionFailure::new("认证运行正在结束"));
             }
-            if let Some(result) = self.result.borrow_and_update().clone() {
+            if let Some(result) = result {
                 return result;
             }
             tokio::select! { biased;

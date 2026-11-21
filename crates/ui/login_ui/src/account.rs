@@ -33,8 +33,7 @@ impl AccountState {
             return Some("正在使用 ChatGPT 登录");
         }
         match self.codex.as_ref() {
-            Some(CodexStatus::Read { expired: false, .. }) => None,
-            Some(CodexStatus::Read { expired: true, .. }) => Some("请重新登录 ChatGPT"),
+            Some(CodexStatus::Read { .. }) => None,
             Some(CodexStatus::Failed(_)) | None => Some("请先使用 ChatGPT 登录"),
         }
     }
@@ -44,7 +43,6 @@ impl AccountState {
             CodexStatus::Read {
                 subject,
                 workspace_id,
-                expired: false,
                 ..
             } => Some((subject, workspace_id)),
             _ => None,
@@ -58,7 +56,6 @@ pub(crate) enum CodexStatus {
         subject: String,
         workspace_id: String,
         email: Option<String>,
-        expired: bool,
     },
     Failed(String),
 }
@@ -108,8 +105,7 @@ impl AccountText {
             Self::Status if state.waiting => "正在等待浏览器授权…".into(),
             Self::Status if state.operation.is_some() => "正在准备浏览器登录…".into(),
             Self::Status => match source {
-                Some(CodexStatus::Read { expired: false, .. }) => "已登录 ChatGPT",
-                Some(CodexStatus::Read { expired: true, .. }) => "登录已过期，请重新登录",
+                Some(CodexStatus::Read { .. }) => "已登录 ChatGPT",
                 Some(CodexStatus::Failed(_)) => "登录凭据不可用",
                 None => "未登录 ChatGPT",
             }

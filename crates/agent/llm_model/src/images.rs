@@ -1,5 +1,7 @@
-use crate::model::{acquire, authorize, http_failure, request_id};
-use agentelier_account::{CredentialClient, ExecutionIdentity, UsableCredentials};
+use crate::model::{acquire, authorize, http_failure, recover, request_id};
+use agentelier_account::{
+    AuthenticatedRequest, CredentialClient, ExecutionIdentity, UsableCredentials,
+};
 use agentelier_tools::{
     GENERATED_IMAGE_MODEL, MAX_GENERATION_PROMPT_CHARS, MAX_ORIGINAL_IMAGE_BYTES,
     MAX_TOOL_BODY_BYTES, OriginalImage, ToolPayload, ToolResult, ToolStatus,
@@ -92,16 +94,27 @@ async fn download(
     identity: &ExecutionIdentity,
     prompt: &str,
 ) -> Result<(Vec<u8>, Option<String>), ToolResult> {
-    let credentials = acquire(credentials).await.map_err(|failure| {
+    let mut current = acquire(credentials).await.map_err(|failure| {
         ToolResult::not_executed("image_authentication", &failure.to_string())
     })?;
-    identity.validate(&credentials).map_err(|failure| {
-        ToolResult::not_executed("image_authentication", &failure.to_string())
-    })?;
-    let response = request(&credentials, prompt).await?;
-    let id = request_id(&response);
-    let bytes = read_response(response).await?;
-    Ok((bytes, id))
+    let mut authentication = AuthenticatedRequest::new(&current);
+    loop {
+        identity.validate(&current).map_err(|failure| {
+            ToolResult::not_executed("image_authentication", &failure.to_string())
+        })?;
+        let response = request(&current, prompt).await?;
+        if response.status().is_success() {
+            let id = request_id(&response);
+            let bytes = read_response(response).await?;
+            return Ok((bytes, id));
+        }
+        let failure = http_failure(response).await;
+        match recover(credentials, &mut authentication, &current, &failure).await {
+            Ok(Some(refreshed)) => current = refreshed,
+            Ok(None) => return Err(service_failure(failure)),
+            Err(failure) => return Err(service_failure(failure)),
+        }
+    }
 }
 
 async fn request(credentials: &UsableCredentials, prompt: &str) -> Result<Response, ToolResult> {
@@ -112,7 +125,7 @@ async fn request(credentials: &UsableCredentials, prompt: &str) -> Result<Respon
         .retry(reqwest::retry::never())
         .build()
         .map_err(network_failure)?;
-    let response = authorize(client.post(CODEX_IMAGES_URL), credentials)
+    authorize(client.post(CODEX_IMAGES_URL), credentials)
         .json(&serde_json::json!({
             "model": GENERATED_IMAGE_MODEL,
             "prompt": prompt,
@@ -121,18 +134,17 @@ async fn request(credentials: &UsableCredentials, prompt: &str) -> Result<Respon
         }))
         .send()
         .await
-        .map_err(network_failure)?;
-    if response.status().is_success() {
-        return Ok(response);
-    }
-    let failure = http_failure(response).await;
+        .map_err(network_failure)
+}
+
+fn service_failure(failure: crate::ModelFailure) -> ToolResult {
     let code = match failure.kind {
         crate::ModelFailureKind::Authentication => "image_authentication",
         crate::ModelFailureKind::Permission => "image_permission",
         crate::ModelFailureKind::UsageLimit => "image_usage_limit",
         _ => "image_service",
     };
-    Err(failed(code, &failure.to_string()))
+    failed(code, &failure.to_string())
 }
 
 async fn read_response(mut response: Response) -> Result<Vec<u8>, ToolResult> {
