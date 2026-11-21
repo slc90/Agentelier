@@ -146,6 +146,7 @@ enum Executor {
     CodexImage,
     Shell,
     Stdin,
+    Computer,
     TaskControl(crate::TaskControl),
 }
 
@@ -234,6 +235,7 @@ impl ToolRegistration {
         &'a self,
         context: &'a ExecutionContext,
         processes: &'a ProcessSessions,
+        scripts: &'a crate::ScriptSession,
         arguments: &'a str,
         cancel: &'a CancellationToken,
         mut permit: ToolPermit,
@@ -261,6 +263,18 @@ impl ToolRegistration {
                 result
             }),
             Executor::Stdin => Box::pin(async move { processes.stdin(arguments, cancel).await }),
+            Executor::Computer => Box::pin(async move {
+                if permit.exclusive.is_none() {
+                    return ToolResult::error(
+                        crate::ToolStatus::Unconfirmed,
+                        "computer_admission",
+                        "桌面执行缺少独占许可",
+                    );
+                }
+                let result = crate::script::execute_tool(scripts, arguments, cancel).await;
+                drop(permit);
+                self.limit_result(result)
+            }),
             Executor::TaskControl(_) | Executor::CodexImage => Box::pin(async {
                 ToolResult::error(
                     crate::ToolStatus::Unconfirmed,
@@ -307,6 +321,11 @@ pub struct ToolCatalog {
 impl ToolCatalog {
     fn builtins(directory: &std::path::Path, image_input: Option<bool>) -> Vec<ToolRegistration> {
         vec![
+            ToolRegistration::process(
+                crate::script::tool_definition(),
+                Executor::Computer,
+                ToolAccess::Exclusive,
+            ),
             ToolRegistration::new(ToolDefinition {
                 name: "view_image".into(),
                 mode: ToolMode::Asynchronous,
@@ -509,7 +528,7 @@ impl ToolCatalog {
             matches!(tool.definition.source, ToolSource::Builtin)
                 && !matches!(
                     tool.executor,
-                    Executor::TaskControl(_) | Executor::CodexImage
+                    Executor::TaskControl(_) | Executor::CodexImage | Executor::Computer
                 )
                 && !seen.contains(&tool.definition.name)
         }) {

@@ -1,4 +1,7 @@
 mod computer;
+mod tool;
+
+pub(crate) use tool::{definition as tool_definition, execute as execute_tool};
 
 use crate::{ImagePayload, ToolFailure, desktop::CaptureMapping};
 use rhai::{AST, Dynamic, Engine, Scope};

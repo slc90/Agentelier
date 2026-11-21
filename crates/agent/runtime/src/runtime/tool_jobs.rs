@@ -1,7 +1,7 @@
 use agentelier_llm_model::FunctionCall;
 use agentelier_tools::{
-    ExecutionContext, ProcessSessions, ToolAccess, ToolAdmission, ToolCatalog, ToolMode,
-    ToolResult, ToolStatus,
+    ExecutionContext, ProcessSessions, ScriptSession, ToolAccess, ToolAdmission, ToolCatalog,
+    ToolMode, ToolResult, ToolStatus,
 };
 use agentelier_turn_runner::{
     ToolAuthorization, ToolBatch, ToolCommand, ToolDispatcher, ToolEvent, ToolJobRequest, ToolWork,
@@ -127,6 +127,7 @@ struct Execution {
     events: mpsc::UnboundedSender<ToolEvent>,
     identities: HashMap<Id, JobIdentity>,
     processes: Arc<ProcessSessions>,
+    scripts: ScriptSession,
     admission: ToolAdmission,
     ordinary: Option<Arc<JobOrder>>,
     controls: Option<Arc<JobOrder>>,
@@ -188,10 +189,16 @@ impl Execution {
             };
             let admission = self.admission.clone();
             let processes = self.processes.clone();
+            let scripts = self.scripts.clone();
             let events = self.events.clone();
-            let handle =
-                self.calls
-                    .spawn(job.run(admission, processes, admission_stop, stop, events));
+            let handle = self.calls.spawn(job.run(
+                admission,
+                processes,
+                scripts,
+                admission_stop,
+                stop,
+                events,
+            ));
             self.identities.insert(handle.id(), identity);
         }
     }
@@ -288,6 +295,7 @@ impl Job {
         self,
         admission: ToolAdmission,
         processes: Arc<ProcessSessions>,
+        scripts: ScriptSession,
         admission_stop: CancellationToken,
         cancel: CancellationToken,
         events: mpsc::UnboundedSender<ToolEvent>,
@@ -395,6 +403,7 @@ impl Job {
                 &self.catalog,
                 &self.context,
                 &processes,
+                &scripts,
                 &self.call.name,
                 &self.call.arguments,
                 &cancel,
@@ -429,6 +438,7 @@ async fn run(
         events,
         identities: HashMap::new(),
         processes,
+        scripts: ScriptSession::default(),
         admission,
         ordinary: None,
         controls: None,

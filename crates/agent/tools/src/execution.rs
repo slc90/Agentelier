@@ -131,6 +131,7 @@ pub async fn execute(
     catalog: &ToolCatalog,
     context: &ExecutionContext,
     processes: &crate::ProcessSessions,
+    scripts: &crate::ScriptSession,
     name: &str,
     arguments: &str,
     cancel: &CancellationToken,
@@ -150,8 +151,10 @@ pub async fn execute(
     let Some(tool) = catalog.find(name) else {
         return ToolResult::error(ToolStatus::Failed, "unknown_tool", "未登记的工具名称");
     };
-    tool.execute(context, processes, arguments, cancel, permit, origin)
-        .await
+    tool.execute(
+        context, processes, scripts, arguments, cancel, permit, origin,
+    )
+    .await
 }
 
 pub(crate) async fn image(

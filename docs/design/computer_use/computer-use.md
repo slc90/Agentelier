@@ -1,6 +1,6 @@
 # Computer Use 设计
 
-实施状态：Windows Driver、持续 Rhai 会话、Rhai Computer API 和桌面独占生命周期已实现。后续能力见[实施方案总览](../../../plans/computer-use/00-overview.md)。
+实施状态：`computer_execute` 已接入现有 Function Calling，并返回文本结果。模型截图反馈和 Krita 端到端验收见[实施方案总览](../../../plans/computer-use/00-overview.md)。
 
 Computer Use 让 Agentelier 中的模型直接操作当前 Windows 桌面上的应用。模型通过普通 Responses Function Calling 提交 Rhai 脚本；Agentelier 在本地解释脚本，由 Rust 提供的 Computer API 调用 Windows 桌面能力，再把执行结果和截图作为工具结果反馈给模型。
 
@@ -113,6 +113,8 @@ API 覆盖窗口枚举与激活、桌面和窗口截图、鼠标操作、键盘�
 一次 Function Calling 结果当前使用一个 `ToolPayload::Image` 图片载荷，因此一次工具调用向模型反馈一张截图。需要模型根据新画面重新决策时，应结束当前脚本并返回截图，让模型在下一轮调用中继续，而不是在脚本内部把模型尚未观察过的多张截图当作反馈。
 
 ## 接入 Agentelier 现有工具系统
+
+新建会话的固定目录通过普通同步 Function Tool 声明 `computer_execute`。严格参数 schema 只接受必填的 `script` 字符串，执行器持有会话独占许可，记录和结果沿用现有调用 ID。会话工具工作者持有自己的 `ScriptSession`，连续工具调用可复用变量和函数，工作者卸载时释放该状态。既有会话的冻结工具目录按其保存的声明恢复。
 
 Computer Use 是 `agent/tools` 固定目录中的内置 Function Tool。模型提交 Rhai 脚本，Tools 将脚本交给 Rhai Runtime 执行，结果按原始 `call_id` 返回现有 Turn Runner。
 
