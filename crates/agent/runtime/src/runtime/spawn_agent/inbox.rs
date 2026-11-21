@@ -71,7 +71,42 @@ impl Children {
                 self.inbox(inbox, conversation, root_task, environment.store)
                     .await
             }
+            mailbox::Command::Wait(request) => {
+                let ticket = self.wait_ticket(conversation, root_task, &request.origin);
+                drop(request.reply.send(ticket));
+            }
         }
+    }
+
+    fn wait_ticket(
+        &mut self,
+        conversation: &mut Conversation,
+        root_task: Option<&ModelTask>,
+        origin: &agentelier_tools::ProcessOrigin,
+    ) -> Result<super::super::wait_agent::Ticket, ConversationFailure> {
+        let turn = TurnId(origin.turn);
+        let (session, receiver) =
+            self.mailbox_caller(conversation, root_task, origin.session, turn)?;
+        let activity = self
+            .mailbox
+            .subscribe(receiver, conversation.mailboxes().revision());
+        let ready = conversation
+            .mailboxes()
+            .next_for_turn(receiver, turn)
+            .is_some_and(|entry| entry.status == MessageStatus::Pending);
+        let steer = tokio_util::sync::CancellationToken::new();
+        if session == origin.session
+            && let Some(task) = root_task
+            && conversation.active_turn(task.id)?.has_pending_steer()
+        {
+            steer.cancel();
+        }
+        self.waiters.insert(receiver, steer.clone());
+        Ok(super::super::wait_agent::Ticket {
+            activity,
+            ready,
+            steer,
+        })
     }
 
     async fn send_message(

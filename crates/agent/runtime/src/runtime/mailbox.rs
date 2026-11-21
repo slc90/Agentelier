@@ -15,6 +15,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 pub(super) enum Command {
     Send(Outgoing),
     Inbox(InboxRequest),
+    Wait(super::wait_agent::Request),
 }
 
 pub(super) struct Outgoing {

@@ -26,6 +26,7 @@ mod renaming;
 mod spawn_agent;
 mod task_control;
 mod tool_jobs;
+mod wait_agent;
 use model_task::{
     ModelJoin, ModelTask, PROGRESS_CAPACITY, TaskRequest, complete, drain_progress, progress,
     stop_model,
@@ -342,6 +343,7 @@ impl AgentRuntime {
                         extensions.push(spawn_agent::registration(spawn_sender, owner_credentials.clone(), data_root.join("prompts.json")));
                         extensions.push(mailbox::registration(mailbox_sender.clone(), agentelier_conversation::DeliveryMode::QueueOnly));
                         extensions.push(mailbox::registration(mailbox_sender.clone(), agentelier_conversation::DeliveryMode::TriggerTurn));
+                        extensions.push(wait_agent::registration(mailbox_sender.clone()));
                         let mut conversation = Conversation::with_extensions(extensions);
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
@@ -751,6 +753,9 @@ impl AgentRuntime {
                                         if task.chat && task.control.cancel.is_cancelled() {
                                             children.cancel_active();
                                         }
+                                        if let Some(bound) = task.control.turn.get() {
+                                            children.clear_wait(agentelier_conversation::AgentId::for_root(bound.session));
+                                        }
                                         debug!(operation_id = task.id, "模型操作已真实结束并回收");
                                         drain_progress(&mut conversation, task.id, &mut progress_events, &store.client(), &publish)?;
                                         let event = complete(&mut conversation, task.id, task.chat, result)?;
@@ -834,6 +839,10 @@ impl AgentRuntime {
                                                 .filter(|task| task.chat)
                                                 .ok_or(RuntimeFailure::ModelState)?;
                                             task.check_instance(&conversation)?;
+                                            if matches!(&event, RunnerEvent::Receipt(receipt) if matches!(receipt.decision, agentelier_conversation::InputDecision::Accepted))
+                                                && let Some(bound) = task.control.turn.get() {
+                                                children.steer_wait(agentelier_conversation::AgentId::for_root(bound.session));
+                                            }
                                             progress(&mut conversation, task.id, event, &store.client(), &publish)?;
                                         } else {
                                             progress_events = None;

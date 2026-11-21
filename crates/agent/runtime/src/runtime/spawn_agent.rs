@@ -199,6 +199,7 @@ pub(super) struct Children {
     active: HashMap<AgentId, ChildHandle>,
     mailbox: MailboxActivity,
     parked: HashMap<AgentId, Box<Conversation>>,
+    waiters: HashMap<AgentId, CancellationToken>,
 }
 
 struct ChildHandle {
@@ -218,6 +219,16 @@ pub(super) struct SpawnEnvironment<'a> {
 }
 
 impl Children {
+    pub(super) fn steer_wait(&self, agent: AgentId) {
+        if let Some(waiter) = self.waiters.get(&agent) {
+            waiter.cancel();
+        }
+    }
+
+    pub(super) fn clear_wait(&mut self, agent: AgentId) {
+        self.waiters.remove(&agent);
+    }
+
     pub(super) fn cancel_active(&self) {
         for child in self.active.values() {
             child.stop.cancel();
@@ -464,6 +475,7 @@ impl Children {
             ConversationFailure::new(format!("子 Agent 执行体无法回收：{failure}"))
         })?;
         let identity = &finished.identity;
+        self.clear_wait(identity.id);
         let cancelled = self
             .active
             .remove(&identity.id)
