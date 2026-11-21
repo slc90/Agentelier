@@ -30,7 +30,7 @@ Agentelier 现有 `ToolPayload::Image` 已包含文字摘要和 `ImagePayload`�
 - 模型：`gpt-6.2-sol`。
 - 推理档位：`high`。
 - 绘画软件：Krita。
-- 参考图：`../../docs/design/images/krita-reference-retro-cel-girl.png`。
+- 参考图：`../../docs/design/computer_use/images/krita-reference-retro-cel-girl.png`。
 - 参考图原始尺寸：1122 × 1402 像素。
 - 画布：使用相同尺寸和比例。
 

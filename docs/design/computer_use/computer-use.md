@@ -1,6 +1,6 @@
 # Computer Use 设计
 
-实施状态：`computer_execute` 已接入现有 Function Calling，并返回文本结果。模型截图反馈和 Krita 端到端验收见[实施方案总览](../../../plans/computer-use/00-overview.md)。
+实施状态：`computer_execute` 已接入现有 Function Calling，返回文本和可选截图。Krita 端到端验收条件见[实施方案 10](../../../plans/computer-use/10-image-feedback-and-krita-acceptance.md)。
 
 Computer Use 让 Agentelier 中的模型直接操作当前 Windows 桌面上的应用。模型通过普通 Responses Function Calling 提交 Rhai 脚本；Agentelier 在本地解释脚本，由 Rust 提供的 Computer API 调用 Windows 桌面能力，再把执行结果和截图作为工具结果反馈给模型。
 
@@ -281,6 +281,8 @@ stateDiagram-v2
 桌面独占许可覆盖整个脚本执行和输入收尾过程。脚本完成或取消并不意味着可以立即释放许可；Driver 需要先释放本次执行持有的鼠标按钮和键盘按键，Runtime 等待实际执行任务退出后，才报告终态。
 
 ## 图片反馈与现有载荷约束
+
+一次执行最多交付最后一张截图。工具摘要包含截图 MIME、SHA-256、实际编码尺寸和字节数，截图以独立附件经既有存储及预算机制持久化，并通过 Responses 的 `input_image` 续接。目录明确标为不接收图片的模型仍能执行桌面操作，截图调用返回文本并标注附件省略原因。
 
 现有 `ToolPayload::Image` 包含文字摘要和一个 `ImagePayload`，现有协议历史能够将其转换为 `input_text` 与 `input_image`。Computer Use 沿用这条路径，不增加新的图片协议。
 

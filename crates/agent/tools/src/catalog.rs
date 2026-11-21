@@ -271,7 +271,9 @@ impl ToolRegistration {
                         "桌面执行缺少独占许可",
                     );
                 }
-                let result = crate::script::execute_tool(scripts, arguments, cancel).await;
+                let result =
+                    crate::script::execute_tool(scripts, arguments, cancel, context.image_input())
+                        .await;
                 drop(permit);
                 self.limit_result(result)
             }),
@@ -321,11 +323,12 @@ pub struct ToolCatalog {
 impl ToolCatalog {
     fn builtins(directory: &std::path::Path, image_input: Option<bool>) -> Vec<ToolRegistration> {
         vec![
-            ToolRegistration::process(
-                crate::script::tool_definition(),
-                Executor::Computer,
-                ToolAccess::Exclusive,
-            ),
+            ToolRegistration {
+                definition: crate::script::tool_definition(),
+                executor: Executor::Computer,
+                access: ToolAccess::Exclusive,
+                image_result: image_input != Some(false),
+            },
             ToolRegistration::new(ToolDefinition {
                 name: "view_image".into(),
                 mode: ToolMode::Asynchronous,

@@ -1,5 +1,7 @@
-use super::ScriptSession;
-use crate::{ToolDefinition, ToolMode, ToolResult, ToolSource, ToolStatus, process::arguments};
+use super::{ScriptOutput, ScriptSession};
+use crate::{
+    ToolDefinition, ToolMode, ToolPayload, ToolResult, ToolSource, ToolStatus, process::arguments,
+};
 use serde::Deserialize;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -47,6 +49,7 @@ pub(crate) async fn execute(
     session: &ScriptSession,
     text: &str,
     cancel: &CancellationToken,
+    image_input: Option<bool>,
 ) -> ToolResult {
     let input: Arguments = match arguments(text, &["script"]) {
         Ok(input) => input,
@@ -55,9 +58,7 @@ pub(crate) async fn execute(
     match session.run(&input.script, cancel).await {
         Ok(output) => ToolResult {
             status: ToolStatus::Succeeded,
-            output: json!({"ok":true,"data":{"text":output.text}})
-                .to_string()
-                .into(),
+            output: payload(output, image_input),
             cleanup_failed: false,
         },
         Err(error) => {
@@ -72,5 +73,26 @@ pub(crate) async fn execute(
             result.cleanup_failed = status == ToolStatus::Unconfirmed;
             result
         }
+    }
+}
+
+fn payload(output: ScriptOutput, image_input: Option<bool>) -> ToolPayload {
+    let ScriptOutput { text, image } = output;
+    match image {
+        Some(_) if image_input == Some(false) => json!({
+            "ok": true,
+            "data": {"text": text, "capture_attachment": "model_does_not_accept_images"}
+        })
+        .to_string()
+        .into(),
+        Some(image) => ToolPayload::Image {
+            summary: json!({
+                "ok": true,
+                "data": {"text": text, "capture": image.descriptor()}
+            })
+            .to_string(),
+            image,
+        },
+        None => json!({"ok":true,"data":{"text":text}}).to_string().into(),
     }
 }
