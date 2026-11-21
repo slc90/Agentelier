@@ -50,6 +50,13 @@ pub enum PointerTarget {
 }
 
 impl PointerTarget {
+    fn window(self) -> Option<WindowId> {
+        match self {
+            Self::Screen(_) => None,
+            Self::Window(id, _) => Some(id),
+        }
+    }
+
     fn screen(self) -> Result<ScreenPoint, ToolFailure> {
         match self {
             Self::Window(id, point) => window_to_screen(id, point),
@@ -71,6 +78,12 @@ impl PointerTarget {
 pub enum ScrollAxis {
     Vertical,
     Horizontal,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TrajectoryPoint {
+    pub target: PointerTarget,
+    pub after: Duration,
 }
 
 pub struct DesktopInput {
@@ -164,6 +177,35 @@ impl DesktopInput {
         self.with_button(button, |input| {
             input.wait(DRAG_EVENT_GAP)?;
             input.move_mouse(to)?;
+            input.wait(DRAG_EVENT_GAP)
+        })
+    }
+
+    pub fn drag_trajectory(
+        &mut self,
+        button: MouseButton,
+        points: &[TrajectoryPoint],
+    ) -> Result<(), ToolFailure> {
+        let Some((first, rest)) = points.split_first() else {
+            return Err(invalid_trajectory());
+        };
+        let window = first.target.window();
+        if rest.is_empty()
+            || !first.after.is_zero()
+            || rest.iter().any(|point| point.target.window() != window)
+        {
+            return Err(invalid_trajectory());
+        }
+        self.move_mouse(first.target)?;
+        self.with_button(button, |input| {
+            input.wait(DRAG_EVENT_GAP)?;
+            let start = Instant::now();
+            let mut elapsed = Duration::ZERO;
+            for point in rest {
+                elapsed = elapsed.saturating_add(point.after);
+                input.wait(elapsed.saturating_sub(start.elapsed()))?;
+                input.move_mouse(point.target)?;
+            }
             input.wait(DRAG_EVENT_GAP)
         })
     }
@@ -284,4 +326,11 @@ fn after_cleanup(
             format!("{error}；输入清理失败：{cleanup}"),
         )),
     }
+}
+
+fn invalid_trajectory() -> ToolFailure {
+    ToolFailure::new(
+        "invalid_trajectory",
+        "鼠标轨迹至少需要两个点，首点间隔为零，且所有点须在同一坐标空间",
+    )
 }
