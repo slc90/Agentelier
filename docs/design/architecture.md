@@ -120,6 +120,8 @@ LLM Model 通过 Account 获取凭据，请求 Codex 的目录与 Responses，�
 
 Chat UI 通过 Widgetry 选择本地音频。Session Store 后台核对 WAV 或 MP3 实际内容，并以不可变字节和草稿记录提交。Conversation 将已确认的草稿附件与用户输入绑定，Bridge 仅传递展示元数据。详见[音频文件理解](subscription-media/03-audio-file-understanding.md)。
 
+音频卡片发起独立的文稿任务。Runtime 沿用音频操作的后台执行与取消，LLM Model 使用绑定的 Codex OAuth 文件转写，Session Store 提交可恢复的版本，Chat UI 展示和复制已保存文稿。
+
 Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模型任务和独立 Turn Runner。Runtime 拥有线程、队列、取消令牌、JoinHandle 及真实回收信号；账号处理期间模型任务仍可并发等待网络。它不包含 OAuth、认证文件实现或模型网络协议。依赖为 Runtime → Account → Login、Runtime → LLM Model → Account，以及 Runtime → Tools，以及 Runtime → Turn Runner → Conversation / LLM Model / Account，无循环。
 
 来源断开或文件失效时，共享门控暂停新凭据交付，Runtime 停止旧模型任务并回收工具。队列暂停和已接纳结果持久确认后，账号区显示新的来源状态。详见[认证运行与凭据管理](modules/authentication.md)。

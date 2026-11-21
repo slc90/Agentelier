@@ -257,6 +257,7 @@ pub struct SessionView {
     pub turn: Option<Box<TurnView>>,
     pub previous_turns: Vec<TurnView>,
     pub audio_draft: Option<AudioAttachmentView>,
+    pub transcriptions: Vec<TranscriptionView>,
     pub committed_items: Vec<HistoryItem>,
     pub execution_blocked: bool,
     pub tool_catalog: Vec<(String, String)>,
@@ -283,6 +284,47 @@ impl From<agentelier_conversation::AudioAttachment> for AudioAttachmentView {
             digest: audio.digest,
             encoded_bytes: audio.encoded_bytes,
             duration_ms: audio.duration_ms,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct TranscriptionView {
+    pub id: agentelier_conversation::TranscriptId,
+    pub audio: agentelier_conversation::AudioId,
+    pub digest: String,
+    pub engine: &'static str,
+    pub outcome: TranscriptionOutcomeView,
+}
+
+#[derive(Clone)]
+pub enum TranscriptionOutcomeView {
+    Completed(String),
+    Failed(String),
+    Cancelled,
+    Interrupted,
+}
+
+impl From<&agentelier_conversation::AudioTranscription> for TranscriptionView {
+    fn from(result: &agentelier_conversation::AudioTranscription) -> Self {
+        use agentelier_conversation::{TranscriptionEngine, TranscriptionOutcome};
+        Self {
+            id: result.source.id,
+            audio: result.source.audio,
+            digest: result.source.digest.clone(),
+            engine: match result.source.engine {
+                TranscriptionEngine::Codex => "Codex",
+            },
+            outcome: match &result.outcome {
+                TranscriptionOutcome::Completed(text) => {
+                    TranscriptionOutcomeView::Completed(text.clone())
+                }
+                TranscriptionOutcome::Failed(error) => {
+                    TranscriptionOutcomeView::Failed(error.clone())
+                }
+                TranscriptionOutcome::Cancelled => TranscriptionOutcomeView::Cancelled,
+                TranscriptionOutcome::Interrupted => TranscriptionOutcomeView::Interrupted,
+            },
         }
     }
 }
@@ -357,6 +399,10 @@ pub enum ConversationEvent {
     AudioDraft {
         session: SessionId,
         result: Result<Option<AudioAttachmentView>, String>,
+    },
+    AudioTranscription {
+        session: SessionId,
+        result: Result<TranscriptionView, String>,
     },
     IdleUpdated(SessionView),
     Processes(SessionProcesses),
@@ -559,6 +605,7 @@ fn view(session: agentelier_conversation::SessionView) -> SessionView {
         turn: session.turn.map(|turn| Box::new(turn_view(*turn))),
         previous_turns: session.previous_turns.into_iter().map(turn_view).collect(),
         audio_draft: session.audio_draft.map(Into::into),
+        transcriptions: session.transcriptions.iter().map(Into::into).collect(),
         committed_items: session
             .committed_items
             .into_iter()
@@ -752,6 +799,12 @@ pub fn convert(event: agentelier_conversation::ConversationEvent) -> Conversatio
             ConversationEvent::AudioDraft {
                 session,
                 result: result.map(|draft| draft.map(Into::into)),
+            }
+        }
+        agentelier_conversation::ConversationEvent::AudioTranscription { session, result } => {
+            ConversationEvent::AudioTranscription {
+                session,
+                result: result.map(|item| (&item).into()),
             }
         }
         agentelier_conversation::ConversationEvent::TaskAction(receipt) => {

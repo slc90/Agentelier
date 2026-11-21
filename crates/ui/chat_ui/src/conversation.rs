@@ -156,6 +156,7 @@ pub struct ChatSession {
     pub turn: Option<ChatTurn>,
     pub previous_turns: Vec<ChatTurn>,
     pub audio_draft: Option<crate::audio_attachment::ChatAudio>,
+    pub transcriptions: Vec<crate::transcription::ChatTranscription>,
     pub committed_items: Vec<ChatHistoryItem>,
     pub execution_blocked: bool,
     pub tool_catalog: Vec<(String, String)>,
@@ -308,6 +309,7 @@ pub(crate) fn install(app: &mut App) {
     crate::request_inspection::install(app);
     crate::tool_timeline::install(app);
     crate::audio_attachment::install(app);
+    crate::transcription::install(app);
     crate::queue::install(app);
     crate::task_panel::install(app);
     app.init_resource::<SessionUiStates>()
@@ -366,6 +368,7 @@ pub(crate) fn panel(state: &ChatState, account: &AccountState) -> impl Scene {
             @crate::task_panel::panel()--
             @crate::queue::panel()--
             @crate::audio_attachment::panel()--
+            @crate::transcription::panel(crate::transcription::Target::Draft)--
             @WidgetryTextField {
                 @value: {draft}, @multiline: true,
                 @auto_size: {Some(AutoSize { min_rows: COMPOSER_MIN_ROWS, max_rows: COMPOSER_MAX_ROWS })},
@@ -1191,6 +1194,7 @@ fn project(session: SessionView) -> Result<ChatSession> {
         instruction_snapshot: serde_json::to_string_pretty(session.settings.instructions.as_ref())?,
         turn: session.turn.map(|turn| project_turn(*turn)).transpose()?,
         audio_draft: session.audio_draft.map(Into::into),
+        transcriptions: session.transcriptions.into_iter().map(Into::into).collect(),
         previous_turns: session
             .previous_turns
             .into_iter()
@@ -1213,6 +1217,10 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
     for event in events {
         if let ConversationEvent::AudioDraft { session, result } = event.kind {
             crate::audio_attachment::receipt(world, event.operation_id, session, result);
+            continue;
+        }
+        if let ConversationEvent::AudioTranscription { session, result } = event.kind {
+            crate::transcription::receipt(world, event.operation_id, session, result);
             continue;
         }
         if let ConversationEvent::IdleUpdated(view) = event.kind {
@@ -1488,6 +1496,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             ),
             ConversationEvent::Tasks(_)
             | ConversationEvent::AudioDraft { .. }
+            | ConversationEvent::AudioTranscription { .. }
             | ConversationEvent::IdleUpdated(_)
             | ConversationEvent::Processes(_)
             | ConversationEvent::TaskAction(_)
@@ -1535,6 +1544,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             }
             ConversationEvent::Tasks(_)
             | ConversationEvent::AudioDraft { .. }
+            | ConversationEvent::AudioTranscription { .. }
             | ConversationEvent::IdleUpdated(_)
             | ConversationEvent::Processes(_)
             | ConversationEvent::TaskAction(_)
@@ -1568,6 +1578,9 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
     {
         world
             .resource_mut::<crate::audio_attachment::AudioDraftState>()
+            .host_failed(&reason);
+        world
+            .resource_mut::<crate::transcription::TranscriptionState>()
             .host_failed(&reason);
         world.resource_mut::<crate::ArchiveState>().loading = false;
         world.resource_mut::<crate::ArchiveState>().refreshing = false;

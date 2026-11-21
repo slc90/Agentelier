@@ -186,6 +186,14 @@ impl AgentHost {
         self.submit(|connection| connection.change_audio_draft(session, path))
     }
 
+    pub fn transcribe_audio(&self, session: SessionId, audio: SessionId) -> Result<u64> {
+        self.submit(|connection| connection.transcribe_audio(session, audio))
+    }
+
+    pub fn cancel_transcription(&self, session: SessionId, id: u64) -> Result<bool> {
+        self.submit(|connection| connection.cancel_transcription(session, id))
+    }
+
     pub fn mcp_config(&self, change: agentelier_bridge_connection::ConfigChange) -> Result<u64> {
         self.submit(|connection| connection.mcp_config(change))
     }

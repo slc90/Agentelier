@@ -78,6 +78,15 @@ pub enum RecordEvent {
         session: SessionId,
         attachment: Option<crate::AudioAttachment>,
     },
+    TranscriptionStarted {
+        session: SessionId,
+        source: crate::TranscriptionSource,
+    },
+    TranscriptionFinished {
+        session: SessionId,
+        id: crate::TranscriptId,
+        outcome: crate::TranscriptionOutcome,
+    },
     Process {
         fact: agentelier_tools::ProcessFact,
     },
@@ -185,14 +194,19 @@ impl RecordEvent {
     pub fn session(&self) -> SessionId {
         match self {
             Self::Process { fact } => fact.origin.session,
-            Self::AudioDraft { session, .. } => *session,
+            Self::AudioDraft { session, .. }
+            | Self::TranscriptionStarted { session, .. }
+            | Self::TranscriptionFinished { session, .. } => *session,
             _ => self.state().map_or(SessionId::nil(), |state| state.session),
         }
     }
 
     pub fn state(&self) -> Option<&StoredState> {
         match self {
-            Self::Process { .. } | Self::AudioDraft { .. } => None,
+            Self::Process { .. }
+            | Self::AudioDraft { .. }
+            | Self::TranscriptionStarted { .. }
+            | Self::TranscriptionFinished { .. } => None,
             Self::ProjectPublished { state, .. }
             | Self::RequestPrepared { state }
             | Self::RequestProgress { state }

@@ -219,6 +219,35 @@ impl Connection {
         Ok(id)
     }
 
+    pub fn transcribe_audio(
+        &mut self,
+        session: SessionId,
+        audio: SessionId,
+    ) -> Result<u64, BridgeFailure> {
+        if self.stopping || self.failure.is_some() {
+            return Err(BridgeFailure("执行连接已经关闭".into()));
+        }
+        let id = self
+            .operations
+            .allocate()
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.runtime
+            .transcribe_audio(id, session, audio)
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.pending_audio.insert(id, session);
+        Ok(id)
+    }
+
+    pub fn cancel_transcription(&self, session: SessionId, id: u64) -> Result<bool, BridgeFailure> {
+        if self.pending_audio.get(&id) != Some(&session) {
+            return Ok(false);
+        }
+        self.runtime
+            .cancel_transcription(id, session)
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        Ok(true)
+    }
+
     pub fn mcp_config(&mut self, change: crate::ConfigChange) -> Result<u64, BridgeFailure> {
         if self.stopping || self.failure.is_some() {
             return Err(BridgeFailure("执行连接已经关闭".into()));
@@ -482,6 +511,10 @@ impl Connection {
             Ok(event) => {
                 if let BridgeEventKind::Conversation(kind) = &event.kind {
                     if let agentelier_conversation_bridge::ConversationEvent::AudioDraft {
+                        session,
+                        ..
+                    }
+                    | agentelier_conversation_bridge::ConversationEvent::AudioTranscription {
                         session,
                         ..
                     } = kind.as_ref()

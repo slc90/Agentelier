@@ -3,12 +3,13 @@ use agentelier_account::{
 };
 use agentelier_conversation::SessionId;
 use agentelier_conversation::{
-    AudioAttachment, Conversation, ConversationEvent, ConversationFailure, ConversationRequest,
+    AudioId, Conversation, ConversationEvent, ConversationFailure, ConversationRequest,
     MAX_PENDING_STEERS, SessionCommand, SteerInput,
 };
 use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
 use agentelier_memory::Memory;
 use agentelier_turn_runner::RunnerEvent;
+mod audio_task;
 mod creation;
 mod deleting;
 mod image_attachment;
@@ -114,7 +115,9 @@ enum Command {
     ImageAttachment(u64, SessionId, String, ImageAttachmentAction),
     ImageAttachmentFinished(u64, io::Result<ImageAttachmentReply>),
     AudioDraft(u64, SessionId, Option<PathBuf>),
-    AudioDraftFinished(u64, SessionId, io::Result<Option<AudioAttachment>>),
+    TranscribeAudio(u64, SessionId, AudioId),
+    CancelTranscription(u64, SessionId),
+    AudioFinished(u64, SessionId, audio_task::Reply),
     McpMaterialFinished(Result<agentelier_mcp::MaterialReply, String>),
     McpConfig(u64, agentelier_mcp::ConfigChange),
     McpStatus(Vec<agentelier_mcp::ConnectionStatus>),
@@ -258,7 +261,8 @@ impl AgentRuntime {
                         let mut mcp_settings = agentelier_mcp::ConfigStore::open(&data_root);
                         let mut material: Option<PendingMaterial> = None;
                         let mut image_attachments = tokio::task::JoinSet::new();
-                        let mut audio_drafts = tokio::task::JoinSet::new();
+                        let mut audio_jobs = tokio::task::JoinSet::new();
+                        let mut audio_cancel: Option<(u64, SessionId, CancellationToken)> = None;
                         let mut mcp_connections = agentelier_mcp::Connections::default();
                         if let Ok(servers) = mcp_settings.servers() {
                             mcp_connections.configure(servers);
@@ -302,10 +306,10 @@ impl AgentRuntime {
                                             .map_err(|_| RuntimeFailure::ModelState)?;
                                         Command::ImageAttachmentFinished(id, result)
                                     },
-                                    result = audio_drafts.join_next(), if !audio_drafts.is_empty() => {
+                                    result = audio_jobs.join_next(), if !audio_jobs.is_empty() => {
                                         let (id, session, result) = result.ok_or(RuntimeFailure::ModelState)?
                                             .map_err(|_| RuntimeFailure::ModelState)?;
-                                        Command::AudioDraftFinished(id, session, result)
+                                        Command::AudioFinished(id, session, result)
                                     },
                                     status = mcp_connections.changed() => Command::McpStatus(status),
                                     result = async { match &mut catalog {
@@ -367,21 +371,61 @@ impl AgentRuntime {
                                 };
                                 match command {
                                     Command::AudioDraft(id, session, path) => {
-                                        if !audio_drafts.is_empty() || !conversation.is_current(session) {
+                                        if !audio_jobs.is_empty() || !conversation.is_current(session) {
                                             let result = Err("会话已变化或上一次音频操作尚未结束".into());
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::AudioDraft { session, result }))?;
                                         } else {
                                             let client = store.client();
-                                            audio_drafts.spawn(async move { (id, session, client.change_audio_draft(session, path).await) });
+                                            audio_jobs.spawn(async move { (id, session, audio_task::Reply::Draft(client.change_audio_draft(session, path).await)) });
                                         }
                                     }
-                                    Command::AudioDraftFinished(id, session, result) => {
+                                    Command::AudioFinished(id, session, audio_task::Reply::Draft(result)) => {
                                         match &result {
                                             Ok(draft) => { conversation.apply_audio_draft(session, draft.clone()); }
                                             Err(failure) => error!(operation_id = id, session_id = %session, error = %failure, "草稿音频提交失败"),
                                         }
                                         let result = result.map_err(|failure| failure.to_string());
                                         emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::AudioDraft { session, result }))?;
+                                    }
+                                    Command::TranscribeAudio(id, session, audio) => {
+                                        let request = if audio_jobs.is_empty() {
+                                            conversation.prepare_transcription(session, audio)
+                                        } else {
+                                            Err(ConversationFailure::new("上一项音频操作尚未结束"))
+                                        };
+                                        match request {
+                                            Ok((attachment, source, owner)) => {
+                                                let cancel = runtime_shutdown.child_token();
+                                                audio_cancel = Some((id, session, cancel.clone()));
+                                                let job = audio_task::TranscriptionJob { session, attachment, source, owner, cancel };
+                                                let client = store.client();
+                                                let credentials = owner_credentials.clone();
+                                                audio_jobs.spawn(async move { (id, session, audio_task::Reply::Transcription(job.run(client, credentials).await)) });
+                                            }
+                                            Err(failure) => {
+                                                let result = Err(failure.to_string());
+                                                emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::AudioTranscription { session, result }))?;
+                                            }
+                                        }
+                                    }
+                                    Command::CancelTranscription(id, session) => {
+                                        if let Some((operation, expected, cancel)) = &audio_cancel && *operation == id && *expected == session {
+                                            cancel.cancel();
+                                        }
+                                    }
+                                    Command::AudioFinished(id, session, audio_task::Reply::Transcription(result)) => {
+                                        audio_cancel = None;
+                                        match &result {
+                                            Ok(transcription) => {
+                                                if let agentelier_conversation::TranscriptionOutcome::Failed(reason) = &transcription.outcome {
+                                                    error!(operation_id = id, session_id = %session, error = reason, "音频转写失败");
+                                                }
+                                                conversation.apply_transcription(session, transcription.clone());
+                                            }
+                                            Err(failure) => error!(operation_id = id, session_id = %session, error = %failure, "转写记录提交失败"),
+                                        }
+                                        let result = result.map_err(|failure| failure.to_string());
+                                        emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::AudioTranscription { session, result }))?;
                                     }
                                     Command::ImageAttachment(id, session, call, action) => {
                                         if let Some(image) = conversation.generated_image(session, &call) {
@@ -891,11 +935,12 @@ impl AgentRuntime {
                                 Ok((_, Ok(_))) => {}
                             }
                         }
-                        while let Some(result) = audio_drafts.join_next().await {
+                        if let Some((_, _, cancel)) = audio_cancel { cancel.cancel(); }
+                        while let Some(result) = audio_jobs.join_next().await {
                             match result {
-                                Ok((id, session, Err(failure))) => error!(operation_id = id, session_id = %session, error = %failure, "关闭期间草稿音频提交失败"),
-                                Err(failure) => error!(error = %failure, "关闭期间草稿音频执行异常结束"),
-                                Ok((_, _, Ok(_))) => {}
+                                Ok((id, session, audio_task::Reply::Draft(Err(failure)) | audio_task::Reply::Transcription(Err(failure)))) => error!(operation_id = id, session_id = %session, error = %failure, "关闭期间音频记录提交失败"),
+                                Err(failure) => error!(error = %failure, "关闭期间音频操作异常结束"),
+                                Ok(_) => {}
                             }
                         }
                         let mcp_finished = mcp_connections.shutdown().await;
@@ -995,6 +1040,19 @@ impl AgentRuntime {
         path: Option<PathBuf>,
     ) -> Result<(), RuntimeFailure> {
         self.send(Command::AudioDraft(id, session, path))
+    }
+
+    pub fn transcribe_audio(
+        &self,
+        id: u64,
+        session: SessionId,
+        audio: AudioId,
+    ) -> Result<(), RuntimeFailure> {
+        self.send(Command::TranscribeAudio(id, session, audio))
+    }
+
+    pub fn cancel_transcription(&self, id: u64, session: SessionId) -> Result<(), RuntimeFailure> {
+        self.send(Command::CancelTranscription(id, session))
     }
 
     pub fn mcp_material(

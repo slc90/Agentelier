@@ -19,6 +19,7 @@ mod reasoning;
 mod request_inspection;
 mod task_panel;
 mod tool_timeline;
+mod transcription;
 mod working_directory;
 
 pub use conversation::{

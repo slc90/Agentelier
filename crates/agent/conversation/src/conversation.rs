@@ -152,6 +152,7 @@ pub struct SessionView {
     pub turn: Option<Box<TurnView>>,
     pub previous_turns: Vec<TurnView>,
     pub audio_draft: Option<crate::AudioAttachment>,
+    pub transcriptions: Arc<Vec<crate::AudioTranscription>>,
     pub committed_items: Vec<ProtocolItemSummary>,
     pub execution_blocked: bool,
     pub(crate) process_cleanup_unconfirmed: bool,
@@ -165,6 +166,10 @@ pub enum ConversationEvent {
     AudioDraft {
         session: SessionId,
         result: Result<Option<crate::AudioAttachment>, String>,
+    },
+    AudioTranscription {
+        session: SessionId,
+        result: Result<crate::AudioTranscription, String>,
     },
     Processes(crate::SessionProcesses),
     TaskAction(crate::TaskActionReceipt),
@@ -452,6 +457,7 @@ impl Conversation {
             turn: None,
             previous_turns: Vec::new(),
             audio_draft: None,
+            transcriptions: Default::default(),
             committed_items: Vec::new(),
             execution_blocked: false,
             process_cleanup_unconfirmed: false,

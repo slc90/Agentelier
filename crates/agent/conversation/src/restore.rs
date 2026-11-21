@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 pub struct RestoredSession {
     audio_draft: Option<crate::AudioAttachment>,
+    transcriptions: Vec<crate::AudioTranscription>,
     pub state: StoredState,
     initial: InitialSession,
     history: ProtocolHistory,
@@ -454,7 +455,8 @@ pub fn restore(
     let mut historical_processes = BTreeMap::new();
     let mut generated_images = HashMap::new();
     let mut audio_draft: Option<crate::AudioAttachment> = None;
-    let mut audio_ids = HashSet::new();
+    let mut audio_ids = HashMap::<crate::AudioId, String>::new();
+    let mut transcriptions = Vec::<crate::AudioTranscription>::new();
     let mut processes = crate::ProcessLedger::default();
     let mut finalized_without_join = false;
     for record in records {
@@ -469,11 +471,39 @@ pub fn restore(
             RecordEvent::AudioDraft { attachment, .. } => {
                 if let Some(audio) = &attachment {
                     audio.validate()?;
-                    if !audio_ids.insert(audio.id) {
+                    if audio_ids.insert(audio.id, audio.digest.clone()).is_some() {
                         return Err(ConversationFailure::new("存档重复登记同一音频附件"));
                     }
                 }
                 audio_draft = attachment;
+            }
+            RecordEvent::TranscriptionStarted { source, .. } => {
+                if source.id.is_nil()
+                    || audio_ids.get(&source.audio) != Some(&source.digest)
+                    || transcriptions
+                        .iter()
+                        .any(|item| item.source.id == source.id)
+                    || transcriptions.len() >= crate::audio::MAX_SESSION_TRANSCRIPTIONS
+                {
+                    return Err(ConversationFailure::new(
+                        "转写记录来源无效、重复或超过会话上限",
+                    ));
+                }
+                transcriptions.push(crate::AudioTranscription {
+                    source,
+                    outcome: crate::TranscriptionOutcome::Interrupted,
+                });
+            }
+            RecordEvent::TranscriptionFinished { id, outcome, .. } => {
+                let entry = transcriptions
+                    .iter_mut()
+                    .find(|item| item.source.id == id)
+                    .filter(|item| matches!(item.outcome, crate::TranscriptionOutcome::Interrupted))
+                    .ok_or_else(|| ConversationFailure::new("转写终态缺少唯一开始记录"))?;
+                if !outcome.valid_terminal() {
+                    return Err(ConversationFailure::new("转写终态缺少有效结果"));
+                }
+                entry.outcome = outcome;
             }
             RecordEvent::Process { fact } => {
                 if matches!(fact.change, agentelier_tools::ProcessChange::Started)
@@ -1306,6 +1336,7 @@ pub fn restore(
     processes.historical();
     Ok(RestoredSession {
         audio_draft,
+        transcriptions,
         state,
         initial,
         history,
@@ -1413,6 +1444,7 @@ impl Conversation {
             turn: restored.state.turn,
             previous_turns: restored.state.previous_turns,
             audio_draft: restored.audio_draft,
+            transcriptions: Arc::new(restored.transcriptions),
             committed_items: restored.state.committed_items,
             execution_blocked: restored.state.execution_blocked,
             process_cleanup_unconfirmed: false,

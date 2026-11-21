@@ -61,6 +61,11 @@ enum Command {
         Option<crate::audio::ImportedAudio>,
         oneshot::Sender<io::Result<Option<AudioAttachment>>>,
     ),
+    ReadAudio(
+        SessionId,
+        AudioAttachment,
+        oneshot::Sender<io::Result<Vec<u8>>>,
+    ),
     Delete(SessionId, oneshot::Sender<io::Result<DeleteCommit>>),
     Rename(SessionId, String, oneshot::Sender<io::Result<RenameCommit>>),
     Scan(oneshot::Sender<io::Result<ArchiveCatalog>>),
@@ -98,6 +103,21 @@ enum Command {
 pub struct SessionStoreClient(mpsc::Sender<Command>);
 
 impl SessionStoreClient {
+    pub async fn read_audio(
+        &self,
+        session: SessionId,
+        audio: AudioAttachment,
+    ) -> io::Result<Vec<u8>> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::ReadAudio(session, audio, reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("音频附件读取未返回结果"))?
+    }
+
     pub async fn change_audio_draft(
         &self,
         session: SessionId,
@@ -377,6 +397,9 @@ impl SessionStore {
                                 Ok(attachment)
                             })();
                             let _closed = reply.send(result);
+                        }
+                        Command::ReadAudio(session, audio, reply) => {
+                            let _closed = reply.send(crate::attachments::read_audio(&root, session, &audio));
                         }
                         Command::Create(initial, reply) => {
                             let result = create(&root, *initial);

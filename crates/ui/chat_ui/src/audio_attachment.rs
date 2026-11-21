@@ -97,9 +97,11 @@ pub(crate) fn panel() -> impl Scene {
 
 pub(crate) fn card(audio: ChatAudio) -> impl Scene {
     let metadata = audio.label();
+    let id = audio.id;
     bsn! {
         Node { flex_direction: FlexDirection::Column, padding: UiRect::all(px(8)), row_gap: px(4), align_self: AlignSelf::Start, max_width: percent(100), flex_shrink: 0.0 }
-        Children [Text("音频附件") WidgetryText-- Text(metadata) WidgetryText]
+        Children [Text("音频附件") WidgetryText-- Text(metadata) WidgetryText--
+            @crate::transcription::panel(crate::transcription::Target::Saved(id))]
     }
 }
 
@@ -107,13 +109,14 @@ fn choose(
     _: On<Activate>,
     chat: Res<ChatState>,
     mut media: ResMut<AudioDraftState>,
+    transcription: Res<crate::transcription::TranscriptionState>,
     primary: Single<Entity, With<PrimaryWindow>>,
     mut commands: Commands,
 ) {
     let Some(session) = chat.session.as_ref().map(|chat| chat.id) else {
         return;
     };
-    if media.busy() {
+    if media.busy() || transcription.busy() {
         return;
     }
     let mut window = WidgetryFileDialogWindow {
@@ -168,11 +171,13 @@ fn remove(
     _: On<Activate>,
     chat: Res<ChatState>,
     host: Res<AgentHost>,
+    transcription: Res<crate::transcription::TranscriptionState>,
     mut state: ResMut<AudioDraftState>,
 ) {
     if let Some(session) = &chat.session
         && session.audio_draft.is_some()
         && !state.busy()
+        && !transcription.busy()
     {
         submit(&host, &mut state, session.id, None);
     }
@@ -220,6 +225,7 @@ pub(crate) fn receipt(
 fn synchronize(
     mut media: ResMut<AudioDraftState>,
     chat: Res<ChatState>,
+    transcription: Res<crate::transcription::TranscriptionState>,
     pickers: Query<(), With<WidgetryFileDialog>>,
     mut texts: Query<&mut Text, With<AudioDraftText>>,
     mut buttons: Query<
@@ -272,7 +278,7 @@ fn synchronize(
                 node.display = display;
             }
         }
-        let next = session.is_none() || media.busy();
+        let next = session.is_none() || media.busy() || transcription.busy();
         if next && !disabled {
             commands.entity(entity).insert(InteractionDisabled);
         }

@@ -11,7 +11,7 @@ sha2.workspace = true
 agentelier_tools = { path = "../tools" }
 agentelier_account = { path = "../account" }
 agentelier_prompts = { path = "../prompts" }
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["multipart"] }
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

@@ -16,6 +16,8 @@ pub use project::{ProjectItem, ProjectPublication, PublicationKind};
 mod stream;
 pub use agentelier_account::CodexIdentity;
 pub use images::generate_image;
+mod transcription;
+pub use transcription::{MAX_TRANSCRIPT_BYTES, transcribe_audio};
 
 pub use generation::{
     GenerationConnection, GenerationRequest, MAX_REQUEST_BYTES, PreparedGeneration,
