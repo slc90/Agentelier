@@ -64,6 +64,107 @@ pub struct ModelInfo {
     pub default_reasoning_level: Option<String>,
     pub image_input: Option<bool>,
     pub context_limits: crate::ContextLimits,
+    pub multi_agent: MultiAgentCapability,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MultiAgentCapability {
+    SupportedV2,
+    Unsupported,
+    Unknown,
+}
+
+#[derive(Debug)]
+pub enum AgentModelError {
+    Unavailable {
+        slug: String,
+    },
+    Unsupported {
+        slug: String,
+    },
+    UnknownCapability {
+        slug: String,
+    },
+    UnsupportedEffort {
+        slug: String,
+        requested: String,
+        available: Vec<String>,
+    },
+    MissingDefaultEffort {
+        slug: String,
+        available: Vec<String>,
+    },
+}
+
+impl fmt::Display for AgentModelError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unavailable { slug } => write!(f, "当前目录没有模型 {slug}"),
+            Self::Unsupported { slug } => write!(f, "模型 {slug} 不支持 Multi-Agent v2"),
+            Self::UnknownCapability { slug } => {
+                write!(f, "模型目录未确认 {slug} 的 Multi-Agent v2 能力")
+            }
+            Self::UnsupportedEffort {
+                slug,
+                requested,
+                available,
+            } => write!(
+                f,
+                "模型 {slug} 不支持推理档位 {requested}，可选档位：{available:?}"
+            ),
+            Self::MissingDefaultEffort { slug, available } => write!(
+                f,
+                "模型 {slug} 缺少目录默认推理档位，可选档位：{available:?}"
+            ),
+        }
+    }
+}
+
+impl Error for AgentModelError {}
+
+pub fn select_agent_model<'a>(
+    models: &'a [ModelInfo],
+    slug: &str,
+    effort: Option<&str>,
+) -> Result<(&'a ModelInfo, Option<&'a str>), AgentModelError> {
+    let model = models
+        .iter()
+        .find(|model| model.slug == slug)
+        .ok_or_else(|| AgentModelError::Unavailable { slug: slug.into() })?;
+    match model.multi_agent {
+        MultiAgentCapability::SupportedV2 => {}
+        MultiAgentCapability::Unsupported => {
+            return Err(AgentModelError::Unsupported { slug: slug.into() });
+        }
+        MultiAgentCapability::Unknown => {
+            return Err(AgentModelError::UnknownCapability { slug: slug.into() });
+        }
+    }
+    let effort = match effort {
+        Some(effort) => Some(
+            model
+                .supported_reasoning_levels
+                .iter()
+                .find(|supported| supported.as_str() == effort)
+                .map(String::as_str)
+                .ok_or_else(|| AgentModelError::UnsupportedEffort {
+                    slug: slug.into(),
+                    requested: effort.into(),
+                    available: model.supported_reasoning_levels.clone(),
+                })?,
+        ),
+        None if model.default_reasoning_level.is_none()
+            && !model.supported_reasoning_levels.is_empty() =>
+        {
+            return Err(AgentModelError::MissingDefaultEffort {
+                slug: slug.into(),
+                available: model.supported_reasoning_levels.clone(),
+            });
+        }
+        None => model.default_reasoning_level.as_deref(),
+    };
+    Ok((model, effort))
 }
 
 pub enum ModelRequest {
@@ -212,6 +313,7 @@ async fn execute_model(
             result.push(ModelInfo {
                 image_input,
                 context_limits: crate::ContextLimits::parse(model)?,
+                multi_agent: multi_agent_capability(model)?,
                 slug,
                 display_name,
                 supported_reasoning_levels,
@@ -224,7 +326,10 @@ async fn execute_model(
                 context_window = model.context_limits.window,
                 effective_window = model.context_limits.effective,
                 auto_compact_limit = model.context_limits.automatic,
-                "已读取模型上下文能力"
+                multi_agent = ?model.multi_agent,
+                reasoning_levels = ?model.supported_reasoning_levels,
+                default_effort = ?model.default_reasoning_level,
+                "已读取模型目录能力"
             );
         }
         tracing::debug!(model_count = result.len(), "已读取当前账号模型目录");
@@ -354,6 +459,23 @@ fn catalog_model(model: &Value) -> bool {
             .is_some_and(|items| items.iter().any(|item| item == "text"))
         && model["allow_only_chatgpt_workspace_executor"].as_bool() != Some(true)
         && model["allow_only_codex_cloud_agent_orchestrator"].as_bool() != Some(true)
+}
+
+fn multi_agent_capability(model: &Value) -> Result<MultiAgentCapability, ModelFailure> {
+    let capability = match model.get("multi_agent_version") {
+        None | Some(Value::Null) => MultiAgentCapability::Unknown,
+        Some(Value::String(version)) => match version.as_str() {
+            "v2" => MultiAgentCapability::SupportedV2,
+            "disabled" | "v1" => MultiAgentCapability::Unsupported,
+            _ => MultiAgentCapability::Unknown,
+        },
+        Some(_) => {
+            return Err(protocol(
+                "模型目录的 multi_agent_version 必须是字符串或空值",
+            ));
+        }
+    };
+    Ok(capability)
 }
 #[derive(Deserialize)]
 struct ReasoningLevel {

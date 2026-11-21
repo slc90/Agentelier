@@ -4,7 +4,7 @@
 
 ## 模型能力目录
 
-Agentelier 已从 Codex 模型目录取得模型 slug、显示名称、推理等级和上下文能力。Multi-Agent 扩展应在现有 `ModelInfo` 上承载必要的协作能力元数据，例如 Multi-Agent 版本支持状态。模型不支持 v2 时，不能作为子 Agent 的显式覆盖目标。
+Agentelier 从 Codex 模型目录取得模型 slug、显示名称、推理等级、上下文能力及 `multi_agent_version`。`ModelInfo` 将 `v2` 映射为支持，`v1` 和 `disabled` 映射为不支持，缺失、空值与未知版本映射为未知。字段类型异常会拒绝刷新。普通模型选择及请求只使用原有模型能力。子 Agent 的显式覆盖须选中当前目录中声明 V2 的条目，并核对此条目的推理档位。[Codex 模型目录字段](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs)
 
 模型能力来自服务端目录，不通过字符串前缀推断支持能力。代际筛选可使用目录元数据或经过确认的目录映射；模型 slug 的 `gpt-6` 字样本身不能证明功能支持。
 

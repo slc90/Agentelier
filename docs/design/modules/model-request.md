@@ -66,6 +66,8 @@ SSE 和 WebSocket 共享 Responses 事件解析。函数参数增量只更新展
 
 模型目录仅在实际 input_modalities 是非空字符串数组时取得明确图片能力，包含 image 为支持，不包含为不支持；缺失或无法解释为未知。该可选信息经 Bridge 和 UI 进入会话固定设置；未知不被推断为支持或拒绝。服务真实拒绝仍沿既有 HTTP 类别与请求标识返回，不自动换模型、账号或协议。
 
+模型目录另解析 `multi_agent_version`。构建子 Agent 模型覆盖时，LLM Model 只接纳当前目录中明确支持 V2 的模型，并要求显式档位在该模型的支持列表内。目录缺项、格式异常和覆盖拒绝各有独立结果。普通 Responses 请求继续使用显式选择的模型及其推理档位。
+
 ## Codex WebSocket 续接
 
 Model 按当前 Codex 凭据发起 HTTPS Upgrade，沿用认证、TLS 和代理设置。每次请求仍冻结 `store: false` 的全量载荷，用于本地历史与预算核对。连接可在同一运行会话的连续 Turn 中复用。仅当冻结输入以前次已确认的完整输入和响应输出开头时，才发送 `previous_response_id` 和新增输入。当前请求重新携带该次适用的工具声明和压缩配置。工具结果以原 `call_id` 进入新增输入。
