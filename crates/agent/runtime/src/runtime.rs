@@ -340,7 +340,8 @@ impl AgentRuntime {
                         let mut children = spawn_agent::Children::default();
                         let mut extensions = agentelier_memory::registrations(memory.as_ref().ok().map(Memory::client));
                         extensions.push(spawn_agent::registration(spawn_sender, owner_credentials.clone(), data_root.join("prompts.json")));
-                        extensions.push(mailbox::registration(mailbox_sender.clone()));
+                        extensions.push(mailbox::registration(mailbox_sender.clone(), agentelier_conversation::DeliveryMode::QueueOnly));
+                        extensions.push(mailbox::registration(mailbox_sender.clone(), agentelier_conversation::DeliveryMode::TriggerTurn));
                         let mut conversation = Conversation::with_extensions(extensions);
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
@@ -464,10 +465,20 @@ impl AgentRuntime {
                                         }).await;
                                     }
                                     Command::Mailbox(command) => {
-                                        children.mailbox_command(command, &mut conversation, model.as_ref(), &store.client()).await;
+                                        children.mailbox_command(command, &mut conversation, model.as_ref(), spawn_agent::SpawnEnvironment {
+                                            store: &store.client(), credentials: &owner_credentials, operations: &operations,
+                                            skills_root: &data_root.join("skills"), mailbox_commands: &mailbox_sender,
+                                        }).await;
                                     }
                                     Command::ChildFinished(result) => {
-                                        children.finish(result, &store.client(), &mut conversation).await?;
+                                        if let Some(agent) = children.finish(result, &store.client(), &mut conversation).await?
+                                            && let Some(view) = conversation.current()
+                                            && let Err(failure) = children.wake_pending(&mut conversation, view.id, agent, spawn_agent::SpawnEnvironment {
+                                                store: &store.client(), credentials: &owner_credentials, operations: &operations,
+                                                skills_root: &data_root.join("skills"), mailbox_commands: &mailbox_sender,
+                                            }).await {
+                                            tracing::error!(session_id = %view.id, agent_id = %agent, error = %failure, "唤醒待处理 Follow-up 失败");
+                                        }
                                     }
                                     Command::AudioDraft(id, session, path) => {
                                         if !audio_jobs.is_empty() || !conversation.is_current(session) {

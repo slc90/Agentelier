@@ -1,5 +1,6 @@
 use agentelier_conversation::{
-    AgentId, AgentState, Conversation, ConversationFailure, MailboxEvent, RecordEvent, SessionId,
+    AgentId, AgentState, Conversation, ConversationFailure, DeliveryMode, MailboxEvent,
+    RecordEvent, SessionId,
 };
 use agentelier_session_store::SessionStoreClient;
 use agentelier_tools::{
@@ -20,6 +21,7 @@ pub(super) struct Outgoing {
     pub(super) origin: ProcessOrigin,
     pub(super) target: String,
     pub(super) message: String,
+    pub(super) mode: DeliveryMode,
     pub(super) cancel: tokio_util::sync::CancellationToken,
     pub(super) reply: oneshot::Sender<ToolResult>,
 }
@@ -28,18 +30,36 @@ pub(super) struct Outgoing {
 #[serde(deny_unknown_fields)]
 struct Arguments {
     target: String,
+    #[serde(alias = "task")]
     message: String,
 }
 
-pub(super) fn registration(commands: mpsc::Sender<Command>) -> ToolRegistration {
-    const NAME: &str = "send_message";
+pub(super) fn registration(
+    commands: mpsc::Sender<Command>,
+    mode: DeliveryMode,
+) -> ToolRegistration {
+    let (name, description, content) = match mode {
+        DeliveryMode::QueueOnly => (
+            "send_message",
+            "Queue a message for another Agent in the current session. Use its stable Agent ID or exact path. The receipt confirms durable delivery to the mailbox. The target reads it at a safe request boundary. This tool does not start an idle Agent. Self-messages are rejected.",
+            "message",
+        ),
+        DeliveryMode::TriggerTurn => (
+            "followup_task",
+            "Assign a follow-up task to a child Agent in the current session by ID or path. A running target processes the task after its current turn. An idle target starts from its existing conversation. The receipt reports submission and wake status.",
+            "task",
+        ),
+    };
     let definition = ToolDefinition {
-        name: NAME.into(),
-        description: "Queue a message for another Agent in the current session. Use its stable Agent ID or exact path. The receipt confirms durable delivery to the mailbox. The target reads it at a safe request boundary. This tool does not start an idle Agent. Self-messages are rejected.".into(),
+        name: name.into(),
+        description: description.into(),
         parameters: json!({"type":"object","properties":{
-            "target":{"type":"string"},"message":{"type":"string","maxLength":agentelier_conversation::MAX_AGENT_MESSAGE_CHARS}
-        },"required":["target","message"],"additionalProperties":false}),
-        source: ToolSource::Extension { provider: "agentelier.collaboration".into(), tool: NAME.into() },
+            "target":{"type":"string"},(content):{"type":"string","maxLength":agentelier_conversation::MAX_AGENT_MESSAGE_CHARS}
+        },"required":["target",content],"additionalProperties":false}),
+        source: ToolSource::Extension {
+            provider: "agentelier.collaboration".into(),
+            tool: name.into(),
+        },
         strict: true,
         mode: ToolMode::Synchronous,
         display_source: None,
@@ -53,7 +73,7 @@ pub(super) fn registration(commands: mpsc::Sender<Command>) -> ToolRegistration 
                 Err(failure) => return ToolResult::not_executed("invalid_message", &failure.to_string()),
             };
             let (reply, receipt) = oneshot::channel();
-            let command = Command::Send(Outgoing { origin, target: arguments.target, message: arguments.message.trim().into(), cancel: cancel.clone(), reply });
+            let command = Command::Send(Outgoing { origin, target: arguments.target, message: arguments.message.trim().into(), mode, cancel: cancel.clone(), reply });
             tokio::select! { biased;
                 _ = cancel.cancelled() => return ToolResult::not_executed("message_cancelled", "消息在接纳前取消"),
                 result = commands.send(command) => if result.is_err() {

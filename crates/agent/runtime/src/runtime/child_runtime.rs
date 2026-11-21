@@ -28,7 +28,17 @@ impl ChildTurn {
     ) -> Result<Self, ConversationFailure> {
         let thread = identity.thread.session_id();
         let mut conversation = Conversation::from_child(thread, prepared)?;
-        let view = conversation.start(
+        let view = Self::start(&mut conversation, thread, task, operation)?;
+        Ok(Self::from_started(conversation, view, operation))
+    }
+
+    pub(super) fn start(
+        conversation: &mut Conversation,
+        thread: agentelier_conversation::SessionId,
+        task: String,
+        operation: u64,
+    ) -> Result<SessionView, ConversationFailure> {
+        conversation.start(
             operation,
             ConversationRequest::Send {
                 session: thread,
@@ -36,12 +46,19 @@ impl ChildTurn {
                 audio: None,
                 transcript: None,
             },
-        )?;
-        Ok(Self {
+        )
+    }
+
+    pub(super) fn from_started(
+        conversation: Conversation,
+        view: SessionView,
+        operation: u64,
+    ) -> Self {
+        Self {
             conversation,
             view,
             operation,
-        })
+        }
     }
 
     pub(super) fn view(&self) -> &SessionView {
@@ -68,7 +85,7 @@ pub(super) struct Execution {
     pub(super) parent_stop: CancellationToken,
     pub(super) commands: mpsc::Receiver<Preparation>,
     pub(super) mailbox: tokio::sync::watch::Receiver<u64>,
-    pub(super) claim: MessageClaim,
+    pub(super) claims: Vec<MessageClaim>,
     pub(super) mailbox_commands: mpsc::Sender<super::mailbox::Command>,
 }
 
@@ -77,19 +94,26 @@ pub(super) struct FinishedChild {
     pub(super) instance: AgentRuntimeId,
     pub(super) state: AgentState,
     pub(super) output: Option<ProtocolArchive>,
-    pub(super) consumed: Option<MessageClaim>,
+    pub(super) consumed: Vec<MessageClaim>,
+    pub(super) residence: Option<Box<Conversation>>,
 }
 
 impl Execution {
     pub(super) async fn run(self) -> FinishedChild {
         let identity = self.identity.clone();
         let instance = self.instance;
-        let claim = self.claim;
+        let claims = self.claims.clone();
         let result = self.execute().await;
-        let consumed = result.as_ref().ok().map(|_| claim);
-        let (state, output) = match result {
-            Ok(result) => result,
-            Err(failure) => (AgentState::Failed(failure.to_string()), None),
+        let (state, output, residence, consumed) = match result {
+            Ok((state, output, conversation)) => {
+                (state, output, Some(Box::new(conversation)), claims)
+            }
+            Err(failure) => (
+                AgentState::Failed(failure.to_string()),
+                None,
+                None,
+                Vec::new(),
+            ),
         };
         FinishedChild {
             identity,
@@ -97,12 +121,13 @@ impl Execution {
             state,
             output,
             consumed,
+            residence,
         }
     }
 
     async fn execute(
         mut self,
-    ) -> Result<(AgentState, Option<ProtocolArchive>), super::RuntimeFailure> {
+    ) -> Result<(AgentState, Option<ProtocolArchive>, Conversation), super::RuntimeFailure> {
         let store = self.store.for_agent(&self.identity);
         let ChildTurn {
             mut conversation,
@@ -235,6 +260,6 @@ impl Execution {
                 return Err(ConversationFailure::new("子 Agent 收到非终态").into());
             }
         };
-        Ok(result)
+        Ok((result.0, result.1, conversation))
     }
 }

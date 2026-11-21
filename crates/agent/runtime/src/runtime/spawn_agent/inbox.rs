@@ -1,4 +1,5 @@
-use super::{Children, ModelTask, mailbox};
+use super::wake::WakeOutcome;
+use super::{Children, ModelTask, SpawnEnvironment, mailbox};
 use agentelier_conversation::{
     AgentId, AgentMessage, AgentMessageId, AgentRegistryError, ClaimedMessage, Conversation,
     ConversationFailure, DeliveryMode, MailboxEvent, MessageClaim, MessageStatus, SessionId,
@@ -43,12 +44,12 @@ impl Children {
         command: mailbox::Command,
         conversation: &mut Conversation,
         root_task: Option<&ModelTask>,
-        store: &SessionStoreClient,
+        environment: SpawnEnvironment<'_>,
     ) {
         match command {
             mailbox::Command::Send(outgoing) => {
                 let result = self
-                    .send_message(&outgoing, conversation, root_task, store)
+                    .send_message(&outgoing, conversation, root_task, environment)
                     .await;
                 let result = result.unwrap_or_else(|failure| {
                     if conversation
@@ -67,7 +68,8 @@ impl Children {
                 drop(outgoing.reply.send(result));
             }
             mailbox::Command::Inbox(inbox) => {
-                self.inbox(inbox, conversation, root_task, store).await
+                self.inbox(inbox, conversation, root_task, environment.store)
+                    .await
             }
         }
     }
@@ -77,7 +79,7 @@ impl Children {
         outgoing: &mailbox::Outgoing,
         conversation: &mut Conversation,
         root_task: Option<&ModelTask>,
-        store: &SessionStoreClient,
+        environment: SpawnEnvironment<'_>,
     ) -> Result<ToolResult, ConversationFailure> {
         let origin = &outgoing.origin;
         let turn = TurnId(origin.turn);
@@ -98,9 +100,10 @@ impl Children {
             })?;
         let receiver = target.identity.id;
         if receiver == sender {
-            return Err(ConversationFailure::new(
-                "send_message 不能发送给调用者自身",
-            ));
+            return Err(ConversationFailure::new("协作消息不能发送给调用者自身"));
+        }
+        if outgoing.mode == DeliveryMode::TriggerTurn && target.identity.parent.is_none() {
+            return Err(ConversationFailure::new("Follow-up 只唤醒子 Agent"));
         }
         let path = target.identity.path.clone();
         let id = conversation
@@ -113,19 +116,60 @@ impl Children {
             receiver,
             turn,
             call_id: origin.call_id.clone(),
-            mode: DeliveryMode::QueueOnly,
+            mode: outgoing.mode,
             text: outgoing.message.clone(),
         };
         let sequence = self
             .mailbox
             .commit(
                 conversation,
-                store,
+                environment.store,
                 session,
                 MailboxEvent::Queued { message },
             )
             .await?;
-        Ok(ToolResult { status: ToolStatus::Succeeded, cleanup_failed: false, output: json!({"accepted":true,"message_id":id,"target":receiver,"path":path,"sequence":sequence}).to_string().into() })
+        let mut output = json!({"accepted":true,"message_id":id,"target":receiver,"path":path,"sequence":sequence});
+        let mut status = ToolStatus::Succeeded;
+        if outgoing.mode == DeliveryMode::TriggerTurn {
+            let saved = conversation.mailboxes().find(id).map(|entry| entry.status);
+            let wake = match saved {
+                Some(MessageStatus::Consumed(_)) => Ok(WakeOutcome::Idle),
+                Some(MessageStatus::Claimed(_)) if self.active.contains_key(&receiver) => {
+                    Ok(WakeOutcome::Running)
+                }
+                Some(MessageStatus::Claimed(_)) => Err(ConversationFailure::new(
+                    "此前领用的 Follow-up 执行尚未确认",
+                )),
+                Some(MessageStatus::Pending) => {
+                    self.wake_pending(conversation, session, receiver, environment)
+                        .await
+                }
+                None => Err(ConversationFailure::new("缺少已接纳的 Follow-up 记录")),
+            };
+            match wake {
+                Ok(WakeOutcome::Running) => output["wake"] = json!("running"),
+                Ok(WakeOutcome::Queued) => output["wake"] = json!("queued"),
+                Ok(WakeOutcome::Idle) => output["wake"] = json!("already_processed"),
+                Err(error) => {
+                    status = if matches!(saved, Some(MessageStatus::Claimed(_)))
+                        || conversation
+                            .current()
+                            .is_some_and(|view| view.execution_blocked)
+                    {
+                        ToolStatus::Unconfirmed
+                    } else {
+                        ToolStatus::Failed
+                    };
+                    output["wake"] = json!("pending");
+                    output["error"] = json!(error.to_string());
+                }
+            }
+        }
+        Ok(ToolResult {
+            status,
+            cleanup_failed: false,
+            output: output.to_string().into(),
+        })
     }
 
     pub(in crate::runtime) async fn inbox(

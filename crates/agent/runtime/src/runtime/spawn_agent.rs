@@ -1,12 +1,12 @@
-use super::child_runtime::{ChildTurn, Execution, FinishedChild};
+use super::child_runtime::{ChildTurn, FinishedChild};
 use super::mailbox::{self, MailboxActivity};
 use super::{ModelTask, RuntimeFailure};
 use agentelier_account::{CredentialClient, ExecutionIdentity};
 use agentelier_conversation::{
     AgentCreationRecord, AgentId, AgentIdentity, AgentMessage, AgentMessageId, AgentNode,
     AgentState, ChildPreparation, ChildRegistration, Conversation, ConversationFailure,
-    DeliveryMode, ForkMode, MAX_AGENT_MESSAGE_CHARS, MailboxEvent, MessageClaim, PreparedChild,
-    RecordEvent, SessionId, TurnId,
+    DeliveryMode, ForkMode, MAX_AGENT_MESSAGE_CHARS, MailboxEvent, PreparedChild, RecordEvent,
+    SessionId, TurnId,
 };
 use agentelier_llm_model::{ModelInfo, ProtocolArchive};
 use agentelier_prompts::{Library, RoleSnapshot};
@@ -26,6 +26,7 @@ const TOOL: &str = "spawn_agent";
 const MAX_TITLE_CHARS: usize = 128;
 
 mod inbox;
+mod wake;
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -197,6 +198,7 @@ pub(super) struct Children {
     stop: CancellationToken,
     active: HashMap<AgentId, ChildHandle>,
     mailbox: MailboxActivity,
+    parked: HashMap<AgentId, Box<Conversation>>,
 }
 
 struct ChildHandle {
@@ -206,6 +208,7 @@ struct ChildHandle {
     stop: CancellationToken,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct SpawnEnvironment<'a> {
     pub(super) store: &'a SessionStoreClient,
     pub(super) credentials: &'a CredentialClient,
@@ -432,68 +435,17 @@ impl Children {
             Err(state) => apply_execution(store, conversation, &identity, state, None)
                 .await
                 .map_err(unknown)?,
-            Ok(turn) => {
-                let claim = MessageClaim {
-                    receiver: id,
-                    message: message.id,
-                    turn: turn.turn_id().map_err(unknown)?,
-                };
-                let mailbox = self
-                    .mailbox
-                    .subscribe(id, conversation.mailboxes().revision());
-                self.mailbox
-                    .commit(
-                        conversation,
-                        store,
-                        session,
-                        MailboxEvent::Claimed { claim },
-                    )
-                    .await
-                    .map_err(unknown)?;
-                let instance = conversation
-                    .agent_registry_mut()
-                    .attach(session, id)
-                    .map_err(unknown)?;
-                if let Err(failure) =
-                    apply_execution(store, conversation, &identity, AgentState::Running, None).await
-                {
-                    conversation
-                        .agent_registry_mut()
-                        .detach(session, id, instance)
-                        .map_err(unknown)?;
-                    return Err(unknown(failure));
-                }
-                let stop = self.stop.child_token();
-                let (commands, incoming) = mpsc::channel(super::COMMAND_CAPACITY);
-                let thread = identity.thread.session_id();
-                self.active.insert(
-                    id,
-                    ChildHandle {
-                        thread,
-                        turn: claim.turn,
-                        commands,
-                        stop: stop.clone(),
-                    },
-                );
-                tracing::info!(session_id = %session, agent_id = %id, agent_path = %identity.path, model = %turn.view().settings.slug, effort = ?turn.view().settings.effort, role = %identity.role, "子 Agent 已启动独立执行轮次");
-                self.jobs.spawn(
-                    Execution {
-                        identity,
-                        instance,
-                        turn,
-                        store: store.clone(),
-                        credentials: environment.credentials.clone(),
-                        skills_root: environment.skills_root.into(),
-                        stop,
-                        parent_stop,
-                        commands: incoming,
-                        mailbox,
-                        claim,
-                        mailbox_commands: environment.mailbox_commands.clone(),
-                    }
-                    .run(),
-                );
-            }
+            Ok(turn) => self
+                .launch_turn(
+                    conversation,
+                    identity,
+                    turn,
+                    &[message],
+                    parent_stop,
+                    environment,
+                )
+                .await
+                .map_err(unknown)?,
         }
         conversation
             .agent_registry()
@@ -507,17 +459,20 @@ impl Children {
         finished: Result<FinishedChild, tokio::task::JoinError>,
         store: &SessionStoreClient,
         conversation: &mut Conversation,
-    ) -> Result<(), RuntimeFailure> {
+    ) -> Result<Option<AgentId>, RuntimeFailure> {
         let finished = finished.map_err(|failure| {
             ConversationFailure::new(format!("子 Agent 执行体无法回收：{failure}"))
         })?;
         let identity = &finished.identity;
-        self.active.remove(&identity.id);
+        let cancelled = self
+            .active
+            .remove(&identity.id)
+            .is_some_and(|child| child.stop.is_cancelled());
         conversation
             .agent_registry_mut()
             .detach(identity.session, identity.id, finished.instance)
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
-        if let Some(claim) = finished.consumed {
+        for claim in finished.consumed {
             self.mailbox
                 .commit(
                     conversation,
@@ -527,6 +482,8 @@ impl Children {
                 )
                 .await?;
         }
+        let resume =
+            finished.residence.is_some() && !cancelled && finished.state != AgentState::Interrupted;
         apply_execution(
             store,
             conversation,
@@ -535,7 +492,10 @@ impl Children {
             finished.output,
         )
         .await?;
-        Ok(())
+        if let Some(residence) = finished.residence {
+            self.parked.insert(identity.id, residence);
+        }
+        Ok(resume.then_some(identity.id))
     }
 
     pub(super) async fn stop(

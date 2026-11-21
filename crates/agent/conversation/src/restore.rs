@@ -529,6 +529,12 @@ pub fn restore(
                         | crate::AgentState::Interrupted,
                     )
                     | (
+                        crate::AgentState::Completed
+                        | crate::AgentState::Interrupted
+                        | crate::AgentState::Failed(_),
+                        crate::AgentState::Running,
+                    )
+                    | (
                         crate::AgentState::Running,
                         crate::AgentState::Failed(_) | crate::AgentState::Interrupted,
                     ) => output.is_none(),

@@ -140,6 +140,35 @@ impl Mailboxes {
             .min_by_key(|entry| entry.queued_at)
     }
 
+    pub fn wake_inputs(&self, receiver: AgentId) -> Result<Vec<AgentMessage>, ConversationFailure> {
+        let mut pending: Vec<_> = self
+            .messages
+            .values()
+            .filter(|entry| {
+                entry.message.receiver == receiver
+                    && !matches!(entry.status, MessageStatus::Consumed(_))
+            })
+            .collect();
+        pending.sort_unstable_by_key(|entry| entry.queued_at);
+        let Some(trigger) = pending.iter().position(|entry| {
+            entry.status == MessageStatus::Pending
+                && entry.message.mode == DeliveryMode::TriggerTurn
+        }) else {
+            return Ok(Vec::new());
+        };
+        pending[..=trigger]
+            .iter()
+            .map(|entry| {
+                if entry.status != MessageStatus::Pending {
+                    return Err(ConversationFailure::new(
+                        "Agent 有尚未确认的领取记录，须先恢复",
+                    ));
+                }
+                Ok(entry.message.clone())
+            })
+            .collect()
+    }
+
     pub fn revision(&self) -> u64 {
         self.last_sequence
     }
