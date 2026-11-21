@@ -1,6 +1,6 @@
 # Computer Use 设计
 
-实施状态：Windows 窗口发现、激活、桌面与窗口截图、坐标转换、鼠标键盘输入和连续轨迹已实现。其余能力见[实施方案总览](../../../plans/computer-use/00-overview.md)。
+实施状态：Windows Driver 和可独立运行的 Rhai 脚本会话已实现。后续能力见[实施方案总览](../../../plans/computer-use/00-overview.md)。
 
 Computer Use 让 Agentelier 中的模型直接操作当前 Windows 桌面上的应用。模型通过普通 Responses Function Calling 提交 Rhai 脚本；Agentelier 在本地解释脚本，由 Rust 提供的 Computer API 调用 Windows 桌面能力，再把执行结果和截图作为工具结果反馈给模型。
 
@@ -43,6 +43,10 @@ flowchart TD
 Computer Use 沿用现有模型—工具—结果反馈循环，不建立独立 Agent 循环，也不修改 Responses 的模型通信协议。
 
 ## Rhai Runtime 组织多步操作
+
+每个 `ScriptSession` 持有独立的 Rhai Engine、变量作用域和函数 AST。后续调用合并已保存的函数定义与新脚本，执行成功后只保存函数部分，旧脚本的顶层语句不会重放。语法错误在修改作用域前返回，执行错误保留此前已执行语句的变量修改，失败脚本的新增函数不会发布。脚本可输出返回值或使用 `print`，工具结果文字受字节上限约束。
+
+执行在现有 Tokio 的阻塞工作线程中完成。调用串行访问自己的脚本会话，并等待工作线程实际退出才取得结果。Rhai 进度回调用于协作式取消并检查执行期限，Engine 同时限制调用深度、操作数和数据规模。脚本模块导入已禁用。
 
 Rhai 是嵌入 Agentelier 进程的脚本引擎，不启动 Python 或 Node.js 子进程。Runtime 保持持续存在的执行上下文，使模型能够在同一 Computer Use 会话的多次工具调用之间保留变量和函数，并在一次脚本内使用条件、循环和函数组合桌面操作。
 

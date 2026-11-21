@@ -1,0 +1,165 @@
+use crate::{ImagePayload, ToolFailure};
+use rhai::{AST, Dynamic, Engine, Scope};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex as AsyncMutex;
+use tokio_util::sync::CancellationToken;
+
+const SCRIPT_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_SCRIPT_BYTES: usize = 64 * 1024;
+const MAX_OUTPUT_BYTES: usize = 8 * 1024;
+const MAX_FUNCTIONS: usize = 128;
+const MAX_VARIABLES: usize = 256;
+const MAX_OPERATIONS: u64 = 2_000_000;
+const MAX_CALL_LEVELS: usize = 32;
+const MAX_EXPRESSION_DEPTH: usize = 64;
+const MAX_STRING_BYTES: usize = 1024 * 1024;
+const MAX_COLLECTION_SIZE: usize = 8192;
+
+pub struct ScriptOutput {
+    pub text: String,
+    pub image: Option<Arc<ImagePayload>>,
+}
+
+#[derive(Clone, Default)]
+pub struct ScriptSession {
+    state: Arc<AsyncMutex<ScriptState>>,
+}
+
+struct ScriptState {
+    engine: Engine,
+    scope: Scope<'static>,
+    functions: AST,
+}
+
+impl Default for ScriptState {
+    fn default() -> Self {
+        let mut engine = Engine::new();
+        engine
+            .set_max_operations(MAX_OPERATIONS)
+            .set_max_call_levels(MAX_CALL_LEVELS)
+            .set_max_expr_depths(MAX_EXPRESSION_DEPTH, MAX_EXPRESSION_DEPTH)
+            .set_max_functions(MAX_FUNCTIONS)
+            .set_max_variables(MAX_VARIABLES)
+            .set_max_string_size(MAX_STRING_BYTES)
+            .set_max_array_size(MAX_COLLECTION_SIZE)
+            .set_max_map_size(MAX_COLLECTION_SIZE);
+        Self {
+            engine,
+            scope: Scope::new(),
+            functions: AST::empty(),
+        }
+    }
+}
+
+impl ScriptSession {
+    pub async fn run(
+        &self,
+        script: &str,
+        cancel: &CancellationToken,
+    ) -> Result<ScriptOutput, ToolFailure> {
+        if script.trim().is_empty() || script.len() > MAX_SCRIPT_BYTES {
+            return Err(ToolFailure::new(
+                "invalid_script",
+                "Rhai 脚本必须为非空文本且不超过 64 KiB",
+            ));
+        }
+        let mut state = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(cancelled()),
+            state = self.state.clone().lock_owned() => state,
+        };
+        let control = Control {
+            cancel: cancel.clone(),
+            deadline: Instant::now() + SCRIPT_TIMEOUT,
+        };
+        let script = script.to_owned();
+        tokio::task::spawn_blocking(move || state.run(&script, control))
+            .await
+            .map_err(|error| ToolFailure::new("script_worker_failed", error.to_string()))?
+    }
+}
+
+impl ScriptState {
+    fn run(&mut self, script: &str, control: Control) -> Result<ScriptOutput, ToolFailure> {
+        control.check()?;
+        let ast = self
+            .engine
+            .compile_with_scope(&self.scope, script)
+            .map_err(|error| ToolFailure::new("script_parse_failed", error.to_string()))?;
+        let program = self.functions.merge(&ast);
+        if program.iter_functions().take(MAX_FUNCTIONS + 1).count() > MAX_FUNCTIONS {
+            return Err(ToolFailure::new(
+                "script_function_limit",
+                "会话函数数量超过限制",
+            ));
+        }
+
+        let output = Arc::new(Mutex::new(String::new()));
+        let printer = output.clone();
+        let debugger = output.clone();
+        let progress = control.clone();
+        self.engine
+            .on_print(move |line| print_line(&printer, line))
+            .on_debug(move |line, _, _| print_line(&debugger, line))
+            .on_progress(move |_| {
+                progress
+                    .check()
+                    .err()
+                    .map(|error| Dynamic::from(error.code))
+            });
+
+        let result = self
+            .engine
+            .eval_ast_with_scope::<Dynamic>(&mut self.scope, &program);
+        control.check()?;
+        let value = result
+            .map_err(|error| ToolFailure::new("script_evaluation_failed", error.to_string()))?;
+        self.functions = program.clone_functions_only();
+
+        let mut output = output
+            .lock()
+            .map_err(|error| ToolFailure::new("script_output_failed", error.to_string()))?;
+        if !value.is_unit() {
+            append_output(&mut output, &value.to_string());
+        }
+        Ok(ScriptOutput {
+            text: std::mem::take(&mut output),
+            image: None,
+        })
+    }
+}
+
+#[derive(Clone)]
+struct Control {
+    cancel: CancellationToken,
+    deadline: Instant,
+}
+
+impl Control {
+    fn check(&self) -> Result<(), ToolFailure> {
+        if self.cancel.is_cancelled() {
+            Err(cancelled())
+        } else if Instant::now() >= self.deadline {
+            Err(ToolFailure::new("timeout", "Rhai 脚本超过执行期限"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn cancelled() -> ToolFailure {
+    ToolFailure::new("cancelled", "Rhai 脚本已取消")
+}
+
+fn print_line(output: &Mutex<String>, line: &str) {
+    if let Ok(mut output) = output.lock() {
+        append_output(&mut output, line);
+        append_output(&mut output, "\n");
+    }
+}
+
+fn append_output(output: &mut String, text: &str) {
+    let limit = MAX_OUTPUT_BYTES.saturating_sub(output.len());
+    output.push_str(&text[..text.floor_char_boundary(text.len().min(limit))]);
+}

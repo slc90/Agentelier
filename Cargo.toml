@@ -42,6 +42,7 @@ bevy_widgetry = { git = "https://github.com/slc90/bevy_widgetry", default-featur
 bevy_brp_runtime = { git = "https://github.com/slc90/bevy_brp" }
 serde = { version = "1.0", features = ["derive"] }
 ron = "0.12.2"
+rhai = { version = "1.27.0", features = ["sync", "no_module"] }
 rmcp = { version = "=3.9.0", default-features = false, features = [
   "client",
   "transport-async-rw",

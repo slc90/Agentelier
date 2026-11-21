@@ -11,11 +11,13 @@ mod output;
 mod patch;
 mod payload;
 mod process;
+mod script;
 mod sessions;
 mod task_control;
 
 pub use environment::WorkingDirectory;
 pub use image::from_mcp_bytes;
+pub use script::{ScriptOutput, ScriptSession};
 
 pub use catalog::{
     ToolCatalog, ToolContract, ToolDefinition, ToolExecution, ToolMode, ToolRegistration,
