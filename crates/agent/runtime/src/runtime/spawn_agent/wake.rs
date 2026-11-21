@@ -27,6 +27,11 @@ impl Children {
         let session = identity.session;
         let id = identity.id;
         let turn_id = turn.turn_id()?;
+        let assignment = messages
+            .iter()
+            .find(|message| message.mode == agentelier_conversation::DeliveryMode::TriggerTurn)
+            .cloned()
+            .ok_or_else(|| ConversationFailure::new("子 Agent 启动缺少任务来源"))?;
         let mailbox = self
             .mailbox
             .subscribe(id, conversation.mailboxes().revision());
@@ -36,6 +41,7 @@ impl Children {
                 receiver: id,
                 message: message.id,
                 turn: turn_id,
+                wake: true,
             };
             self.mailbox
                 .commit(
@@ -93,6 +99,7 @@ impl Children {
                 commands: incoming,
                 mailbox,
                 claims,
+                assignment,
                 mailbox_commands: environment.mailbox_commands.clone(),
             }
             .run(),

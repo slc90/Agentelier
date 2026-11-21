@@ -674,7 +674,11 @@ impl ActiveTurn<'_> {
             *self.history = self.history.with_user(&self.input()?);
             self.state.input_retained = true;
         }
-        *self.history = self.history.with_user(&note);
+        *self.history = if delivery.message.completion.is_some() {
+            self.history.with_agent_result(&note)
+        } else {
+            self.history.with_user(&note)
+        };
         self.view.committed_items = self.history.summary();
         self.begin_history_commit();
         Ok(crate::RecordEvent::MailboxInput {

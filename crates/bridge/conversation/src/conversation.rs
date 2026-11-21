@@ -54,6 +54,7 @@ pub enum TurnStatus {
 }
 #[derive(Clone)]
 pub enum HistoryItem {
+    AgentResult,
     Project { publication: u64 },
     Compaction,
     User,
@@ -662,6 +663,7 @@ fn history_item(item: agentelier_conversation::ProtocolItemSummary) -> HistoryIt
             HistoryItem::Project { publication }
         }
         agentelier_conversation::ProtocolItemSummary::User => HistoryItem::User,
+        agentelier_conversation::ProtocolItemSummary::AgentResult => HistoryItem::AgentResult,
         agentelier_conversation::ProtocolItemSummary::FunctionCall { call_id, name } => {
             HistoryItem::FunctionCall { call_id, name }
         }

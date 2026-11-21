@@ -23,7 +23,7 @@ mod conversation;
 mod mailbox;
 pub use mailbox::{
     AgentMessage, AgentMessageId, ClaimedMessage, DeliveryMode, MAX_AGENT_MESSAGE_CHARS,
-    MailboxEntry, MailboxEvent, Mailboxes, MessageClaim, MessageStatus,
+    MailboxEntry, MailboxEvent, Mailboxes, MessageClaim, MessageStatus, TaskCompletion,
 };
 mod memory_evidence;
 mod processes;

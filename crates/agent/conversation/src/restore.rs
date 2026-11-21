@@ -513,6 +513,7 @@ pub fn restore(
                 state,
                 request,
                 output,
+                delivery,
                 ..
             } => {
                 if let Some(request) = &request {
@@ -520,7 +521,7 @@ pub fn restore(
                         .validate_request_materials()
                         .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
                 }
-                let (_, previous) = agent_positions
+                let (identity, previous) = agent_positions
                     .get(&agent)
                     .and_then(|position| agents.get_mut(*position))
                     .ok_or_else(|| ConversationFailure::new("Agent 执行记录缺少身份提交"))?;
@@ -551,6 +552,22 @@ pub fn restore(
                     return Err(ConversationFailure::new(
                         "Agent 执行记录状态顺序或结果不一致",
                     ));
+                }
+                if let Some(message) = delivery {
+                    if message.sender != agent
+                        || identity.parent != Some(message.receiver)
+                        || !message.completion.as_ref().is_some_and(|completion| {
+                            completion.path == identity.path && completion.state == state
+                        })
+                    {
+                        return Err(ConversationFailure::new(
+                            "完成结果身份或终态与 Agent 不一致",
+                        ));
+                    }
+                    mailboxes.apply(
+                        crate::MailboxEvent::Queued { message: *message },
+                        record.sequence,
+                    )?;
                 }
                 *previous = state;
             }
@@ -635,7 +652,7 @@ pub fn restore(
                 let root = crate::AgentId::for_root(initial.session);
                 let registered = |agent| agent == root || agent_positions.contains_key(&agent);
                 if !registered(event.receiver())
-                    || matches!(&event, crate::MailboxEvent::Queued { message } if !registered(message.sender))
+                    || matches!(&event, crate::MailboxEvent::Queued { message } if !registered(message.sender) || message.completion.is_some())
                 {
                     return Err(ConversationFailure::new(
                         "Mailbox 记录的发送方或接收方未在会话登记",
@@ -1306,10 +1323,19 @@ pub fn restore(
                 } else {
                     &users[1..]
                 };
-                if pending.has_barrier()
-                    || retained_user == retained_input
-                    || !applied.appends_users(&history, expected)
-                {
+                let is_result = mailboxes
+                    .find(claim.message)
+                    .is_some_and(|entry| entry.message.completion.is_some());
+                let valid_history = if is_result {
+                    applied.appends_agent_result(
+                        &history,
+                        retained_user.then_some(turn.input.as_str()),
+                        &note,
+                    )
+                } else {
+                    applied.appends_users(&history, expected)
+                };
+                if pending.has_barrier() || retained_user == retained_input || !valid_history {
                     return Err(ConversationFailure::new("邮箱输入与确认历史前缀不一致"));
                 }
                 history = applied;

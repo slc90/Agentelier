@@ -21,6 +21,7 @@ pub enum ProtocolItemSummary {
     },
     Compaction,
     User,
+    AgentResult,
     FunctionCall {
         call_id: String,
         name: String,
@@ -41,6 +42,7 @@ pub(crate) enum ProtocolItem {
     Project(crate::ProjectItem),
     Compaction(crate::CompactionItem),
     User(String),
+    AgentResult(String),
     FunctionCall {
         raw: Value,
         call_id: String,
@@ -222,6 +224,12 @@ impl ProtocolHistory {
         history
     }
 
+    pub fn with_agent_result(&self, input: &str) -> Self {
+        let mut history = self.clone();
+        history.0.push(ProtocolItem::AgentResult(input.to_owned()));
+        history
+    }
+
     pub fn response_append(
         &self,
         input: Option<&str>,
@@ -310,6 +318,7 @@ impl ProtocolHistory {
                     snapshot_hash: item.snapshot_hash.clone(),
                 },
                 ProtocolItem::User(_) => ProtocolItemSummary::User,
+                ProtocolItem::AgentResult(_) => ProtocolItemSummary::AgentResult,
                 ProtocolItem::Compaction(_) => ProtocolItemSummary::Compaction,
                 ProtocolItem::FunctionCall { call_id, name, .. } => {
                     ProtocolItemSummary::FunctionCall {
@@ -352,7 +361,7 @@ impl ProtocolHistory {
             .map(|item| match item {
                 ProtocolItem::Project(item) => serde_json::json!({"role":"user","content":item.text}),
                 ProtocolItem::Compaction(item) => item.0,
-                ProtocolItem::User(input) => serde_json::json!({"role": "user", "content": input}),
+                ProtocolItem::User(input) | ProtocolItem::AgentResult(input) => serde_json::json!({"role": "user", "content": input}),
                 ProtocolItem::Assistant { raw, .. } | ProtocolItem::Reasoning { raw, .. } | ProtocolItem::FunctionCall {raw, ..} => raw,
                 ProtocolItem::FunctionResult {call_id, output} => {
                     let body = match output {

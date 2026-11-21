@@ -63,6 +63,9 @@ enum ArchivedItem {
     User {
         text: String,
     },
+    AgentResult {
+        text: String,
+    },
     FunctionCall {
         raw: Value,
         call_id: String,
@@ -88,6 +91,20 @@ pub struct ProtocolArchive {
 }
 
 impl ProtocolArchive {
+    pub fn appends_agent_result(&self, previous: &Self, user: Option<&str>, note: &str) -> bool {
+        let Some((ArchivedItem::AgentResult { text }, prefix)) = self.items.split_last() else {
+            return false;
+        };
+        text == note
+            && prefix
+                .strip_prefix(previous.items.as_slice())
+                .is_some_and(|added| match (added, user) {
+                    ([], None) => true,
+                    ([ArchivedItem::User { text }], Some(user)) => text == user,
+                    _ => false,
+                })
+    }
+
     pub fn appends_users(&self, previous: &Self, users: &[&str]) -> bool {
         self.items
             .strip_prefix(previous.items.as_slice())
@@ -233,7 +250,9 @@ impl ProtocolArchive {
                         return Err(crate::model::protocol("压缩历史工具结果不匹配"));
                     }
                 }
-                ArchivedItem::User { .. } | ArchivedItem::Project { .. }
+                ArchivedItem::User { .. }
+                | ArchivedItem::AgentResult { .. }
+                | ArchivedItem::Project { .. }
                     if pending.values().any(|asynchronous| !asynchronous) =>
                 {
                     return Err(crate::model::protocol("压缩历史用户输入插入未封闭调用"));
@@ -281,6 +300,7 @@ impl ProtocolArchive {
                 matches!(
                     item,
                     ArchivedItem::User { .. }
+                        | ArchivedItem::AgentResult { .. }
                         | ArchivedItem::Project { .. }
                         | ArchivedItem::FunctionResult { .. }
                 )
@@ -368,6 +388,7 @@ impl ProtocolArchive {
                 matches!(
                     item,
                     ArchivedItem::User { .. }
+                        | ArchivedItem::AgentResult { .. }
                         | ArchivedItem::Project { .. }
                         | ArchivedItem::FunctionResult { .. }
                 )
@@ -411,6 +432,7 @@ fn capture(items: &[ProtocolItem]) -> ProtocolArchive {
             .map(|item| match item {
                 ProtocolItem::Project(item) => ArchivedItem::Project { item: item.clone() },
                 ProtocolItem::User(text) => ArchivedItem::User { text: text.clone() },
+                ProtocolItem::AgentResult(text) => ArchivedItem::AgentResult { text: text.clone() },
                 ProtocolItem::Compaction(item) => ArchivedItem::Compaction { item: item.clone() },
                 ProtocolItem::FunctionCall { raw, call_id, name } => ArchivedItem::FunctionCall {
                     raw: raw.clone(),
@@ -463,6 +485,12 @@ impl ProtocolHistory {
                         return Err(crate::model::protocol("历史用户消息插入未封闭同步调用"));
                     }
                     ProtocolItem::User(text)
+                }
+                ArchivedItem::AgentResult { text } => {
+                    if text.is_empty() || pending.values().any(|asynchronous| !asynchronous) {
+                        return Err(crate::model::protocol("历史协作结果缺少内容或边界无效"));
+                    }
+                    ProtocolItem::AgentResult(text)
                 }
                 ArchivedItem::FunctionCall { raw, call_id, name } => {
                     if call_id.is_empty()

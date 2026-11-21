@@ -173,6 +173,7 @@ impl Children {
             call_id: origin.call_id.clone(),
             mode: outgoing.mode,
             text: outgoing.message.clone(),
+            completion: None,
         };
         let sequence = self
             .mailbox
@@ -294,6 +295,7 @@ impl Children {
             message: message.id,
             receiver,
             turn,
+            wake: false,
         };
         self.mailbox
             .commit(

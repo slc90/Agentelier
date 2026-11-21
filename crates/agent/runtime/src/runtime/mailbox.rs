@@ -95,6 +95,12 @@ pub(super) fn registration(
 pub(super) struct MailboxActivity(HashMap<AgentId, watch::Sender<u64>>);
 
 impl MailboxActivity {
+    pub(super) fn notify(&self, receiver: AgentId, sequence: u64) {
+        if let Some(watch) = self.0.get(&receiver) {
+            watch.send_replace(sequence);
+        }
+    }
+
     pub(super) fn subscribe(&mut self, target: AgentId, revision: u64) -> watch::Receiver<u64> {
         self.0
             .entry(target)
@@ -153,9 +159,7 @@ impl MailboxActivity {
             MailboxEvent::Consumed { claim } => (claim.message, "consumed"),
         };
         conversation.mailboxes_mut().apply(event, sequence)?;
-        if let Some(watch) = self.0.get(&receiver) {
-            watch.send_replace(sequence);
-        }
+        self.notify(receiver, sequence);
         tracing::debug!(session_id = %session, agent_id = %receiver, message_id = %message_id, sequence, change, "Mailbox 状态已持久提交");
         Ok(sequence)
     }

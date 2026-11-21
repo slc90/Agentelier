@@ -16,7 +16,7 @@ pub fn text_tokens(text: &str) -> u64 {
 fn item_tokens(item: &ProtocolItem) -> u64 {
     match item {
         ProtocolItem::Project(item) => text_tokens(&item.text).saturating_add(text_tokens("user")),
-        ProtocolItem::User(text) => text_tokens(text),
+        ProtocolItem::User(text) | ProtocolItem::AgentResult(text) => text_tokens(text),
         ProtocolItem::Compaction(item) => (item
             .0
             .get("encrypted_content")
@@ -132,7 +132,9 @@ impl ProtocolHistory {
         self.0.iter().try_fold(0usize, |total, item| {
             let bytes = match item {
                 ProtocolItem::Project(item) => count(&json!({"role":"user","content":item.text}))?,
-                ProtocolItem::User(input) => count(&json!({"role":"user","content":input}))?,
+                ProtocolItem::User(input) | ProtocolItem::AgentResult(input) => {
+                    count(&json!({"role":"user","content":input}))?
+                }
                 ProtocolItem::Compaction(item) => count(&item.0)?,
                 ProtocolItem::Assistant { raw, .. }
                 | ProtocolItem::Reasoning { raw, .. }

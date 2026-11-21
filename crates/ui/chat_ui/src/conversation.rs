@@ -52,6 +52,7 @@ pub enum ChatTurnStatus {
 }
 #[derive(Clone, Reflect)]
 pub enum ChatHistoryItem {
+    AgentResult,
     Project { publication: u64 },
     Compaction,
     User,
@@ -1004,6 +1005,7 @@ fn history_item(item: agentelier_conversation_bridge::HistoryItem) -> ChatHistor
             ChatHistoryItem::Project { publication }
         }
         agentelier_conversation_bridge::HistoryItem::User => ChatHistoryItem::User,
+        agentelier_conversation_bridge::HistoryItem::AgentResult => ChatHistoryItem::AgentResult,
         agentelier_conversation_bridge::HistoryItem::FunctionCall { call_id, name } => {
             ChatHistoryItem::FunctionCall { call_id, name }
         }

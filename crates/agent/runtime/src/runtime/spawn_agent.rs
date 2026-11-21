@@ -6,7 +6,7 @@ use agentelier_conversation::{
     AgentCreationRecord, AgentId, AgentIdentity, AgentMessage, AgentMessageId, AgentNode,
     AgentState, ChildPreparation, ChildRegistration, Conversation, ConversationFailure,
     DeliveryMode, ForkMode, MAX_AGENT_MESSAGE_CHARS, MailboxEvent, PreparedChild, RecordEvent,
-    SessionId, TurnId,
+    SessionId, TaskCompletion, TurnId,
 };
 use agentelier_llm_model::{ModelInfo, ProtocolArchive};
 use agentelier_prompts::{Library, RoleSnapshot};
@@ -423,6 +423,7 @@ impl Children {
             call_id: origin.call_id.clone(),
             mode: DeliveryMode::TriggerTurn,
             text: request.task.clone(),
+            completion: None,
         };
         self.mailbox
             .commit(
@@ -510,11 +511,13 @@ impl Children {
                 .agent_registry()
                 .get(session, id)
                 .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
-            if node.state == AgentState::Stopping && finished.residence.is_none() {
+            if finished.residence.is_none() {
                 if let Some(child) = self.active.get_mut(&id) {
                     child.cleanup_unconfirmed = true;
                 }
-                tracing::error!(session_id = %session, agent_id = %id, agent_path = %node.identity.path, state = ?finished.state, "子 Agent 中断收尾未确认，保留活动占用");
+                let error = format!("子 Agent 收尾未确认：{}", node.identity.path);
+                tracing::error!(session_id = %session, agent_id = %id, agent_path = %node.identity.path, turn_id = finished.assignment.turn.0, call_id = %finished.assignment.call_id, state = ?finished.state, "子 Agent 收尾未确认，保留活动占用");
+                conversation.fail_storage(error);
                 continue;
             }
             if let Some(agent) = self.commit_finish(finished, store, conversation).await? {
@@ -548,14 +551,41 @@ impl Children {
         }
         let resume =
             finished.residence.is_some() && !cancelled && finished.state != AgentState::Interrupted;
-        apply_execution(
+        let delivery = finished.result.and_then(|(agent_turn, text)| {
+            identity.parent.map(|receiver| AgentMessage {
+                id: AgentMessageId::allocate(),
+                sender: identity.id,
+                receiver,
+                turn: finished.assignment.turn,
+                call_id: finished.assignment.call_id,
+                mode: DeliveryMode::QueueOnly,
+                text: text
+                    .chars()
+                    .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\r' | '\t'))
+                    .take(MAX_AGENT_MESSAGE_CHARS)
+                    .collect(),
+                completion: Some(TaskCompletion {
+                    task: finished.assignment.id,
+                    assigned_by: finished.assignment.sender,
+                    path: identity.path.clone(),
+                    agent_turn,
+                    state: finished.state.clone(),
+                    assignment: finished.assignment.text,
+                }),
+            })
+        });
+        let sequence = persist_execution(
             store,
             conversation,
             identity,
             finished.state,
             finished.output,
+            delivery.clone(),
         )
         .await?;
+        if let Some(delivery) = delivery {
+            self.mailbox.notify(delivery.receiver, sequence);
+        }
         conversation
             .agent_registry_mut()
             .detach(identity.session, identity.id, finished.instance)
@@ -596,6 +626,25 @@ async fn apply_execution(
     state: AgentState,
     output: Option<ProtocolArchive>,
 ) -> Result<(), ConversationFailure> {
+    persist_execution(store, conversation, identity, state, output, None)
+        .await
+        .map(drop)
+}
+
+async fn persist_execution(
+    store: &SessionStoreClient,
+    conversation: &mut Conversation,
+    identity: &AgentIdentity,
+    state: AgentState,
+    output: Option<ProtocolArchive>,
+    delivery: Option<AgentMessage>,
+) -> Result<u64, ConversationFailure> {
+    let delivery_event = delivery.as_ref().map(|message| MailboxEvent::Queued {
+        message: message.clone(),
+    });
+    if let Some(event) = &delivery_event {
+        conversation.mailboxes().validate(event)?;
+    }
     let result = store
         .append(RecordEvent::AgentExecution {
             session: identity.session,
@@ -603,25 +652,29 @@ async fn apply_execution(
             state: state.clone(),
             request: None,
             output,
+            delivery: delivery.map(Box::new),
         })
         .await;
-    if !result
-        .as_ref()
-        .is_ok_and(|commit| commit.session == identity.session)
-    {
-        let message = result.err().map_or_else(
-            || "子 Agent 提交回执会话不匹配".into(),
-            |failure| failure.to_string(),
-        );
-        conversation.fail_storage(message.clone());
-        return Err(ConversationFailure::new(message));
-    }
+    let sequence = match result {
+        Ok(commit) if commit.session == identity.session => commit.sequence,
+        result => {
+            let message = result.err().map_or_else(
+                || "子 Agent 提交回执会话不匹配".into(),
+                |failure| failure.to_string(),
+            );
+            conversation.fail_storage(message.clone());
+            return Err(ConversationFailure::new(message));
+        }
+    };
     conversation
         .agent_registry_mut()
         .set_state(identity.session, identity.id, state.clone())
         .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+    if let Some(event) = delivery_event {
+        conversation.mailboxes_mut().apply(event, sequence)?;
+    }
     tracing::debug!(session_id = %identity.session, agent_id = %identity.id, agent_path = %identity.path, ?state, "子 Agent 执行状态已提交");
-    Ok(())
+    Ok(sequence)
 }
 
 fn success(node: &AgentNode) -> ToolResult {

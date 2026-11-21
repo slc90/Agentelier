@@ -3,7 +3,7 @@ use super::spawn_agent::Preparation;
 use super::{AgentEventKind, ModelControl};
 use agentelier_account::CredentialClient;
 use agentelier_conversation::{
-    AgentIdentity, AgentRuntimeId, AgentState, Conversation, ConversationEvent,
+    AgentIdentity, AgentMessage, AgentRuntimeId, AgentState, Conversation, ConversationEvent,
     ConversationFailure, ConversationRequest, MessageClaim, PreparedChild, RecordEvent,
     SessionView, TurnId, TurnStatus,
 };
@@ -86,6 +86,7 @@ pub(super) struct Execution {
     pub(super) commands: mpsc::Receiver<Preparation>,
     pub(super) mailbox: tokio::sync::watch::Receiver<u64>,
     pub(super) claims: Vec<MessageClaim>,
+    pub(super) assignment: AgentMessage,
     pub(super) mailbox_commands: mpsc::Sender<super::mailbox::Command>,
 }
 
@@ -96,6 +97,8 @@ pub(super) struct FinishedChild {
     pub(super) output: Option<ProtocolArchive>,
     pub(super) consumed: Vec<MessageClaim>,
     pub(super) residence: Option<Box<Conversation>>,
+    pub(super) assignment: Box<AgentMessage>,
+    pub(super) result: Option<(TurnId, String)>,
 }
 
 impl Execution {
@@ -103,16 +106,22 @@ impl Execution {
         let identity = self.identity.clone();
         let instance = self.instance;
         let claims = self.claims.clone();
+        let assignment = Box::new(self.assignment.clone());
         let result = self.execute().await;
-        let (state, output, residence, consumed) = match result {
-            Ok((state, output, conversation)) => {
-                (state, output, Some(Box::new(conversation)), claims)
-            }
+        let (state, output, residence, consumed, result) = match result {
+            Ok((state, output, conversation, turn, text)) => (
+                state,
+                output,
+                Some(Box::new(conversation)),
+                claims,
+                Some((turn, text)),
+            ),
             Err(failure) => (
                 AgentState::Failed(failure.to_string()),
                 None,
                 None,
                 Vec::new(),
+                None,
             ),
         };
         FinishedChild {
@@ -122,12 +131,23 @@ impl Execution {
             output,
             consumed,
             residence,
+            assignment,
+            result,
         }
     }
 
     async fn execute(
         mut self,
-    ) -> Result<(AgentState, Option<ProtocolArchive>, Conversation), super::RuntimeFailure> {
+    ) -> Result<
+        (
+            AgentState,
+            Option<ProtocolArchive>,
+            Conversation,
+            TurnId,
+            String,
+        ),
+        super::RuntimeFailure,
+    > {
         let store = self.store.for_agent(&self.identity);
         let ChildTurn {
             mut conversation,
@@ -234,6 +254,9 @@ impl Execution {
             return Err(ConversationFailure::new("子 Agent Runner 缺少轮次终态").into());
         };
         cleanup?;
+        if view.execution_blocked {
+            return Err(ConversationFailure::new("子 Agent 会话的执行或结果提交未确认").into());
+        }
         let (state, history) = conversation
             .archive()
             .ok_or_else(|| ConversationFailure::new("子 Agent 完成后缺少历史"))?;
@@ -252,14 +275,40 @@ impl Execution {
             .ok_or_else(|| ConversationFailure::new("子 Agent 缺少已完成轮次"))?;
         tracing::info!(session_id = %identity.session, agent_id = %identity.id, agent_path = %identity.path, thread_id = %identity.thread, turn_id = turn.id.0, operation_id = operation, "子 Agent 轮次已存档并回收");
         let result = match turn.status {
-            TurnStatus::Completed => (AgentState::Completed, history),
-            TurnStatus::Cancelled => (AgentState::Interrupted, None),
-            TurnStatus::Failed(reason) => (AgentState::Failed(reason), None),
-            TurnStatus::Limited => (AgentState::Failed("子 Agent 达到执行预算".into()), None),
+            TurnStatus::Completed => {
+                let final_text = turn
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.phase.as_deref() == Some("final_answer"))
+                    .or_else(|| turn.messages.last())
+                    .map(|message| {
+                        message
+                            .content
+                            .iter()
+                            .map(|content| content.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .filter(|text| !text.trim().is_empty())
+                    .unwrap_or_else(|| "Child completed without a text response.".into());
+                (AgentState::Completed, history, final_text)
+            }
+            TurnStatus::Cancelled => (
+                AgentState::Interrupted,
+                None,
+                "Child task was interrupted.".into(),
+            ),
+            TurnStatus::Failed(reason) => (AgentState::Failed(reason.clone()), None, reason),
+            TurnStatus::Limited => (
+                AgentState::Failed("子 Agent 达到执行预算".into()),
+                None,
+                "Child exceeded its execution budget.".into(),
+            ),
             TurnStatus::Running => {
                 return Err(ConversationFailure::new("子 Agent 收到非终态").into());
             }
         };
-        Ok((result.0, result.1, conversation))
+        Ok((result.0, result.1, conversation, turn.id, result.2))
     }
 }

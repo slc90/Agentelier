@@ -1,4 +1,6 @@
-use crate::{AgentId, AgentIdentity, ConversationFailure, SessionId, TurnId};
+use crate::{
+    AgentId, AgentIdentity, AgentPath, AgentState, ConversationFailure, SessionId, TurnId,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -41,10 +43,37 @@ pub struct AgentMessage {
     pub call_id: String,
     pub mode: DeliveryMode,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion: Option<TaskCompletion>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskCompletion {
+    pub task: AgentMessageId,
+    pub assigned_by: AgentId,
+    pub path: AgentPath,
+    pub agent_turn: TurnId,
+    pub state: AgentState,
+    pub assignment: String,
 }
 
 impl AgentMessage {
     pub fn render(&self) -> String {
+        if let Some(completion) = &self.completion {
+            return format!(
+                "Task result from {} (Agent {}, Turn {}, task {} assigned by Agent {} in Turn {}, call {}). Status: {}.\nAssignment:\n{}\nResult:\n{}",
+                completion.path,
+                self.sender,
+                completion.agent_turn.0,
+                completion.task,
+                completion.assigned_by,
+                self.turn.0,
+                self.call_id,
+                completion.state.name(),
+                completion.assignment,
+                self.text
+            );
+        }
         format!(
             "Message from collaborating Agent {} (message {}, source Turn {}):\n{}",
             self.sender, self.id, self.turn.0, self.text
@@ -62,6 +91,8 @@ pub struct MessageClaim {
     pub receiver: AgentId,
     pub message: AgentMessageId,
     pub turn: TurnId,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wake: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -120,12 +151,17 @@ impl Mailboxes {
     }
 
     pub fn next_for_turn(&self, receiver: AgentId, turn: TurnId) -> Option<&MailboxEntry> {
+        self.next_input(receiver, turn, false)
+    }
+
+    fn next_input(&self, receiver: AgentId, turn: TurnId, wake: bool) -> Option<&MailboxEntry> {
         self.messages
             .values()
             .filter(|entry| {
                 entry.message.receiver == receiver
                     && !matches!(entry.status, MessageStatus::Consumed(_))
                     && entry.status != MessageStatus::Claimed(turn)
+                    && (!wake || entry.message.completion.is_none())
             })
             .min_by_key(|entry| entry.queued_at)
     }
@@ -147,6 +183,7 @@ impl Mailboxes {
             .filter(|entry| {
                 entry.message.receiver == receiver
                     && !matches!(entry.status, MessageStatus::Consumed(_))
+                    && entry.message.completion.is_none()
             })
             .collect();
         pending.sort_unstable_by_key(|entry| entry.queued_at);
@@ -200,12 +237,43 @@ impl Mailboxes {
                 {
                     return Err(ConversationFailure::new("消息缺少有效身份、来源或正文"));
                 }
+                if let Some(completion) = &message.completion {
+                    let valid = message.mode == DeliveryMode::QueueOnly
+                        && completion.agent_turn.0 > 0
+                        && matches!(
+                            completion.state,
+                            AgentState::Completed | AgentState::Interrupted | AgentState::Failed(_)
+                        )
+                        && self.find(completion.task).is_some_and(|entry| {
+                            entry.message.receiver == message.sender
+                                && entry.message.sender == completion.assigned_by
+                                && entry.message.mode == DeliveryMode::TriggerTurn
+                                && entry.message.turn == message.turn
+                                && entry.message.call_id == message.call_id
+                                && entry.message.text == completion.assignment
+                        })
+                        && !self.messages.values().any(|entry| {
+                            entry.message.sender == message.sender
+                                && entry
+                                    .message
+                                    .completion
+                                    .as_ref()
+                                    .is_some_and(|prior| prior.agent_turn == completion.agent_turn)
+                        });
+                    if valid {
+                        return Ok(None);
+                    }
+                    return Err(ConversationFailure::new(
+                        "子 Agent 完成结果缺少唯一的任务来源",
+                    ));
+                }
                 let pending = self
                     .messages
                     .values()
                     .filter(|entry| {
                         entry.message.receiver == message.receiver
                             && !matches!(entry.status, MessageStatus::Consumed(_))
+                            && entry.message.completion.is_none()
                     })
                     .count();
                 if pending >= MAX_PENDING_PER_AGENT {
@@ -215,7 +283,7 @@ impl Mailboxes {
             MailboxEvent::Claimed { claim } => {
                 if claim.turn.0 == 0
                     || !self
-                        .next_for_turn(claim.receiver, claim.turn)
+                        .next_input(claim.receiver, claim.turn, claim.wake)
                         .is_some_and(|entry| {
                             entry.message.id == claim.message
                                 && entry.status == MessageStatus::Pending

@@ -86,6 +86,8 @@ pub enum RecordEvent {
         request: Option<Box<agentelier_llm_model::RequestProjection>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<agentelier_llm_model::ProtocolArchive>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delivery: Option<Box<crate::AgentMessage>>,
     },
     AgentStopRequested {
         session: SessionId,

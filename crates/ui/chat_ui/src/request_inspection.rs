@@ -149,6 +149,7 @@ fn order(request: &ChatRequest) -> String {
         let description = match item {
             ChatHistoryItem::Project { publication } => format!("user · 自动项目 P{publication}"),
             ChatHistoryItem::User => "user · 用户输入".into(),
+            ChatHistoryItem::AgentResult => "Agent 协作结果".into(),
             ChatHistoryItem::Assistant { phase } => format!("assistant · {phase:?}"),
             ChatHistoryItem::FunctionCall { call_id, name } => {
                 format!("function_call · {name} · {call_id}")
