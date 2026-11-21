@@ -37,6 +37,12 @@ struct Geometry {
 
 pub struct Capture {
     image: ImagePayload,
+    mapping: CaptureMapping,
+}
+
+#[derive(Clone)]
+pub(crate) struct CaptureMapping {
+    size: (u32, u32),
     geometry: Geometry,
 }
 
@@ -50,18 +56,40 @@ impl Capture {
     }
 
     pub fn screen_bounds(&self) -> ScreenRect {
-        self.geometry.region
+        self.mapping.screen_bounds()
     }
 
     pub fn window_bounds(&self) -> Option<ScreenRect> {
-        self.geometry.target.map(|(_, bounds)| bounds)
+        self.mapping.window_bounds()
     }
 
     pub fn screen_point(&self, pixel: ScreenshotPixel) -> Result<ScreenPoint, ToolFailure> {
+        self.mapping.screen_point(pixel)
+    }
+
+    pub fn window_point(&self, pixel: ScreenshotPixel) -> Result<WindowPoint, ToolFailure> {
+        self.mapping.window_point(pixel)
+    }
+
+    pub(crate) fn into_parts(self) -> (ImagePayload, CaptureMapping) {
+        (self.image, self.mapping)
+    }
+}
+
+impl CaptureMapping {
+    pub(crate) fn screen_bounds(&self) -> ScreenRect {
+        self.geometry.region
+    }
+
+    pub(crate) fn window_bounds(&self) -> Option<ScreenRect> {
+        self.geometry.target.map(|(_, bounds)| bounds)
+    }
+
+    pub(crate) fn screen_point(&self, pixel: ScreenshotPixel) -> Result<ScreenPoint, ToolFailure> {
         if geometry(self.geometry.target.map(|(id, _)| id))? != self.geometry {
             return Err(geometry_changed());
         }
-        let (width, height) = self.image.dimensions();
+        let (width, height) = self.size;
         if pixel.x >= width || pixel.y >= height {
             return Err(outside_capture());
         }
@@ -82,7 +110,7 @@ impl Capture {
         }
     }
 
-    pub fn window_point(&self, pixel: ScreenshotPixel) -> Result<WindowPoint, ToolFailure> {
+    pub(crate) fn window_point(&self, pixel: ScreenshotPixel) -> Result<WindowPoint, ToolFailure> {
         let bounds = self.window_bounds().ok_or_else(|| {
             ToolFailure::new("window_capture_required", "只有窗口截图具有窗口局部坐标")
         })?;
@@ -155,8 +183,11 @@ fn capture(target: Option<WindowId>) -> Result<Capture, ToolFailure> {
         return Err(geometry_changed());
     }
     Ok(Capture {
+        mapping: CaptureMapping {
+            size: image.dimensions(),
+            geometry: before,
+        },
         image,
-        geometry: before,
     })
 }
 

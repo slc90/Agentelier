@@ -5,6 +5,7 @@ use winsafe::{DwmAttr, HWND, co};
 
 mod capture;
 mod input;
+pub(crate) use capture::CaptureMapping;
 pub use capture::{
     Capture, ScreenPoint, ScreenshotPixel, WindowPoint, capture_desktop, capture_window,
     window_to_screen,
@@ -26,6 +27,20 @@ pub struct WindowId {
 impl WindowId {
     pub fn handle(self) -> usize {
         self.handle
+    }
+
+    pub(crate) fn token(self) -> String {
+        format!("{:x}:{}:{}", self.handle, self.process, self.thread)
+    }
+
+    pub(crate) fn from_token(token: &str) -> Option<Self> {
+        let (handle, owner) = token.split_once(':')?;
+        let (process, thread) = owner.split_once(':')?;
+        Some(Self {
+            handle: usize::from_str_radix(handle, 16).ok()?,
+            process: process.parse().ok()?,
+            thread: thread.parse().ok()?,
+        })
     }
 
     fn read(window: &HWND) -> Self {

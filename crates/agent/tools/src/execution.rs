@@ -74,7 +74,7 @@ pub enum ToolStatus {
     NotExecuted,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ToolFailure {
     pub code: &'static str,
     message: String,

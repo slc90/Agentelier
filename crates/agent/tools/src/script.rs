@@ -1,4 +1,6 @@
-use crate::{ImagePayload, ToolFailure};
+mod computer;
+
+use crate::{ImagePayload, ToolFailure, desktop::CaptureMapping};
 use rhai::{AST, Dynamic, Engine, Scope};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -30,6 +32,7 @@ struct ScriptState {
     engine: Engine,
     scope: Scope<'static>,
     functions: AST,
+    observed: Option<CaptureMapping>,
 }
 
 impl Default for ScriptState {
@@ -44,10 +47,12 @@ impl Default for ScriptState {
             .set_max_string_size(MAX_STRING_BYTES)
             .set_max_array_size(MAX_COLLECTION_SIZE)
             .set_max_map_size(MAX_COLLECTION_SIZE);
+        computer::register(&mut engine);
         Self {
             engine,
             scope: Scope::new(),
             functions: AST::empty(),
+            observed: None,
         }
     }
 }
@@ -109,13 +114,23 @@ impl ScriptState {
                     .map(|error| Dynamic::from(error.code))
             });
 
+        let desktop = Arc::new(Mutex::new(computer::Run::new(
+            control.clone(),
+            self.observed.clone(),
+        )));
+        self.engine.set_default_tag(Dynamic::from(desktop.clone()));
         let result = self
             .engine
             .eval_ast_with_scope::<Dynamic>(&mut self.scope, &program);
+        self.engine.set_default_tag(Dynamic::UNIT);
+        let (mapping, image) = desktop
+            .lock()
+            .map_err(|error| ToolFailure::new("desktop_input_cleanup", error.to_string()))?
+            .finish()?;
         control.check()?;
-        let value = result
-            .map_err(|error| ToolFailure::new("script_evaluation_failed", error.to_string()))?;
+        let value = result.map_err(|error| computer::script_failure(&error))?;
         self.functions = program.clone_functions_only();
+        self.observed = mapping;
 
         let mut output = output
             .lock()
@@ -125,7 +140,7 @@ impl ScriptState {
         }
         Ok(ScriptOutput {
             text: std::mem::take(&mut output),
-            image: None,
+            image,
         })
     }
 }

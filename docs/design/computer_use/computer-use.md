@@ -1,6 +1,6 @@
 # Computer Use 设计
 
-实施状态：Windows Driver 和可独立运行的 Rhai 脚本会话已实现。后续能力见[实施方案总览](../../../plans/computer-use/00-overview.md)。
+实施状态：Windows Driver、持续 Rhai 会话和 Rhai Computer API 已实现。后续能力见[实施方案总览](../../../plans/computer-use/00-overview.md)。
 
 Computer Use 让 Agentelier 中的模型直接操作当前 Windows 桌面上的应用。模型通过普通 Responses Function Calling 提交 Rhai 脚本；Agentelier 在本地解释脚本，由 Rust 提供的 Computer API 调用 Windows 桌面能力，再把执行结果和截图作为工具结果反馈给模型。
 
@@ -91,6 +91,18 @@ Rust 侧使用 Win32 枚举显示器，按所有显示器的并集确定桌面�
 输入状态由 Driver 跟踪。脚本正常结束、取消或任务退出时，Driver 只释放自己在本次执行中按下且尚未释放的按键和鼠标按钮，避免残留状态影响后续操作，也不盲目释放用户原本持有的输入状态。
 
 ## Computer API 连接 Rhai 与 Driver
+
+Rhai 原生函数通过当前执行上下文访问 Driver。窗口引用使用 `windows()` 返回的 `id` 字符串，随每次操作核对窗口身份。
+
+| 操作 | Rhai 接口 |
+| --- | --- |
+| 窗口观察与激活 | `windows()`、`window(id)`、`activate(id)` |
+| 截图与坐标 | `capture_desktop()`、`capture_window(id)`、`screen_at(x, y)`、`window_at(x, y)` |
+| 指针和按钮 | `mouse_position()`、`mouse_move(x, y)`、`mouse_move(id, x, y)`、`mouse_down(button)`、`mouse_up(button)`、`click(button)`、`double_click(button)` |
+| 滚动与拖动 | `scroll(axis, detents)`、`drag(button, [x1,y1], [x2,y2])`、`trajectory(button, [[x,y,dt], …])`。拖动和轨迹可在首参数传窗口 `id`，使用窗口局部坐标。 |
+| 键盘和等待 | `key_down(name)`、`key_up(name)`、`press(name)`、`shortcut([name, …])`、`type_text(text)`、`wait(ms)` |
+
+`screen_at` 和 `window_at` 将最近一次截图的像素转换为物理屏幕坐标和窗口局部坐标，可以在后续调用中使用。脚本执行器交付本次最后一张截图，其他返回值和 `print` 作为文字。Driver 错误可用 `try/catch` 捕获并读取 `code` 与 `message`，未处理的错误由外层接收。每次调用实际退出前释放脚本持有的输入。
 
 Computer API 将 Driver 能力注册到 Rhai，作为模型脚本唯一的桌面操作入口。模型不直接接触 Win32 原始对象、COM 对象或窗口句柄生命周期。
 
