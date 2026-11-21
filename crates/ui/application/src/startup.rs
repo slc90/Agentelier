@@ -102,10 +102,7 @@ fn run_application(
     if config.brp_enabled {
         app.add_plugins(BrpRuntimePlugin::with_port(config.brp_port));
     }
-    let source_config = config_store.clone();
-    let host_plugin = AgentHostPlugin::new(config.codex_auth_file, move |path| {
-        source_config.remember_codex_source(path)
-    });
+    let host_plugin = AgentHostPlugin::default();
     let backend = host_plugin.host();
     app.insert_resource(config_store)
         .add_plugins((AppAssetPlugin, WidgetryWindowPlugin, host_plugin, login_ui))

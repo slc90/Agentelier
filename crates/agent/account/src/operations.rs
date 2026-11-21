@@ -1,6 +1,9 @@
 use crate::credentials::{CredentialClient, CredentialIntent};
-use crate::source::{AccountSource, SourceChange, SourceSettings};
-use agentelier_login::{SessionFailure, UsableCredentials};
+use crate::source::AccountSource;
+use agentelier_login::{
+    BrowserLogin, CodexOAuthCredentials, CredentialStore, DataEnvironment, SessionFailure,
+    UsableCredentials,
+};
 use std::{error::Error, fmt};
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -10,7 +13,13 @@ pub struct AccountEvent {
     pub kind: AccountEventKind,
 }
 
+pub struct LoginPrompt {
+    pub authorization_url: String,
+    pub browser_error: Option<String>,
+}
+
 pub enum AccountEventKind {
+    LoginWaiting(LoginPrompt),
     SourceSettling,
     SourceChanged(Result<AccountSource, String>),
 }
@@ -21,6 +30,7 @@ pub enum DeliveryFailure {
     Full,
     Wake,
 }
+
 #[derive(Debug)]
 pub enum AccountFailure {
     Busy,
@@ -31,14 +41,15 @@ pub enum AccountFailure {
     Disconnected,
     SourceSettling,
 }
+
 impl fmt::Display for AccountFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Busy => f.write_str("认证后台命令队列已满"),
             Self::Closed => f.write_str("认证后台已停止接收命令"),
-            Self::Task => f.write_str("认证文件任务异常结束"),
+            Self::Task => f.write_str("认证后台任务异常结束"),
             Self::CredentialState => f.write_str("凭据共享请求状态锁已损坏"),
-            Self::Disconnected => f.write_str("请选择有效的 Codex 凭据文件"),
+            Self::Disconnected => f.write_str("请先使用 ChatGPT 登录"),
             Self::SourceSettling => f.write_str("正在回收旧账号的任务并保存待办"),
             Self::Delivery(DeliveryFailure::Closed) => f.write_str("认证结果接收端已关闭"),
             Self::Delivery(DeliveryFailure::Full) => f.write_str("认证结果队列已满"),
@@ -51,8 +62,8 @@ impl fmt::Display for AccountFailure {
 impl Error for AccountFailure {}
 
 pub enum AccountCommand {
-    ChangeSource(u64, SourceChange),
     ReadSource,
+    CompleteLogin(u64, Result<CodexOAuthCredentials, String>),
     Credentials {
         current: CancellationToken,
         intent: CredentialIntent,
@@ -62,21 +73,19 @@ pub enum AccountCommand {
 
 pub struct Account {
     credentials: CredentialClient,
-    source: SourceSettings,
+    store: CredentialStore,
+    current: Option<CodexOAuthCredentials>,
     snapshot: Option<AccountSource>,
 }
 
 impl Account {
-    pub fn new(credentials: CredentialClient, source: SourceSettings) -> Self {
+    pub fn new(credentials: CredentialClient, environment: DataEnvironment) -> Self {
         Self {
             credentials,
-            source,
+            store: CredentialStore::new(environment),
+            current: None,
             snapshot: None,
         }
-    }
-
-    pub fn codex_selected(&self) -> bool {
-        self.source.codex_selected()
     }
 
     pub fn codex_identity(&self) -> Option<&crate::CodexIdentity> {
@@ -85,35 +94,74 @@ impl Account {
             .and_then(AccountSource::codex_identity)
     }
 
+    pub async fn browser_login(
+        cancellation: &CancellationToken,
+        prompt: impl FnOnce(LoginPrompt),
+    ) -> Result<CodexOAuthCredentials, String> {
+        let login = BrowserLogin::start()
+            .await
+            .map_err(|failure| failure.to_string())?;
+        let browser_error = tokio::select! { biased;
+            () = cancellation.cancelled() => return Err("已取消浏览器登录".into()),
+            opened = login.open_browser() => opened.err().map(|failure| failure.to_string()),
+        };
+        prompt(LoginPrompt {
+            authorization_url: login.authorization_url().to_owned(),
+            browser_error,
+        });
+        login
+            .complete(cancellation)
+            .await
+            .map_err(|failure| failure.to_string())
+    }
+
     pub async fn handle(
         &mut self,
         command: AccountCommand,
     ) -> Result<Option<AccountEvent>, AccountFailure> {
-        let mut source = self.source.clone();
         match command {
-            AccountCommand::ChangeSource(id, change) => {
-                let (updated, result) = tokio::task::spawn_blocking(move || {
-                    let result = source.change(change).map(|()| source.read());
-                    (source, result)
-                })
-                .await
-                .map_err(|_| AccountFailure::Task)?;
-                match result {
-                    Ok(snapshot) => {
-                        self.source = updated;
-                        self.observe(id, snapshot)
-                    }
-                    Err(_) => Ok(Some(AccountEvent {
-                        operation_id: id,
-                        kind: AccountEventKind::SourceChanged(Err("无法保存当前凭据来源".into())),
-                    })),
-                }
-            }
             AccountCommand::ReadSource => {
-                let snapshot = tokio::task::spawn_blocking(move || source.read())
+                let store = self.store.clone();
+                let loaded = tokio::task::spawn_blocking(move || store.load())
                     .await
                     .map_err(|_| AccountFailure::Task)?;
-                self.observe(0, snapshot)
+                let snapshot = match loaded {
+                    Ok(credentials) => {
+                        self.current = credentials;
+                        self.current
+                            .as_ref()
+                            .map_or(AccountSource::Disconnected, |current| {
+                                AccountSource::Codex(current.summary().clone())
+                            })
+                    }
+                    Err(failure) => AccountSource::Unavailable(failure.to_string()),
+                };
+                self.observe(0, snapshot, false)
+            }
+            AccountCommand::CompleteLogin(id, result) => {
+                let result = match result {
+                    Ok(credentials) => {
+                        let store = self.store.clone();
+                        tokio::task::spawn_blocking(move || {
+                            store.save(&credentials).map(|()| credentials)
+                        })
+                        .await
+                        .map_err(|_| AccountFailure::Task)?
+                        .map_err(|failure| failure.to_string())
+                    }
+                    Err(failure) => Err(failure),
+                };
+                match result {
+                    Ok(credentials) => {
+                        let snapshot = AccountSource::Codex(credentials.summary().clone());
+                        self.current = Some(credentials);
+                        self.observe(id, snapshot, true)
+                    }
+                    Err(failure) => Ok(Some(AccountEvent {
+                        operation_id: id,
+                        kind: AccountEventKind::SourceChanged(Err(failure)),
+                    })),
+                }
             }
             AccountCommand::Credentials {
                 current,
@@ -126,28 +174,52 @@ impl Account {
                     ))));
                     return Ok(None);
                 }
-                let (snapshot, outcome) =
-                    tokio::task::spawn_blocking(move || source.acquire(intent))
-                        .await
-                        .map_err(|_| AccountFailure::Task)?;
-                let event = self.observe(0, snapshot)?;
+                let Some(credentials) = self.current.as_ref() else {
+                    result.send_replace(Some(Err(SessionFailure::new("请先使用 ChatGPT 登录"))));
+                    return Ok(None);
+                };
+                let mut summary = credentials.summary().clone();
+                let outcome = self.acquire(credentials, intent);
+                if let Ok(expired) = credentials.is_expired() {
+                    summary.expired = expired;
+                }
+                let event = self.observe(0, AccountSource::Codex(summary), false)?;
                 result.send_replace(Some(outcome));
                 Ok(event)
             }
         }
     }
 
+    fn acquire(
+        &self,
+        credentials: &CodexOAuthCredentials,
+        intent: CredentialIntent,
+    ) -> Result<UsableCredentials, SessionFailure> {
+        let current = UsableCredentials::from_oauth(credentials)?;
+        if let CredentialIntent::Recover(rejected) = intent {
+            if rejected.identity() != current.version().identity() {
+                return Err(SessionFailure::new(
+                    "Codex 凭据的账号或工作区已变化，原请求已停止",
+                ));
+            }
+            if &rejected == current.version() {
+                return Err(SessionFailure::new("Codex OAuth 凭据未更新，请重新登录"));
+            }
+        }
+        Ok(current)
+    }
+
     fn observe(
         &mut self,
         operation_id: u64,
         snapshot: AccountSource,
+        new_login: bool,
     ) -> Result<Option<AccountEvent>, AccountFailure> {
         let previous = self.snapshot.as_ref();
-        let replaced = previous.is_some_and(|old| {
-            old.path() != snapshot.path() || old.codex_identity() != snapshot.codex_identity()
-        });
+        let replaced = new_login
+            || previous.is_some_and(|old| old.codex_identity() != snapshot.codex_identity());
         self.credentials
-            .update_source(self.source.codex_selected(), replaced)?;
+            .update_source(matches!(snapshot, AccountSource::Codex(_)), replaced)?;
         if operation_id == 0 && previous == Some(&snapshot) {
             return Ok(None);
         }

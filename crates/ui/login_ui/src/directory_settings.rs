@@ -6,8 +6,8 @@ use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
 use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::file_dialog::{
-    WidgetryFileDialog, WidgetryFileDialogFilter, WidgetryFileDialogFilterId,
-    WidgetryFileDialogMode, WidgetryFileDialogResult, WidgetryFileDialogResultEvent,
+    WidgetryFileDialog, WidgetryFileDialogMode, WidgetryFileDialogResult,
+    WidgetryFileDialogResultEvent,
 };
 use bevy_widgetry::job::{
     JobId, JobManager, JobOptions, JobOutcome, JobRead, JobReceiver, SendStatus,
@@ -48,7 +48,6 @@ enum View {
     Home,
     Settings,
     Choosing(u64),
-    CodexPicker,
 }
 
 #[derive(Component, Clone, Copy)]
@@ -228,66 +227,9 @@ fn render(world: &mut World) -> Result {
                 on(selected)
             ]
         }).id(),
-        View::CodexPicker => {
-            let initial_directory = account.codex.as_ref()
-                .and_then(|source| source.path.parent())
-                .map(std::path::Path::to_path_buf)
-                .unwrap_or(current);
-            world.commands().spawn_scene_with_error_handler(bsn! {
-                Name("CodexCredentialSelection") ChildOf(host)
-                Node { width: percent(100), height: percent(100), flex_direction: FlexDirection::Column, align_items: AlignItems::Start, padding: UiRect::all(px(PANEL_PADDING)), row_gap: px(FIELD_GAP) }
-                Children [
-                    @button("返回主界面", "CodexCredentialBack", Action::Home, false)--
-                    Text("选择 Codex 的 auth.json") WidgetryText--
-                    @WidgetryFileDialog {
-                        @mode: WidgetryFileDialogMode::PickFile,
-                        @initial_directory: {Some(initial_directory)},
-                        @filters: {vec![WidgetryFileDialogFilter {
-                            id: WidgetryFileDialogFilterId("codex-json".into()),
-                            label: "JSON".into(),
-                            suffixes: vec!["json".into()],
-                            default_extension: None,
-                        }]},
-                    }
-                    Name("CodexCredentialPicker")
-                    Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }
-                    on(codex_selected)
-                ]
-            }).id()
-        }
     };
     world.resource_mut::<DirectorySettings>().screen = Some(screen);
     Ok(())
-}
-
-pub(crate) fn pick_codex(world: &mut World) -> Result {
-    let mut state = world.resource_mut::<DirectorySettings>();
-    if !matches!(state.view, View::Home) {
-        return Ok(());
-    }
-    state.view = View::CodexPicker;
-    info!("用户打开 Codex 凭据文件选择器");
-    render(world)
-}
-
-fn codex_selected(event: On<WidgetryFileDialogResultEvent>, mut commands: Commands) {
-    let result = event.result.clone();
-    commands.queue(move |world: &mut World| -> Result {
-        let mut state = world.resource_mut::<DirectorySettings>();
-        if !matches!(state.view, View::CodexPicker) {
-            return Ok(());
-        }
-        state.view = View::Home;
-        match result {
-            WidgetryFileDialogResult::File(path) => crate::authentication::change_source(
-                world,
-                agentelier_agent_host::SourceChange::Select(path),
-            )?,
-            WidgetryFileDialogResult::Cancelled => info!("用户取消选择 Codex 凭据文件"),
-            _ => return Err(io::Error::other("Codex 凭据选择器返回了不匹配的结果类型").into()),
-        }
-        render(world)
-    });
 }
 
 fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands) -> Result {
@@ -298,9 +240,6 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
                 let mut state = world.resource_mut::<DirectorySettings>();
                 if matches!(state.view, View::Choosing(_)) {
                     info!("用户关闭目录选择，保留已保存的下次启动位置");
-                }
-                if matches!(state.view, View::CodexPicker) {
-                    info!("用户关闭 Codex 凭据文件选择器");
                 }
                 state.view = View::Home;
                 render(world)

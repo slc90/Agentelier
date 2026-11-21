@@ -1,12 +1,8 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 use std::fmt;
-use std::fs::File;
-use std::io::Read;
-use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const MAX_AUTH_BYTES: u64 = 64 * 1024;
 pub(crate) const ISSUER: &str = "https://auth.openai.com";
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Deserialize)]
@@ -23,15 +19,8 @@ pub struct CodexIdentity {
     pub workspace_id: String,
 }
 
-pub struct CodexCredentials {
-    pub summary: CodexAccountSummary,
-    pub(crate) access_token: String,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CodexReadFailure {
-    Unreadable,
-    Unsupported,
     MissingTokens,
     InvalidTokens,
     IdentityMismatch,
@@ -41,30 +30,12 @@ pub enum CodexReadFailure {
 impl fmt::Display for CodexReadFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Unreadable => "无法读取 Codex 凭据文件",
-            Self::Unsupported => "不支持此文件格式或认证方式，请选择 Codex ChatGPT OAuth 凭据",
             Self::MissingTokens => "Codex OAuth 凭据缺少必要令牌",
             Self::InvalidTokens => "Codex OAuth 令牌格式或声明无效",
             Self::IdentityMismatch => "Codex OAuth 凭据的账号或工作区标识不一致",
             Self::Clock => "无法判断 Codex OAuth 凭据是否过期",
         })
     }
-}
-
-#[derive(Deserialize)]
-struct AuthFile {
-    auth_mode: Option<String>,
-    #[serde(rename = "OPENAI_API_KEY")]
-    api_key: Option<String>,
-    tokens: Option<Tokens>,
-}
-
-#[derive(Deserialize)]
-struct Tokens {
-    id_token: Option<String>,
-    access_token: Option<String>,
-    refresh_token: Option<String>,
-    account_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -82,47 +53,6 @@ struct ChatGptClaims {
     chatgpt_account_id: String,
     chatgpt_user_id: Option<String>,
     user_id: Option<String>,
-}
-
-pub fn read_codex_credentials(path: &Path) -> Result<CodexCredentials, CodexReadFailure> {
-    if !path.is_absolute() || !path.metadata().is_ok_and(|metadata| metadata.is_file()) {
-        return Err(CodexReadFailure::Unreadable);
-    }
-    let file = File::open(path).map_err(|_| CodexReadFailure::Unreadable)?;
-    let mut bytes = Vec::new();
-    file.take(MAX_AUTH_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| CodexReadFailure::Unreadable)?;
-    if bytes.len() as u64 > MAX_AUTH_BYTES {
-        return Err(CodexReadFailure::Unsupported);
-    }
-    let file: AuthFile =
-        serde_json::from_slice(&bytes).map_err(|_| CodexReadFailure::Unsupported)?;
-    if !matches!(file.auth_mode.as_deref(), Some("chatgpt") | None)
-        || file.api_key.is_some_and(|key| !key.is_empty())
-    {
-        return Err(CodexReadFailure::Unsupported);
-    }
-    let tokens = file.tokens.ok_or(match file.auth_mode {
-        Some(_) => CodexReadFailure::MissingTokens,
-        None => CodexReadFailure::Unsupported,
-    })?;
-    let access_token = tokens.access_token.ok_or(CodexReadFailure::MissingTokens)?;
-    let (summary, _) = summarize_tokens(
-        required_token(tokens.id_token.as_deref())?,
-        &access_token,
-        required_token(tokens.refresh_token.as_deref())?,
-    )?;
-    if tokens
-        .account_id
-        .is_some_and(|account| account != summary.identity.workspace_id)
-    {
-        return Err(CodexReadFailure::IdentityMismatch);
-    }
-    Ok(CodexCredentials {
-        summary,
-        access_token,
-    })
 }
 
 pub(crate) fn summarize_tokens(

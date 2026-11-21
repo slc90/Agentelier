@@ -1,11 +1,9 @@
-use std::{error::Error, fmt, path::PathBuf};
+use std::{error::Error, fmt};
 
 pub enum SourceSnapshot {
     Disconnected,
-    Codex {
-        path: PathBuf,
-        status: Result<CodexSummary, String>,
-    },
+    Codex(CodexSummary),
+    Unavailable(String),
 }
 
 pub struct CodexSummary {
@@ -16,6 +14,10 @@ pub struct CodexSummary {
 }
 
 pub enum AccountEventKind {
+    LoginWaiting {
+        authorization_url: String,
+        browser_error: Option<String>,
+    },
     SourceSettling,
     SourceChanged(Result<SourceSnapshot, BridgeFailure>),
 }
@@ -31,6 +33,12 @@ impl Error for BridgeFailure {}
 
 pub fn convert(kind: agentelier_account::AccountEventKind) -> AccountEventKind {
     match kind {
+        agentelier_account::AccountEventKind::LoginWaiting(prompt) => {
+            AccountEventKind::LoginWaiting {
+                authorization_url: prompt.authorization_url,
+                browser_error: prompt.browser_error,
+            }
+        }
         agentelier_account::AccountEventKind::SourceSettling => AccountEventKind::SourceSettling,
         agentelier_account::AccountEventKind::SourceChanged(result) => {
             AccountEventKind::SourceChanged(result.map(convert_source).map_err(BridgeFailure))
@@ -41,16 +49,14 @@ pub fn convert(kind: agentelier_account::AccountEventKind) -> AccountEventKind {
 fn convert_source(source: agentelier_account::AccountSource) -> SourceSnapshot {
     match source {
         agentelier_account::AccountSource::Disconnected => SourceSnapshot::Disconnected,
-        agentelier_account::AccountSource::Codex { path, status } => SourceSnapshot::Codex {
-            path,
-            status: status
-                .map(|summary| CodexSummary {
-                    subject: summary.identity.subject,
-                    workspace_id: summary.identity.workspace_id,
-                    email: summary.email,
-                    expired: summary.expired,
-                })
-                .map_err(|failure| failure.to_string()),
-        },
+        agentelier_account::AccountSource::Codex(summary) => SourceSnapshot::Codex(CodexSummary {
+            subject: summary.identity.subject,
+            workspace_id: summary.identity.workspace_id,
+            email: summary.email,
+            expired: summary.expired,
+        }),
+        agentelier_account::AccountSource::Unavailable(failure) => {
+            SourceSnapshot::Unavailable(failure)
+        }
     }
 }

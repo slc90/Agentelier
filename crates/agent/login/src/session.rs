@@ -1,4 +1,4 @@
-use crate::{CodexCredentials, CodexIdentity, CodexOAuthCredentials};
+use crate::{CodexIdentity, CodexOAuthCredentials};
 use sha2::{Digest, Sha256};
 use std::{error::Error, fmt};
 
@@ -38,15 +38,6 @@ pub struct UsableCredentials {
 }
 
 impl UsableCredentials {
-    pub fn from_codex(file: CodexCredentials) -> Result<Self, SessionFailure> {
-        if file.summary.expired {
-            return Err(SessionFailure::new(
-                "Codex 外部凭据已过期，请在 Codex 中恢复授权",
-            ));
-        }
-        Ok(Self::new(file.summary.identity, file.access_token))
-    }
-
     pub fn from_oauth(credentials: &CodexOAuthCredentials) -> Result<Self, SessionFailure> {
         if credentials
             .is_expired()

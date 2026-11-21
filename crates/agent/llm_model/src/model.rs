@@ -1,5 +1,5 @@
 use agentelier_account::{
-    AuthenticatedRequest, CredentialClient, ExecutionIdentity, UsableCredentials,
+    AuthenticatedRequest, CODEX_ORIGINATOR, CredentialClient, ExecutionIdentity, UsableCredentials,
 };
 use agentelier_tools::ToolContract;
 use reqwest::{Client, RequestBuilder, Response};
@@ -45,6 +45,7 @@ pub(super) fn authorize(
 ) -> RequestBuilder {
     request
         .bearer_auth(credentials.access_token())
+        .header("originator", CODEX_ORIGINATOR)
         .header(
             "ChatGPT-Account-Id",
             &credentials.version().identity().workspace_id,

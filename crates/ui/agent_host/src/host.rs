@@ -1,20 +1,18 @@
 use agentelier_account_bridge::AccountEventKind;
-use agentelier_bridge_connection::{
-    BridgeEventKind, BridgeFailure, Connection, SourceChange, SourceSettings,
-};
+use agentelier_bridge_connection::{BridgeEventKind, BridgeFailure, Connection, DataEnvironment};
 use agentelier_conversation_bridge::SessionId;
 use agentelier_llm_model_bridge::ModelEventKind;
 use bevy::prelude::*;
 use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tracing::debug;
 
 const MAX_EVENTS_PER_UPDATE: usize = 32;
 
-#[derive(Resource, Clone)]
-pub struct AgentHost(Arc<Mutex<HostState>>, SourceSettings);
+#[derive(Resource, Clone, Default)]
+pub struct AgentHost(Arc<Mutex<HostState>>);
 
 #[derive(Default)]
 struct HostState {
@@ -83,23 +81,12 @@ pub struct HostFailed {
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub struct ReceiveAgentEvents;
 
+#[derive(Default)]
 pub struct AgentHostPlugin {
     host: AgentHost,
 }
 
 impl AgentHostPlugin {
-    pub fn new(
-        codex_auth_file: Option<PathBuf>,
-        save_source: impl Fn(Option<&Path>) -> io::Result<()> + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            host: AgentHost(
-                Arc::new(Mutex::new(HostState::default())),
-                SourceSettings::new(codex_auth_file, save_source),
-            ),
-        }
-    }
-
     pub fn host(&self) -> AgentHost {
         self.host.clone()
     }
@@ -129,7 +116,7 @@ impl AgentHost {
             .map_err(|_| io::Error::other("执行宿主状态锁已损坏").into())
     }
 
-    pub fn prepare(&self, path: PathBuf, proxy: &EventLoopProxyWrapper) -> Result {
+    pub fn prepare(&self, environment: DataEnvironment, proxy: &EventLoopProxyWrapper) -> Result {
         let mut state = self.state()?;
         if state.stopping || state.failed {
             return Err(io::Error::other("执行宿主已经停止").into());
@@ -140,9 +127,7 @@ impl AgentHost {
         let proxy = (**proxy).clone();
         let notify = Arc::new(move || proxy.send_event(WinitUserEvent::WakeUp).is_ok());
         let wake_window = notify.clone();
-        state.connection = Some(Connection::start(path, self.1.clone(), move || {
-            wake_window()
-        })?);
+        state.connection = Some(Connection::start(environment, move || wake_window())?);
         state.notify = Some(notify);
         debug!("共享执行连接已建立");
         Ok(())
@@ -163,8 +148,11 @@ impl AgentHost {
         action(connection).map_err(BevyError::from)
     }
 
-    pub fn change_source(&self, change: SourceChange) -> Result<u64> {
-        self.submit(|connection| connection.change_source(change))
+    pub fn begin_login(&self) -> Result<u64> {
+        self.submit(Connection::begin_login)
+    }
+    pub fn cancel_login(&self, id: u64) -> Result {
+        self.submit(|connection| connection.cancel_login(id))
     }
     pub fn request_memory(
         &self,

@@ -1,6 +1,6 @@
 # 单次模型请求
 
-模型通信位于 `agentelier_llm_model`，与串行认证所有者共用同一线程的 Tokio。网络任务通过 `agentelier_account::CredentialClient` 取得凭据，Account 按需读取 Codex 客户端管理的文件，模型任务只消费受身份约束的凭据。
+模型通信位于 `agentelier_llm_model`，与串行认证所有者共用同一线程的 Tokio。网络任务通过 `agentelier_account::CredentialClient` 取得凭据，Account 从当前登录会话交付凭据，模型任务消费受身份约束的可用凭据。
 
 ```mermaid
 sequenceDiagram
@@ -28,7 +28,7 @@ sequenceDiagram
 
 模型任务取消会丢弃自己的网络和凭据等待。主窗口在运行侧确认真实终态后结束等待。
 
-Codex OAuth 使用 `chatgpt.com/backend-api/codex/models` 和同域的 `responses`，目录请求携带 `client_version`，两类请求都携带 `ChatGPT-Account-Id` 工作区头。Codex 目录只显示服务标记为可见、支持文本且可由普通客户端执行的模型，并保留服务顺序。Codex Responses 添加顶层 `instructions` 字段，固定指令仍按原顺序进入 `input`。
+Codex OAuth 使用 `chatgpt.com/backend-api/codex/models` 和同域的 `responses`，目录请求携带 `client_version`，Codex 请求携带自有 Originator 标识和 `ChatGPT-Account-Id` 工作区头。Responses 和 Codex Images 使用同一 CredentialClient。Codex 目录只显示服务标记为可见、支持文本且可由普通客户端执行的模型，并保留服务顺序。Codex Responses 添加顶层 `instructions` 字段，固定指令仍按原顺序进入 `input`。
 
 用户从当前来源的目录显式选择 slug 后独立验证。认证恢复沿 AuthenticatedRequest 的一次恢复预算执行。恢复要求取得同一主体和工作区的新 Token 版本。HTTP 401 可在输出前触发一次同源凭据恢复。输出项或文本开始后禁止重放，请求原始字节在认证恢复期间保持固定。
 

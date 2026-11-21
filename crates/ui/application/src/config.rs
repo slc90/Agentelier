@@ -1,6 +1,6 @@
 use bevy::prelude::Resource;
 use bevy_widgetry_path_display::{display_path, simplify_path};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -21,8 +21,17 @@ pub(crate) struct AppConfig {
     pub(crate) brp_port: u16,
     #[serde(default, serialize_with = "serialize_optional_path")]
     pub(crate) data_directory: Option<PathBuf>,
-    #[serde(default, serialize_with = "serialize_optional_path")]
-    pub(crate) codex_auth_file: Option<PathBuf>,
+    #[serde(
+        default,
+        rename = "codex_auth_file",
+        skip_serializing,
+        deserialize_with = "ignore_legacy_codex_file"
+    )]
+    _legacy_codex_auth_file: (),
+}
+
+fn ignore_legacy_codex_file<'de, D: Deserializer<'de>>(deserializer: D) -> Result<(), D::Error> {
+    Option::<PathBuf>::deserialize(deserializer).map(drop)
 }
 
 fn serialize_optional_path<S: Serializer>(
@@ -42,7 +51,7 @@ impl Default for AppConfig {
             brp_enabled: true,
             brp_port: DEFAULT_BRP_PORT,
             data_directory: None,
-            codex_auth_file: None,
+            _legacy_codex_auth_file: (),
         }
     }
 }
@@ -115,10 +124,6 @@ impl ConfigStore {
 
     pub(crate) fn remember_data_directory(&self, path: &Path) -> io::Result<()> {
         self.update(|config| config.data_directory = Some(path.to_path_buf()))
-    }
-
-    pub(crate) fn remember_codex_source(&self, path: Option<&Path>) -> io::Result<()> {
-        self.update(|config| config.codex_auth_file = path.map(Path::to_path_buf))
     }
 
     fn update(&self, change: impl FnOnce(&mut AppConfig)) -> io::Result<()> {

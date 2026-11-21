@@ -16,7 +16,6 @@ pub use host::{
 
 pub use agentelier_bridge_connection::{ConfigChange, Server, ServerId, ServerSettings, Transport};
 
-pub use agentelier_bridge_connection::SourceChange;
 pub use agentelier_bridge_connection::{ConnectionState, ConnectionStatus};
 
 pub use agentelier_bridge_connection::{

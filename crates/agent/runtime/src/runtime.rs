@@ -1,5 +1,5 @@
 use agentelier_account::{
-    Account, AccountCommand, AccountEventKind, AccountFailure, CredentialClient,
+    Account, AccountCommand, AccountEventKind, AccountFailure, CredentialClient, LoginPrompt,
 };
 use agentelier_conversation::SessionId;
 use agentelier_conversation::{
@@ -9,6 +9,7 @@ use agentelier_conversation::{
 use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
 use agentelier_memory::Memory;
 use agentelier_turn_runner::RunnerEvent;
+mod account_login;
 mod audio_task;
 mod creation;
 mod deleting;
@@ -37,7 +38,6 @@ use tracing::{debug, error};
 pub use agentelier_account::DeliveryFailure;
 
 const COMMAND_CAPACITY: usize = 4;
-const SOURCE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 const SESSION_COMMAND_CAPACITY: usize = 16;
 
 pub struct AgentEvent {
@@ -142,6 +142,9 @@ enum Command {
     ),
     Created(io::Result<agentelier_session_store::Commit>),
     Account(AccountCommand),
+    BeginLogin(u64),
+    CancelLogin(u64),
+    LoginWaiting(u64, LoginPrompt),
     Model {
         id: u64,
         control: ModelControl,
@@ -213,8 +216,7 @@ impl ModelControl {
 }
 impl AgentRuntime {
     pub fn start(
-        data_root: PathBuf,
-        source: crate::SourceSettings,
+        environment: crate::DataEnvironment,
         operations: crate::OperationSequence,
         publish: impl Fn(AgentEvent) -> Result<(), DeliveryFailure> + Send + 'static,
         finished: impl Fn() -> Result<(), DeliveryFailure> + Send + 'static,
@@ -227,15 +229,14 @@ impl AgentRuntime {
         let shutdown = CancellationToken::new();
         let runtime_shutdown = shutdown.clone();
         let credential_commands = commands.clone();
-        let credentials =
-            CredentialClient::new(shutdown.clone(), source.codex_selected(), move |command| {
-                credential_commands
-                    .try_send(Command::Account(command))
-                    .map_err(|failure| match failure {
-                        mpsc::error::TrySendError::Full(_) => AccountFailure::Busy,
-                        mpsc::error::TrySendError::Closed(_) => AccountFailure::Closed,
-                    })
-            });
+        let credentials = CredentialClient::new(shutdown.clone(), move |command| {
+            credential_commands
+                .try_send(Command::Account(command))
+                .map_err(|failure| match failure {
+                    mpsc::error::TrySendError::Full(_) => AccountFailure::Busy,
+                    mpsc::error::TrySendError::Closed(_) => AccountFailure::Closed,
+                })
+        });
         let owner_credentials = credentials.clone();
         let shared_model: SharedModel = Arc::new(Mutex::new(None));
         let owner_model = shared_model.clone();
@@ -246,6 +247,7 @@ impl AgentRuntime {
                 debug!("认证运行线程已启动");
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     runtime.block_on(async move {
+                        let data_root = environment.root().to_path_buf();
                         let store = agentelier_session_store::SessionStore::start(data_root.clone()).map_err(RuntimeFailure::Store)?;
                         let memory_root = data_root.clone();
                         let memory = tokio::task::spawn_blocking(move || Memory::open(&memory_root))
@@ -277,9 +279,8 @@ impl AgentRuntime {
                         let mut renaming: Option<renaming::Renaming> = None;
                         let mut suspending = 0usize;
                         let mut finalizing = false;
-                        let mut account = Account::new(owner_credentials.clone(), source);
-                        let mut source_check = tokio::time::interval(SOURCE_CHECK_INTERVAL);
-                        source_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                        let mut account = Account::new(owner_credentials.clone(), environment);
+                        let mut login = None;
                         let mut pending_source: Option<agentelier_account::AccountEvent> = None;
                         let mut delivery_failure = None;
                         let mut model: Option<ModelTask> = None;
@@ -290,11 +291,15 @@ impl AgentRuntime {
                         ));
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
+                            if let Some(event) = account.handle(AccountCommand::ReadSource).await? {
+                                owner_credentials.finish_source_change()?;
+                                emit(&publish, event.operation_id, AgentEventKind::Account(event.kind))?;
+                            }
                             loop {
                                 let idle_work = session_tools.as_ref().map(|(_, tools)| tools.work.clone());
                                 let command = tokio::select! { biased;
                                     _ = runtime_shutdown.cancelled() => break,
-                                    _ = source_check.tick(), if account.codex_selected() && pending_source.is_none() => Command::Account(AccountCommand::ReadSource),
+                                    update = account_login::next(&mut login), if login.is_some() => update,
                                     reply = async {
                                         match &mut material {
                                             Some(job) => (&mut job.task).await.unwrap_or_else(|_| Err("MCP 材料请求任务异常结束".into())),
@@ -858,6 +863,23 @@ impl AgentRuntime {
                                             }
                                         }
                                     }
+                                    Command::BeginLogin(id) => {
+                                        if login.is_some() {
+                                            emit(&publish, id, AgentEventKind::Account(
+                                                AccountEventKind::SourceChanged(Err("已有浏览器登录正在进行".into())),
+                                            ))?;
+                                        } else {
+                                            login = Some(account_login::LoginTask::start(id, &runtime_shutdown));
+                                        }
+                                    }
+                                    Command::CancelLogin(id) => {
+                                        if let Some(task) = &login {
+                                            task.cancel(id);
+                                        }
+                                    }
+                                    Command::LoginWaiting(id, prompt) => {
+                                        emit(&publish, id, AgentEventKind::Account(AccountEventKind::LoginWaiting(prompt)))?;
+                                    }
                                     Command::Account(command) => {
                                         let mut source_event = account.handle(command).await?;
                                         let settling = owner_credentials.source_settling()?;
@@ -908,6 +930,9 @@ impl AgentRuntime {
                             Ok::<(), RuntimeFailure>(())
                         }
                         .await;
+                        if let Some(login) = login {
+                            login.finish().await;
+                        }
                         capture_delivery(
                             stop_model(
                                 &mut model,
@@ -1078,12 +1103,11 @@ impl AgentRuntime {
             })
     }
 
-    pub fn change_source(
-        &self,
-        id: u64,
-        change: crate::SourceChange,
-    ) -> Result<(), RuntimeFailure> {
-        self.send(Command::Account(AccountCommand::ChangeSource(id, change)))
+    pub fn begin_login(&self, id: u64) -> Result<(), RuntimeFailure> {
+        self.send(Command::BeginLogin(id))
+    }
+    pub fn cancel_login(&self, id: u64) -> Result<(), RuntimeFailure> {
+        self.submit(Command::CancelLogin(id))
     }
     pub fn credentials(&self) -> CredentialClient {
         self.credentials.clone()
@@ -1277,9 +1301,9 @@ impl AgentRuntime {
 fn model_source(
     account: &Account,
 ) -> Result<&agentelier_account::CodexIdentity, agentelier_conversation::ConversationFailure> {
-    account.codex_identity().ok_or_else(|| {
-        agentelier_conversation::ConversationFailure::new("请选择有效的 Codex 凭据文件")
-    })
+    account
+        .codex_identity()
+        .ok_or_else(|| agentelier_conversation::ConversationFailure::new("请先使用 ChatGPT 登录"))
 }
 impl Drop for AgentRuntime {
     fn drop(&mut self) {

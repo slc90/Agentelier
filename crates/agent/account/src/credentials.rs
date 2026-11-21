@@ -20,7 +20,7 @@ struct Flight {
 }
 struct ClientState {
     flights: Vec<Flight>,
-    codex_selected: bool,
+    signed_in: bool,
     source_settling: bool,
     invalidated: CancellationToken,
 }
@@ -100,14 +100,13 @@ impl CredentialRequest {
 impl CredentialClient {
     pub fn new(
         shutdown: CancellationToken,
-        codex_selected: bool,
         submit: impl Fn(AccountCommand) -> Result<(), AccountFailure> + Send + Sync + 'static,
     ) -> Self {
         Self {
             submit: Arc::new(submit),
             state: Arc::new(Mutex::new(ClientState {
                 flights: Vec::new(),
-                codex_selected,
+                signed_in: false,
                 source_settling: false,
                 invalidated: CancellationToken::new(),
             })),
@@ -162,11 +161,11 @@ impl CredentialClient {
             .state
             .lock()
             .map_err(|_| AccountFailure::CredentialState)?;
-        if !state.codex_selected {
-            return Err(AccountFailure::Disconnected);
-        }
         if state.source_settling {
             return Err(AccountFailure::SourceSettling);
+        }
+        if !state.signed_in {
+            return Err(AccountFailure::Disconnected);
         }
         state.flights.retain(|flight| {
             flight.result.borrow().is_none() && flight.result.has_changed().is_ok()
@@ -209,18 +208,18 @@ impl CredentialClient {
     }
     pub(crate) fn update_source(
         &self,
-        selected: bool,
+        signed_in: bool,
         changed: bool,
     ) -> Result<(), AccountFailure> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| AccountFailure::CredentialState)?;
-        if changed || state.codex_selected != selected {
+        if changed || state.signed_in != signed_in {
             state.invalidated.cancel();
             state.flights.clear();
             state.invalidated = CancellationToken::new();
-            state.codex_selected = selected;
+            state.signed_in = signed_in;
             state.source_settling = true;
         }
         Ok(())

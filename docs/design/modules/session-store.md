@@ -4,7 +4,7 @@
 
 ## 初始记录的提交边界
 
-Runtime 从已有数据环境的凭据路径取得同一父目录；Store 仅写入该目录下的 `sessions/<uuid>/`，不读取认证文件，也不改变数据环境占用。会话 UUID 贯穿 Conversation、Bridge、UI 和取消控制，连接 operation ID 仍为本次进程内的独立身份。
+Runtime 从已占用的数据环境取得本次运行的根目录；Store 仅写入该目录下的 `sessions/<uuid>/`，不读取认证文件，也不改变数据环境占用。会话 UUID 贯穿 Conversation、Bridge、UI 和取消控制，连接 operation ID 仍为本次进程内的独立身份。
 
 Conversation 准备创建或 Reset，不立即替换当前会话。Store 工作者创建专属目录，将完整 JSONL 初始记录写入同目录临时文件，Flush 和 sync 后以不覆盖方式提交 `session.jsonl`。目录已存在时拒绝创建，不清理既有目录。初始记录提交前的失败只清理本次新建的空目录，清理失败保留实际错误。
 

@@ -1,6 +1,6 @@
 # Agentelier 总体架构
 
-Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。Bevy ECS 与 Winit 管理交互和展示，独立线程的 Tokio current-thread Runtime 承载账号与模型执行。当前已实现数据目录启动与设置、Codex 外部凭据选择和恢复、模型连接验证、多轮流式聊天、工具执行及运行收尾。
+Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。Bevy ECS 与 Winit 管理交互和展示，独立线程的 Tokio current-thread Runtime 承载账号与模型执行。当前已实现数据目录启动与设置、Codex 浏览器登录和凭据恢复、模型连接验证、多轮流式聊天、工具执行及运行收尾。
 
 ## Workspace 与三个领域
 
@@ -106,11 +106,11 @@ flowchart TD
 
 目录设置显示本次固定路径、打开当前目录、检查并保存下次启动位置。候选检查不持有第二份长期占用，保存成功才更新配置投影；更改下次位置不搬运文件、不切换当前数据环境或账号。关系见[数据目录与启动](mechanisms/application-data.md)。
 
-UI 使用 `bevy_widgetry_path_display::display_path` 显示路径，application 在序列化配置时使用同库的 `simplify_path`，Login 在调用 Windows Shell 打开数据目录时使用该函数。数据环境对外仍返回原始规范路径，目录比较与文件操作不使用显示字符串。Codex 文件选择会提交路径配置，现有目录下的 SIWC 凭据不参与目录检查。
+UI 使用 `bevy_widgetry_path_display::display_path` 显示路径，application 在序列化配置时使用同库的 `simplify_path`，Login 在调用 Windows Shell 打开数据目录时使用该函数。数据环境对外仍返回原始规范路径，目录比较与文件操作不使用显示字符串。账号凭据位于本次取得占用的数据环境，目录检查只验证目录自身的读写能力。
 
 ## Agent 的账号、模型与执行所有者
 
-Login 提供数据环境和 Codex 文件只读解析。Account 串行处理外部文件选择、断开、状态检查及凭据请求。文件工作交给 spawn_blocking。应用配置只持久化所选路径，签发和更新由 Codex 客户端负责。
+Login 提供数据环境、Codex 浏览器 OAuth 与本地凭据存储。Account 恢复当前数据目录的授权、接纳登录结果并处理共享凭据请求。文件工作交给 spawn_blocking，Runtime 负责浏览器登录任务的调度、取消与回收。
 
 Account 的可克隆 CredentialClient 管理接纳、会话失效令牌和在途请求合并。它通过 Runtime 赋予的命令提交能力进入同一个有界队列，不反向依赖 Runtime。Token、会话代次和旋转待保存结果只留在执行侧；启动仅恢复文件，无周期保活。按需更新保存成功才交付凭据，取消等待者不丢弃已经开始的旋转。
 
@@ -126,11 +126,11 @@ Chat UI 通过 Widgetry 选择本地音频。Session Store 后台核对 WAV 或 
 
 Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模型任务和独立 Turn Runner。Runtime 拥有线程、队列、取消令牌、JoinHandle 及真实回收信号；账号处理期间模型任务仍可并发等待网络。它不包含 OAuth、认证文件实现或模型网络协议。依赖为 Runtime → Account → Login、Runtime → LLM Model → Account，以及 Runtime → Tools，以及 Runtime → Turn Runner → Conversation / LLM Model / Account，无循环。
 
-来源断开或文件失效时，共享门控暂停新凭据交付，Runtime 停止旧模型任务并回收工具。队列暂停和已接纳结果持久确认后，账号区显示新的来源状态。详见[认证运行与凭据管理](modules/authentication.md)。
+登录更替或账号失效时，共享门控暂停新凭据交付，Runtime 停止旧模型任务并回收工具。队列暂停和已接纳结果持久确认后，账号区显示新的来源状态。详见[认证运行与凭据管理](modules/authentication.md)。
 
 ## Bridge 按业务转换，共用连接协调
 
-Account Bridge 将 AccountEventKind 转为自己的账号事件和安全摘要，保留登录、保存、会话及退出阶段；LLM Model Bridge 将模型结果转换为自己的回复、错误及完成/取消类型。两者都不执行后台业务，不持有 Agent 的执行状态或 UI 的展示状态。
+Account Bridge 将 AccountEventKind 转为自己的账号事件和安全摘要，投影浏览器等待、账号状态和操作错误；LLM Model Bridge 将模型结果转换为自己的回复、错误及完成/取消类型。两者都不执行后台业务，不持有 Agent 的执行状态或 UI 的展示状态。
 
 Connection 只包装和调用对应业务转换，返回带 operation_id 的 BridgeEvent；BridgeEventKind 区分 Account 与 Model。它分配操作身份、隔离迟到结果、协调在途操作、转发控制命令并持有连接收尾句柄，不实现字段投影或业务错误分类。UI 显式消费连接封装和相应业务类型。
 
@@ -179,7 +179,7 @@ flowchart LR
 
 所有库使用宿主统一配置的 tracing。日志只包含安全的操作标识、阶段与诊断，不泄露 Token、授权地址或模型正文。开发与 BRP 验证须保护现有登录状态，未经授权不退出、重新授权、重置凭据或更换数据环境。
 
-模型准备区由 chat_ui 构造并持有 UI 投影，通过共享宿主读取目录和验证显式模型。登录主页以 HomeContent 提供内容位置，application 使用 BSN 挂载 ChatUiHost，不把模型状态或网络逻辑放入通用装配。模型目录与验证复用现有模型任务生命周期，结果按业务类型在 LLM Model Bridge 转换；同一主体和工作区的外部 Token 更新保留准备区，账号失效或身份变化后清除旧目录与选择。
+模型准备区由 chat_ui 构造并持有 UI 投影，通过共享宿主读取目录和验证显式模型。登录主页以 HomeContent 提供内容位置，application 使用 BSN 挂载 ChatUiHost，不把模型状态或网络逻辑放入通用装配。模型目录与验证复用现有模型任务生命周期，结果按业务类型在 LLM Model Bridge 转换；同一授权内的 Token 更新保留准备区，账号失效或身份变化后清除旧目录与选择。
 
 ## 内存聊天与流式投影
 

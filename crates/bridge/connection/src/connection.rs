@@ -81,8 +81,7 @@ pub struct Connection {
 }
 impl Connection {
     pub fn start(
-        path: PathBuf,
-        source: crate::SourceSettings,
+        environment: crate::DataEnvironment,
         notify: impl Fn() -> bool + Send + Sync + 'static,
     ) -> Result<Self, BridgeFailure> {
         let (sender, events) = mpsc::sync_channel(RESULT_CAPACITY);
@@ -95,8 +94,7 @@ impl Connection {
         let finished_wake = wake.clone();
         let operations = agentelier_agent_runtime::OperationSequence::default();
         let runtime = AgentRuntime::start(
-            path,
-            source,
+            environment,
             operations.clone(),
             move |event| {
                 let event = BridgeEvent {
@@ -298,13 +296,21 @@ impl Connection {
             .allocate()
             .map_err(|failure| BridgeFailure(failure.to_string()))
     }
-    pub fn change_source(&mut self, change: crate::SourceChange) -> Result<u64, BridgeFailure> {
+    pub fn begin_login(&mut self) -> Result<u64, BridgeFailure> {
         let id = self.allocate()?;
         self.runtime
-            .change_source(id, change)
+            .begin_login(id)
             .map_err(|error| BridgeFailure(error.to_string()))?;
         self.pending = Some(id);
         Ok(id)
+    }
+    pub fn cancel_login(&self, id: u64) -> Result<(), BridgeFailure> {
+        if self.pending == Some(id) {
+            self.runtime
+                .cancel_login(id)
+                .map_err(|error| BridgeFailure(error.to_string()))?;
+        }
+        Ok(())
     }
     pub fn request_model(
         &mut self,
@@ -745,12 +751,9 @@ impl Connection {
                     }
                     BridgeEventKind::Account(kind) => kind,
                 };
-                if event.operation_id != 0 {
-                    if !matches!(kind, AccountEventKind::SourceChanged(_))
-                        || self.pending != Some(event.operation_id)
-                    {
-                        return self.protocol_failure();
-                    }
+                if self.pending == Some(event.operation_id)
+                    && matches!(kind, AccountEventKind::SourceChanged(_))
+                {
                     self.pending = None;
                 }
                 Ok(Some(event))
