@@ -340,7 +340,7 @@ impl AgentRuntime {
                         let mut task_receipts = task_control::Receipts::new();
                         let (spawn_sender, mut spawn_requests) = mpsc::channel(COMMAND_CAPACITY);
                         let (mailbox_sender, mut mailbox_requests) = mpsc::channel(SESSION_COMMAND_CAPACITY);
-                        let mut children = spawn_agent::Children::default();
+                        let mut children = spawn_agent::Children::with_configured_limits()?;
                         let mut extensions = agentelier_memory::registrations(memory.as_ref().ok().map(Memory::client));
                         extensions.push(spawn_agent::registration(spawn_sender, owner_credentials.clone(), data_root.join("prompts.json")));
                         extensions.push(mailbox::registration(mailbox_sender.clone(), agentelier_conversation::DeliveryMode::QueueOnly));

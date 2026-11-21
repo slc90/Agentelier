@@ -124,6 +124,7 @@ impl Children {
         if messages.is_empty() {
             return Ok(WakeOutcome::Idle);
         }
+        self.check_execution_capacity().map_err(failure)?;
         let node = conversation
             .agent_registry()
             .get(session, id)

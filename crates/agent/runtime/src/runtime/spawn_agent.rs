@@ -27,6 +27,7 @@ const MAX_TITLE_CHARS: usize = 128;
 
 mod inbox;
 mod interrupt;
+mod limits;
 mod wake;
 
 #[derive(Clone, Deserialize)]
@@ -202,6 +203,7 @@ pub(super) struct Children {
     parked: HashMap<AgentId, Box<Conversation>>,
     waiters: HashMap<AgentId, CancellationToken>,
     finishing: HashMap<AgentId, FinishedChild>,
+    limits: limits::Limits,
 }
 
 struct ChildHandle {
@@ -312,6 +314,12 @@ impl Children {
                 "Spawn 已在提交前取消",
             ));
         }
+        // This actor owns all admissions, so no other request can claim these slots
+        // while preparation and the durable identity commit are in flight.
+        self.check_spawn_capacity(conversation.agent_registry(), session, parent)
+            .inspect_err(|failure| {
+                tracing::debug!(session_id = %session, agent_id = %parent, turn_id = turn.0, call_id = %origin.call_id, status = ?failure.status, "子 Agent 资源准入被拒绝");
+            })?;
         let id = AgentId::allocate();
         let request = &spec.arguments;
         let reservation = conversation
@@ -455,17 +463,35 @@ impl Children {
             Err(state) => apply_execution(store, conversation, &identity, state, None)
                 .await
                 .map_err(unknown)?,
-            Ok(turn) => self
-                .launch_turn(
-                    conversation,
-                    identity,
-                    turn,
-                    &[message],
-                    parent_stop,
-                    environment,
-                )
-                .await
-                .map_err(unknown)?,
+            Ok(turn) => {
+                if let Err(error) = self
+                    .launch_turn(
+                        conversation,
+                        identity.clone(),
+                        turn,
+                        &[message],
+                        parent_stop,
+                        environment,
+                    )
+                    .await
+                {
+                    if conversation
+                        .current()
+                        .is_some_and(|view| view.execution_blocked)
+                    {
+                        return Err(unknown(error));
+                    }
+                    apply_execution(
+                        store,
+                        conversation,
+                        &identity,
+                        AgentState::Failed(error.to_string()),
+                        None,
+                    )
+                    .await
+                    .map_err(unknown)?;
+                }
+            }
         }
         conversation
             .agent_registry()

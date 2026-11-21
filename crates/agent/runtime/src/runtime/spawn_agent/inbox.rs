@@ -165,6 +165,14 @@ impl Children {
             .mailboxes()
             .find_source(sender, turn, &origin.call_id)
             .map_or_else(AgentMessageId::allocate, |entry| entry.message.id);
+        if outgoing.mode == DeliveryMode::TriggerTurn
+            && !self.active.contains_key(&receiver)
+            && conversation.mailboxes().find(id).is_none()
+            && let Err(limit) = self.check_execution_capacity()
+        {
+            tracing::debug!(session_id = %session, agent_id = %receiver, agent_path = %path, turn_id = turn.0, call_id = %origin.call_id, %limit, "Follow-up 执行准入被拒绝");
+            return Ok(limit.rejection());
+        }
         let message = AgentMessage {
             id,
             sender,

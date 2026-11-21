@@ -20,6 +20,8 @@ Runtime 管理 Agent 的实际任务句柄、取消令牌、执行许可、驻�
 
 创建前先预留所有必要名额，创建失败时通过 RAII/显式回滚释放尚未提交的预留。持久化创建成功后，不能因调用方取消而把已登记身份当作不存在。容量许可的释放必须晚于真实执行结束回执。
 
+Root 深度为 0，且不计入子 Agent 总量或并发。已登记身份持续占用总量，执行句柄占用并发直到 Runner、工具和存档收尾确认。Agent Control 在同一事件循环中串行准入，检查后到提交或回滚期间不会处理其他 Spawn 或 Follow-up。三个默认限制为总量 32、并发 4、深度 4，可分别用启动环境变量 `AGENTELIER_AGENT_TOTAL`、`AGENTELIER_AGENT_CONCURRENT`、`AGENTELIER_AGENT_DEPTH` 覆盖。
+
 ## 驻留管理
 
 驻留限制控制内存中加载的子 Agent Runtime 数量，不改变 Agent Tree 总量。Root 始终驻留；正在执行、正在关闭、持有未确认资源或处于关键持久化提交过程中的 Agent 不可卸载。空闲且状态已保存的 Agent 可以成为卸载候选。
