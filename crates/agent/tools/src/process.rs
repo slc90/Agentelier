@@ -19,6 +19,21 @@ const REAP_DEADLINE: Duration = Duration::from_secs(10);
 pub(crate) const PROCESS_POLL: Duration = Duration::from_millis(40);
 const RESULT_STREAM_BYTES: usize = 16 * 1024;
 
+pub(crate) fn powershell_path() -> io::Result<PathBuf> {
+    std::env::var_os("PATH")
+        .and_then(|value| {
+            std::env::split_paths(&value)
+                .map(|entry| entry.join("pwsh.exe"))
+                .find(|path| path.is_file())
+        })
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "PATH 中找不到 PowerShell 7 pwsh.exe",
+            )
+        })
+}
+
 #[derive(Debug)]
 struct JobMonitor(Arc<Job>);
 impl CommandWrapper for JobMonitor {
@@ -89,19 +104,7 @@ impl Process {
                 .directory(candidate.as_deref())?
                 .path()
                 .to_path_buf();
-            let shell = std::env::var_os("PATH")
-                .and_then(|value| {
-                    std::env::split_paths(&value)
-                        .map(|entry| entry.join("pwsh.exe"))
-                        .find(|path| path.is_file())
-                })
-                .ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::NotFound,
-                        "PATH 中找不到 PowerShell 7 pwsh.exe",
-                    )
-                })?;
-            Ok((directory, shell))
+            Ok((directory, powershell_path()?))
         })
         .await
         .map_err(|error| ToolFailure::new("environment_failed", error.to_string()))?
