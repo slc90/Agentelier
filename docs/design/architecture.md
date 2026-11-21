@@ -100,7 +100,7 @@ flowchart TD
 
 ## UI 管理交互与通用宿主
 
-`application` 建立可执行文件旁的日志，读取 `config/config.ron`，装配窗口、Asset、缩放与可选 BRP。`agent_host` 是唯一 Connection 所有者和接收者，按业务将账号、模型与聊天事件分发到独立 ECS 消息通道，运行错误另行广播；`login_ui` 在宿主接收后消费自己的业务消息，通过 BSN 组合界面，持有面向交互的账号与目录状态；Widgetry 控件自身的状态遵循其公开契约。
+`application` 建立可执行文件旁的日志，读取 `config/config.ron`，装配窗口、Asset、缩放与可选 BRP。BRP 的 Main World 和 Render World 端口独立配置。`agent_host` 是唯一 Connection 所有者和接收者，按业务将账号、模型与聊天事件分发到独立 ECS 消息通道，运行错误另行广播；`login_ui` 在宿主接收后消费自己的业务消息，通过 BSN 组合界面，持有面向交互的账号与目录状态；Widgetry 控件自身的状态遵循其公开契约。
 
 启动界面复用 Widgetry 目录选择器，通过辅助 Job 调用 Login 检查并占用目录。配置由 application 的 ConfigStore 串行合并并完整替换提交；成功后复用同一窗口进入主界面，通过共享 AgentHost 发起账号恢复。数据环境保持到后台执行及日志收尾完成。
 

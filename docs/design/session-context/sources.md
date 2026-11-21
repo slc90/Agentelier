@@ -23,7 +23,7 @@
 | [数据目录机制](https://github.com/slc90/Agentelier/blob/main/docs/design/mechanisms/application-data.md) | 用户选择的数据根、`config/config.ron`、本次运行固定路径、目录占用与关闭释放。 |
 | [提示词快照](https://github.com/slc90/Agentelier/blob/main/docs/design/modules/prompts.md) | `prompts.json` 与 `InstructionSnapshot`；会话指令不依赖提示词库继续存在。 |
 | [聊天与 Markdown 设计](https://github.com/slc90/Agentelier/blob/main/docs/design/chat-foundation/05-ui-markdown.md) | 右侧页面的输入、阅读跟随、公开控件 API 和原生 Markdown；其中早期单轮限制以当前工具及队列设计为准。 |
-| [现有依赖配置](https://github.com/slc90/Agentelier/blob/main/Cargo.toml)与[已知问题](https://github.com/slc90/Agentelier/blob/main/docs/known_issues.md) | 复用现有依赖与平台约束；BRP 特殊键、固定 Render 端口及切页文字现象按已有记录处理。 |
+| [现有依赖配置](https://github.com/slc90/Agentelier/blob/main/Cargo.toml)与[已知问题](https://github.com/slc90/Agentelier/blob/main/docs/known_issues.md) | 复用现有依赖与平台约束；BRP 特殊键及切页文字现象按已有记录处理。 |
 
 `sessions/<id>/` 的具体文件组织、独立 Session Store、最简列表以及本次运行内的 UI 状态保存，是围绕这些现有职责确定的适配设计，不是对当前源码已经具备这些能力的描述。
 

@@ -100,7 +100,10 @@ fn run_application(
             }),
     );
     if config.brp_enabled {
-        app.add_plugins(BrpRuntimePlugin::with_port(config.brp_port));
+        app.add_plugins(BrpRuntimePlugin::with_ports(
+            config.brp_port,
+            config.brp_render_port,
+        ));
     }
     let host_plugin = AgentHostPlugin::default();
     let backend = host_plugin.host();

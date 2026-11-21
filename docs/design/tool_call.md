@@ -305,7 +305,7 @@ Queue 使用明确的“排队”按钮，Tab 保持通常的焦点导航。不�
 
 GUI 验证使用 `bevy_brp_mcp` 操作实际应用：先建立焦点，再输入与点击，结合截图、ECS 安全投影和日志检查状态。BRP 是开发者控制应用的通道，不作为本阶段模型可调用的 MCP 工具。
 
-当前特殊按键的 `logical_key` 限制按已知问题处理：必要时通过 BRP `world.write_message` 发送完整键盘输入；不直接改编辑器 ECS 状态冒充用户输入。原生 IME 行为另外实机检查。完成后释放 Custom Pointer 并确认 `inactive`，正常关闭应用。固定 Render 端口限制下不同时启动多个启用 BRP 的实例。
+当前特殊按键的 `logical_key` 限制按已知问题处理：必要时通过 BRP `world.write_message` 发送完整键盘输入；不直接改编辑器 ECS 状态冒充用户输入。原生 IME 行为另外实机检查。完成后释放 Custom Pointer 并确认 `inactive`，正常关闭应用。
 
 验证中保护现有凭据和数据目录，不退出登录、重新授权或换账号。更新职责、依赖、生命周期或重要契约时，同步 `docs/design/architecture.md` 和相关模块、机制设计；方案仍留在 `plans/`，实现完成后才更新当前设计事实。不另建 Feature 文档或功能说明层。
 

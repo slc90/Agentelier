@@ -89,7 +89,7 @@ flowchart LR
 
 新增存储库按职责落在 `crates/agent/`，设置 Windows x64 入口检查，依赖在 Workspace 统一管理。继续使用当前锁定的 Bevy、Widgetry 和 BRP 组合，不因参考库有新接口就顺带升级或复制上游源码。`app/` 保持薄入口，`application` 不吸收会话业务。
 
-UI 使用 BSN 和 Widgetry 公开 API。实际 GUI 验证使用 `bevy_brp_mcp`，结合截图、真实输入和安全 ECS 状态；验证完成释放 Custom Pointer 并确认 `inactive`。特殊键的现有逻辑键限制按 `docs/known_issues.md` 处理，需要时经 BRP 写入完整 KeyboardInput 消息，不直接修改编辑器状态。原生 IME 另做实机确认，不同时启动两个启用固定 Render 端口的实例。
+UI 使用 BSN 和 Widgetry 公开 API。实际 GUI 验证使用 `bevy_brp_mcp`，结合截图、真实输入和安全 ECS 状态；验证完成释放 Custom Pointer 并确认 `inactive`。特殊键的现有逻辑键限制按 `docs/known_issues.md` 处理，需要时经 BRP 写入完整 KeyboardInput 消息，不直接修改编辑器状态。原生 IME 另做实机确认。
 
 本项目不编写测试代码、Benchmark、Example 或专门测试宿主。各实施增量用适用的 Cargo 静态检查、真实应用运行、调试边界故障注入和 BRP 验证。跨账号场景由用户明确授权或亲自切换账号后验证，不能为验收重置已有凭据、发起 OAuth 或更换数据目录。
 

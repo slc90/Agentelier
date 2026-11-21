@@ -10,7 +10,7 @@ use tempfile::NamedTempFile;
 const DEFAULT_SCALE_FACTOR: f32 = 1.25;
 const ALLOWED_SCALE_FACTORS: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
 const DEFAULT_BRP_PORT: u16 = 15702;
-const RENDER_WORLD_BRP_PORT: u16 = 15703;
+const DEFAULT_BRP_RENDER_PORT: u16 = 15703;
 const BRP_PORT_RANGE: std::ops::RangeInclusive<u16> = 1024..=65534;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -19,6 +19,8 @@ pub(crate) struct AppConfig {
     pub(crate) scale_factor: f32,
     pub(crate) brp_enabled: bool,
     pub(crate) brp_port: u16,
+    #[serde(default = "default_brp_render_port")]
+    pub(crate) brp_render_port: u16,
     #[serde(default, serialize_with = "serialize_optional_path")]
     pub(crate) data_directory: Option<PathBuf>,
     #[serde(
@@ -28,6 +30,10 @@ pub(crate) struct AppConfig {
         deserialize_with = "ignore_legacy_codex_file"
     )]
     _legacy_codex_auth_file: (),
+}
+
+const fn default_brp_render_port() -> u16 {
+    DEFAULT_BRP_RENDER_PORT
 }
 
 fn ignore_legacy_codex_file<'de, D: Deserializer<'de>>(deserializer: D) -> Result<(), D::Error> {
@@ -50,6 +56,7 @@ impl Default for AppConfig {
             scale_factor: DEFAULT_SCALE_FACTOR,
             brp_enabled: true,
             brp_port: DEFAULT_BRP_PORT,
+            brp_render_port: default_brp_render_port(),
             data_directory: None,
             _legacy_codex_auth_file: (),
         }
@@ -64,10 +71,21 @@ impl AppConfig {
                 "scale_factor 必须为 1.0、1.25、1.5 或 2.0",
             ));
         }
-        if !BRP_PORT_RANGE.contains(&self.brp_port) || self.brp_port == RENDER_WORLD_BRP_PORT {
+        for (field, port) in [
+            ("brp_port", self.brp_port),
+            ("brp_render_port", self.brp_render_port),
+        ] {
+            if !BRP_PORT_RANGE.contains(&port) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{field} 必须为 {BRP_PORT_RANGE:?}"),
+                ));
+            }
+        }
+        if self.brp_port == self.brp_render_port {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "brp_port 必须为 1024..=65534，且不能占用 15703",
+                "brp_port 和 brp_render_port 不能使用同一个端口",
             ));
         }
         Ok(())
