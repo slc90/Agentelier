@@ -11,7 +11,7 @@ use agentelier_turn_runner::{InboxAction, InboxRequest};
 use serde_json::json;
 
 impl Children {
-    fn mailbox_caller(
+    pub(super) fn mailbox_caller(
         &self,
         conversation: &Conversation,
         root_task: Option<&ModelTask>,
@@ -74,6 +74,12 @@ impl Children {
             mailbox::Command::Wait(request) => {
                 let ticket = self.wait_ticket(conversation, root_task, &request.origin);
                 drop(request.reply.send(ticket));
+            }
+            mailbox::Command::Interrupt(request) => {
+                let result = self
+                    .interrupt(&request, conversation, root_task, environment.store)
+                    .await;
+                drop(request.reply.send(result));
             }
         }
     }
@@ -139,6 +145,11 @@ impl Children {
         }
         if outgoing.mode == DeliveryMode::TriggerTurn && target.identity.parent.is_none() {
             return Err(ConversationFailure::new("Follow-up 只唤醒子 Agent"));
+        }
+        if outgoing.mode == DeliveryMode::TriggerTurn
+            && target.state == agentelier_conversation::AgentState::Stopping
+        {
+            return Err(ConversationFailure::new("目标 Agent 正在中断收尾"));
         }
         let path = target.identity.path.clone();
         let id = conversation

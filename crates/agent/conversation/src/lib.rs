@@ -5,7 +5,8 @@ mod active;
 mod agent_registry;
 pub use agent_registry::{
     AgentId, AgentIdentity, AgentNode, AgentOrigin, AgentPath, AgentRegistry, AgentRegistryError,
-    AgentReservation, AgentResidency, AgentRuntimeId, AgentState, AgentThreadId, ChildRegistration,
+    AgentReservation, AgentResidency, AgentRuntimeId, AgentState, AgentStop, AgentStopSource,
+    AgentThreadId, ChildRegistration,
 };
 mod project_context;
 pub use agentelier_llm_model::PublicationKind;

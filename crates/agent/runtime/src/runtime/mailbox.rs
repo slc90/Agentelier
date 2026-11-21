@@ -16,6 +16,7 @@ pub(super) enum Command {
     Send(Outgoing),
     Inbox(InboxRequest),
     Wait(super::wait_agent::Request),
+    Interrupt(super::interrupt_agent::Request),
 }
 
 pub(super) struct Outgoing {

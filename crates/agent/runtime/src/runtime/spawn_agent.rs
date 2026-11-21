@@ -26,6 +26,7 @@ const TOOL: &str = "spawn_agent";
 const MAX_TITLE_CHARS: usize = 128;
 
 mod inbox;
+mod interrupt;
 mod wake;
 
 #[derive(Clone, Deserialize)]
@@ -200,6 +201,7 @@ pub(super) struct Children {
     mailbox: MailboxActivity,
     parked: HashMap<AgentId, Box<Conversation>>,
     waiters: HashMap<AgentId, CancellationToken>,
+    finishing: HashMap<AgentId, FinishedChild>,
 }
 
 struct ChildHandle {
@@ -207,6 +209,7 @@ struct ChildHandle {
     turn: TurnId,
     commands: mpsc::Sender<Preparation>,
     stop: CancellationToken,
+    cleanup_unconfirmed: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -219,6 +222,10 @@ pub(super) struct SpawnEnvironment<'a> {
 }
 
 impl Children {
+    pub(super) fn has_active(&self) -> bool {
+        !self.active.is_empty()
+    }
+
     pub(super) fn steer_wait(&self, agent: AgentId) {
         if let Some(waiter) = self.waiters.get(&agent) {
             waiter.cancel();
@@ -280,7 +287,7 @@ impl Children {
             let (&parent, child) = self
                 .active
                 .iter()
-                .find(|(_, child)| child.thread == origin.session)
+                .find(|(_, child)| child.thread == origin.session && child.turn == turn)
                 .ok_or_else(|| rejection("Spawn 来源子 Agent 未执行或已关闭"))?;
             (parent, None, Some(child), child.stop.clone())
         };
@@ -298,6 +305,7 @@ impl Children {
         if invocation.cancel.is_cancelled()
             || spec.identity.is_invalidated()
             || self.stop.is_cancelled()
+            || parent_stop.is_cancelled()
         {
             return Err(ToolResult::not_executed(
                 "spawn_cancelled",
@@ -474,16 +482,60 @@ impl Children {
         let finished = finished.map_err(|failure| {
             ConversationFailure::new(format!("子 Agent 执行体无法回收：{failure}"))
         })?;
+        let session = finished.identity.session;
+        self.finishing.insert(finished.identity.id, finished);
+        let mut wake = None;
+        while let Some(id) = self.finishing.keys().copied().find(|&id| {
+            conversation
+                .agent_registry()
+                .get(session, id)
+                .is_ok_and(|node| {
+                    node.state != AgentState::Stopping
+                        || conversation
+                            .agent_registry()
+                            .subtree(session, id)
+                            .is_ok_and(|mut descendants| {
+                                !descendants.any(|other| {
+                                    other.identity.id != id
+                                        && self.active.contains_key(&other.identity.id)
+                                })
+                            })
+                })
+        }) {
+            let finished = self
+                .finishing
+                .remove(&id)
+                .ok_or_else(|| ConversationFailure::new("待收尾的子 Agent 已丢失"))?;
+            let node = conversation
+                .agent_registry()
+                .get(session, id)
+                .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+            if node.state == AgentState::Stopping && finished.residence.is_none() {
+                if let Some(child) = self.active.get_mut(&id) {
+                    child.cleanup_unconfirmed = true;
+                }
+                tracing::error!(session_id = %session, agent_id = %id, agent_path = %node.identity.path, state = ?finished.state, "子 Agent 中断收尾未确认，保留活动占用");
+                continue;
+            }
+            if let Some(agent) = self.commit_finish(finished, store, conversation).await? {
+                wake = Some(agent);
+            }
+        }
+        Ok(wake)
+    }
+
+    async fn commit_finish(
+        &mut self,
+        finished: FinishedChild,
+        store: &SessionStoreClient,
+        conversation: &mut Conversation,
+    ) -> Result<Option<AgentId>, RuntimeFailure> {
         let identity = &finished.identity;
         self.clear_wait(identity.id);
         let cancelled = self
             .active
-            .remove(&identity.id)
+            .get(&identity.id)
             .is_some_and(|child| child.stop.is_cancelled());
-        conversation
-            .agent_registry_mut()
-            .detach(identity.session, identity.id, finished.instance)
-            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
         for claim in finished.consumed {
             self.mailbox
                 .commit(
@@ -504,6 +556,11 @@ impl Children {
             finished.output,
         )
         .await?;
+        conversation
+            .agent_registry_mut()
+            .detach(identity.session, identity.id, finished.instance)
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+        self.active.remove(&identity.id);
         if let Some(residence) = finished.residence {
             self.parked.insert(identity.id, residence);
         }
@@ -522,6 +579,11 @@ impl Children {
             if let Err(failure) = self.finish(result, store, conversation).await {
                 first_failure.get_or_insert(failure);
             }
+        }
+        if self.has_active() {
+            first_failure.get_or_insert_with(|| {
+                ConversationFailure::new("部分子 Agent 尚无可确认的收尾结果").into()
+            });
         }
         first_failure.map_or(Ok(()), Err)
     }
@@ -563,16 +625,7 @@ async fn apply_execution(
 }
 
 fn success(node: &AgentNode) -> ToolResult {
-    let state = match node.state {
-        AgentState::Starting => "starting",
-        AgentState::Running => "running",
-        AgentState::Waiting => "waiting",
-        AgentState::Completed => "completed",
-        AgentState::Interrupted => "interrupted",
-        AgentState::Failed(_) => "failed",
-        AgentState::Closed => "closed",
-    };
-    let mut output = json!({"agent_id":node.identity.id, "path":node.identity.path, "state":state, "nickname":node.identity.nickname});
+    let mut output = json!({"agent_id":node.identity.id, "path":node.identity.path, "state":node.state.name(), "nickname":node.identity.nickname});
     if let AgentState::Failed(reason) = &node.state {
         output["reason"] = json!(reason);
     }

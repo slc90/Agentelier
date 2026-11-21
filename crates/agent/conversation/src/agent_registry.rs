@@ -4,6 +4,9 @@ use std::str::FromStr;
 use std::{error::Error, fmt};
 use uuid::Uuid;
 
+mod stop;
+pub use stop::{AgentStop, AgentStopSource};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
 pub struct AgentId(Uuid);
@@ -86,7 +89,7 @@ impl AgentPath {
                 .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
     }
 
-    fn contains(&self, candidate: &Self) -> bool {
+    pub fn contains(&self, candidate: &Self) -> bool {
         candidate
             .0
             .strip_prefix(&self.0)
@@ -153,10 +156,26 @@ pub enum AgentState {
     Starting,
     Running,
     Waiting,
+    Stopping,
     Completed,
     Interrupted,
     Failed(String),
     Closed,
+}
+
+impl AgentState {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Running => "running",
+            Self::Waiting => "waiting",
+            Self::Stopping => "stopping",
+            Self::Completed => "completed",
+            Self::Interrupted => "interrupted",
+            Self::Failed(_) => "failed",
+            Self::Closed => "closed",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -312,6 +331,7 @@ pub struct AgentRegistry {
     roots: HashMap<SessionId, AgentId>,
     entries: HashMap<AgentId, Registration>,
     paths: HashMap<SessionId, BTreeMap<AgentPath, AgentId>>,
+    stops: stop::Stops,
 }
 
 impl AgentRegistry {
@@ -585,6 +605,7 @@ impl AgentRegistry {
     }
 
     pub(crate) fn retire_session(&mut self, session: SessionId) {
+        self.stops.retire(session);
         self.roots.remove(&session);
         self.paths.remove(&session);
         self.entries.retain(|_, entry| {

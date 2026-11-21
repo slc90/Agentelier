@@ -10,7 +10,7 @@ Agent Tree 的可恢复性建立在 Agentelier 现有 Session Store 上，不新
 - AgentStateChanged：业务状态变化及原因。
 - AgentMessageQueued / AgentMessageConsumed：消息 ID、发送者、接收者、投递模式、顺序和消费事实。
 - AgentTaskAssigned / AgentTaskCompleted：任务来源、原始调用 ID、任务内容引用、结果或失败摘要。
-- AgentInterrupted / AgentClosed：中断请求、真实执行终态和资源回收事实。
+- AgentStopRequested：按来源和操作 ID 记录定向中断的接纳及子树范围。后续 AgentExecution 记录经确认的执行终态。没有后续终态的请求在重启后保持未确认。
 - AgentRuntimeEvicted / AgentRuntimeRestored：驻留状态变化及恢复实例身份。
 
 事件名称可以与现有 `RecordEvent` 命名协调，但语义必须能区分请求已接纳、消息已投递、消息已消费、取消已请求和资源已真实回收。不能用一个笼统的 `AgentUpdated` 事件覆盖所有阶段。

@@ -16,6 +16,7 @@ mod creation;
 mod deleting;
 mod image_attachment;
 pub use image_attachment::{ImageAttachmentAction, ImageAttachmentReply};
+mod interrupt_agent;
 mod loading;
 mod mailbox;
 mod memory;
@@ -344,6 +345,7 @@ impl AgentRuntime {
                         extensions.push(mailbox::registration(mailbox_sender.clone(), agentelier_conversation::DeliveryMode::QueueOnly));
                         extensions.push(mailbox::registration(mailbox_sender.clone(), agentelier_conversation::DeliveryMode::TriggerTurn));
                         extensions.push(wait_agent::registration(mailbox_sender.clone()));
+                        extensions.push(interrupt_agent::registration(mailbox_sender.clone()));
                         let mut conversation = Conversation::with_extensions(extensions);
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
@@ -860,7 +862,7 @@ impl AgentRuntime {
                                             ConversationRequest::Create(_) | ConversationRequest::Open { .. } | ConversationRequest::Reset { .. } => true,
                                             _ => false,
                                         };
-                                        if replacing && !children.jobs.is_empty() {
+                                        if replacing && children.has_active() {
                                             control.finished.cancel();
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("当前会话仍有子 Agent 正在执行".into())))?;
                                             continue;

@@ -12,7 +12,7 @@ use std::{error::Error, fmt};
 
 pub use uuid::Uuid as SessionId;
 pub const MAX_TURN_REQUESTS: u32 = 32;
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TurnId(pub u64);
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -616,6 +616,7 @@ impl Conversation {
         &mut self,
         view: &SessionView,
         agents: Vec<(crate::AgentIdentity, AgentState)>,
+        stops: Vec<crate::AgentStop>,
     ) -> Result<AgentRuntimeId, AgentRegistryError> {
         let backup = self.agents.clone();
         let result = (|| {
@@ -632,6 +633,9 @@ impl Conversation {
                 self.agents.set_state(view.id, id, state)?;
             }
             self.agents.clear_reservations(view.id);
+            for stop in stops {
+                self.agents.remember_stop(view.id, stop);
+            }
             Ok(instance)
         })();
         if result.is_err() {

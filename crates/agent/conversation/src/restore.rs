@@ -27,6 +27,7 @@ pub struct RestoredSession {
     notice: Option<String>,
     recovered_results: Vec<RecoveredResult>,
     agents: Vec<(crate::AgentIdentity, crate::AgentState)>,
+    stops: Vec<crate::AgentStop>,
     mailboxes: crate::Mailboxes,
     pub normalized: bool,
 }
@@ -482,6 +483,8 @@ pub fn restore(
     let mut agents: Vec<(crate::AgentIdentity, crate::AgentState)> = Vec::new();
     let mut agent_positions = HashMap::new();
     let mut spawn_sources = HashSet::new();
+    let mut stops = Vec::<crate::AgentStop>::new();
+    let mut stop_sources = HashSet::new();
     let mut mailboxes = crate::Mailboxes::default();
     for record in records {
         if record.session != initial.session || record.event.session() != initial.session {
@@ -535,10 +538,13 @@ pub fn restore(
                         crate::AgentState::Running,
                     )
                     | (
-                        crate::AgentState::Running,
+                        crate::AgentState::Running | crate::AgentState::Stopping,
                         crate::AgentState::Failed(_) | crate::AgentState::Interrupted,
                     ) => output.is_none(),
-                    (crate::AgentState::Running, crate::AgentState::Completed) => output.is_some(),
+                    (
+                        crate::AgentState::Running | crate::AgentState::Stopping,
+                        crate::AgentState::Completed,
+                    ) => output.is_some(),
                     _ => false,
                 };
                 if !valid || (request.is_some() && state != crate::AgentState::Running) {
@@ -548,17 +554,71 @@ pub fn restore(
                 }
                 *previous = state;
             }
+            RecordEvent::AgentStopRequested { stop, .. } => {
+                let valid = |message| ConversationFailure::new(message);
+                let root = crate::AgentId::for_root(initial.session);
+                let target = agent_positions
+                    .get(&stop.target)
+                    .and_then(|position| agents.get(*position))
+                    .ok_or_else(|| valid("中断请求目标未在会话登记"))?;
+                let caller_allowed = stop.source.caller == root
+                    || agent_positions
+                        .get(&stop.source.caller)
+                        .and_then(|position| agents.get(*position))
+                        .is_some_and(|(caller, _)| caller.path.contains(&target.0.path));
+                let mut unique = HashSet::new();
+                let members_valid = stop.affected.iter().all(|member| {
+                    unique.insert(*member)
+                        && agent_positions
+                            .get(member)
+                            .and_then(|position| agents.get(*position))
+                            .is_some_and(|(identity, state)| {
+                                target.0.path.contains(&identity.path)
+                                    && matches!(
+                                        state,
+                                        crate::AgentState::Running | crate::AgentState::Waiting
+                                    )
+                            })
+                });
+                let operation_valid = match &stop.operation {
+                    Some(operation) if !stop.affected.is_empty() => operation == &stop.source,
+                    Some(operation) => stop_sources.contains(operation),
+                    None => stop.affected.is_empty(),
+                };
+                if !caller_allowed
+                    || stop.source.caller == stop.target
+                    || stop.source.turn.0 == 0
+                    || stop.source.call_id.is_empty()
+                    || !members_valid
+                    || !operation_valid
+                    || !stop_sources.insert(stop.source.clone())
+                {
+                    return Err(valid("中断请求来源、子树范围或操作标识无效"));
+                }
+                for member in &stop.affected {
+                    if let Some((_, state)) = agent_positions
+                        .get(member)
+                        .and_then(|position| agents.get_mut(*position))
+                    {
+                        *state = crate::AgentState::Stopping;
+                    }
+                }
+                stops.push(stop);
+            }
             RecordEvent::AgentTurn { agent, event, .. } => {
                 let (identity, state) = agent_positions
                     .get(&agent)
                     .and_then(|position| agents.get(*position))
                     .ok_or_else(|| ConversationFailure::new("子 Agent 轮次记录缺少身份提交"))?;
-                if !matches!(state, crate::AgentState::Running)
-                    || identity.thread.session_id() != event.session()
+                if !matches!(
+                    state,
+                    crate::AgentState::Running | crate::AgentState::Stopping
+                ) || identity.thread.session_id() != event.session()
                     || matches!(
                         event.as_ref(),
                         RecordEvent::AgentCreated { .. }
                             | RecordEvent::AgentExecution { .. }
+                            | RecordEvent::AgentStopRequested { .. }
                             | RecordEvent::AgentTurn { .. }
                             | RecordEvent::Mailbox { .. }
                     )
@@ -1536,6 +1596,7 @@ pub fn restore(
         normalized,
         recovered_results,
         agents,
+        stops,
         mailboxes,
     })
 }
@@ -1667,7 +1728,7 @@ impl Conversation {
             queue_paused: restored.state.queue_paused,
             task_policy: Box::new(restored.state.task_policy),
         };
-        let instance = self.activate_restored_root(&view, restored.agents)?;
+        let instance = self.activate_restored_root(&view, restored.agents, restored.stops)?;
         self.mailboxes = restored.mailboxes;
         self.next_turn = restored.next_turn;
         self.session = Some(ChatSession {

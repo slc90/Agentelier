@@ -54,6 +54,9 @@ stateDiagram-v2
   Waiting --> Running: Follow-up / 消息唤醒
   Running --> Completed: 任务正常结束
   Running --> Interrupted: 明确中断并完成收尾
+  Running --> Stopping: 定向中断请求已持久接纳
+  Stopping --> Interrupted: Runner、工具和后代均已收尾
+  Stopping --> Completed: 取消生效前执行已完成
   Running --> Failed: 执行失败
   Completed --> Running: Follow-up 重新启动
   Interrupted --> Running: 后续任务重新启动

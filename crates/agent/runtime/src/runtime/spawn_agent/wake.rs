@@ -76,6 +76,7 @@ impl Children {
                 turn: turn_id,
                 commands,
                 stop: stop.clone(),
+                cleanup_unconfirmed: false,
             },
         );
         tracing::info!(session_id = %session, agent_id = %id, agent_path = %identity.path, turn_id = turn_id.0, model = %turn.view().settings.slug, effort = ?turn.view().settings.effort, role = %identity.role, "子 Agent 已启动独立执行轮次");
@@ -121,18 +122,25 @@ impl Children {
             .get(session, id)
             .map_err(failure)?;
         let identity = node.identity.clone();
-        let parent = identity
-            .parent
-            .ok_or_else(|| ConversationFailure::new("Follow-up 只唤醒子 Agent"))?;
-        if node.state == AgentState::Closed
-            || conversation
+        if identity.parent.is_none() {
+            return Err(ConversationFailure::new("Follow-up 只唤醒子 Agent"));
+        }
+        let mut ancestor = Some(id);
+        while let Some(member) = ancestor {
+            let node = conversation
                 .agent_registry()
-                .get(session, parent)
-                .map_err(failure)?
-                .state
-                == AgentState::Closed
-        {
-            return Err(ConversationFailure::new("目标 Agent 或其父级已经关闭"));
+                .get(session, member)
+                .map_err(failure)?;
+            if matches!(node.state, AgentState::Closed | AgentState::Stopping)
+                || conversation
+                    .agent_registry()
+                    .subtree_stopping(session, member)
+            {
+                return Err(ConversationFailure::new(
+                    "目标 Agent 或其祖先正在停止或已经关闭",
+                ));
+            }
+            ancestor = node.identity.parent;
         }
         let operation = environment.operations.allocate().map_err(failure)?;
         let task = messages
