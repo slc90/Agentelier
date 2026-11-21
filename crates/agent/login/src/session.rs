@@ -1,4 +1,4 @@
-use crate::{CodexCredentials, CodexIdentity};
+use crate::{CodexCredentials, CodexIdentity, CodexOAuthCredentials};
 use sha2::{Digest, Sha256};
 use std::{error::Error, fmt};
 
@@ -44,13 +44,30 @@ impl UsableCredentials {
                 "Codex 外部凭据已过期，请在 Codex 中恢复授权",
             ));
         }
-        Ok(Self {
+        Ok(Self::new(file.summary.identity, file.access_token))
+    }
+
+    pub fn from_oauth(credentials: &CodexOAuthCredentials) -> Result<Self, SessionFailure> {
+        if credentials
+            .is_expired()
+            .map_err(|failure| SessionFailure::new(failure.to_string()))?
+        {
+            return Err(SessionFailure::new("Codex OAuth 凭据已过期"));
+        }
+        Ok(Self::new(
+            credentials.summary().identity.clone(),
+            credentials.access_token().to_owned(),
+        ))
+    }
+
+    fn new(identity: CodexIdentity, access_token: String) -> Self {
+        Self {
             version: CredentialVersion {
-                identity: file.summary.identity,
-                fingerprint: Sha256::digest(file.access_token.as_bytes()).into(),
+                identity,
+                fingerprint: Sha256::digest(access_token.as_bytes()).into(),
             },
-            access_token: file.access_token,
-        })
+            access_token,
+        }
     }
 
     pub fn access_token(&self) -> &str {

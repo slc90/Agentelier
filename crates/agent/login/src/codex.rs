@@ -9,10 +9,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const MAX_AUTH_BYTES: u64 = 64 * 1024;
 pub(crate) const ISSUER: &str = "https://auth.openai.com";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, Deserialize)]
 pub struct CodexAccountSummary {
     pub identity: CodexIdentity,
     pub email: Option<String>,
+    #[serde(skip)]
     pub expired: bool,
 }
 

@@ -2,7 +2,7 @@ use crate::codex::{ISSUER, summarize_tokens, unix_time};
 use crate::{CodexAccountSummary, CodexReadFailure};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use reqwest::{Client, StatusCode};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io;
@@ -14,6 +14,9 @@ use tokio::time::{Instant, timeout, timeout_at};
 use tokio_util::sync::CancellationToken;
 use url::{Url, form_urlencoded};
 use winsafe::{self as win, co, prelude::*};
+
+mod store;
+pub use store::{CredentialStore, CredentialStoreFailure};
 
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const SCOPE: &str = "openid profile email offline_access api.connectors.read api.connectors.invoke";
@@ -77,49 +80,61 @@ struct TokenResponse {
     expires_in: Option<u64>,
 }
 
-pub struct CodexOAuthCredentials {
+#[derive(Clone, Serialize, Deserialize)]
+struct OAuthTokens {
+    #[serde(default)]
     id_token: String,
+    #[serde(default)]
     access_token: String,
+    #[serde(default)]
     refresh_token: String,
     expires_at: u64,
+}
+
+#[derive(Clone, Serialize)]
+pub struct CodexOAuthCredentials {
+    tokens: OAuthTokens,
     summary: CodexAccountSummary,
 }
 
 impl CodexOAuthCredentials {
     fn from_response(response: TokenResponse) -> Result<Self, CodexReadFailure> {
-        let id_token = response.id_token.ok_or(CodexReadFailure::MissingTokens)?;
-        let access_token = response
-            .access_token
-            .ok_or(CodexReadFailure::MissingTokens)?;
-        let refresh_token = response
-            .refresh_token
-            .ok_or(CodexReadFailure::MissingTokens)?;
-        let (mut summary, claim_expiry) =
-            summarize_tokens(&id_token, &access_token, &refresh_token)?;
-        let now = unix_time()?;
-        let expires_at = response.expires_in.map_or(claim_expiry, |seconds| {
-            claim_expiry.min(now.saturating_add(seconds))
-        });
-        summary.expired = expires_at <= now;
-        Ok(Self {
-            id_token,
-            access_token,
-            refresh_token,
-            expires_at,
-            summary,
+        Self::from_tokens(OAuthTokens {
+            id_token: response.id_token.ok_or(CodexReadFailure::MissingTokens)?,
+            access_token: response
+                .access_token
+                .ok_or(CodexReadFailure::MissingTokens)?,
+            refresh_token: response
+                .refresh_token
+                .ok_or(CodexReadFailure::MissingTokens)?,
+            expires_at: match response.expires_in {
+                Some(seconds) => unix_time()?.saturating_add(seconds),
+                None => u64::MAX,
+            },
         })
+    }
+
+    fn from_tokens(mut tokens: OAuthTokens) -> Result<Self, CodexReadFailure> {
+        let (mut summary, claim_expiry) = summarize_tokens(
+            &tokens.id_token,
+            &tokens.access_token,
+            &tokens.refresh_token,
+        )?;
+        tokens.expires_at = tokens.expires_at.min(claim_expiry);
+        summary.expired = tokens.expires_at <= unix_time()?;
+        Ok(Self { tokens, summary })
     }
 
     pub fn summary(&self) -> &CodexAccountSummary {
         &self.summary
     }
 
-    pub fn expires_at(&self) -> u64 {
-        self.expires_at
+    pub fn is_expired(&self) -> Result<bool, CodexReadFailure> {
+        Ok(self.tokens.expires_at <= unix_time()?)
     }
 
-    pub fn into_tokens(self) -> (String, String, String) {
-        (self.id_token, self.access_token, self.refresh_token)
+    pub(crate) fn access_token(&self) -> &str {
+        &self.tokens.access_token
     }
 }
 

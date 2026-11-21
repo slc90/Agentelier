@@ -22,4 +22,6 @@ Login 负责数据环境、浏览器 OAuth、凭据解析和凭据值。Account 
 
 Login 提供一次性的浏览器授权操作，使用回环监听与 Authorization Code + PKCE S256 交换凭据。授权 URL 使用实际绑定的端口，浏览器启动失败时可手动打开。回调核对本次 State，完成、失败、取消或超时后释放监听。授权结果包含 Token、Access Token 到期时间和账号摘要，供后续接入 Account。
 
+Login 的 CredentialStore 绑定已取得独占锁的数据环境，在该目录内以同目录临时文件同步写入后替换 `codex-oauth.json`。恢复时重新核对令牌声明、账号摘要和有效期。文件缺失表示本地尚未授权，读取或格式错误返回明确原因。Account 接入该存储前，应用仍使用外部文件来源。
+
 外部凭据结构参考官方 Codex 的 [auth.json 存储](https://github.com/openai/codex/blob/main/codex-rs/login/src/auth/storage.rs)与 [TokenData](https://github.com/openai/codex/blob/main/codex-rs/login/src/token_data.rs)。
