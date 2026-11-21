@@ -123,13 +123,13 @@ impl fmt::Display for AgentPath {
     }
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AgentOrigin {
     Root,
     Spawn { turn: TurnId, call_id: String },
 }
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AgentIdentity {
     pub id: AgentId,
     pub session: SessionId,
@@ -159,7 +159,7 @@ pub enum AgentResidency {
     Resident(AgentRuntimeId),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AgentNode {
     pub identity: AgentIdentity,
     pub state: AgentState,
@@ -276,6 +276,7 @@ impl fmt::Display for AgentRegistryError {
 
 impl Error for AgentRegistryError {}
 
+#[derive(Clone)]
 enum Registration {
     Reserved { identity: AgentIdentity, key: Uuid },
     Committed(AgentNode),
@@ -300,7 +301,7 @@ impl Registration {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct AgentRegistry {
     roots: HashMap<SessionId, AgentId>,
     entries: HashMap<AgentId, Registration>,
@@ -374,6 +375,87 @@ impl AgentRegistry {
                     _ => None,
                 }
             }))
+    }
+
+    pub fn spawned_by(
+        &self,
+        session: SessionId,
+        parent: AgentId,
+        turn: TurnId,
+        call_id: &str,
+    ) -> Option<&AgentNode> {
+        self.subtree(session, parent).ok()?.find(|node| {
+            node.identity.parent == Some(parent) && matches!(&node.identity.origin,
+                AgentOrigin::Spawn { turn: source, call_id: call } if *source == turn && call == call_id)
+        })
+    }
+
+    pub(crate) fn restore_child(
+        &mut self,
+        identity: AgentIdentity,
+    ) -> Result<(), AgentRegistryError> {
+        let AgentOrigin::Spawn { turn, call_id } = &identity.origin else {
+            return Err(AgentRegistryError::InvalidTarget);
+        };
+        let parent = identity.parent.ok_or(AgentRegistryError::InvalidPath)?;
+        if let Some(entry) = self.entries.get(&identity.id) {
+            if let Registration::Reserved {
+                identity: reserved,
+                key,
+            } = entry
+                && reserved == &identity
+            {
+                return self.commit(AgentReservation {
+                    identity,
+                    key: *key,
+                });
+            }
+            let agent = self.get(identity.session, identity.id)?;
+            return if agent.identity == identity {
+                Ok(())
+            } else {
+                Err(AgentRegistryError::DuplicateId {
+                    id: identity.id,
+                    session: identity.session,
+                })
+            };
+        }
+        let segment = identity
+            .path
+            .0
+            .rsplit('/')
+            .next()
+            .ok_or(AgentRegistryError::InvalidPath)?;
+        let reservation = self.reserve_child(
+            identity.session,
+            parent,
+            ChildRegistration {
+                id: identity.id,
+                segment: segment.into(),
+                nickname: identity.nickname.clone(),
+                role: identity.role.clone(),
+                turn: *turn,
+                call_id: call_id.clone(),
+            },
+        )?;
+        if reservation.identity != identity {
+            self.release(reservation)?;
+            return Err(AgentRegistryError::InvalidPath);
+        }
+        self.commit(reservation)
+    }
+
+    pub(crate) fn clear_reservations(&mut self, session: SessionId) {
+        if let Some(paths) = self.paths.get_mut(&session) {
+            paths.retain(|_, id| {
+                if matches!(self.entries.get(id), Some(Registration::Reserved { .. })) {
+                    self.entries.remove(id);
+                    false
+                } else {
+                    true
+                }
+            });
+        }
     }
 
     pub fn register_root(

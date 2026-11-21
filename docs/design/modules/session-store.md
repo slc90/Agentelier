@@ -93,3 +93,7 @@ Deleted 元数据由同一写入者分配序号、Flush 与 sync；提交之前�
 CompactionCheckpoint 额外保存源项目发布身份，安装与恢复时核对最后确认发布和源窗口。新窗口状态由检查点 window 与项目发布 window 共同持久表达；检查点之后尚未补发与已补发的恢复位置可区分，不依赖易丢失的内存标志。
 
 RequestProgress 保存已准备请求的发送阶段与传输回执。HTTP 保存响应状态，Codex WebSocket 成功发送后保存所用连接的升级状态。请求进度属于元数据，不推进历史覆盖序号。冻结请求另存开放调用与压缩策略。ContinuedWithoutCompaction 用原失败请求及输入身份持久记录一次性继续，随后请求沿用原 Turn 且使用新序号。旧存档缺少这些字段时保留未知，不从完成气泡反推发送事实。历史核对所需的来源与最终包装正文全部来自 ProjectPublished，不因源文件消失而重新采集。
+
+## 子 Agent 创建与执行记录
+
+子 Agent 身份及首个模型请求使用同一 Session JSONL 的 `AgentCreated` 和 `AgentExecution` 记录。身份记录包括父级及来源调用、冻结配置和独立历史起点。启动和终态记录关联同一稳定 Agent ID。重开时先校验 Agent 记录的关联和顺序，再恢复内存身份。缺少已确认终态的 Agent 保留身份并显示执行未确认。

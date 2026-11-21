@@ -52,6 +52,49 @@ pub struct PreparedChild {
     pub tools: Arc<ToolCatalog>,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct AgentCreationRecord {
+    pub identity: crate::AgentIdentity,
+    pub task: String,
+    pub config: ChildConfigSnapshot,
+    pub history: agentelier_llm_model::ProtocolArchive,
+}
+
+impl AgentCreationRecord {
+    pub fn validate(&self, session: SessionId) -> Result<(), ConversationFailure> {
+        let fork = &self.config.fork;
+        if self.identity.session != session
+            || self.identity.parent.is_none()
+            || self.identity.role != self.config.role.id
+            || self.task.trim().is_empty()
+            || !matches!(&self.identity.origin, crate::AgentOrigin::Spawn { turn, call_id }
+                if *turn == fork.turn && *call_id == fork.call_id)
+            || self.config.settings.codex.is_none()
+            || !self.config.settings.working_directory.is_absolute()
+            || !self.config.settings.context_limits.available()
+            || self.history.len() != fork.items
+            || self
+                .history
+                .prefix_fingerprint(fork.items)
+                .map_err(failure)?
+                != fork.history_hash
+        {
+            return Err(ConversationFailure::new(
+                "子 Agent 初始记录缺少一致身份、来源或设置",
+            ));
+        }
+        self.config
+            .settings
+            .instructions
+            .validate()
+            .map_err(failure)?;
+        for publication in &self.config.projects {
+            publication.validate().map_err(failure)?;
+        }
+        Ok(())
+    }
+}
+
 pub struct ChildPreparation<'a> {
     pub request: u32,
     pub call_id: &'a str,

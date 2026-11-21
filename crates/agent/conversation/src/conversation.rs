@@ -534,6 +534,34 @@ impl Conversation {
         self.agents.attach(view.id, root)
     }
 
+    pub(crate) fn activate_restored_root(
+        &mut self,
+        view: &SessionView,
+        agents: Vec<(crate::AgentIdentity, AgentState)>,
+    ) -> Result<AgentRuntimeId, AgentRegistryError> {
+        let backup = self.agents.clone();
+        let result = (|| {
+            let instance = self.activate_root(view)?;
+            for (identity, state) in agents {
+                let id = identity.id;
+                self.agents.restore_child(identity)?;
+                let state = match state {
+                    AgentState::Starting | AgentState::Running => {
+                        AgentState::Failed("先前子 Agent 的执行终态未确认".into())
+                    }
+                    state => state,
+                };
+                self.agents.set_state(view.id, id, state)?;
+            }
+            self.agents.clear_reservations(view.id);
+            Ok(instance)
+        })();
+        if result.is_err() {
+            self.agents = backup;
+        }
+        result
+    }
+
     pub fn sync_root_state(&mut self, view: &SessionView) -> Result<(), AgentRegistryError> {
         let state = match view.turn.as_ref().map(|turn| &turn.status) {
             None => AgentState::Waiting,
@@ -549,6 +577,10 @@ impl Conversation {
 
     pub fn agent_registry(&self) -> &AgentRegistry {
         &self.agents
+    }
+
+    pub fn agent_registry_mut(&mut self) -> &mut AgentRegistry {
+        &mut self.agents
     }
 
     pub fn root_instance(&self, session: SessionId) -> Option<AgentRuntimeId> {

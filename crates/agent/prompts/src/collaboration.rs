@@ -19,13 +19,15 @@ pub enum CollaborationMode {
 
 impl CollaborationMode {
     pub(crate) fn resolve(&self) -> io::Result<ResolvedInstruction> {
-        let (mode, policy) = match self {
+        let (mode, version, policy) = match self {
             Self::ExplicitRequestOnly => (
                 "explicit_request_only",
-                "Create child Agents only when the user explicitly asks for multiple Agents or parallel collaboration.",
+                2,
+                "Create child Agents only when the user explicitly asks you to delegate, create a child Agent, or use multiple Agents or parallel collaboration.",
             ),
             Self::Proactive => (
                 "proactive",
+                1,
                 "Delegate independent parts of complex work when parallel execution materially helps.",
             ),
             Self::Custom(text) => {
@@ -40,16 +42,18 @@ impl CollaborationMode {
                         "自定义协作策略为空、含无效字符或超过 8 KiB",
                     ));
                 }
-                ("custom", text)
+                ("custom", 1, text)
             }
         };
+        let mut revision = revision(
+            &format!("agentelier.collaboration.{mode}"),
+            mode,
+            format!("{ROOT_PROTOCOL}\n\n{policy}"),
+        );
+        revision.reference.version = version;
         Ok(ResolvedInstruction {
             slot: InstructionSlot::Collaboration,
-            revision: revision(
-                &format!("agentelier.collaboration.{mode}"),
-                mode,
-                format!("{ROOT_PROTOCOL}\n\n{policy}"),
-            ),
+            revision,
         })
     }
 }

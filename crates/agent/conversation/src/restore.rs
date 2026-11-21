@@ -26,6 +26,7 @@ pub struct RestoredSession {
     next_turn: u64,
     notice: Option<String>,
     recovered_results: Vec<RecoveredResult>,
+    agents: Vec<(crate::AgentIdentity, crate::AgentState)>,
     pub normalized: bool,
 }
 
@@ -459,6 +460,9 @@ pub fn restore(
     let mut transcriptions = Vec::<crate::AudioTranscription>::new();
     let mut processes = crate::ProcessLedger::default();
     let mut finalized_without_join = false;
+    let mut agents: Vec<(crate::AgentIdentity, crate::AgentState)> = Vec::new();
+    let mut agent_positions = HashMap::new();
+    let mut spawn_sources = HashSet::new();
     for record in records {
         if record.session != initial.session || record.event.session() != initial.session {
             return Err(ConversationFailure::new("存档事件属于另一会话"));
@@ -468,6 +472,56 @@ pub fn restore(
         }
         let prepared = matches!(&record.event, RecordEvent::RequestPrepared { .. });
         match record.event {
+            RecordEvent::AgentCreated { session, creation } => {
+                creation.validate(session)?;
+                let identity = creation.identity;
+                let fork = creation.config.fork;
+                if !spawn_sources.insert((identity.parent, fork.turn.0, fork.call_id))
+                    || agent_positions.insert(identity.id, agents.len()).is_some()
+                {
+                    return Err(ConversationFailure::new(
+                        "存档中存在重复的 Spawn 来源或 Agent ID",
+                    ));
+                }
+                agents.push((identity, crate::AgentState::Starting));
+            }
+            RecordEvent::AgentExecution {
+                agent,
+                state,
+                request,
+                output,
+                ..
+            } => {
+                if let Some(request) = &request {
+                    request
+                        .validate_request_materials()
+                        .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+                }
+                let (_, previous) = agent_positions
+                    .get(&agent)
+                    .and_then(|position| agents.get_mut(*position))
+                    .ok_or_else(|| ConversationFailure::new("Agent 执行记录缺少身份提交"))?;
+                let valid = match (&*previous, &state) {
+                    (
+                        crate::AgentState::Starting,
+                        crate::AgentState::Running
+                        | crate::AgentState::Failed(_)
+                        | crate::AgentState::Interrupted,
+                    )
+                    | (
+                        crate::AgentState::Running,
+                        crate::AgentState::Failed(_) | crate::AgentState::Interrupted,
+                    ) => output.is_none(),
+                    (crate::AgentState::Running, crate::AgentState::Completed) => output.is_some(),
+                    _ => false,
+                };
+                if !valid || (state == crate::AgentState::Running) != request.is_some() {
+                    return Err(ConversationFailure::new(
+                        "Agent 执行记录状态顺序或结果不一致",
+                    ));
+                }
+                *previous = state;
+            }
             RecordEvent::AudioDraft { attachment, .. } => {
                 if let Some(audio) = &attachment {
                     audio.validate()?;
@@ -1385,6 +1439,7 @@ pub fn restore(
         notice: (!notices.is_empty()).then(|| notices.join("\n")),
         normalized,
         recovered_results,
+        agents,
     })
 }
 
@@ -1515,7 +1570,7 @@ impl Conversation {
             queue_paused: restored.state.queue_paused,
             task_policy: Box::new(restored.state.task_policy),
         };
-        let instance = self.activate_root(&view)?;
+        let instance = self.activate_restored_root(&view, restored.agents)?;
         self.next_turn = restored.next_turn;
         self.session = Some(ChatSession {
             idle: None,

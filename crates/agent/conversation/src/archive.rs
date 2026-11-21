@@ -74,6 +74,19 @@ pub enum RecoveryEvidence {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RecordEvent {
+    AgentCreated {
+        session: SessionId,
+        creation: Box<crate::AgentCreationRecord>,
+    },
+    AgentExecution {
+        session: SessionId,
+        agent: crate::AgentId,
+        state: crate::AgentState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request: Option<Box<agentelier_llm_model::RequestProjection>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<agentelier_llm_model::ProtocolArchive>,
+    },
     AudioDraft {
         session: SessionId,
         attachment: Option<crate::AudioAttachment>,
@@ -194,7 +207,9 @@ impl RecordEvent {
     pub fn session(&self) -> SessionId {
         match self {
             Self::Process { fact } => fact.origin.session,
-            Self::AudioDraft { session, .. }
+            Self::AgentCreated { session, .. }
+            | Self::AgentExecution { session, .. }
+            | Self::AudioDraft { session, .. }
             | Self::TranscriptionStarted { session, .. }
             | Self::TranscriptionFinished { session, .. } => *session,
             _ => self.state().map_or(SessionId::nil(), |state| state.session),
@@ -203,7 +218,9 @@ impl RecordEvent {
 
     pub fn state(&self) -> Option<&StoredState> {
         match self {
-            Self::Process { .. }
+            Self::AgentCreated { .. }
+            | Self::AgentExecution { .. }
+            | Self::Process { .. }
             | Self::AudioDraft { .. }
             | Self::TranscriptionStarted { .. }
             | Self::TranscriptionFinished { .. } => None,

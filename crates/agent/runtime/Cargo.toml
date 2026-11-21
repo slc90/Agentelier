@@ -13,6 +13,8 @@ agentelier_turn_runner = { path = "../turn_runner" }
 agentelier_conversation = { path = "../conversation" }
 agentelier_account = { path = "../account" }
 agentelier_llm_model = { path = "../llm_model" }
+agentelier_prompts = { path = "../prompts" }
+serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
 tempfile.workspace = true

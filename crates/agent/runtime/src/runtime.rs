@@ -21,6 +21,7 @@ pub use memory::{MemoryReply, MemoryRequest};
 mod model_task;
 mod recording;
 mod renaming;
+mod spawn_agent;
 mod task_control;
 mod tool_jobs;
 use model_task::{
@@ -156,6 +157,8 @@ enum Command {
         request: ModelRequest,
     },
     ModelFinished(ModelJoin),
+    SpawnAgent(Box<spawn_agent::Invocation>),
+    ChildFinished(Result<spawn_agent::FinishedChild, tokio::task::JoinError>),
     Stream(Option<RunnerEvent>),
     Session(SessionCommand),
     TaskAction {
@@ -329,9 +332,11 @@ impl AgentRuntime {
                         let mut model: Option<ModelTask> = None;
                         let mut session_tools: Option<(SessionId, tool_jobs::SessionTools)> = None;
                         let mut task_receipts = task_control::Receipts::new();
-                        let mut conversation = Conversation::with_extensions(agentelier_memory::registrations(
-                            memory.as_ref().ok().map(Memory::client),
-                        ));
+                        let (spawn_sender, mut spawn_requests) = mpsc::channel(COMMAND_CAPACITY);
+                        let mut children = spawn_agent::Children::default();
+                        let mut extensions = agentelier_memory::registrations(memory.as_ref().ok().map(Memory::client));
+                        extensions.push(spawn_agent::registration(spawn_sender, owner_credentials.clone(), data_root.join("prompts.json")));
+                        let mut conversation = Conversation::with_extensions(extensions);
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
                             if let AccountEffect::Event(event) = account.restore().await? {
@@ -427,6 +432,8 @@ impl AgentRuntime {
                                         Some(task) => (&mut task.handle).await,
                                         None => std::future::pending().await,
                                     }} => Command::ModelFinished(result),
+                                    Some(invocation) = spawn_requests.recv() => Command::SpawnAgent(Box::new(invocation)),
+                                    Some(result) = children.jobs.join_next(), if !children.jobs.is_empty() => Command::ChildFinished(result),
                                     command = session_incoming.recv(), if !pending_queue => match command {
                                         Some(command) => Command::Session(command),
                                         None => break,
@@ -441,6 +448,12 @@ impl AgentRuntime {
                                     },
                                 };
                                 match command {
+                                    Command::SpawnAgent(invocation) => {
+                                        children.spawn(*invocation, &mut conversation, model.as_ref(), &store.client(), &owner_credentials).await;
+                                    }
+                                    Command::ChildFinished(result) => {
+                                        spawn_agent::Children::finish(result, &store.client(), &mut conversation).await?;
+                                    }
                                     Command::AudioDraft(id, session, path) => {
                                         if !audio_jobs.is_empty() || !conversation.is_current(session) {
                                             let result = Err("会话已变化或上一次音频操作尚未结束".into());
@@ -807,6 +820,11 @@ impl AgentRuntime {
                                             ConversationRequest::Create(_) | ConversationRequest::Open { .. } | ConversationRequest::Reset { .. } => true,
                                             _ => false,
                                         };
+                                        if replacing && !children.jobs.is_empty() {
+                                            control.finished.cancel();
+                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("当前会话仍有子 Agent 正在执行".into())))?;
+                                            continue;
+                                        }
                                         if replacing && let Err(failure) = conversation.check_replacement() {
                                             control.finished.cancel();
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
@@ -1026,6 +1044,11 @@ impl AgentRuntime {
                                 capture_delivery(Err(failure.into()), &mut delivery_failure);
                             }
                         }
+                        drop(spawn_requests);
+                        capture_delivery(
+                            children.stop(&store.client(), &mut conversation).await,
+                            &mut delivery_failure,
+                        );
                         capture_delivery(
                             stop_model(
                                 &mut model,

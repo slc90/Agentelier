@@ -131,7 +131,12 @@ fn strict_by_default() -> bool {
 }
 
 pub type ToolExecution<'a> = Pin<Box<dyn Future<Output = ToolResult> + Send + 'a>>;
-type ToolExecutor = dyn for<'a> Fn(&'a ExecutionContext, &'a str, &'a CancellationToken) -> ToolExecution<'a>
+type ToolExecutor = dyn for<'a> Fn(
+        &'a ExecutionContext,
+        &'a str,
+        &'a CancellationToken,
+        crate::ProcessOrigin,
+    ) -> ToolExecution<'a>
     + Send
     + Sync;
 
@@ -176,6 +181,23 @@ impl ToolRegistration {
             &'a ExecutionContext,
             &'a str,
             &'a CancellationToken,
+        ) -> ToolExecution<'a>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self::with_origin(definition, move |context, arguments, cancel, _| {
+            executor(context, arguments, cancel)
+        })
+    }
+
+    pub fn with_origin(
+        definition: ToolDefinition,
+        executor: impl for<'a> Fn(
+            &'a ExecutionContext,
+            &'a str,
+            &'a CancellationToken,
+            crate::ProcessOrigin,
         ) -> ToolExecution<'a>
         + Send
         + Sync
@@ -247,7 +269,7 @@ impl ToolRegistration {
                 )
             }),
             Executor::Function(execute) => {
-                let execution = execute(context, arguments, cancel);
+                let execution = execute(context, arguments, cancel, origin);
                 Box::pin(async move {
                     let result = execution.await;
                     if result.status == crate::ToolStatus::ExternalUnconfirmed {
