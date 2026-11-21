@@ -170,6 +170,16 @@ fn order(request: &ChatRequest) -> String {
             format!("{} · 长期记忆 · {}", memory.role, memory.publication_id),
         ));
     }
+    if let Some((index, source)) = &request.transcript {
+        materials.push((
+            *index,
+            format!(
+                "developer · 文稿引用 · {} · SHA-256 {}",
+                source.label(),
+                source.text_sha256
+            ),
+        ));
+    }
     materials.sort_by_key(|(index, _)| *index);
     for (index, text) in materials {
         lines.insert(index.min(lines.len()), text);

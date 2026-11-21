@@ -58,6 +58,13 @@ impl ActiveTurn<'_> {
         let rendered = catalog
             .render()
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+        let transcript = self
+            .view
+            .turn
+            .as_ref()
+            .and_then(|turn| turn.transcript.as_ref())
+            .map(|reference| self.view.transcript_evidence(reference))
+            .transpose()?;
         self.view.context.task_material_tokens =
             agentelier_llm_model::estimated_text_tokens(&rendered)
                 .saturating_add(agentelier_llm_model::estimated_text_tokens("developer"))
@@ -66,7 +73,11 @@ impl ActiveTurn<'_> {
                         .memory
                         .as_ref()
                         .map_or(0, |memory| memory.estimated_tokens()),
-                );
+                )
+                .saturating_add(transcript.as_ref().map_or(
+                    0,
+                    agentelier_llm_model::TranscriptEvidence::estimated_tokens,
+                ));
         for skill in &selected {
             skill
                 .validate()
@@ -369,6 +380,11 @@ impl ActiveTurn<'_> {
             .state
             .continuation
             .is_some_and(|source| source.request == turn.request_index);
+        let transcript = turn
+            .transcript
+            .as_ref()
+            .map(|reference| self.view.transcript_evidence(reference))
+            .transpose()?;
         if self.history.has_open_synchronous_calls() {
             return Err(ConversationFailure::new("同步调用的结果尚未进入历史"));
         }
@@ -404,6 +420,7 @@ impl ActiveTurn<'_> {
             skip_compaction,
             reserved_result_bytes,
             memory: self.state.memory.as_deref().cloned(),
+            transcript,
             selected_skills: turn.selected_skills.clone(),
             skill_catalog: turn
                 .skills

@@ -455,7 +455,7 @@ pub fn restore(
     let mut historical_processes = BTreeMap::new();
     let mut generated_images = HashMap::new();
     let mut audio_draft: Option<crate::AudioAttachment> = None;
-    let mut audio_ids = HashMap::<crate::AudioId, String>::new();
+    let mut audio_ids = HashMap::<crate::AudioId, crate::AudioAttachment>::new();
     let mut transcriptions = Vec::<crate::AudioTranscription>::new();
     let mut processes = crate::ProcessLedger::default();
     let mut finalized_without_join = false;
@@ -471,7 +471,7 @@ pub fn restore(
             RecordEvent::AudioDraft { attachment, .. } => {
                 if let Some(audio) = &attachment {
                     audio.validate()?;
-                    if audio_ids.insert(audio.id, audio.digest.clone()).is_some() {
+                    if audio_ids.insert(audio.id, audio.clone()).is_some() {
                         return Err(ConversationFailure::new("存档重复登记同一音频附件"));
                     }
                 }
@@ -479,7 +479,9 @@ pub fn restore(
             }
             RecordEvent::TranscriptionStarted { source, .. } => {
                 if source.id.is_nil()
-                    || audio_ids.get(&source.audio) != Some(&source.digest)
+                    || !audio_ids
+                        .get(&source.audio)
+                        .is_some_and(|attachment| attachment.digest == source.digest)
                     || transcriptions
                         .iter()
                         .any(|item| item.source.id == source.id)
@@ -558,6 +560,15 @@ pub fn restore(
                     .requests
                     .last()
                     .ok_or_else(|| ConversationFailure::new("准备记录缺少请求材料"))?;
+                if fact
+                    .projection
+                    .transcript
+                    .as_ref()
+                    .map(|item| &item.reference)
+                    != turn.transcript.as_ref()
+                {
+                    return Err(ConversationFailure::new("冻结请求与选定文稿版本不一致"));
+                }
                 if (fact.projection.route == agentelier_llm_model::RecordedModelSource::Codex)
                     != initial.settings.codex.is_some()
                 {
@@ -689,9 +700,25 @@ pub fn restore(
                 }
                 let mut incoming = incoming;
                 if let Some(turn) = incoming.turn.as_ref() {
+                    if let Some(reference) = &turn.transcript {
+                        validate_transcript(
+                            initial.session,
+                            reference,
+                            &audio_ids,
+                            &transcriptions,
+                        )?;
+                    }
                     if turn.is_retry {
                         if turn.audio != state.turn.as_ref().and_then(|prior| prior.audio.clone()) {
                             return Err(ConversationFailure::new("重试的音频附件来源不一致"));
+                        }
+                        if turn.transcript.as_ref()
+                            != state
+                                .turn
+                                .as_ref()
+                                .and_then(|prior| prior.transcript.as_ref())
+                        {
+                            return Err(ConversationFailure::new("重试引用了不同的文稿版本"));
                         }
                     } else if let Some(audio) = &turn.audio {
                         if turn.result_continuation || audio_draft.as_ref() != Some(audio) {
@@ -727,6 +754,7 @@ pub fn restore(
                     || old.input_id != source.input
                     || next.input_id != source.input
                     || next.input != old.input
+                    || next.transcript != old.transcript
                     || next.request_index != source.request
                     || source.input_retained != retained_input
                     || source.request >= crate::MAX_TURN_REQUESTS
@@ -1084,6 +1112,16 @@ pub fn restore(
                 state: incoming,
                 decision,
             } => {
+                for queued in &incoming.queue {
+                    if let Some(reference) = &queued.transcript {
+                        validate_transcript(
+                            initial.session,
+                            reference,
+                            &audio_ids,
+                            &transcriptions,
+                        )?;
+                    }
+                }
                 state.queue = incoming.queue;
                 state.queue_paused = incoming.queue_paused
                     || state.execution_blocked
@@ -1348,6 +1386,26 @@ pub fn restore(
         normalized,
         recovered_results,
     })
+}
+
+fn validate_transcript(
+    session: crate::SessionId,
+    reference: &agentelier_llm_model::TranscriptReference,
+    attachments: &HashMap<crate::AudioId, crate::AudioAttachment>,
+    transcriptions: &[crate::AudioTranscription],
+) -> Result<(), ConversationFailure> {
+    let audio = attachments
+        .get(&reference.audio)
+        .ok_or_else(|| ConversationFailure::new("引用文稿缺少原始音频记录"))?;
+    if audio.name != reference.filename || audio.digest != reference.audio_sha256 {
+        return Err(ConversationFailure::new("文稿引用与存档音频不一致"));
+    }
+    transcriptions
+        .iter()
+        .find(|item| item.source.id == reference.transcript)
+        .ok_or_else(|| ConversationFailure::new("引用的完整文稿尚未保存"))?
+        .evidence(session, reference)
+        .map(drop)
 }
 
 impl Conversation {

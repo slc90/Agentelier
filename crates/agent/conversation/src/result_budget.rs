@@ -140,24 +140,54 @@ impl crate::conversation::ChatSession {
         &self,
         history: &ProtocolHistory,
         input: &str,
+        transcript: Option<&agentelier_llm_model::TranscriptEvidence>,
     ) -> Result<(), ConversationFailure> {
         if !history.has_open_calls() {
             return Ok(());
         }
         let candidate = history.with_user(input);
         let mut context = (*self.view.context).clone();
+        let previous = self
+            .view
+            .turn
+            .as_ref()
+            .and_then(|turn| turn.transcript.as_ref())
+            .map(|reference| self.view.transcript_evidence(reference))
+            .transpose()?;
+        context.task_material_tokens = context
+            .task_material_tokens
+            .saturating_sub(previous.as_ref().map_or(
+                0,
+                agentelier_llm_model::TranscriptEvidence::estimated_tokens,
+            ))
+            .saturating_add(transcript.map_or(
+                0,
+                agentelier_llm_model::TranscriptEvidence::estimated_tokens,
+            ));
         context.refresh(
             &candidate,
             &self.view.settings.instructions,
             self.tools.definitions(),
         )?;
-        let fixed = self
+        let projection = self
             .view
             .turn
             .as_ref()
             .and_then(|turn| turn.requests.last())
-            .and_then(|request| request.projection.fixed_bytes)
+            .map(|request| &request.projection);
+        let mut fixed = projection
+            .and_then(|request| request.fixed_bytes)
             .unwrap_or_default();
+        if projection.is_some_and(|request| request.transcript.is_some()) {
+            fixed = fixed.saturating_sub(
+                previous
+                    .as_ref()
+                    .map_or(0, agentelier_llm_model::TranscriptEvidence::wire_bytes),
+            );
+        }
+        fixed = fixed.saturating_add(
+            transcript.map_or(0, agentelier_llm_model::TranscriptEvidence::wire_bytes),
+        );
         ResultHeadroom::measure(
             &self.tools,
             &self.pending_results,

@@ -1,12 +1,15 @@
 use crate::conversation::{ChatSession, ChatState};
 use agentelier_agent_host::AgentHost;
-use agentelier_conversation_bridge::{SessionId, TranscriptionOutcomeView, TranscriptionView};
+use agentelier_conversation_bridge::{
+    SessionId, TranscriptReferenceView, TranscriptionOutcomeView, TranscriptionView,
+};
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
 use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{AutoSize, WidgetryReadOnlyTextField, WidgetryTextFieldHeadless};
+use std::collections::HashMap;
 use std::io;
 
 const TRANSCRIPT_MIN_ROWS: usize = 3;
@@ -27,6 +30,37 @@ pub enum ChatOutcome {
     Failed(String),
     Cancelled,
     Interrupted,
+}
+
+#[derive(Clone, Reflect, PartialEq, Eq)]
+pub struct ChatTranscriptReference {
+    pub session: SessionId,
+    pub audio: SessionId,
+    pub transcript: SessionId,
+    pub filename: String,
+    pub engine: String,
+    pub audio_sha256: String,
+    pub text_sha256: String,
+}
+
+impl From<TranscriptReferenceView> for ChatTranscriptReference {
+    fn from(value: TranscriptReferenceView) -> Self {
+        Self {
+            session: value.session,
+            audio: value.audio,
+            transcript: value.transcript,
+            filename: value.filename,
+            engine: value.engine,
+            audio_sha256: value.audio_sha256,
+            text_sha256: value.text_sha256,
+        }
+    }
+}
+
+impl ChatTranscriptReference {
+    pub(crate) fn label(&self) -> String {
+        source_label(&self.filename, &self.engine, self.transcript)
+    }
 }
 
 impl From<TranscriptionView> for ChatTranscription {
@@ -50,6 +84,7 @@ impl From<TranscriptionView> for ChatTranscription {
 pub(crate) struct TranscriptionState {
     pending: Option<Pending>,
     feedback: Option<(SessionId, SessionId, String)>,
+    selected: HashMap<SessionId, Option<SessionId>>,
 }
 
 #[derive(Clone, Copy)]
@@ -63,6 +98,33 @@ struct Pending {
 impl TranscriptionState {
     pub(crate) fn busy(&self) -> bool {
         self.pending.is_some()
+    }
+
+    pub(crate) fn selection(&self, session: &ChatSession) -> Option<SessionId> {
+        let id = self.selected.get(&session.id).copied().unwrap_or_else(|| {
+            session
+                .turn
+                .iter()
+                .chain(session.previous_turns.iter().rev())
+                .find(|turn| !turn.result_continuation)
+                .and_then(|turn| turn.transcript.as_ref().map(|source| source.transcript))
+        })?;
+        let turns = || session.turn.iter().chain(&session.previous_turns);
+        let available = turns()
+            .filter_map(|turn| turn.transcript.as_ref())
+            .any(|source| source.transcript == id)
+            || session
+                .transcriptions
+                .iter()
+                .find(|entry| entry.id == id)
+                .is_some_and(|entry| {
+                    session
+                        .audio_draft
+                        .iter()
+                        .chain(turns().filter_map(|turn| turn.audio.as_ref()))
+                        .any(|audio| audio.id == entry.audio)
+                });
+        available.then_some(id)
     }
 
     pub(crate) fn host_failed(&mut self, failure: &str) {
@@ -102,6 +164,10 @@ struct Panel {
 struct Summary;
 #[derive(Component, Clone, Default)]
 struct TranscriptText;
+#[derive(Component, Clone, Default)]
+struct SelectionPanel;
+#[derive(Component, Clone, Default)]
+struct SelectionLabel;
 
 #[derive(Component, Clone, Copy)]
 enum Action {
@@ -109,6 +175,7 @@ enum Action {
     Cancel,
     View,
     Copy,
+    Ask,
 }
 
 pub(crate) fn install(app: &mut App) {
@@ -127,6 +194,7 @@ pub(crate) fn panel(target: Target) -> impl Scene {
                 @button("取消转写", "CancelTranscription", Action::Cancel)--
                 @button("查看文稿", "ViewTranscript", Action::View)--
                 @button("复制文稿", "CopyTranscript", Action::Copy)--
+                @button("用文稿提问", "AskAboutTranscript", Action::Ask)--
                 Text::default() WidgetryText Summary Name("TranscriptionStatus")
             ]--
             @WidgetryReadOnlyTextField {
@@ -135,6 +203,24 @@ pub(crate) fn panel(target: Target) -> impl Scene {
             }
             TranscriptText Name("TranscriptText") Node { display: Display::None, width: percent(100), min_width: px(0) }
         ]
+    }
+}
+
+pub(crate) fn selection_panel() -> impl Scene {
+    bsn! {
+        SelectionPanel Name("TranscriptSelection")
+        Node { display: Display::None, min_width: px(0), column_gap: px(8), flex_shrink: 0.0, align_items: AlignItems::Center }
+        Children [
+            Text::default() WidgetryText SelectionLabel Name("SelectedTranscriptLabel")--
+            @WidgetryButton { @children: {Some(Box::new(bsn_list!{Text("清除文稿引用") WidgetryText}) as Box<dyn SceneList>)} }
+            Name("ClearTranscriptSelection") on(clear)
+        ]
+    }
+}
+
+fn clear(_: On<Activate>, chat: Res<ChatState>, mut state: ResMut<TranscriptionState>) {
+    if let Some(session) = &chat.session {
+        state.selected.insert(session.id, None);
     }
 }
 
@@ -256,6 +342,16 @@ fn invoke(world: &mut World, button: Entity) -> Result {
             world.resource_mut::<TranscriptionState>().feedback =
                 Some((session_id, audio, message));
         }
+        Action::Ask => {
+            let Some((version, _)) = latest(session, audio) else {
+                return Ok(());
+            };
+            let id = version.id;
+            world
+                .resource_mut::<TranscriptionState>()
+                .selected
+                .insert(session_id, Some(id));
+        }
     }
     Ok(())
 }
@@ -301,6 +397,7 @@ pub(crate) fn receipt(
 }
 
 fn synchronize(world: &mut World) -> Result {
+    synchronize_selection(world);
     let mut panels = world.query::<(Entity, &Panel)>();
     let panels: Vec<_> = panels
         .iter(world)
@@ -382,7 +479,9 @@ fn synchronize(world: &mut World) -> Result {
                         let (visible, enabled) = match action {
                             Action::Start => (pending.is_none(), idle),
                             Action::Cancel => (pending.is_some(), can_cancel),
-                            Action::View | Action::Copy => (displayed.is_some(), true),
+                            Action::View | Action::Copy | Action::Ask => {
+                                (displayed.is_some(), true)
+                            }
                         };
                         set_display(world, control, visible);
                         if enabled && world.get::<InteractionDisabled>(control).is_some() {
@@ -399,6 +498,48 @@ fn synchronize(world: &mut World) -> Result {
         }
     }
     Ok(())
+}
+
+fn synchronize_selection(world: &mut World) {
+    let chat = world.resource::<ChatState>();
+    let selection = chat.session.as_ref().and_then(|session| {
+        let id = world.resource::<TranscriptionState>().selection(session)?;
+        let turns = || {
+            session
+                .turn
+                .iter()
+                .chain(session.previous_turns.iter().rev())
+        };
+        if let Some(reference) = turns()
+            .filter_map(|turn| turn.transcript.as_ref())
+            .find(|reference| reference.transcript == id)
+        {
+            return Some(reference.label());
+        }
+        let document = session.transcriptions.iter().find(|entry| entry.id == id)?;
+        let source = session
+            .audio_draft
+            .iter()
+            .chain(turns().filter_map(|turn| turn.audio.as_ref()))
+            .find(|audio| audio.id == document.audio)?;
+        Some(source_label(&source.name, &document.engine, id))
+    });
+    let mut panels = world.query_filtered::<Entity, With<SelectionPanel>>();
+    let panels: Vec<_> = panels.iter(world).collect();
+    let visible = selection.is_some();
+    for entity in panels {
+        set_display(world, entity, visible);
+    }
+    let label = selection.map_or_else(String::new, |source| format!("下一条消息引用 · {source}"));
+    let mut outputs = world.query_filtered::<&mut Text, With<SelectionLabel>>();
+    for mut output in outputs.iter_mut(world) {
+        output.set_if_neq(Text::new(&label));
+    }
+}
+
+fn source_label(filename: &str, engine: &str, id: SessionId) -> String {
+    let version = id.to_string();
+    format!("{filename} · {engine} · 文稿 {} · 仅文字", &version[..8])
 }
 
 fn set_display(world: &mut World, entity: Entity, visible: bool) {

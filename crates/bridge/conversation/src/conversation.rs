@@ -32,6 +32,7 @@ pub enum ConversationRequest {
         session: SessionId,
         input: String,
         audio: Option<agentelier_conversation::AudioId>,
+        transcript: Option<agentelier_conversation::TranscriptId>,
     },
     Retry {
         session: SessionId,
@@ -173,6 +174,7 @@ pub struct RequestMemory {
 
 #[derive(Clone)]
 pub struct RequestView {
+    pub transcript: Option<(usize, TranscriptReferenceView)>,
     pub response_accepted: Option<bool>,
     pub additional_tools_in_input: bool,
     pub memory: Option<RequestMemory>,
@@ -199,6 +201,7 @@ pub struct TurnView {
     pub is_retry: bool,
     pub input: String,
     pub audio: Option<AudioAttachmentView>,
+    pub transcript: Option<TranscriptReferenceView>,
     pub messages: Vec<MessageView>,
     pub status: TurnStatus,
     pub request_items: Vec<HistoryItem>,
@@ -215,12 +218,22 @@ pub struct QueuedInput {
     pub operation_id: u64,
     pub input_id: u64,
     pub text: String,
+    pub transcript: Option<TranscriptReferenceView>,
 }
 #[derive(Clone)]
 pub enum SessionAction {
-    Enqueue { session: SessionId, text: String },
-    Remove { session: SessionId, operation: u64 },
-    Resume { session: SessionId },
+    Enqueue {
+        session: SessionId,
+        text: String,
+        transcript: Option<agentelier_conversation::TranscriptId>,
+    },
+    Remove {
+        session: SessionId,
+        operation: u64,
+    },
+    Resume {
+        session: SessionId,
+    },
 }
 pub enum QueueDecision {
     Enqueued,
@@ -295,6 +308,31 @@ pub struct TranscriptionView {
     pub digest: String,
     pub engine: &'static str,
     pub outcome: TranscriptionOutcomeView,
+}
+
+#[derive(Clone)]
+pub struct TranscriptReferenceView {
+    pub session: SessionId,
+    pub audio: SessionId,
+    pub transcript: SessionId,
+    pub filename: String,
+    pub engine: String,
+    pub audio_sha256: String,
+    pub text_sha256: String,
+}
+
+impl From<agentelier_conversation::TranscriptReference> for TranscriptReferenceView {
+    fn from(value: agentelier_conversation::TranscriptReference) -> Self {
+        Self {
+            session: value.session,
+            audio: value.audio,
+            transcript: value.transcript,
+            filename: value.filename,
+            engine: value.engine,
+            audio_sha256: value.audio_sha256,
+            text_sha256: value.text_sha256,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -505,10 +543,12 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
             session,
             input,
             audio,
+            transcript,
         } => agentelier_conversation::ConversationRequest::Send {
             session,
             input,
             audio,
+            transcript,
         },
     }
 }
@@ -589,6 +629,7 @@ fn view(session: agentelier_conversation::SessionView) -> SessionView {
                 operation_id: input.operation_id,
                 input_id: input.input_id.0,
                 text: input.text,
+                transcript: input.transcript.map(Into::into),
             })
             .collect(),
         queue_paused: session.queue_paused,
@@ -652,6 +693,10 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
                     role: material.role,
                     input_index: material.input_index,
                 }),
+                transcript: fact
+                    .projection
+                    .transcript
+                    .map(|item| (item.input_index, item.reference.into())),
                 skills: fact
                     .projection
                     .skill_materials
@@ -737,6 +782,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
         operation_id: turn.operation_id,
         input: turn.input,
         audio: turn.audio.map(Into::into),
+        transcript: turn.transcript.map(Into::into),
         messages: turn
             .messages
             .into_iter()
@@ -981,9 +1027,16 @@ pub fn steer_input(
 
 pub fn session_command(id: u64, action: SessionAction) -> agentelier_conversation::SessionCommand {
     match action {
-        SessionAction::Enqueue { session, text } => {
-            agentelier_conversation::SessionCommand::Enqueue { id, session, text }
-        }
+        SessionAction::Enqueue {
+            session,
+            text,
+            transcript,
+        } => agentelier_conversation::SessionCommand::Enqueue {
+            id,
+            session,
+            text,
+            transcript,
+        },
         SessionAction::Remove { session, operation } => {
             agentelier_conversation::SessionCommand::Remove {
                 id,

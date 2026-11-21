@@ -18,6 +18,7 @@ pub struct ChatQueuedInput {
     pub operation_id: u64,
     pub input_id: u64,
     pub text: String,
+    pub transcript: Option<crate::transcription::ChatTranscriptReference>,
 }
 #[derive(Component, Clone, Default)]
 struct QueuePanel;
@@ -108,6 +109,9 @@ pub(crate) fn enqueue(world: &mut World) -> Result {
         .request_session(SessionAction::Enqueue {
             session: session.id,
             text: submitted.text.clone(),
+            transcript: world
+                .resource::<crate::transcription::TranscriptionState>()
+                .selection(session),
         });
     let mut state = world.resource_mut::<ChatState>();
     match result {
@@ -146,6 +150,7 @@ pub(crate) fn receive(state: &mut ChatState, event: QueueEvent) -> Option<Pendin
                 operation_id: input.operation_id,
                 input_id: input.input_id,
                 text: input.text,
+                transcript: input.transcript.map(Into::into),
             })
             .collect();
         session.queue_paused = view.queue_paused;
@@ -263,7 +268,7 @@ pub(crate) fn reconcile(world: &mut World) -> Result {
             .ok_or_else(|| std::io::Error::other("队列列表状态丢失"))?
             .items = items.clone();
         for (index, input) in items.iter().enumerate() {
-            let text = format!(
+            let mut text = format!(
                 "{}. {}",
                 index + 1,
                 input
@@ -272,6 +277,9 @@ pub(crate) fn reconcile(world: &mut World) -> Result {
                     .take(PREVIEW_CHARACTERS)
                     .collect::<String>()
             );
+            if let Some(source) = &input.transcript {
+                text.push_str(&format!("\n引用文稿 · {}", source.label()));
+            }
             let operation = input.operation_id;
             let name = format!("ChatQueueRemove-{operation}");
             world.commands().spawn_scene_with_error_handler(bsn! {

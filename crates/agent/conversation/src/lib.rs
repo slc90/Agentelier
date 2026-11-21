@@ -48,6 +48,7 @@ pub use conversation::{
 };
 
 pub use agentelier_llm_model::ProtocolItemSummary;
+pub use agentelier_llm_model::TranscriptReference;
 
 pub use agentelier_tools::ToolStatus;
 

@@ -35,6 +35,7 @@ impl std::io::Write for RequestBytes {
 
 pub struct GenerationRequest {
     pub memory: Option<crate::MemorySnapshot>,
+    pub transcript: Option<crate::TranscriptEvidence>,
     pub selected_skills: Vec<agentelier_skills::SelectedSkill>,
     pub skill_catalog: Option<String>,
     pub slug: String,
@@ -74,6 +75,8 @@ pub struct RequestProjection {
     pub skill_materials: Vec<SkillMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<crate::MemoryMaterial>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<crate::TranscriptMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history: Option<RequestHistory>,
     pub items: Vec<crate::ProtocolItemSummary>,
@@ -172,9 +175,13 @@ impl RequestProjection {
             }
         }
         let memory_index = usize::from(self.additional_tools_in_input()) + self.base_hashes.len();
-        let catalog_index = memory_index + usize::from(self.memory.is_some());
+        let transcript_index = memory_index + usize::from(self.memory.is_some());
+        let catalog_index = transcript_index + usize::from(self.transcript.is_some());
         if let Some(memory) = &self.memory {
             memory.validate(memory_index)?;
+        }
+        if let Some(transcript) = &self.transcript {
+            transcript.validate(transcript_index)?;
         }
         let selected_start = self
             .skill_materials
@@ -279,6 +286,9 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
             Ok::<_, ModelFailure>(material)
         })
         .transpose()?;
+    let transcript = generation
+        .transcript
+        .map(|evidence| evidence.insert(&mut input));
     let mut skill_materials = Vec::new();
     if let Some(catalog) = generation.skill_catalog {
         use sha2::{Digest, Sha256};
@@ -364,6 +374,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         tool_contract: contract,
         skill_materials,
         memory,
+        transcript,
         history: Some(history),
         items,
         base_hashes,

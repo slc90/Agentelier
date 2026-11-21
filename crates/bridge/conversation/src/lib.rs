@@ -4,7 +4,8 @@ compile_error!("This application supports Windows x64 only");
 mod conversation;
 pub use conversation::{
     AudioAttachmentView, ProjectCollectionStatus, ProjectContextView, ProjectPublicationView,
-    ProjectRuleSource, ProjectSnapshotView, TranscriptionOutcomeView, TranscriptionView,
+    ProjectRuleSource, ProjectSnapshotView, TranscriptReferenceView, TranscriptionOutcomeView,
+    TranscriptionView,
 };
 
 pub use conversation::{

@@ -1,4 +1,5 @@
 use crate::{Conversation, ConversationFailure, SessionId};
+use agentelier_llm_model::{TranscriptEvidence, TranscriptReference};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_AUDIO_BYTES: usize = 20 * 1024 * 1024;
@@ -13,6 +14,14 @@ pub const MAX_SESSION_TRANSCRIPTIONS: usize = 64;
 #[serde(rename_all = "snake_case")]
 pub enum TranscriptionEngine {
     Codex,
+}
+
+impl TranscriptionEngine {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Codex => "Codex",
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -48,6 +57,91 @@ impl TranscriptionOutcome {
 pub struct AudioTranscription {
     pub source: TranscriptionSource,
     pub outcome: TranscriptionOutcome,
+}
+
+impl AudioTranscription {
+    pub(crate) fn evidence(
+        &self,
+        session: SessionId,
+        reference: &TranscriptReference,
+    ) -> Result<TranscriptEvidence, ConversationFailure> {
+        if reference.session != session
+            || reference.transcript != self.source.id
+            || reference.audio != self.source.audio
+            || reference.audio_sha256 != self.source.digest
+            || reference.engine != self.source.engine.name()
+        {
+            return Err(ConversationFailure::new("文稿版本与音频来源不一致"));
+        }
+        let TranscriptionOutcome::Completed(text) = &self.outcome else {
+            return Err(ConversationFailure::new("所选转写没有完整文稿"));
+        };
+        TranscriptEvidence::new(reference.clone(), text).map_err(crate::result_budget::model_error)
+    }
+}
+
+impl crate::SessionView {
+    fn audio_attachment(&self, audio: AudioId) -> Option<&AudioAttachment> {
+        self.audio_draft
+            .iter()
+            .chain(
+                self.turn
+                    .iter()
+                    .map(Box::as_ref)
+                    .chain(&self.previous_turns)
+                    .filter_map(|turn| turn.audio.as_ref()),
+            )
+            .find(|item| item.id == audio)
+    }
+
+    pub(crate) fn transcript_reference(
+        &self,
+        id: TranscriptId,
+    ) -> Result<TranscriptReference, ConversationFailure> {
+        let result = self
+            .transcriptions
+            .iter()
+            .find(|item| item.source.id == id)
+            .ok_or_else(|| ConversationFailure::new("所选文稿不属于当前会话"))?;
+        let TranscriptionOutcome::Completed(text) = &result.outcome else {
+            return Err(ConversationFailure::new("所选转写没有完整文稿"));
+        };
+        let audio = self
+            .audio_attachment(result.source.audio)
+            .filter(|item| item.digest == result.source.digest);
+        let Some(audio) = audio else {
+            let reference = self
+                .turn
+                .iter()
+                .map(Box::as_ref)
+                .chain(&self.previous_turns)
+                .filter_map(|turn| turn.transcript.as_ref())
+                .find(|source| source.transcript == id)
+                .ok_or_else(|| ConversationFailure::new("所选文稿缺少原始音频附件"))?;
+            result.evidence(self.id, reference)?;
+            return Ok(reference.clone());
+        };
+        Ok(TranscriptReference::new(
+            self.id,
+            audio.id,
+            id,
+            audio.digest.clone(),
+            audio.name.clone(),
+            result.source.engine.name().into(),
+            text,
+        ))
+    }
+
+    pub(crate) fn transcript_evidence(
+        &self,
+        reference: &TranscriptReference,
+    ) -> Result<TranscriptEvidence, ConversationFailure> {
+        self.transcriptions
+            .iter()
+            .find(|item| item.source.id == reference.transcript)
+            .ok_or_else(|| ConversationFailure::new("会话中没有所选文稿版本"))?
+            .evidence(self.id, reference)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,16 +228,7 @@ impl Conversation {
             return Err(ConversationFailure::new("本会话已达到 64 次音频转写上限"));
         }
         let attachment = view
-            .audio_draft
-            .iter()
-            .chain(
-                view.turn
-                    .iter()
-                    .map(Box::as_ref)
-                    .chain(&view.previous_turns)
-                    .filter_map(|turn| turn.audio.as_ref()),
-            )
-            .find(|item| item.id == audio)
+            .audio_attachment(audio)
             .ok_or_else(|| ConversationFailure::new("当前会话没有此音频附件"))?;
         let source = TranscriptionSource {
             id: TranscriptId::new_v4(),

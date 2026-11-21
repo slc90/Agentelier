@@ -100,6 +100,7 @@ pub struct ChatRequestMemory {
 
 #[derive(Clone, Reflect)]
 pub struct ChatRequest {
+    pub transcript: Option<(usize, crate::transcription::ChatTranscriptReference)>,
     pub response_accepted: Option<bool>,
     pub additional_tools_in_input: bool,
     pub memory: Option<ChatRequestMemory>,
@@ -125,6 +126,7 @@ pub struct ChatTurn {
     pub is_retry: bool,
     pub input: String,
     pub audio: Option<crate::audio_attachment::ChatAudio>,
+    pub transcript: Option<crate::transcription::ChatTranscriptReference>,
     pub messages: Vec<ChatMessage>,
     pub status: ChatTurnStatus,
     pub request_items: Vec<ChatHistoryItem>,
@@ -369,6 +371,7 @@ pub(crate) fn panel(state: &ChatState, account: &AccountState) -> impl Scene {
             @crate::queue::panel()--
             @crate::audio_attachment::panel()--
             @crate::transcription::panel(crate::transcription::Target::Draft)--
+            @crate::transcription::selection_panel()--
             @WidgetryTextField {
                 @value: {draft}, @multiline: true,
                 @auto_size: {Some(AutoSize { min_rows: COMPOSER_MIN_ROWS, max_rows: COMPOSER_MAX_ROWS })},
@@ -833,6 +836,9 @@ fn send(world: &mut World) -> Result {
         .as_ref()
         .ok_or_else(|| io::Error::other("发送消息缺少聊天会话"))?;
     let audio = session.audio_draft.as_ref().map(|audio| audio.id);
+    let transcript = world
+        .resource::<crate::transcription::TranscriptionState>()
+        .selection(session);
     let session = session.id;
     let input = state.draft.clone();
     let submitted = PendingDraft {
@@ -846,6 +852,7 @@ fn send(world: &mut World) -> Result {
             session,
             input,
             audio,
+            transcript,
         });
     let mut state = world.resource_mut::<ChatState>();
     match result {
@@ -1019,6 +1026,9 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
             .requests
             .into_iter()
             .map(|fact| ChatRequest {
+                transcript: fact
+                    .transcript
+                    .map(|(index, source)| (index, source.into())),
                 response_accepted: fact.response_accepted,
                 additional_tools_in_input: fact.additional_tools_in_input,
                 memory: fact.memory.map(|memory| ChatRequestMemory {
@@ -1090,6 +1100,7 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
         operation_id: turn.operation_id,
         input: turn.input,
         audio: turn.audio.map(Into::into),
+        transcript: turn.transcript.map(Into::into),
         messages: turn
             .messages
             .into_iter()
@@ -1180,6 +1191,7 @@ fn project(session: SessionView) -> Result<ChatSession> {
                 operation_id: input.operation_id,
                 input_id: input.input_id,
                 text: input.text,
+                transcript: input.transcript.map(Into::into),
             })
             .collect(),
         queue_paused: session.queue_paused,
@@ -1639,9 +1651,19 @@ fn reconcile(world: &mut World) -> Result {
                     if let Some(audio) = &turn.audio {
                         let key = ChatRow {
                             item_id: Some(format!("audio-{}", audio.id)),
-                            ..user_key
+                            ..user_key.clone()
                         };
                         desired.push((key, RowContent::Audio(audio.clone())));
+                    }
+                    if let Some(source) = &turn.transcript {
+                        let key = ChatRow {
+                            item_id: Some(format!("transcript-{}", source.transcript)),
+                            ..user_key
+                        };
+                        desired.push((
+                            key,
+                            RowContent::Plain(format!("引用文稿 · {}", source.label())),
+                        ));
                     }
                 }
                 if turn.messages.is_empty() && turn.tools.is_empty() {

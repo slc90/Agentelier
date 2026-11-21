@@ -6,12 +6,15 @@ pub struct QueuedInput {
     pub operation_id: u64,
     pub input_id: TurnId,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<agentelier_llm_model::TranscriptReference>,
 }
 pub enum SessionCommand {
     Enqueue {
         id: u64,
         session: SessionId,
         text: String,
+        transcript: Option<crate::TranscriptId>,
     },
     Remove {
         id: u64,
@@ -150,13 +153,21 @@ impl Conversation {
             ));
         }
         match command {
-            SessionCommand::Enqueue { id, text, .. } => {
+            SessionCommand::Enqueue {
+                id,
+                text,
+                transcript,
+                ..
+            } => {
                 if text.trim().is_empty() {
                     return Err(ConversationFailure::new("不能排队空白消息"));
                 }
                 if view.queue.len() >= MAX_QUEUED_INPUTS {
                     return Err(ConversationFailure::new("待办消息已满，最多 8 条"));
                 }
+                let transcript = transcript
+                    .map(|id| view.transcript_reference(id))
+                    .transpose()?;
                 let input_id = next_turn
                     .checked_add(1)
                     .ok_or(ConversationFailure::new("输入标识已耗尽"))?;
@@ -165,6 +176,7 @@ impl Conversation {
                     operation_id: id,
                     input_id: TurnId(input_id),
                     text,
+                    transcript,
                 });
                 Ok(QueueDecision::Enqueued)
             }
@@ -226,7 +238,13 @@ impl Conversation {
             return Ok(None);
         };
         let session_id = session.view.id;
-        self.begin(input.operation_id, session_id, input.text)?;
+        self.begin_input(
+            input.operation_id,
+            session_id,
+            Some(input.text),
+            None,
+            input.transcript,
+        )?;
         let session = self
             .session
             .as_mut()

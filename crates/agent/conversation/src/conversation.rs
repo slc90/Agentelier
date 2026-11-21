@@ -67,6 +67,7 @@ pub enum ConversationRequest {
         session: SessionId,
         input: String,
         audio: Option<crate::AudioId>,
+        transcript: Option<crate::TranscriptId>,
     },
     Retry {
         session: SessionId,
@@ -130,6 +131,8 @@ pub struct TurnView {
     pub input: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio: Option<crate::AudioAttachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<agentelier_llm_model::TranscriptReference>,
     pub messages: Vec<OutputMessage>,
     pub status: TurnStatus,
     pub request_items: Vec<ProtocolItemSummary>,
@@ -520,21 +523,13 @@ impl Conversation {
         self.prepare(settings, tools, memory)
     }
 
-    pub fn begin(
-        &mut self,
-        operation_id: u64,
-        session_id: SessionId,
-        input: String,
-    ) -> Result<SessionView, ConversationFailure> {
-        self.begin_input(operation_id, session_id, Some(input), None)
-    }
-
-    fn begin_input(
+    pub(crate) fn begin_input(
         &mut self,
         operation_id: u64,
         session_id: SessionId,
         input: Option<String>,
         audio: Option<crate::AudioId>,
+        transcript: Option<agentelier_llm_model::TranscriptReference>,
     ) -> Result<SessionView, ConversationFailure> {
         if input.as_ref().is_some_and(|input| input.trim().is_empty()) {
             return Err(ConversationFailure::new("不能发送空白消息"));
@@ -546,6 +541,15 @@ impl Conversation {
         if session.view.id != session_id {
             return Err(ConversationFailure::new("聊天会话身份已变化"));
         }
+        if audio.is_some() && session.view.audio_draft.as_ref().map(|item| item.id) != audio {
+            return Err(ConversationFailure::new(
+                "草稿音频附件已变化，请核对后重新发送",
+            ));
+        }
+        let evidence = transcript
+            .as_ref()
+            .map(|reference| session.view.transcript_evidence(reference))
+            .transpose()?;
         if session
             .view
             .turn
@@ -572,7 +576,7 @@ impl Conversation {
             return Err(ConversationFailure::new("当前没有已保存、待处理的工具结果"));
         }
         let request_items = if let Some(input) = &input {
-            session.check_pending_input(history, input)?;
+            session.check_pending_input(history, input, evidence.as_ref())?;
             history.with_user(input).summary()
         } else {
             history.summary()
@@ -596,6 +600,7 @@ impl Conversation {
             operation_id,
             input: input.unwrap_or_default(),
             audio: audio.and_then(|_| session.view.audio_draft.take()),
+            transcript,
             messages: Vec::new(),
             status: TurnStatus::Running,
             request_items,
@@ -631,29 +636,25 @@ impl Conversation {
     ) -> Result<SessionView, ConversationFailure> {
         match request {
             ConversationRequest::ProcessResults { session } => {
-                self.begin_input(operation, session, None, None)
+                self.begin_input(operation, session, None, None, None)
             }
             ConversationRequest::Send {
                 session,
                 input,
                 audio,
+                transcript,
             } => {
-                if audio.is_none() {
-                    return self.begin(operation, session, input);
-                }
-                if self
-                    .session
-                    .as_ref()
-                    .filter(|chat| chat.view.id == session)
-                    .and_then(|chat| chat.view.audio_draft.as_ref())
-                    .map(|item| item.id)
-                    != audio
-                {
-                    return Err(ConversationFailure::new(
-                        "草稿音频附件已变化，请核对后重新发送",
-                    ));
-                }
-                self.begin_input(operation, session, Some(input), audio)
+                let source = transcript
+                    .map(|id| {
+                        self.session
+                            .as_ref()
+                            .filter(|chat| chat.view.id == session)
+                            .ok_or_else(|| ConversationFailure::new("聊天会话已变化"))?
+                            .view
+                            .transcript_reference(id)
+                    })
+                    .transpose()?;
+                self.begin_input(operation, session, Some(input), audio, source)
             }
             ConversationRequest::ContinueWithoutCompaction {
                 session,
@@ -682,7 +683,8 @@ impl Conversation {
                 let input = previous.input.clone();
                 let input_id = previous.input_id;
                 let audio = previous.audio.clone();
-                self.begin_input(operation, session, Some(input), None)?;
+                let transcript = previous.transcript.clone();
+                self.begin_input(operation, session, Some(input), None, transcript)?;
                 let current = self
                     .session
                     .as_mut()
