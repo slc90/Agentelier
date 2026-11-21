@@ -96,4 +96,4 @@ RequestProgress 保存已准备请求的发送阶段与传输回执。HTTP 保�
 
 ## 子 Agent 创建与执行记录
 
-子 Agent 身份及首个模型请求使用同一 Session JSONL 的 `AgentCreated` 和 `AgentExecution` 记录。身份记录包括父级及来源调用、冻结配置和独立历史起点。启动和终态记录关联同一稳定 Agent ID。重开时先校验 Agent 记录的关联和顺序，再恢复内存身份。缺少已确认终态的 Agent 保留身份并显示执行未确认。
+子 Agent 使用同一 Session JSONL 中的 `AgentCreated`、`AgentExecution` 与 `AgentTurn` 记录。身份记录包括父级及来源调用、冻结配置和独立历史起点。各条轮次记录关联子 Agent ID 和 Thread，承载内层 Runner 原有事件。单写入者确认外层 Session 后，以该 Thread 作为内部提交回执的归属。附件保存在所属 Session 的原有资源目录。重开时校验身份、记录顺序和 Thread 归属，缺少已确认终态的 Agent 保留身份并显示执行未确认。

@@ -45,11 +45,16 @@ pub struct ActiveTurn<'a> {
     pub(crate) view: &'a mut SessionView,
     pub(crate) history: &'a mut ProtocolHistory,
     pub(crate) tools: &'a Arc<ToolCatalog>,
+    pub(crate) child: Option<&'a crate::ChildMaterials>,
     pub(crate) results: &'a mut std::collections::BTreeMap<String, ToolResultEntry>,
     pub(crate) tasks: &'a mut crate::tasks::TaskLedger,
 }
 
 impl ActiveTurn<'_> {
+    pub fn child_materials(&self) -> Option<crate::ChildMaterials> {
+        self.child.cloned()
+    }
+
     pub fn skills(
         &mut self,
         catalog: agentelier_skills::Catalog,

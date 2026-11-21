@@ -515,12 +515,31 @@ pub fn restore(
                     (crate::AgentState::Running, crate::AgentState::Completed) => output.is_some(),
                     _ => false,
                 };
-                if !valid || (state == crate::AgentState::Running) != request.is_some() {
+                if !valid || (request.is_some() && state != crate::AgentState::Running) {
                     return Err(ConversationFailure::new(
                         "Agent 执行记录状态顺序或结果不一致",
                     ));
                 }
                 *previous = state;
+            }
+            RecordEvent::AgentTurn { agent, event, .. } => {
+                let (identity, state) = agent_positions
+                    .get(&agent)
+                    .and_then(|position| agents.get(*position))
+                    .ok_or_else(|| ConversationFailure::new("子 Agent 轮次记录缺少身份提交"))?;
+                if !matches!(state, crate::AgentState::Running)
+                    || identity.thread.session_id() != event.session()
+                    || matches!(
+                        event.as_ref(),
+                        RecordEvent::AgentCreated { .. }
+                            | RecordEvent::AgentExecution { .. }
+                            | RecordEvent::AgentTurn { .. }
+                    )
+                {
+                    return Err(ConversationFailure::new(
+                        "子 Agent 轮次记录的所属线程或状态不匹配",
+                    ));
+                }
             }
             RecordEvent::AudioDraft { attachment, .. } => {
                 if let Some(audio) = &attachment {
@@ -1582,6 +1601,7 @@ impl Conversation {
             pending_results: BTreeMap::new(),
             active: None,
             tasks: restored.tasks,
+            child: None,
         });
         Ok((view, instance))
     }

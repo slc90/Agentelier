@@ -109,7 +109,7 @@ pub(super) async fn dispatch(
             conversation,
             tools,
             agentelier_turn_runner::IdleAction::Control(command),
-            store,
+            &store.client(),
             publish,
         )
         .await;

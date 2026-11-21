@@ -14,8 +14,8 @@ mod archive;
 mod audio;
 mod child_config;
 pub use child_config::{
-    AgentCreationRecord, ChildConfigSnapshot, ChildExecutionPolicy, ChildPreparation, ForkBoundary,
-    ForkMode, PreparedChild,
+    AgentCreationRecord, ChildConfigSnapshot, ChildExecutionPolicy, ChildMaterials,
+    ChildPreparation, ForkBoundary, ForkMode, PreparedChild,
 };
 mod control;
 mod conversation;

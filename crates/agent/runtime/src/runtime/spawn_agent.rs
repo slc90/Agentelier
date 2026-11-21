@@ -1,11 +1,12 @@
+use super::child_runtime::{ChildTurn, Execution, FinishedChild};
 use super::{ModelTask, RuntimeFailure};
 use agentelier_account::{CredentialClient, ExecutionIdentity};
 use agentelier_conversation::{
-    AgentCreationRecord, AgentId, AgentIdentity, AgentNode, AgentRuntimeId, AgentState,
-    ChildPreparation, ChildRegistration, Conversation, ConversationFailure, ForkMode,
-    PreparedChild, RecordEvent, TurnId,
+    AgentCreationRecord, AgentId, AgentIdentity, AgentNode, AgentState, ChildPreparation,
+    ChildRegistration, Conversation, ConversationFailure, ForkMode, PreparedChild, RecordEvent,
+    SessionId, TurnId,
 };
-use agentelier_llm_model::{GenerationConnection, GenerationRequest, ModelInfo, ProtocolArchive};
+use agentelier_llm_model::{ModelInfo, ProtocolArchive};
 use agentelier_prompts::{Library, RoleSnapshot};
 use agentelier_session_store::SessionStoreClient;
 use agentelier_tools::{
@@ -13,8 +14,8 @@ use agentelier_tools::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -23,7 +24,7 @@ const TOOL: &str = "spawn_agent";
 const MAX_TASK_CHARS: usize = 16_384;
 const MAX_TITLE_CHARS: usize = 128;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Arguments {
     task: String,
@@ -37,16 +38,49 @@ struct Arguments {
 
 pub(super) struct Invocation {
     origin: ProcessOrigin,
-    prepared: Result<SpawnSpec, ToolResult>,
+    prepared: Result<PreparedInvocation, ToolResult>,
     cancel: CancellationToken,
     reply: oneshot::Sender<ToolResult>,
 }
 
-struct SpawnSpec {
+#[derive(Clone)]
+pub(super) struct PreparedInvocation {
     arguments: Arguments,
     role: RoleSnapshot,
     identity: ExecutionIdentity,
     models: Vec<ModelInfo>,
+}
+
+impl PreparedInvocation {
+    pub(super) fn prepare(
+        &self,
+        conversation: &mut Conversation,
+        operation: u64,
+        origin: &ProcessOrigin,
+    ) -> Result<PreparedChild, ConversationFailure> {
+        let active = conversation.active_turn(operation)?;
+        if active.session_id() != origin.session || active.turn_id()? != origin.turn {
+            return Err(ConversationFailure::new("Spawn 来源不属于当前执行轮次"));
+        }
+        active.prepare_child(
+            ChildPreparation {
+                request: origin.request,
+                call_id: &origin.call_id,
+                fork: self.arguments.fork.unwrap_or_default(),
+                model: self.arguments.model.as_deref(),
+                effort: self.arguments.reasoning_effort.as_deref(),
+                role: &self.role,
+            },
+            &self.models,
+            self.identity.identity(),
+        )
+    }
+}
+
+pub(super) struct Preparation {
+    pub(super) origin: ProcessOrigin,
+    pub(super) spec: PreparedInvocation,
+    pub(super) reply: oneshot::Sender<Result<PreparedChild, ConversationFailure>>,
 }
 
 pub(super) fn registration(
@@ -119,7 +153,7 @@ async fn invoke(
         } else {
             Vec::new()
         };
-        Ok(SpawnSpec {
+        Ok(PreparedInvocation {
             arguments,
             role,
             identity,
@@ -158,26 +192,38 @@ async fn invoke(
 pub(super) struct Children {
     pub(super) jobs: JoinSet<FinishedChild>,
     stop: CancellationToken,
+    active: HashMap<AgentId, ChildHandle>,
 }
 
-pub(super) struct FinishedChild {
-    identity: AgentIdentity,
-    instance: AgentRuntimeId,
-    state: AgentState,
-    output: Option<ProtocolArchive>,
+struct ChildHandle {
+    thread: SessionId,
+    commands: mpsc::Sender<Preparation>,
+    stop: CancellationToken,
+}
+
+pub(super) struct SpawnEnvironment<'a> {
+    pub(super) store: &'a SessionStoreClient,
+    pub(super) credentials: &'a CredentialClient,
+    pub(super) operations: &'a crate::OperationSequence,
+    pub(super) skills_root: &'a Path,
 }
 
 impl Children {
+    pub(super) fn cancel_active(&self) {
+        for child in self.active.values() {
+            child.stop.cancel();
+        }
+    }
+
     pub(super) async fn spawn(
         &mut self,
         invocation: Invocation,
         conversation: &mut Conversation,
         root_task: Option<&ModelTask>,
-        store: &SessionStoreClient,
-        credentials: &CredentialClient,
+        environment: SpawnEnvironment<'_>,
     ) {
         let result = self
-            .admit(&invocation, conversation, root_task, store, credentials)
+            .admit(&invocation, conversation, root_task, environment)
             .await;
         drop(
             invocation
@@ -191,16 +237,33 @@ impl Children {
         invocation: &Invocation,
         conversation: &mut Conversation,
         root_task: Option<&ModelTask>,
-        store: &SessionStoreClient,
-        credentials: &CredentialClient,
+        environment: SpawnEnvironment<'_>,
     ) -> Result<ToolResult, ToolResult> {
         let origin = &invocation.origin;
-        let (session, turn) = (origin.session, TurnId(origin.turn));
-        let parent = AgentId::for_root(session);
-        let root_task = root_task
-            .filter(|task| task.control.matches_turn(session, origin.turn))
-            .ok_or_else(|| rejection("Spawn 的父任务已结束或不属于当前会话"))?;
-        root_task.check_instance(conversation).map_err(rejection)?;
+        let view = conversation
+            .current()
+            .ok_or_else(|| rejection("Spawn 缺少所属 Session"))?;
+        let session = view.id;
+        let turn = TurnId(origin.turn);
+        let (parent, root_operation, child, parent_stop) = if origin.session == session {
+            let task = root_task
+                .filter(|task| task.control.matches_turn(session, origin.turn))
+                .ok_or_else(|| rejection("Spawn 的 Root 任务已结束或不属于当前会话"))?;
+            task.check_instance(conversation).map_err(rejection)?;
+            (
+                AgentId::for_root(session),
+                Some(task.id),
+                None,
+                task.control.cancel.clone(),
+            )
+        } else {
+            let (&parent, child) = self
+                .active
+                .iter()
+                .find(|(_, child)| child.thread == origin.session)
+                .ok_or_else(|| rejection("Spawn 来源子 Agent 未执行或已关闭"))?;
+            (parent, None, Some(child), child.stop.clone())
+        };
         if let Some(node) =
             conversation
                 .agent_registry()
@@ -208,10 +271,7 @@ impl Children {
         {
             return Ok(success(node));
         }
-        if conversation
-            .current()
-            .is_some_and(|view| view.execution_blocked)
-        {
+        if view.execution_blocked {
             return Err(unknown("当前会话的存档提交未确认，请重新打开核对"));
         }
         let spec = invocation.prepared.as_ref().map_err(Clone::clone)?;
@@ -245,20 +305,27 @@ impl Children {
             )
             .map_err(rejection)?;
         let identity = reservation.identity().clone();
-        let prepared = conversation.active_turn(root_task.id).and_then(|active| {
-            active.prepare_child(
-                ChildPreparation {
-                    request: origin.request,
-                    call_id: &origin.call_id,
-                    fork: request.fork.unwrap_or_default(),
-                    model: request.model.as_deref(),
-                    effort: request.reasoning_effort.as_deref(),
-                    role: &spec.role,
-                },
-                &spec.models,
-                spec.identity.identity(),
-            )
-        });
+        let prepared = if let Some(operation) = root_operation {
+            spec.prepare(conversation, operation, origin)
+        } else if let Some(child) = child {
+            let (reply, result) = oneshot::channel();
+            match child
+                .commands
+                .send(Preparation {
+                    origin: origin.clone(),
+                    spec: spec.clone(),
+                    reply,
+                })
+                .await
+            {
+                Ok(()) => result.await.unwrap_or_else(|_| {
+                    Err(ConversationFailure::new("父 Agent 未返回创建准备结果"))
+                }),
+                Err(_) => Err(ConversationFailure::new("父 Agent 已退出，不能准备 Spawn")),
+            }
+        } else {
+            Err(ConversationFailure::new("Spawn 缺少父 Agent 执行体"))
+        };
         let prepared = match prepared {
             Ok(prepared)
                 if !invocation.cancel.is_cancelled() && !spec.identity.is_invalidated() =>
@@ -289,6 +356,7 @@ impl Children {
                 .map_err(rejection)?;
             return Err(rejection(failure));
         }
+        let store = environment.store;
         let pending = match store.try_append(RecordEvent::AgentCreated {
             session,
             creation: Box::new(creation),
@@ -319,30 +387,32 @@ impl Children {
             .commit(reservation)
             .map_err(unknown)?;
         tracing::info!(session_id = %session, agent_id = %id, agent_path = %identity.path, turn_id = origin.turn, call_id = %origin.call_id, "子 Agent 身份已持久登记");
-        let starting = if invocation.cancel.is_cancelled() || spec.identity.is_invalidated() {
+        let starting = if invocation.cancel.is_cancelled()
+            || spec.identity.is_invalidated()
+            || parent_stop.is_cancelled()
+        {
             Err(AgentState::Interrupted)
         } else {
-            initial_generation(prepared, &request.task)
+            environment
+                .operations
+                .allocate()
+                .map_err(|failure| ConversationFailure::new(failure.to_string()))
+                .and_then(|operation| {
+                    ChildTurn::new(&identity, prepared, request.task.clone(), operation)
+                })
                 .map_err(|failure| AgentState::Failed(failure.to_string()))
         };
         match starting {
-            Err(state) => apply_execution(store, conversation, &identity, state, None, None)
+            Err(state) => apply_execution(store, conversation, &identity, state, None)
                 .await
                 .map_err(unknown)?,
-            Ok((initial, model, effort)) => {
+            Ok(turn) => {
                 let instance = conversation
                     .agent_registry_mut()
                     .attach(session, id)
                     .map_err(unknown)?;
-                if let Err(failure) = apply_execution(
-                    store,
-                    conversation,
-                    &identity,
-                    AgentState::Running,
-                    Some(initial.projection().clone()),
-                    None,
-                )
-                .await
+                if let Err(failure) =
+                    apply_execution(store, conversation, &identity, AgentState::Running, None).await
                 {
                     conversation
                         .agent_registry_mut()
@@ -350,18 +420,32 @@ impl Children {
                         .map_err(unknown)?;
                     return Err(unknown(failure));
                 }
-                let credentials = credentials.clone();
-                let authorization = spec.identity.clone();
                 let stop = self.stop.child_token();
-                tracing::info!(session_id = %session, agent_id = %id, agent_path = %identity.path, model, effort, role = %identity.role, "子 Agent 已启动独立模型请求");
-                self.jobs.spawn(run_child(
-                    identity,
-                    instance,
-                    initial,
-                    credentials,
-                    authorization,
-                    stop,
-                ));
+                let (commands, incoming) = mpsc::channel(super::COMMAND_CAPACITY);
+                let thread = identity.thread.session_id();
+                self.active.insert(
+                    id,
+                    ChildHandle {
+                        thread,
+                        commands,
+                        stop: stop.clone(),
+                    },
+                );
+                tracing::info!(session_id = %session, agent_id = %id, agent_path = %identity.path, model = %turn.view().settings.slug, effort = ?turn.view().settings.effort, role = %identity.role, "子 Agent 已启动独立执行轮次");
+                self.jobs.spawn(
+                    Execution {
+                        identity,
+                        instance,
+                        turn,
+                        store: store.clone(),
+                        credentials: environment.credentials.clone(),
+                        skills_root: environment.skills_root.into(),
+                        stop,
+                        parent_stop,
+                        commands: incoming,
+                    }
+                    .run(),
+                );
             }
         }
         conversation
@@ -372,6 +456,7 @@ impl Children {
     }
 
     pub(super) async fn finish(
+        &mut self,
         finished: Result<FinishedChild, tokio::task::JoinError>,
         store: &SessionStoreClient,
         conversation: &mut Conversation,
@@ -380,6 +465,7 @@ impl Children {
             ConversationFailure::new(format!("子 Agent 执行体无法回收：{failure}"))
         })?;
         let identity = &finished.identity;
+        self.active.remove(&identity.id);
         conversation
             .agent_registry_mut()
             .detach(identity.session, identity.id, finished.instance)
@@ -389,7 +475,6 @@ impl Children {
             conversation,
             identity,
             finished.state,
-            None,
             finished.output,
         )
         .await?;
@@ -404,88 +489,11 @@ impl Children {
         self.stop.cancel();
         let mut first_failure = None;
         while let Some(result) = self.jobs.join_next().await {
-            if let Err(failure) = Self::finish(result, store, conversation).await {
+            if let Err(failure) = self.finish(result, store, conversation).await {
                 first_failure.get_or_insert(failure);
             }
         }
         first_failure.map_or(Ok(()), Err)
-    }
-}
-
-fn initial_generation(
-    prepared: PreparedChild,
-    task: &str,
-) -> Result<
-    (
-        agentelier_llm_model::PreparedGeneration,
-        String,
-        Option<String>,
-    ),
-    ConversationFailure,
-> {
-    let settings = prepared.config.settings;
-    let history_position = prepared.history.position();
-    let compact_threshold = settings
-        .context_limits
-        .compact_threshold()
-        .ok_or_else(|| ConversationFailure::new("子 Agent 模型缺少压缩阈值"))?;
-    let skill_catalog = prepared
-        .config
-        .skills
-        .render()
-        .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
-    let generation = agentelier_llm_model::prepare(GenerationRequest {
-        memory: None,
-        transcript: None,
-        selected_skills: Vec::new(),
-        skill_catalog: Some(skill_catalog),
-        slug: settings.slug.clone(),
-        compact_threshold,
-        skip_compaction: false,
-        reserved_result_bytes: 0,
-        effort: settings.effort.clone(),
-        context: prepared.history.with_user(task),
-        history_position,
-        instructions: Arc::new(settings.instructions),
-        tools: prepared.tools,
-    })
-    .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
-    Ok((generation, settings.slug, settings.effort))
-}
-
-async fn run_child(
-    identity: AgentIdentity,
-    instance: AgentRuntimeId,
-    generation: agentelier_llm_model::PreparedGeneration,
-    credentials: CredentialClient,
-    authorization: ExecutionIdentity,
-    cancel: CancellationToken,
-) -> FinishedChild {
-    let (progress, mut incoming) = mpsc::channel(super::model_task::PROGRESS_CAPACITY);
-    let future = agentelier_llm_model::generate(
-        GenerationConnection::default(),
-        credentials,
-        generation,
-        &authorization,
-        progress,
-    );
-    tokio::pin!(future);
-    let (state, output) = loop {
-        tokio::select! { biased;
-            _ = cancel.cancelled() => break (AgentState::Interrupted, None),
-            result = &mut future => break match result {
-                Ok((result, _)) if result.calls.is_empty() => (AgentState::Completed, Some(result.output.archive())),
-                Ok(_) => (AgentState::Failed("初始子 Agent 执行入口收到需要独立工具循环的模型调用".into()), None),
-                Err(failure) => (AgentState::Failed(failure.to_string()), None),
-            },
-            Some(_) = incoming.recv() => {}
-        }
-    };
-    FinishedChild {
-        identity,
-        instance,
-        state,
-        output,
     }
 }
 
@@ -494,7 +502,6 @@ async fn apply_execution(
     conversation: &mut Conversation,
     identity: &AgentIdentity,
     state: AgentState,
-    request: Option<agentelier_llm_model::RequestProjection>,
     output: Option<ProtocolArchive>,
 ) -> Result<(), ConversationFailure> {
     let result = store
@@ -502,7 +509,7 @@ async fn apply_execution(
             session: identity.session,
             agent: identity.id,
             state: state.clone(),
-            request: request.map(Box::new),
+            request: None,
             output,
         })
         .await;

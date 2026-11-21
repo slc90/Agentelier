@@ -52,6 +52,12 @@ pub struct PreparedChild {
     pub tools: Arc<ToolCatalog>,
 }
 
+#[derive(Clone)]
+pub struct ChildMaterials {
+    pub project: Arc<agentelier_project_context::ProjectSnapshot>,
+    pub skills: Arc<agentelier_skills::Catalog>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AgentCreationRecord {
     pub identity: crate::AgentIdentity,

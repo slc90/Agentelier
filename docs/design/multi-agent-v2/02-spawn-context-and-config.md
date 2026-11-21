@@ -60,7 +60,7 @@ sequenceDiagram
 
 若持久化身份提交失败，不启动子 Agent。若提交后 Runtime 启动失败，保留创建失败状态和原因，释放未占用的运行资源，但不伪造“从未创建”。
 
-当前 `spawn_agent` 已接入 Root 工具目录。调用沿用工具执行提供的父 Thread、Turn、请求序号及 call ID。已登记的同一来源返回原身份。Session JSONL 中先记录 `AgentCreated` 及配置和初始历史，再记录启动请求材料与执行终态。启动入口执行子 Agent 的首个模型请求，完整工具循环由独立 Runner 增量接入。
+`spawn_agent` 调用沿用工具执行提供的父 Thread、Turn、请求序号及 call ID。已登记的同一来源返回原身份。Session JSONL 先记录 `AgentCreated` 及配置和初始历史，再接纳执行轮次。子 Agent 通过现有 Turn Runner 执行独立的模型和工具循环，工具权限仍由父级工具目录和 Role 决定。
 
 ## 模型覆盖
 

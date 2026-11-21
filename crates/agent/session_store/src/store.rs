@@ -100,9 +100,34 @@ enum Command {
 }
 
 #[derive(Clone)]
-pub struct SessionStoreClient(mpsc::Sender<Command>);
+pub struct SessionStoreClient(mpsc::Sender<Command>, Option<AgentStorage>);
+
+#[derive(Clone, Copy)]
+struct AgentStorage {
+    session: SessionId,
+    id: agentelier_conversation::AgentId,
+    thread: SessionId,
+}
 
 impl SessionStoreClient {
+    pub fn for_agent(&self, identity: &agentelier_conversation::AgentIdentity) -> Self {
+        Self(
+            self.0.clone(),
+            Some(AgentStorage {
+                session: identity.session,
+                id: identity.id,
+                thread: identity.thread.session_id(),
+            }),
+        )
+    }
+
+    fn attachment_session(&self, thread: SessionId) -> io::Result<SessionId> {
+        match self.1 {
+            None => Ok(thread),
+            Some(agent) if agent.thread == thread => Ok(agent.session),
+            Some(_) => Err(io::Error::other("附件不属于当前 Agent Thread")),
+        }
+    }
     pub async fn read_audio(
         &self,
         session: SessionId,
@@ -222,6 +247,9 @@ impl SessionStoreClient {
         &self,
         event: RecordEvent,
     ) -> io::Result<oneshot::Receiver<io::Result<Commit>>> {
+        if self.1.is_some() {
+            return Err(io::Error::other("Agent Thread 记录必须等待范围校验回执"));
+        }
         let (reply, result) = oneshot::channel();
         self.0
             .try_send(Command::Append(Box::new(event), reply))
@@ -237,14 +265,31 @@ impl SessionStoreClient {
     }
 
     pub async fn append(&self, event: RecordEvent) -> io::Result<Commit> {
+        let event = match self.1 {
+            None => event,
+            Some(agent) if event.session() == agent.thread => RecordEvent::AgentTurn {
+                session: agent.session,
+                agent: agent.id,
+                event: Box::new(event),
+            },
+            Some(_) => return Err(io::Error::other("会话记录不属于当前 Agent Thread")),
+        };
+        let expected = event.session();
         let (reply, result) = oneshot::channel();
         self.0
             .send(Command::Append(Box::new(event), reply))
             .await
             .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
-        result
+        let mut commit = result
             .await
-            .map_err(|_| io::Error::other("会话记录未返回提交结果"))?
+            .map_err(|_| io::Error::other("会话记录未返回提交结果"))??;
+        if let Some(agent) = self.1 {
+            if commit.session != expected {
+                return Err(io::Error::other("Agent 轮次写入收到所属会话不符的回执"));
+            }
+            commit.session = agent.thread;
+        }
+        Ok(commit)
     }
 
     pub async fn save_image(
@@ -254,7 +299,7 @@ impl SessionStoreClient {
         image: Arc<ImagePayload>,
     ) -> io::Result<StoredImage> {
         let reference = StoredImage {
-            session,
+            session: self.attachment_session(session)?,
             summary,
             image: image.descriptor(),
         };
@@ -287,7 +332,11 @@ impl SessionStoreClient {
     ) -> io::Result<PathBuf> {
         let (reply, result) = oneshot::channel();
         self.0
-            .send(Command::SaveGenerated(session, image, reply))
+            .send(Command::SaveGenerated(
+                self.attachment_session(session)?,
+                image,
+                reply,
+            ))
             .await
             .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
         result
@@ -302,7 +351,11 @@ impl SessionStoreClient {
     ) -> io::Result<agentelier_tools::OriginalImage> {
         let (reply, result) = oneshot::channel();
         self.0
-            .send(Command::ReadGenerated(session, image, reply))
+            .send(Command::ReadGenerated(
+                self.attachment_session(session)?,
+                image,
+                reply,
+            ))
             .await
             .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
         result
@@ -420,7 +473,7 @@ impl SessionStore {
     }
 
     pub fn client(&self) -> SessionStoreClient {
-        SessionStoreClient(self.sender.clone())
+        SessionStoreClient(self.sender.clone(), None)
     }
 
     pub fn create(

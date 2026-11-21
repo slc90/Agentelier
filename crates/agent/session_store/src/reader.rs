@@ -571,17 +571,21 @@ pub(super) fn load(
         .take()
         .ok_or_else(|| io::Error::other("存档没有可恢复的初始记录"))?;
     for record in &parsed.records {
+        let event = match &record.event {
+            RecordEvent::AgentTurn { event, .. } => event.as_ref(),
+            event => event,
+        };
         if let agentelier_conversation::RecordEvent::AudioDraft {
             attachment: Some(audio),
             ..
-        } = &record.event
+        } = event
         {
             crate::attachments::read_audio(root, session, audio)?;
         }
         if let agentelier_conversation::RecordEvent::ToolReturned {
             generated_image: Some(generated),
             ..
-        } = &record.event
+        } = event
         {
             crate::attachments::validate_generated(root, session, &generated.image)?;
         }

@@ -28,6 +28,12 @@ impl fmt::Display for AgentId {
 #[serde(transparent)]
 pub struct AgentThreadId(Uuid);
 
+impl AgentThreadId {
+    pub fn session_id(self) -> SessionId {
+        self.0
+    }
+}
+
 impl fmt::Display for AgentThreadId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)

@@ -4,6 +4,8 @@
 
 ## 独立执行与会话所有权
 
+子 Agent 在共享 Tokio Runtime 内运行各自的 Conversation、Turn Runner 和工具工作者。Agent Control 记录每个活动执行体的 Thread 和取消入口。子 Agent 的 Spawn 请求回到来源 Conversation 读取冻结调用步骤，持久登记由共同的 Session 所有者完成。Root 取消会传递到所属活动执行体，结束后按真实 Runner 和工具工作者回执收尾。
+
 Root 和每个子 Agent 都有自己的 Conversation 与 Runner。一个 Agent 同一时刻最多有一个活动 Turn；不同 Agent 可以并发运行。Root 的前台用户任务仍只有一个活动入口，子 Agent 执行不占用 Root 的 Steer/Queue 前台槽。
 
 Runtime 管理 Agent 的实际任务句柄、取消令牌、执行许可、驻留许可和 Mailbox 通知接收端。Conversation 不保存 JoinHandle、锁或 OS 资源。工具执行使用 Agent 自身的固定工作目录和权限快照；所有 Agent 默认共享会话工作目录。

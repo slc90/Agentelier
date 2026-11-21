@@ -87,6 +87,11 @@ pub enum RecordEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<agentelier_llm_model::ProtocolArchive>,
     },
+    AgentTurn {
+        session: SessionId,
+        agent: crate::AgentId,
+        event: Box<RecordEvent>,
+    },
     AudioDraft {
         session: SessionId,
         attachment: Option<crate::AudioAttachment>,
@@ -209,6 +214,7 @@ impl RecordEvent {
             Self::Process { fact } => fact.origin.session,
             Self::AgentCreated { session, .. }
             | Self::AgentExecution { session, .. }
+            | Self::AgentTurn { session, .. }
             | Self::AudioDraft { session, .. }
             | Self::TranscriptionStarted { session, .. }
             | Self::TranscriptionFinished { session, .. } => *session,
@@ -220,6 +226,7 @@ impl RecordEvent {
         match self {
             Self::AgentCreated { .. }
             | Self::AgentExecution { .. }
+            | Self::AgentTurn { .. }
             | Self::Process { .. }
             | Self::AudioDraft { .. }
             | Self::TranscriptionStarted { .. }

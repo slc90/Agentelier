@@ -188,7 +188,7 @@ Conversation 固定 Session 的模型与推理设置，始终持有会话历史�
 
 Conversation 的内存 Agent Registry 管理 Session 内的 Root 身份及子 Agent 身份预留。Root 使用 Session UUID 映射其稳定标识与历史，Runtime 用每次打开时分配的实例标识核对执行事件。详见 [聊天会话与协议历史](modules/conversation.md#设置与生命周期)。
 
-`spawn_agent` 由 Runtime 按当前调用来源接纳。Conversation 准备子配置、校验身份与路径，Runtime 通过现有 Session Store 确认身份记录和启动事实后启动子模型请求。子 Agent 的首个请求及结果记录在所属会话的 Agent 事件中。详见 [创建子 Agent 时如何形成独立上下文](multi-agent-v2/02-spawn-context-and-config.md)。
+`spawn_agent` 由 Runtime 按当前调用来源接纳。Conversation 准备子配置、校验身份与路径，Runtime 通过现有 Session Store 确认身份记录和启动事实后，为子 Agent 启动独立的 Conversation 和 Turn Runner。在同一个 Tokio Runtime 内，各 Agent 的模型请求和工具工作可并发，子轮次记录按 Thread 保存在所属会话。详见 [创建子 Agent 时如何形成独立上下文](multi-agent-v2/02-spawn-context-and-config.md)。
 
 LLM Model 解析 Responses 输出项、内容段、公开 phase 和文本增量；只有 response.completed 及可接受完整输出才成功。聊天无总生成时长限制，合法流式事件维持 120 秒空闲期限；连接验证仍保留原总超时。聊天启用固定 Direct function tools；LLM Model 只解析调用和映射结果，Runner 在完整响应和身份检查后执行。普通拒绝正文正常展示。任务 join 后才释放操作占用，失败/取消保留已经显示的部分回复。
 

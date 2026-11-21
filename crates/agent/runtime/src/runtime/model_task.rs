@@ -106,7 +106,7 @@ pub(super) fn progress(
     conversation: &mut Conversation,
     id: u64,
     event: RunnerEvent,
-    store: &agentelier_session_store::SessionStore,
+    store: &SessionStoreClient,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
     match event {
@@ -126,7 +126,7 @@ pub(super) fn progress(
                 drop(reply.send(Err(failure)));
                 return Ok(());
             }
-            let store = store.client();
+            let store = store.clone();
             tokio::spawn(async move {
                 let result = store
                     .append(event)
@@ -162,7 +162,7 @@ pub(super) fn progress(
                 drop(reply.send(Err(ConversationFailure::new("图片附件不属于当前任务"))));
                 return Ok(());
             }
-            let store = store.client();
+            let store = store.clone();
             tokio::spawn(async move {
                 let result = match store.save_image(session, summary, image).await {
                     Ok(reference) => store.read_image(reference).await,
@@ -201,7 +201,7 @@ pub(super) fn progress(
                 return Ok(());
             };
             let image_input = turn.settings().image_input;
-            let store = store.client();
+            let store = store.clone();
             tokio::spawn(async move {
                 let result = save_generated(&store, session, image, image_input).await;
                 drop(
@@ -293,7 +293,7 @@ pub(super) fn drain_progress(
     conversation: &mut Conversation,
     id: u64,
     incoming: &mut Option<mpsc::Receiver<RunnerEvent>>,
-    store: &agentelier_session_store::SessionStore,
+    store: &SessionStoreClient,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
     if let Some(receiver) = incoming {
@@ -367,7 +367,7 @@ pub(super) async fn drive_idle(
     conversation: &mut Conversation,
     tools: &super::tool_jobs::SessionTools,
     action: agentelier_turn_runner::IdleAction,
-    store: &agentelier_session_store::SessionStore,
+    store: &SessionStoreClient,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
     let (outgoing, mut incoming) = mpsc::channel(PROGRESS_CAPACITY);
@@ -394,7 +394,7 @@ pub(super) async fn finish_tools(
     tools: super::tool_jobs::SessionTools,
     reason: &'static str,
     conversation: &mut Conversation,
-    store: &agentelier_session_store::SessionStore,
+    store: &SessionStoreClient,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
 ) -> Result<(), RuntimeFailure> {
     tools.work.lock().await.stop_all();
@@ -450,7 +450,7 @@ pub(super) async fn stop_model(
                     Some(receiver) => receiver.recv().await,
                     None => std::future::pending().await,
                 }} => match event {
-                    Some(event) => if let Err(failure) = progress(conversation,task.id,event,store,publish) {
+                    Some(event) => if let Err(failure) = progress(conversation,task.id,event,&store.client(),publish) {
                         tracing::error!(error=%failure,"取消收尾时状态交付失败，继续回收任务");
                         progress_failure=progress_failure.or(Some(failure));
                     },
@@ -459,7 +459,9 @@ pub(super) async fn stop_model(
             }
         };
         task.control.finished.cancel();
-        if let Err(failure) = drain_progress(conversation, task.id, incoming, store, publish) {
+        if let Err(failure) =
+            drain_progress(conversation, task.id, incoming, &store.client(), publish)
+        {
             tracing::error!(error=%failure,"取消收尾时末次进度交付失败");
             progress_failure = progress_failure.or(Some(failure));
         }

@@ -227,6 +227,7 @@ pub(crate) struct ChatSession {
     pub(crate) pending_results: std::collections::BTreeMap<String, crate::active::ToolResultEntry>,
     pub(crate) active: Option<ActiveState>,
     pub(crate) tasks: crate::tasks::TaskLedger,
+    pub(crate) child: Option<crate::ChildMaterials>,
 }
 
 pub struct PreparedSession {
@@ -502,6 +503,7 @@ impl Conversation {
                 pending_results: Default::default(),
                 active: None,
                 tasks: Default::default(),
+                child: None,
             },
         })
     }
@@ -532,6 +534,79 @@ impl Conversation {
                 .detach(session, AgentId::for_root(session), instance)?;
         }
         self.agents.attach(view.id, root)
+    }
+
+    pub fn from_child(
+        thread: SessionId,
+        prepared: crate::PreparedChild,
+    ) -> Result<Self, ConversationFailure> {
+        let crate::PreparedChild {
+            config,
+            history,
+            tools,
+        } = prepared;
+        let settings = config.settings;
+        let publications: Vec<_> = config.projects.into_iter().map(Arc::new).collect();
+        let project = publications
+            .last()
+            .ok_or_else(|| ConversationFailure::new("子 Agent 缺少冻结的项目来源"))?;
+        let window = project.window;
+        let child = crate::ChildMaterials {
+            project: Arc::new(project.snapshot.clone()),
+            skills: Arc::new(config.skills),
+        };
+        let mut view = SessionView {
+            project_publications: Arc::new(publications),
+            project_context: Box::new(crate::ProjectContextState::Loaded(child.project.clone())),
+            context: Box::new(crate::ContextState {
+                window,
+                limits: settings.context_limits.as_ref().clone(),
+                ..Default::default()
+            }),
+            notice: None,
+            id: thread,
+            settings: Box::new(SessionSettings {
+                codex: settings.codex,
+                slug: settings.slug,
+                display_name: settings.display_name,
+                effort: settings.effort,
+                image_input: settings.image_input,
+                context_limits: settings.context_limits,
+                instructions: Arc::new(settings.instructions),
+                working_directory: settings.working_directory,
+            }),
+            turn: None,
+            previous_turns: Vec::new(),
+            audio_draft: None,
+            transcriptions: Default::default(),
+            committed_items: history.summary(),
+            execution_blocked: false,
+            process_cleanup_unconfirmed: false,
+            tool_catalog: tools
+                .definitions()
+                .map(|tool| (tool.name.clone(), tool.catalog_description()))
+                .collect(),
+            queue: Vec::new(),
+            queue_paused: false,
+            task_policy: Default::default(),
+        };
+        view.context
+            .refresh(&history, &view.settings.instructions, tools.definitions())?;
+        Ok(Self {
+            session: Some(ChatSession {
+                idle: None,
+                processes: Default::default(),
+                memory: None,
+                view,
+                history: Some(history),
+                tools,
+                pending_results: Default::default(),
+                active: None,
+                tasks: Default::default(),
+                child: Some(child),
+            }),
+            ..Self::default()
+        })
     }
 
     pub(crate) fn activate_restored_root(
@@ -917,6 +992,7 @@ impl Conversation {
                 .as_mut()
                 .ok_or_else(|| ConversationFailure::new("当前任务缺少会话历史"))?,
             tools: &session.tools,
+            child: session.child.as_ref(),
             results: &mut session.pending_results,
             tasks: &mut session.tasks,
         })

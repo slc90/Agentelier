@@ -366,8 +366,8 @@ async fn run_task(
     if cancel.is_cancelled() {
         return Ok(TurnStatus::Cancelled);
     }
-    let (settings, input) = active
-        .call(|turn| Ok((turn.settings(), turn.input()?)))
+    let (settings, input, child) = active
+        .call(|turn| Ok((turn.settings(), turn.input()?, turn.child_materials())))
         .await?;
     if !active
         .call(|turn| Ok(turn.continuation().is_some()))
@@ -375,12 +375,16 @@ async fn run_task(
     {
         let directory = settings.working_directory.clone();
         let loading_cancel = cancel.clone();
+        let frozen_skills = child.as_ref().map(|materials| materials.skills.clone());
         let discovered = tokio::task::spawn_blocking(move || {
-            let catalog = agentelier_skills::discover_standard(
-                &directory,
-                &user_skills_root,
-                &loading_cancel,
-            )?;
+            let catalog = match frozen_skills {
+                Some(catalog) => catalog.as_ref().clone(),
+                None => agentelier_skills::discover_standard(
+                    &directory,
+                    &user_skills_root,
+                    &loading_cancel,
+                )?,
+            };
             let selected = agentelier_skills::select(&catalog, &input, &loading_cancel)?;
             Ok::<_, agentelier_skills::Failure>((catalog, selected))
         })
@@ -443,7 +447,9 @@ async fn run_task(
                 "工具资源回收未确认，当前会话已暂停执行",
             ));
         }
-        if let Some(status) = collect_project(active, cancel, progress).await? {
+        if child.is_none()
+            && let Some(status) = collect_project(active, cancel, progress).await?
+        {
             return Ok(status);
         }
         let project = active

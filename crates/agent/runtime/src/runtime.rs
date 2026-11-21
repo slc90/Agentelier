@@ -11,6 +11,7 @@ use agentelier_memory::Memory;
 use agentelier_turn_runner::RunnerEvent;
 mod account_login;
 mod audio_task;
+mod child_runtime;
 mod creation;
 mod deleting;
 mod image_attachment;
@@ -158,7 +159,7 @@ enum Command {
     },
     ModelFinished(ModelJoin),
     SpawnAgent(Box<spawn_agent::Invocation>),
-    ChildFinished(Result<spawn_agent::FinishedChild, tokio::task::JoinError>),
+    ChildFinished(Result<child_runtime::FinishedChild, tokio::task::JoinError>),
     Stream(Option<RunnerEvent>),
     Session(SessionCommand),
     TaskAction {
@@ -449,10 +450,15 @@ impl AgentRuntime {
                                 };
                                 match command {
                                     Command::SpawnAgent(invocation) => {
-                                        children.spawn(*invocation, &mut conversation, model.as_ref(), &store.client(), &owner_credentials).await;
+                                        children.spawn(*invocation, &mut conversation, model.as_ref(), spawn_agent::SpawnEnvironment {
+                                            store: &store.client(),
+                                            credentials: &owner_credentials,
+                                            operations: &operations,
+                                            skills_root: &data_root.join("skills"),
+                                        }).await;
                                     }
                                     Command::ChildFinished(result) => {
-                                        spawn_agent::Children::finish(result, &store.client(), &mut conversation).await?;
+                                        children.finish(result, &store.client(), &mut conversation).await?;
                                     }
                                     Command::AudioDraft(id, session, path) => {
                                         if !audio_jobs.is_empty() || !conversation.is_current(session) {
@@ -722,8 +728,11 @@ impl AgentRuntime {
                                         let task =
                                             model.take().ok_or(RuntimeFailure::ModelState)?;
                                         task.check_instance(&conversation)?;
+                                        if task.chat && task.control.cancel.is_cancelled() {
+                                            children.cancel_active();
+                                        }
                                         debug!(operation_id = task.id, "模型操作已真实结束并回收");
-                                        drain_progress(&mut conversation, task.id, &mut progress_events, &store, &publish)?;
+                                        drain_progress(&mut conversation, task.id, &mut progress_events, &store.client(), &publish)?;
                                         let event = complete(&mut conversation, task.id, task.chat, result)?;
                                         if task.chat {
                                             if conversation.current().is_some_and(|view| view.execution_blocked)
@@ -776,7 +785,7 @@ impl AgentRuntime {
                                     }
                                     Command::IdleTool(event) => {
                                         let (_, tools) = session_tools.as_ref().ok_or(RuntimeFailure::ModelState)?;
-                                        if let Err(error) = model_task::drive_idle(&mut conversation, tools, agentelier_turn_runner::IdleAction::Tool(event), &store, &publish).await {
+                                        if let Err(error) = model_task::drive_idle(&mut conversation, tools, agentelier_turn_runner::IdleAction::Tool(event), &store.client(), &publish).await {
                                             tools.admission.block();
                                             tracing::error!(%error, "后台工具结果保存或归并失败");
                                             if let Some(view) = conversation.fail_storage(error.to_string()) {
@@ -803,7 +812,7 @@ impl AgentRuntime {
                                                 .filter(|task| task.chat)
                                                 .ok_or(RuntimeFailure::ModelState)?;
                                             task.check_instance(&conversation)?;
-                                            progress(&mut conversation, task.id, event, &store, &publish)?;
+                                            progress(&mut conversation, task.id, event, &store.client(), &publish)?;
                                         } else {
                                             progress_events = None;
                                         }
@@ -994,7 +1003,7 @@ impl AgentRuntime {
                                             if model.is_some() { stop_model(&mut model, &mut progress_events, &mut conversation, &store, &publish).await?; }
                                             if let Some((session, tools)) = session_tools.take() {
                                                 let processes = tools.process_views.clone();
-                                                model_task::finish_tools(tools, "account_changed", &mut conversation, &store, &publish).await?;
+                                                model_task::finish_tools(tools, "account_changed", &mut conversation, &store.client(), &publish).await?;
                                                 let update = conversation.retain_closed_processes(session, processes.borrow().clone())?;
                                                 emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Processes(update)))?;
                                             }
@@ -1061,7 +1070,7 @@ impl AgentRuntime {
                             &mut delivery_failure,
                         );
                         if let Some((_, tools)) = session_tools.take() {
-                            capture_delivery(model_task::finish_tools(tools, "application_shutdown", &mut conversation, &store, &publish).await, &mut delivery_failure);
+                            capture_delivery(model_task::finish_tools(tools, "application_shutdown", &mut conversation, &store.client(), &publish).await, &mut delivery_failure);
                         }
                         if let Some(job) = material {
                             job.cancel.cancel();
