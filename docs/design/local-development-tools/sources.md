@@ -24,7 +24,7 @@
 
 [Workspace 配置](https://github.com/slc90/Agentelier/blob/main/Cargo.toml)提供当前依赖和 lint 事实：`unsafe_code = "forbid"`；Tokio 已启用 `process`；新依赖及 feature 由 Workspace 统一管理。实现使用安全依赖封装，不在应用代码中绕开 unsafe 禁令。
 
-[已知问题](https://github.com/slc90/Agentelier/blob/main/docs/known_issues.md)记录 BRP 特殊按键逻辑键值问题。Agentelier 的 Main 和 Render 端口配置见[数据目录与启动](../mechanisms/application-data.md#配置与日志的位置固定)。
+Agentelier 的 Main 和 Render 端口配置见[数据目录与启动](../mechanisms/application-data.md#配置与日志的位置固定)。
 
 <a id="codex"></a>
 ## Codex：参考行为，不复制整套宿主

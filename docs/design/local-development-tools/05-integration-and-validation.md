@@ -58,7 +58,7 @@ Queue 仍按 FIFO 推进；只有前一任务的模型工作、进程组和工�
 
 `lib.rs` 只承担模块声明和出口，按进程、补丁、图像等真实职责划分内部 module，不使用 `mod.rs`，不为每个按钮、错误或工具建立一个 crate。保留 unsafe 与主动 panic 的禁令，不通过全局 lint suppression 绕过。[工程规则](sources.md#rules)
 
-涉及 UI 的运行验证继续通过 BRP 操作 Agentelier 自身。特殊键采用仓库已记录的完整 KeyboardInput 路径；建立焦点后再输入，不能直接修改编辑器内部 ECS 状态冒充输入。完成后释放 Pointer 并确认 inactive。截图豁免只给 Downloads 中生成的实验项目，不修改应用自己的 GUI 验证规则。
+涉及 UI 的运行验证继续通过 BRP 操作 Agentelier 自身。建立焦点后用标准 `send_keys` 验证特殊按键。完成后释放 Pointer 并确认 `inactive`。截图豁免只给 Downloads 中生成的实验项目，不修改应用自己的 GUI 验证规则。
 
 开发、调试和最终考试都使用现有账号与数据目录，不退出登录、不重新授权、不换账号或清除凭据。普通应用关闭依然只是正常收尾，不触发账号退出。
 
