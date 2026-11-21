@@ -160,6 +160,7 @@ pub enum AgentState {
     Stopping,
     Completed,
     Interrupted,
+    Unknown,
     Failed(String),
     Closed,
 }
@@ -173,6 +174,7 @@ impl AgentState {
             Self::Stopping => "stopping",
             Self::Completed => "completed",
             Self::Interrupted => "interrupted",
+            Self::Unknown => "unknown",
             Self::Failed(_) => "failed",
             Self::Closed => "closed",
         }

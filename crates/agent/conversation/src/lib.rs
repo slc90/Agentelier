@@ -41,7 +41,7 @@ pub use audio::{
 };
 pub use memory_evidence::{MemorySourceTurn, memory_evidence};
 pub use processes::ProcessLedger;
-pub use restore::{RestoredSession, restore};
+pub use restore::{RestoredChild, RestoredSession, restore, restore_child};
 pub use task_actions::{SessionProcesses, TaskAction, TaskActionOutcome, TaskActionReceipt};
 pub use task_policy::{TaskPolicy, TaskPolicyChange};
 pub use tasks::{

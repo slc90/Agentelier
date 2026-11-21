@@ -553,6 +553,27 @@ fn repair(
     })
 }
 
+pub(super) fn load_child(
+    root: &Path,
+    session: SessionId,
+    agent: agentelier_conversation::AgentId,
+) -> io::Result<agentelier_conversation::RestoredChild> {
+    let directory = crate::attachments::session_directory(root, session)?;
+    let parsed = read(&directory, session)?;
+    if let Some(issue) = parsed.issue {
+        return Err(io::Error::other(issue.to_string()));
+    }
+    if parsed.summary.deleted || parsed.initial.is_none() {
+        return Err(io::Error::other("所属会话缺少有效的存档"));
+    }
+    agentelier_conversation::restore_child(session, agent, parsed.records, |reference| {
+        crate::attachments::read(root, reference).map_err(|failure| {
+            agentelier_conversation::ConversationFailure::new(failure.to_string())
+        })
+    })
+    .map_err(io::Error::other)
+}
+
 pub(super) fn load(
     root: &Path,
     session: SessionId,

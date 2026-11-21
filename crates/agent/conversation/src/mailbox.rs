@@ -86,13 +86,19 @@ pub struct ClaimedMessage {
     pub message: AgentMessage,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MessageClaim {
     pub receiver: AgentId,
     pub message: AgentMessageId,
     pub turn: TurnId,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub wake: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoveredClaim {
+    pub claim: MessageClaim,
+    pub consumed: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -123,6 +129,7 @@ pub struct MailboxEntry {
     pub message: AgentMessage,
     pub queued_at: u64,
     pub status: MessageStatus,
+    claim: Option<MessageClaim>,
 }
 
 #[derive(Default)]
@@ -212,6 +219,46 @@ impl Mailboxes {
 
     pub fn close(&mut self) {
         self.closed = true;
+    }
+
+    pub(crate) fn recovered_claims(
+        &self,
+        notes: &std::collections::HashSet<MessageClaim>,
+        entered_turns: &std::collections::HashSet<(AgentId, TurnId)>,
+    ) -> Vec<RecoveredClaim> {
+        let mut claims: Vec<_> = self
+            .messages
+            .values()
+            .filter_map(|entry| {
+                let claim = entry.claim?;
+                let admitted = (claim.wake || entry.message.mode == DeliveryMode::TriggerTurn)
+                    && entered_turns.contains(&(claim.receiver, claim.turn));
+                let consumed = admitted || notes.contains(&claim);
+                Some((entry.queued_at, RecoveredClaim { claim, consumed }))
+            })
+            .collect();
+        claims.sort_unstable_by_key(|(sequence, _)| *sequence);
+        claims.into_iter().map(|(_, claim)| claim).collect()
+    }
+
+    pub(crate) fn settle_claims(
+        &mut self,
+        claims: &[RecoveredClaim],
+    ) -> Result<(), ConversationFailure> {
+        for &RecoveredClaim { claim, consumed } in claims {
+            let entry = self
+                .messages
+                .get_mut(&claim.message)
+                .filter(|entry| entry.claim == Some(claim))
+                .ok_or_else(|| ConversationFailure::new("恢复的消息领取与存档不一致"))?;
+            entry.status = if consumed {
+                MessageStatus::Consumed(claim.turn)
+            } else {
+                MessageStatus::Pending
+            };
+            entry.claim = None;
+        }
+        Ok(())
     }
 
     pub fn validate(&self, event: &MailboxEvent) -> Result<Option<u64>, ConversationFailure> {
@@ -322,14 +369,17 @@ impl Mailboxes {
                         message,
                         queued_at: sequence,
                         status: MessageStatus::Pending,
+                        claim: None,
                     },
                 );
             }
-            MailboxEvent::Claimed { claim } => {
-                self.update(claim.message, MessageStatus::Claimed(claim.turn))?
-            }
+            MailboxEvent::Claimed { claim } => self.update(
+                claim.message,
+                MessageStatus::Claimed(claim.turn),
+                Some(claim),
+            )?,
             MailboxEvent::Consumed { claim } => {
-                self.update(claim.message, MessageStatus::Consumed(claim.turn))?
+                self.update(claim.message, MessageStatus::Consumed(claim.turn), None)?
             }
         }
         self.last_sequence = sequence;
@@ -340,12 +390,14 @@ impl Mailboxes {
         &mut self,
         id: AgentMessageId,
         status: MessageStatus,
+        claim: Option<MessageClaim>,
     ) -> Result<(), ConversationFailure> {
         let entry = self
             .messages
             .get_mut(&id)
             .ok_or_else(|| ConversationFailure::new("Mailbox 缺少目标准入记录"))?;
         entry.status = status;
+        entry.claim = claim;
         Ok(())
     }
 }

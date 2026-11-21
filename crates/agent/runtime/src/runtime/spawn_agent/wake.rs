@@ -136,6 +136,12 @@ impl Children {
         if self.stop.is_cancelled() || !conversation.is_current(session) {
             return Err(ConversationFailure::new("所属会话正在关闭或已切换"));
         }
+        if conversation
+            .current()
+            .is_some_and(|view| view.execution_blocked)
+        {
+            return Err(ConversationFailure::new("所属会话存在未确认的存档"));
+        }
         if self.active.contains_key(&id) {
             return Ok(WakeOutcome::Queued);
         }
@@ -149,6 +155,7 @@ impl Children {
             .get(session, id)
             .map_err(failure)?;
         let identity = node.identity.clone();
+        let residency = node.residency;
         if identity.parent.is_none() {
             return Err(ConversationFailure::new("Follow-up 只唤醒子 Agent"));
         }
@@ -175,23 +182,27 @@ impl Children {
             .map(AgentMessage::render)
             .collect::<Vec<_>>()
             .join("\n\n");
-        let parked = self.parked.get_mut(&id).ok_or_else(|| {
-            ConversationFailure::new("子 Agent 历史尚未恢复，任务仍保留在 Mailbox")
-        })?;
-        if node.residency != AgentResidency::Resident(parked.instance) {
-            return Err(ConversationFailure::new("子 Agent 驻留实例已变化"));
-        }
-        let view = ChildTurn::start(
-            &mut parked.history,
-            identity.thread.session_id(),
-            task,
-            operation,
-        )?;
-        let history = self
-            .parked
-            .remove(&id)
-            .ok_or_else(|| ConversationFailure::new("唤醒时缺少已准备的 Agent 历史"))?;
-        let turn = ChildTurn::from_started(*history.history, view, operation);
+        let thread = identity.thread.session_id();
+        let turn = if let Some(parked) = self.parked.get_mut(&id) {
+            if residency != AgentResidency::Resident(parked.instance) {
+                return Err(ConversationFailure::new("子 Agent 驻留实例已变化"));
+            }
+            let view = ChildTurn::start(&mut parked.history, thread, task, operation)?;
+            let parked = self
+                .parked
+                .remove(&id)
+                .ok_or_else(|| ConversationFailure::new("唤醒时缺少已准备的 Agent 历史"))?;
+            ChildTurn::from_started(*parked.history, view, operation)
+        } else {
+            if residency != AgentResidency::Unloaded {
+                return Err(ConversationFailure::new(
+                    "驻留实例未提供可确认的子 Agent 历史",
+                ));
+            }
+            let mut history = restore_child(conversation, &identity, environment.store).await?;
+            let view = ChildTurn::start(&mut history, thread, task, operation)?;
+            ChildTurn::from_started(history, view, operation)
+        };
         self.launch_turn(
             conversation,
             identity,
@@ -203,6 +214,43 @@ impl Children {
         .await?;
         Ok(WakeOutcome::Running)
     }
+}
+
+async fn restore_child(
+    conversation: &mut Conversation,
+    identity: &AgentIdentity,
+    store: &agentelier_session_store::SessionStoreClient,
+) -> Result<Conversation, ConversationFailure> {
+    let session = identity.session;
+    let id = identity.id;
+    let mut restored = store.load_child(session, id).await.map_err(failure)?;
+    if restored.identity != *identity {
+        return Err(ConversationFailure::new(
+            "冷恢复身份与当前 Agent Tree 不一致",
+        ));
+    }
+    if restored.settle_unknown {
+        apply_execution(store, conversation, identity, AgentState::Unknown, None).await?;
+    }
+    if let Some(event) = restored.recovery_event() {
+        let thread = identity.thread.session_id();
+        let result = store.for_agent(identity).append(event).await;
+        let sequence = match result {
+            Ok(commit) if commit.session == thread => commit.sequence,
+            result => {
+                let message = result.err().map_or_else(
+                    || "子 Agent 恢复回执身份不符".into(),
+                    |error| error.to_string(),
+                );
+                conversation.fail_storage(message.clone());
+                return Err(ConversationFailure::new(message));
+            }
+        };
+        restored.confirm_recovery(sequence);
+    }
+    conversation.install_child(restored).inspect_err(|error| {
+        tracing::error!(session_id = %session, agent_id = %id, agent_path = %identity.path, %error, "子 Agent 冷恢复绑定失败");
+    })
 }
 
 fn failure(error: impl std::fmt::Display) -> ConversationFailure {

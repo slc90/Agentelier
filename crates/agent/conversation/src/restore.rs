@@ -14,6 +14,16 @@ use agentelier_tools::{
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
+mod child;
+pub use child::{RestoredChild, restore_child};
+
+#[derive(Default)]
+struct ReplaySeed {
+    history: ProtocolArchive,
+    publications: Vec<Arc<agentelier_llm_model::ProjectPublication>>,
+    child_mail: Option<HashMap<crate::AgentMessageId, crate::AgentMessage>>,
+}
+
 pub struct RestoredSession {
     audio_draft: Option<crate::AudioAttachment>,
     transcriptions: Vec<crate::AudioTranscription>,
@@ -26,6 +36,7 @@ pub struct RestoredSession {
     next_turn: u64,
     notice: Option<String>,
     recovered_results: Vec<RecoveredResult>,
+    recovered_mailbox: Vec<crate::mailbox::RecoveredClaim>,
     agents: Vec<(crate::AgentIdentity, crate::AgentState)>,
     stops: Vec<crate::AgentStop>,
     mailboxes: crate::Mailboxes,
@@ -52,6 +63,7 @@ impl RestoredSession {
                 .clone()
                 .unwrap_or_else(|| "已恢复有效历史，待办保持暂停".into()),
             results: Some(self.recovered_results.clone()),
+            mailbox: self.recovered_mailbox.clone(),
         }
     }
 
@@ -301,7 +313,9 @@ fn is_read_only(tools: &[crate::StoredTool], name: &str) -> bool {
         .is_some_and(|tool| match &tool.source {
             ToolSource::Builtin => name == "view_image",
             ToolSource::Extension { provider, tool } => {
-                provider == "memory" && matches!(tool.as_str(), "search_memory" | "read_memory")
+                (provider == "memory" && matches!(tool.as_str(), "search_memory" | "read_memory"))
+                    || (provider == "agentelier.collaboration"
+                        && matches!(tool.as_str(), "wait_agent" | "list_agents"))
             }
             ToolSource::Mcp { .. } => false,
         })
@@ -437,6 +451,15 @@ fn check_mailbox_note(
 pub fn restore(
     initial: InitialSession,
     records: Vec<SessionRecord>,
+    load: impl FnMut(&StoredImage) -> Result<Arc<ImagePayload>, ConversationFailure>,
+) -> Result<RestoredSession, ConversationFailure> {
+    replay(initial, records, ReplaySeed::default(), load)
+}
+
+fn replay(
+    initial: InitialSession,
+    records: Vec<SessionRecord>,
+    seed: ReplaySeed,
     mut load: impl FnMut(&StoredImage) -> Result<Arc<ImagePayload>, ConversationFailure>,
 ) -> Result<RestoredSession, ConversationFailure> {
     initial
@@ -456,8 +479,14 @@ pub fn restore(
         queue_paused: false,
         task_policy: Default::default(),
     };
-    let mut publications = Vec::<Arc<agentelier_llm_model::ProjectPublication>>::new();
-    let mut history = ProtocolArchive::default();
+    let ReplaySeed {
+        mut history,
+        mut publications,
+        child_mail,
+    } = seed;
+    if let Some(project) = publications.last() {
+        state.context.window = project.window;
+    }
     if let Some(memory) = &initial.settings.memory {
         memory
             .validate()
@@ -486,6 +515,8 @@ pub fn restore(
     let mut stops = Vec::<crate::AgentStop>::new();
     let mut stop_sources = HashSet::new();
     let mut mailboxes = crate::Mailboxes::default();
+    let mut entered_turns = HashSet::new();
+    let mut received_notes = HashSet::new();
     for record in records {
         if record.session != initial.session || record.event.session() != initial.session {
             return Err(ConversationFailure::new("存档事件属于另一会话"));
@@ -530,11 +561,13 @@ pub fn restore(
                         crate::AgentState::Starting,
                         crate::AgentState::Running
                         | crate::AgentState::Failed(_)
-                        | crate::AgentState::Interrupted,
+                        | crate::AgentState::Interrupted
+                        | crate::AgentState::Unknown,
                     )
                     | (
                         crate::AgentState::Completed
                         | crate::AgentState::Interrupted
+                        | crate::AgentState::Unknown
                         | crate::AgentState::Failed(_),
                         crate::AgentState::Running,
                     )
@@ -546,6 +579,7 @@ pub fn restore(
                         crate::AgentState::Running | crate::AgentState::Stopping,
                         crate::AgentState::Completed,
                     ) => output.is_some(),
+                    (crate::AgentState::Running, crate::AgentState::Unknown) => output.is_none(),
                     _ => false,
                 };
                 if !valid || (request.is_some() && state != crate::AgentState::Running) {
@@ -627,10 +661,13 @@ pub fn restore(
                     .get(&agent)
                     .and_then(|position| agents.get(*position))
                     .ok_or_else(|| ConversationFailure::new("子 Agent 轮次记录缺少身份提交"))?;
-                if !matches!(
+                let valid_state = matches!(
                     state,
                     crate::AgentState::Running | crate::AgentState::Stopping
-                ) || identity.thread.session_id() != event.session()
+                ) || (*state == crate::AgentState::Unknown
+                    && matches!(event.as_ref(), RecordEvent::Recovered { .. }));
+                if !valid_state
+                    || identity.thread.session_id() != event.session()
                     || matches!(
                         event.as_ref(),
                         RecordEvent::AgentCreated { .. }
@@ -647,6 +684,12 @@ pub fn restore(
                 }
                 if let RecordEvent::MailboxInput { claim, note, .. } = event.as_ref() {
                     check_mailbox_note(&mailboxes, *claim, agent, note)?;
+                    if !received_notes.insert(*claim) {
+                        return Err(ConversationFailure::new("子 Agent 邮箱输入重复提交"));
+                    }
+                }
+                if let Some(turn) = event.state().and_then(|state| state.turn.as_ref()) {
+                    entered_turns.insert((agent, turn.id));
                 }
             }
             RecordEvent::AgentEviction { agent, .. } => {
@@ -1324,12 +1367,27 @@ pub fn restore(
                 note,
                 retained_user,
             } => {
-                check_mailbox_note(
-                    &mailboxes,
-                    claim,
-                    crate::AgentId::for_root(initial.session),
-                    &note,
-                )?;
+                let receiver = crate::AgentId::for_root(initial.session);
+                let is_result = if let Some(child_mail) = &child_mail {
+                    child_mail
+                        .get(&claim.message)
+                        .filter(|message| {
+                            claim.receiver == receiver
+                                && message.receiver == receiver
+                                && message.render() == note
+                        })
+                        .ok_or_else(|| ConversationFailure::new("子 Agent 邮箱输入缺少匹配的交付"))?
+                        .completion
+                        .is_some()
+                } else {
+                    check_mailbox_note(&mailboxes, claim, receiver, &note)?;
+                    if !received_notes.insert(claim) {
+                        return Err(ConversationFailure::new("Root 邮箱输入重复提交"));
+                    }
+                    mailboxes
+                        .find(claim.message)
+                        .is_some_and(|entry| entry.message.completion.is_some())
+                };
                 let turn = incoming
                     .turn
                     .as_ref()
@@ -1341,9 +1399,6 @@ pub fn restore(
                 } else {
                     &users[1..]
                 };
-                let is_result = mailboxes
-                    .find(claim.message)
-                    .is_some_and(|entry| entry.message.completion.is_some());
                 let valid_history = if is_result {
                     applied.appends_agent_result(
                         &history,
@@ -1417,7 +1472,16 @@ pub fn restore(
                 history: recovered,
                 notice,
                 results,
+                mailbox,
             } => {
+                if !mailbox.is_empty() {
+                    if mailbox != mailboxes.recovered_claims(&received_notes, &entered_turns) {
+                        return Err(ConversationFailure::new(
+                            "恢复的消息消费与已确认的历史不一致",
+                        ));
+                    }
+                    mailboxes.settle_claims(&mailbox)?;
+                }
                 finalized_without_join = false;
                 processes.historical();
                 let recovered = match (recovered, results) {
@@ -1458,7 +1522,12 @@ pub fn restore(
             }
         }
     }
-    let mut normalized = !pending.0.is_empty() || processes.has_active() || finalized_without_join;
+    let recovered_mailbox = mailboxes.recovered_claims(&received_notes, &entered_turns);
+    mailboxes.settle_claims(&recovered_mailbox)?;
+    let mut normalized = !pending.0.is_empty()
+        || processes.has_active()
+        || finalized_without_join
+        || !recovered_mailbox.is_empty();
     let recovered_results = pending.recover(&mut history, &mut state, retained_input)?;
     recover_external_effects(
         &mut state,
@@ -1639,6 +1708,7 @@ pub fn restore(
         notice: (!notices.is_empty()).then(|| notices.join("\n")),
         normalized,
         recovered_results,
+        recovered_mailbox,
         agents,
         stops,
         mailboxes,

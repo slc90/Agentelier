@@ -625,9 +625,7 @@ impl Conversation {
                 let id = identity.id;
                 self.agents.restore_child(identity)?;
                 let state = match state {
-                    AgentState::Starting | AgentState::Running => {
-                        AgentState::Failed("先前子 Agent 的执行终态未确认".into())
-                    }
+                    AgentState::Starting | AgentState::Running => AgentState::Unknown,
                     state => state,
                 };
                 self.agents.set_state(view.id, id, state)?;

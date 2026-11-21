@@ -155,6 +155,8 @@ pub enum RecordEvent {
         notice: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         results: Option<Vec<RecoveredResult>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        mailbox: Vec<crate::mailbox::RecoveredClaim>,
     },
     Accepted {
         state: StoredState,

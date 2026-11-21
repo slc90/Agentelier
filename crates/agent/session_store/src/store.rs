@@ -79,6 +79,11 @@ enum Command {
         SessionId,
         oneshot::Sender<io::Result<agentelier_conversation::RestoredSession>>,
     ),
+    LoadChild(
+        SessionId,
+        agentelier_conversation::AgentId,
+        oneshot::Sender<io::Result<agentelier_conversation::RestoredChild>>,
+    ),
     Create(Box<InitialSession>, oneshot::Sender<io::Result<Commit>>),
     SaveImage(
         StoredImage,
@@ -243,6 +248,21 @@ impl SessionStoreClient {
         Ok(result)
     }
 
+    pub async fn load_child(
+        &self,
+        session: SessionId,
+        agent: agentelier_conversation::AgentId,
+    ) -> io::Result<agentelier_conversation::RestoredChild> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::LoadChild(session, agent, reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("子 Agent 存档读取未返回结果"))?
+    }
+
     pub fn try_append(
         &self,
         event: RecordEvent,
@@ -399,6 +419,11 @@ impl SessionStore {
                             let result = crate::reader::load(&root, session, &mut writer);
                             if let Err(failure) = &result { error!(session_id = %session, error = %failure, "本地会话读取失败"); }
                             if reply.send(result).is_err() { debug!("会话读取已结束，等待者已离开"); }
+                        }
+                        Command::LoadChild(session, agent, reply) => {
+                            let result = crate::reader::load_child(&root, session, agent);
+                            if let Err(failure) = &result { error!(session_id = %session, agent_id = %agent, error = %failure, "子 Agent 存档读取失败"); }
+                            drop(reply.send(result));
                         }
                         Command::Append(event, reply) => {
                             let session = event.session();
