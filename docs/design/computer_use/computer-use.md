@@ -1,5 +1,7 @@
 # Computer Use 设计
 
+实施状态：Windows 窗口发现与激活已实现。其余章节描述目标设计，实施顺序见[实施方案总览](../../../plans/computer-use/00-overview.md)。
+
 Computer Use 让 Agentelier 中的模型直接操作当前 Windows 桌面上的应用。模型通过普通 Responses Function Calling 提交 Rhai 脚本；Agentelier 在本地解释脚本，由 Rust 提供的 Computer API 调用 Windows 桌面能力，再把执行结果和截图作为工具结果反馈给模型。
 
 本设计只面向 Windows x64 本地桌面。浏览器自动化继续使用 MCP，不属于 Computer Use。Rhai 是本次唯一的脚本运行环境；它只服务于 Computer Use，不扩展为通用 Code Mode 或 Application Runtime。
@@ -55,6 +57,8 @@ Windows Driver 使用 Rust 和 Windows 原生桌面 API 操作完整桌面。它
 ### 窗口发现与激活
 
 Driver 能枚举当前桌面的顶层窗口，并读取后续识别和定位所需的基本信息，包括窗口句柄、标题、位置和尺寸。模型可以根据窗口列表选择目标窗口，并请求激活该窗口。窗口句柄只是当前桌面状态的引用；窗口关闭或重建后，旧句柄不能继续当作有效目标。
+
+Rust 侧通过 WinSafe 调用 Win32 枚举和 DWM 查询。窗口列表过滤隐藏、被 DWM 隐藏、无标题、桌面外壳和普通工具窗口，保留最小化标记。边界是可见窗口框的物理屏幕像素，右边界和下边界为开区间。窗口标识包含 HWND 及原进程和线程身份，每次操作都从当前顶层窗口重新解析。激活要求窗口已可见且未最小化，调用后实际核对前台窗口，区分目标失效、最小化和系统拒绝激活。
 
 窗口管理不负责理解窗口内部控件。本次不实现 UI Automation，不读取控件树、Automation ID 或 Control Pattern。
 

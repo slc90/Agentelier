@@ -395,6 +395,7 @@ dependencies = [
  "uuid",
  "win32job",
  "windows",
+ "winsafe",
 ]
 
 [[package]]

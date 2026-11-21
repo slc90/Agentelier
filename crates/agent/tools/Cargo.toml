@@ -10,6 +10,7 @@ serde_json.workspace = true
 process-wrap.workspace = true
 win32job.workspace = true
 windows.workspace = true
+winsafe = { workspace = true, features = ["dwm"] }
 tokio.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true

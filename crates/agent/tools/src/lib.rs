@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod blocking;
 mod catalog;
+pub mod desktop;
 mod environment;
 mod execution;
 mod image;
