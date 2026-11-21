@@ -29,3 +29,12 @@ TurnView 保留其请求所用的指令消息，Bridge 传递完整安全投影�
 核对页按会话、Turn 与实际请求序号选择记录，显示保存的固定基础、项目发布类型、窗口、完整包装正文、来源路径／作用目录／摘要／原文及实际组装顺序。沿用通过相邻请求引用相同发布身份表达，清除与压缩后重新发布保留各自类型；最近采集失败不会覆盖所选历史材料。发送事实缺失明确标为未记录，不等同于未发送。
 
 请求选择与来源展开状态保存在 ChatState 及按会话隔离的展示状态中，切页重建后恢复；不拥有第二份协议历史，也不读取项目磁盘。来源与正文使用 WidgetryReadOnlyTextField，内容更新仅调用公开 Headless API，保留导航、选择、复制和内部滚动。BRP 只反射安全材料与有序项类型，不公开推理密文、认证头或图片 Base64。
+## Multi-Agent 协作指令
+
+`prompts.json` 的 `collaboration` 定义新 Root 的默认委派策略，组合预设的 `config.collaboration` 可以覆盖它。配置接受 `"explicit_request_only"`、`"proactive"` 或 `{"custom": "策略正文"}`。缺省策略要求用户明确请求协作。自定义策略需要非空、有效正文，长度上限 8 KiB。
+
+Root 在创建时将策略解析为独立的 `Collaboration` 指令，按固定顺序附在基础和补充指令后。该条目使用稳定来源标识和内容哈希，随 Session 的现有指令快照一同保存。旧 Session 从存档读取自己的原始快照。
+
+提示词库提供 `general`、`research`、`implementation` 和 `review` 四个内置角色。`roles` 可声明自定义角色，每项有唯一 `id`、非零 `version` 和对提示词版本的 `instructions` 引用，可附带 `model`、`reasoning` 及 `allowed_tools`。未知角色、空配置及缺失的版本引用会返回配置错误。工具白名单必须是父级工具权限的子集。
+
+子 Agent 指令快照复用基础和补充指令，再附加独立的 `SubAgent` 通用约束及 `Role` 指令。Role 指令包含解析时的完整正文与哈希，原任务通过自己的输入路径提交。角色声明和快照构造属于 Prompts，实际子 Agent 创建在 Runtime 接入。

@@ -1,4 +1,5 @@
 use crate::snapshot::{InstructionConfig, content_hash};
+use crate::{CollaborationMode, CustomRole};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, Write};
@@ -85,6 +86,10 @@ pub struct PromptPreset {
 pub struct Library {
     pub entries: Vec<PromptRevision>,
     pub presets: Vec<PromptPreset>,
+    #[serde(default)]
+    pub collaboration: CollaborationMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<CustomRole>,
 }
 
 impl Library {
@@ -96,6 +101,7 @@ impl Library {
     }
 
     pub fn validate(&self) -> io::Result<()> {
+        self.validate_roles()?;
         for (index, entry) in self.entries.iter().enumerate() {
             entry.validate()?;
             if self.entries[..index]

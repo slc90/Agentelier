@@ -1,4 +1,5 @@
 use crate::library::{Library, PromptRef, PromptRevision};
+use crate::{CollaborationMode, RoleSnapshot};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io;
@@ -18,12 +19,17 @@ pub enum BaseInstruction {
 pub struct InstructionConfig {
     pub base: BaseInstruction,
     pub supplements: Vec<PromptRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collaboration: Option<CollaborationMode>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InstructionSlot {
     Base,
     Supplement,
+    Collaboration,
+    SubAgent,
+    Role,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -64,21 +70,62 @@ impl Library {
                 revision: self.find(reference)?.clone(),
             });
         }
+        snapshot.instructions.push(
+            config
+                .collaboration
+                .as_ref()
+                .unwrap_or(&self.collaboration)
+                .resolve()?,
+        );
         snapshot.validate()?;
         Ok(snapshot)
     }
 }
 
 impl InstructionSnapshot {
+    pub fn for_child(&self, role: &RoleSnapshot) -> io::Result<Self> {
+        self.validate()?;
+        let mut snapshot = Self {
+            base_overridden: self.base_overridden,
+            instructions: self
+                .instructions
+                .iter()
+                .filter(|instruction| {
+                    matches!(
+                        instruction.slot,
+                        InstructionSlot::Base | InstructionSlot::Supplement
+                    )
+                })
+                .cloned()
+                .collect(),
+        };
+        snapshot.instructions.extend(role.instructions());
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+
     pub fn validate(&self) -> io::Result<()> {
         let mut bases = 0;
-        for (order, instruction) in self.instructions.iter().enumerate() {
+        let mut instructions = self.instructions.iter().enumerate().peekable();
+        while let Some((order, instruction)) = instructions.next() {
             instruction.revision.validate()?;
-            if instruction.slot == InstructionSlot::Base {
-                bases += 1;
-                if order != 0 {
-                    return Err(io::Error::other("基础指令必须位于首条"));
+            match instruction.slot {
+                InstructionSlot::Base if order == 0 => bases += 1,
+                InstructionSlot::Supplement => {}
+                InstructionSlot::Collaboration if instructions.peek().is_none() => {}
+                InstructionSlot::SubAgent => {
+                    let Some((_, role)) = instructions
+                        .next()
+                        .filter(|(_, item)| item.slot == InstructionSlot::Role)
+                    else {
+                        return Err(io::Error::other("子 Agent 指令缺少角色来源"));
+                    };
+                    role.revision.validate()?;
+                    if instructions.peek().is_some() {
+                        return Err(io::Error::other("子 Agent 角色指令必须位于末尾"));
+                    }
                 }
+                _ => return Err(io::Error::other("指令快照的来源或顺序不正确")),
             }
         }
         if bases != usize::from(self.base_overridden) {
