@@ -28,7 +28,7 @@ sequenceDiagram
 
 模型任务取消会丢弃自己的网络和凭据等待。主窗口在运行侧确认真实终态后结束等待。
 
-Codex OAuth 使用 `chatgpt.com/backend-api/codex/models` 和同域的 `responses`，目录请求携带 `client_version`，Codex 请求携带自有 Originator 标识和 `ChatGPT-Account-Id` 工作区头。Responses 和 Codex Images 使用同一 CredentialClient。Codex 目录只显示服务标记为可见、支持文本且可由普通客户端执行的模型，并保留服务顺序。Codex Responses 添加顶层 `instructions` 字段，固定指令仍按原顺序进入 `input`。
+Codex OAuth 使用 `chatgpt.com/backend-api/codex/models` 和同域的 `responses`，目录请求携带 `client_version`，Codex 请求携带 `originator: agentelier` 和 `ChatGPT-Account-Id` 工作区头。Responses 和 Codex Images 使用同一 CredentialClient。Codex 目录只显示服务标记为可见、支持文本且可由普通客户端执行的模型，并保留服务顺序。Codex Responses 添加顶层 `instructions` 字段，固定指令仍按原顺序进入 `input`。
 
 用户从当前来源的目录显式选择 slug 后独立验证。认证恢复沿 AuthenticatedRequest 的一次恢复预算执行。恢复要求取得同一主体和工作区的新 Token 版本。HTTP 401 可在输出前触发一次同源凭据恢复。Account 优先交付已有的新版本，否则启动共享续期。Codex Images 在收到成功响应之前应用同一规则。输出项或文本开始后禁止重放，请求原始字节在认证恢复期间保持固定。
 

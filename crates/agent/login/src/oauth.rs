@@ -29,11 +29,13 @@ const DEFAULT_PORT: u16 = 1455;
 const FALLBACK_PORT: u16 = 1457;
 const CALLBACK_PATH: &str = "/auth/callback";
 const LOGIN_TIMEOUT: Duration = Duration::from_mins(5);
+const BROWSER_LAUNCH_TIMEOUT: Duration = Duration::from_secs(8);
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(2);
 const TOKEN_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CALLBACK_BYTES: usize = 8 * 1024;
 const MAX_CALLBACK_HEADERS: usize = 64;
 const RANDOM_BYTES: usize = 32;
+const URL_TOKEN_BYTES: usize = (RANDOM_BYTES * 4).div_ceil(3);
 
 #[derive(Debug)]
 pub enum OAuthFailure {
@@ -43,6 +45,7 @@ pub enum OAuthFailure {
     Cancelled,
     Timeout,
     InvalidCallback,
+    StaleCallback,
     StateMismatch,
     Denied,
     Provider,
@@ -61,6 +64,7 @@ impl fmt::Display for OAuthFailure {
             Self::Cancelled => f.write_str("已取消浏览器登录"),
             Self::Timeout => f.write_str("等待浏览器授权超时"),
             Self::InvalidCallback => f.write_str("OAuth 回调参数重复或无效"),
+            Self::StaleCallback => f.write_str("OAuth 回调属于另一登录操作"),
             Self::StateMismatch => f.write_str("OAuth 回调的 State 与本次登录不匹配"),
             Self::Denied => f.write_str("用户拒绝了浏览器授权"),
             Self::Provider => f.write_str("OAuth 服务未完成授权"),
@@ -95,7 +99,7 @@ struct OAuthTokens {
     expires_at: u64,
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CodexOAuthCredentials {
     tokens: OAuthTokens,
     summary: CodexAccountSummary,
@@ -152,7 +156,7 @@ pub struct BrowserLogin {
 
 impl BrowserLogin {
     pub async fn start() -> Result<Self, OAuthFailure> {
-        let state = random_url_token()?;
+        let state = format!("{}.{}", random_url_token()?, random_url_token()?);
         let verifier = random_url_token()?;
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
         let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, DEFAULT_PORT)).await {
@@ -194,16 +198,18 @@ impl BrowserLogin {
 
     pub async fn open_browser(&self) -> io::Result<()> {
         let url = self.authorization_url.clone();
-        tokio::task::spawn_blocking(move || {
+        let launch = tokio::task::spawn_blocking(move || {
             let _com =
                 win::CoInitializeEx(co::COINIT::APARTMENTTHREADED | co::COINIT::DISABLE_OLE1DDE)
                     .map_err(io::Error::other)?;
             win::HWND::NULL
                 .ShellExecute("open", url.as_str(), None, None, co::SW::SHOWNORMAL)
                 .map_err(io::Error::other)
-        })
-        .await
-        .map_err(io::Error::other)?
+        });
+        timeout(BROWSER_LAUNCH_TIMEOUT, launch)
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "打开系统浏览器超时"))?
+            .map_err(io::Error::other)?
     }
 
     pub async fn complete(
@@ -286,6 +292,9 @@ async fn wait_callback(listener: TcpListener, state: &str) -> Result<String, OAu
         };
         // Browser disconnects must not discard an authorization code already accepted by the app.
         drop(timeout(CONNECTION_TIMEOUT, reply(&mut stream, status, body)).await);
+        if matches!(result, Err(OAuthFailure::StaleCallback)) {
+            continue;
+        }
         return result;
     }
 }
@@ -327,6 +336,11 @@ fn callback_code(query: &str, expected_state: &str) -> Result<String, OAuthFailu
         }
     }
     if state.as_deref() != Some(expected_state) {
+        if let Some(attempt) = state.as_deref().and_then(callback_attempt)
+            && callback_attempt(expected_state) != Some(attempt)
+        {
+            return Err(OAuthFailure::StaleCallback);
+        }
         return Err(OAuthFailure::StateMismatch);
     }
     if let Some(error) = error {
@@ -339,6 +353,19 @@ fn callback_code(query: &str, expected_state: &str) -> Result<String, OAuthFailu
     code.filter(|code| !code.is_empty())
         .map(|code| code.into_owned())
         .ok_or(OAuthFailure::MissingCode)
+}
+
+fn callback_attempt(state: &str) -> Option<&str> {
+    let (attempt, nonce) = state.split_once('.')?;
+    [attempt, nonce]
+        .into_iter()
+        .all(|value| {
+            value.len() == URL_TOKEN_BYTES
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+        .then_some(attempt)
 }
 
 async fn reply(stream: &mut TcpStream, status: &str, body: &str) -> io::Result<()> {

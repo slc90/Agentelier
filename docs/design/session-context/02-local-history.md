@@ -20,7 +20,7 @@ flowchart LR
 
 ## 沿用已经选择的应用数据目录
 
-存储根使用本次启动已经检查并占用的 `DataEnvironment`。应用配置仍位于可执行文件旁，`auth.json` 和 `prompts.json` 仍各归原来的所有者。本阶段在所选数据目录中增加 `sessions/`，不使用项目工作目录，也不读取其他客户端的 `.codex` 数据。[数据环境](sources.md#现有结构与约束)
+存储根使用本次启动已经检查并占用的 `DataEnvironment`。应用配置位于可执行文件旁，`codex-oauth.json` 由 Login 管理，`prompts.json` 由 Prompts 管理。会话存档位于所选数据目录中的 `sessions/`，独立于项目工作目录及其他客户端的数据。[数据环境](../mechanisms/application-data.md)
 
 | 会话内路径 | 保存什么 | 权威关系 |
 | --- | --- | --- |

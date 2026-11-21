@@ -763,6 +763,7 @@ impl Connection {
                     && matches!(
                         kind,
                         AccountEventKind::SourceChanged(_)
+                            | AccountEventKind::LoginCancelled
                             | AccountEventKind::LogoutFinished { .. }
                     )
                 {

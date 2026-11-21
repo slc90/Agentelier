@@ -1,8 +1,8 @@
 use crate::credentials::{CredentialClient, CredentialIntent};
 use crate::source::AccountSource;
 use agentelier_login::{
-    BrowserLogin, CodexOAuthCredentials, CredentialStore, DataEnvironment, SessionFailure,
-    UsableCredentials,
+    BrowserLogin, CodexOAuthCredentials, CredentialStore, DataEnvironment, OAuthFailure,
+    SessionFailure, UsableCredentials,
 };
 use std::{error::Error, fmt};
 use tokio::sync::watch;
@@ -19,13 +19,31 @@ pub struct AccountEvent {
     pub kind: AccountEventKind,
 }
 
-pub struct LoginPrompt {
-    pub authorization_url: String,
-    pub browser_error: Option<String>,
+pub enum LoginPrompt {
+    Opened,
+    Manual {
+        authorization_url: String,
+        reason: String,
+    },
+}
+
+pub enum LoginFailure {
+    Cancelled,
+    Failed(String),
+}
+
+impl From<OAuthFailure> for LoginFailure {
+    fn from(failure: OAuthFailure) -> Self {
+        match failure {
+            OAuthFailure::Cancelled => Self::Cancelled,
+            other => Self::Failed(other.to_string()),
+        }
+    }
 }
 
 pub enum AccountEventKind {
     LoginWaiting(LoginPrompt),
+    LoginCancelled,
     SourceSettling,
     SourceChanged(Result<AccountSource, String>),
     LogoutFinished {
@@ -72,7 +90,7 @@ impl fmt::Display for AccountFailure {
 impl Error for AccountFailure {}
 
 pub enum AccountCommand {
-    CompleteLogin(u64, Result<CodexOAuthCredentials, String>),
+    CompleteLogin(u64, Result<CodexOAuthCredentials, LoginFailure>),
     CompleteRefresh(Result<RefreshCompletion, String>),
     BeginLogout(u64),
     CompleteLogout(u64, Result<LogoutCompletion, String>),
@@ -123,22 +141,20 @@ impl Account {
     pub async fn browser_login(
         cancellation: &CancellationToken,
         prompt: impl FnOnce(LoginPrompt),
-    ) -> Result<CodexOAuthCredentials, String> {
-        let login = BrowserLogin::start()
-            .await
-            .map_err(|failure| failure.to_string())?;
-        let browser_error = tokio::select! { biased;
-            () = cancellation.cancelled() => return Err("已取消浏览器登录".into()),
-            opened = login.open_browser() => opened.err().map(|failure| failure.to_string()),
+    ) -> Result<CodexOAuthCredentials, LoginFailure> {
+        let login = BrowserLogin::start().await?;
+        let opened = tokio::select! { biased;
+            () = cancellation.cancelled() => return Err(LoginFailure::Cancelled),
+            opened = login.open_browser() => opened,
         };
-        prompt(LoginPrompt {
-            authorization_url: login.authorization_url().to_owned(),
-            browser_error,
+        prompt(match opened {
+            Ok(()) => LoginPrompt::Opened,
+            Err(failure) => LoginPrompt::Manual {
+                authorization_url: login.authorization_url().to_owned(),
+                reason: failure.to_string(),
+            },
         });
-        login
-            .complete(cancellation)
-            .await
-            .map_err(|failure| failure.to_string())
+        Ok(login.complete(cancellation).await?)
     }
 
     pub async fn restore(&mut self) -> Result<AccountEffect, AccountFailure> {
@@ -174,7 +190,7 @@ impl Account {
                         })
                         .await
                         .map_err(|_| AccountFailure::Task)?
-                        .map_err(|failure| failure.to_string())
+                        .map_err(|failure| LoginFailure::Failed(failure.to_string()))
                     }
                     Err(failure) => Err(failure),
                 };
@@ -185,7 +201,11 @@ impl Account {
                         self.renewal.unsaved = None;
                         self.observe(id, snapshot, true)
                     }
-                    Err(failure) => Ok(AccountEffect::Event(AccountEvent {
+                    Err(LoginFailure::Cancelled) => Ok(AccountEffect::Event(AccountEvent {
+                        operation_id: id,
+                        kind: AccountEventKind::LoginCancelled,
+                    })),
+                    Err(LoginFailure::Failed(failure)) => Ok(AccountEffect::Event(AccountEvent {
                         operation_id: id,
                         kind: AccountEventKind::SourceChanged(Err(failure)),
                     })),

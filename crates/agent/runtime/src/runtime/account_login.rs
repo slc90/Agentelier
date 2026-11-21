@@ -1,5 +1,7 @@
 use super::Command;
-use agentelier_account::{Account, AccountCommand, CodexOAuthCredentials, LoginPrompt};
+use agentelier_account::{
+    Account, AccountCommand, CodexOAuthCredentials, LoginFailure, LoginPrompt,
+};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -8,7 +10,7 @@ pub(super) struct LoginTask {
     id: u64,
     cancellation: CancellationToken,
     prompt: Option<oneshot::Receiver<LoginPrompt>>,
-    task: JoinHandle<Result<CodexOAuthCredentials, String>>,
+    task: JoinHandle<Result<CodexOAuthCredentials, LoginFailure>>,
 }
 
 impl LoginTask {
@@ -55,9 +57,9 @@ pub(super) async fn next(pending: &mut Option<LoginTask>) -> Command {
     }
     let completed = (&mut login.task).await;
     let outcome = if login.cancellation.is_cancelled() {
-        Err("已取消浏览器登录".into())
+        Err(LoginFailure::Cancelled)
     } else {
-        completed.unwrap_or_else(|_| Err("浏览器登录后台任务异常结束".into()))
+        completed.unwrap_or_else(|_| Err(LoginFailure::Failed("浏览器登录后台任务异常结束".into())))
     };
     *pending = None;
     Command::Account(AccountCommand::CompleteLogin(id, outcome))

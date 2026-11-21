@@ -1,6 +1,6 @@
 use super::{CodexOAuthCredentials, OAuthTokens};
 use crate::{CodexAccountSummary, CodexReadFailure, DataEnvironment};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
@@ -118,7 +118,16 @@ impl CredentialStore {
     }
 
     fn write(&self, credentials: &CodexOAuthCredentials) -> Result<(), CredentialStoreFailure> {
-        let bytes = serde_json::to_vec(credentials).map_err(|_| CredentialStoreFailure::Format)?;
+        #[derive(Serialize)]
+        struct Record<'a> {
+            tokens: &'a OAuthTokens,
+            summary: &'a CodexAccountSummary,
+        }
+        let bytes = serde_json::to_vec(&Record {
+            tokens: &credentials.tokens,
+            summary: &credentials.summary,
+        })
+        .map_err(|_| CredentialStoreFailure::Format)?;
         if bytes.len() as u64 > MAX_CREDENTIAL_BYTES {
             return Err(CredentialStoreFailure::Format);
         }

@@ -13,16 +13,19 @@ pub struct CodexSummary {
 }
 
 pub enum AccountEventKind {
-    LoginWaiting {
-        authorization_url: String,
-        browser_error: Option<String>,
-    },
+    LoginWaiting(Option<ManualLogin>),
+    LoginCancelled,
     SourceSettling,
     SourceChanged(Result<SourceSnapshot, BridgeFailure>),
     LogoutFinished {
         source: SourceSnapshot,
         remote_warning: Option<String>,
     },
+}
+
+pub struct ManualLogin {
+    pub authorization_url: String,
+    pub reason: String,
 }
 
 #[derive(Clone, Debug)]
@@ -37,11 +40,18 @@ impl Error for BridgeFailure {}
 pub fn convert(kind: agentelier_account::AccountEventKind) -> AccountEventKind {
     match kind {
         agentelier_account::AccountEventKind::LoginWaiting(prompt) => {
-            AccountEventKind::LoginWaiting {
-                authorization_url: prompt.authorization_url,
-                browser_error: prompt.browser_error,
-            }
+            AccountEventKind::LoginWaiting(match prompt {
+                agentelier_account::LoginPrompt::Opened => None,
+                agentelier_account::LoginPrompt::Manual {
+                    authorization_url,
+                    reason,
+                } => Some(ManualLogin {
+                    authorization_url,
+                    reason,
+                }),
+            })
         }
+        agentelier_account::AccountEventKind::LoginCancelled => AccountEventKind::LoginCancelled,
         agentelier_account::AccountEventKind::SourceSettling => AccountEventKind::SourceSettling,
         agentelier_account::AccountEventKind::SourceChanged(result) => {
             AccountEventKind::SourceChanged(result.map(convert_source).map_err(BridgeFailure))

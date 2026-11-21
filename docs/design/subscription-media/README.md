@@ -2,14 +2,14 @@
 
 Agentelier 已经具备一个稳定的基本闭环：账号所有者交付凭据，LLM Model 生成冻结的 Responses 请求，Turn Runner 与会话所有者处理 Function Tool，Session Store 保存权威事件和不可变图片结果，Bridge 向 Bevy 界面投影安全状态。`gpt-6.2-sol` 的 `additional_tools` 与 `async: true` 已进入当前源码，不属于本次要重建的功能。
 
-模型服务已迁移到 Codex OAuth。真实应用已通过 Codex Responses WebSocket 跑通 `gpt-6-astra` 跨回合异步工具。先前实验使用 Codex OAuth 从图像服务取得过 `gpt-image-2` PNG。下图展示当前认证和会话结构，以及计划接入的媒体能力。
+模型服务使用 Agentelier 浏览器授权的 Codex OAuth 会话。真实应用已通过 Codex Responses WebSocket 跑通 `gpt-6-astra` 跨回合异步工具，并通过当前 Account 凭据链路取得 `gpt-image-2` PNG。下图展示认证、会话和媒体能力的关系。
 
 ```mermaid
 flowchart TD
-    UI["Bevy · Codex 凭据选择与聊天"] --> Host["Agent Host / Bridge"]
+    UI["Bevy · ChatGPT 登录与聊天"] --> Host["Agent Host / Bridge"]
     Host --> Runtime["Agent Runtime / Turn Runner"]
     Runtime --> Account["Account · Codex 执行身份"]
-    Account --> Codex["用户指定的 auth.json · 只读"]
+    Account --> Login["Login · 浏览器 OAuth 与本地凭据"]
     Runtime --> Model["LLM Model"]
     Model --> Account
     Model --> CodexAPI["Codex Responses"]
@@ -24,7 +24,7 @@ flowchart TD
 
 ## 从现有能力到新增能力
 
-- **认证与模型路由**采用用户明确选择的本地 Codex `auth.json`。它是应用的登录来源，签发和更新仍归 Codex 客户端。
+- **认证与模型路由**使用当前数据目录恢复的 OAuth 会话。Login 管理授权、持久化、续期与撤销，Account 负责凭据交付。
 - **图片生成**：为 Agent 增加调用 `gpt-image-2` 的 Function Tool。生成的图片既是模型工具结果，也是可以在会话中查看、恢复和导出的持久媒体产物。
 - **音频文件理解**：用户提供现成音频文件，Agent 得到与原文件绑定的内容材料并可进行转写、总结、问答。具体音频服务入口须先确认可用授权；声学分析与仅基于文稿的分析要区分。
 

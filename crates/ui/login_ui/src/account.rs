@@ -14,20 +14,49 @@ const BUTTON_WIDTH: f32 = 168.0;
 pub struct AccountState {
     pub(crate) codex: Option<CodexStatus>,
     pub(crate) source_settling: bool,
-    pub(crate) operation: Option<u64>,
-    pub(crate) waiting: bool,
-    pub(crate) signing_out: bool,
+    pub(crate) operation: Option<AccountOperation>,
+    #[reflect(ignore)]
+    pub(crate) authorization_url: Option<String>,
     pub(crate) error: Option<String>,
+    pub(crate) notice: Option<String>,
     pub runtime_failed: bool,
 }
 
+#[derive(Reflect, Clone)]
+pub(crate) struct AccountOperation {
+    pub(crate) id: u64,
+    pub(crate) phase: AccountPhase,
+}
+
+#[derive(Reflect, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AccountPhase {
+    OpeningBrowser,
+    WaitingForBrowser,
+    ManualBrowser,
+    LinkCopied,
+    Cancelling,
+    SigningOut,
+}
+
 impl AccountState {
+    pub(crate) fn phase(&self) -> Option<AccountPhase> {
+        self.operation.as_ref().map(|operation| operation.phase)
+    }
+
+    pub(crate) fn clear_operation(&mut self) {
+        self.operation = None;
+        self.authorization_url = None;
+        self.source_settling = false;
+        self.error = None;
+        self.notice = None;
+    }
+
     pub fn is_busy(&self) -> bool {
         self.operation.is_some() || self.source_settling
     }
 
     pub fn model_unavailable_reason(&self) -> Option<&'static str> {
-        if self.signing_out {
+        if self.phase() == Some(AccountPhase::SigningOut) {
             return Some("正在退出登录");
         }
         if self.source_settling {
@@ -68,6 +97,7 @@ pub(crate) enum CodexStatus {
 enum ButtonAction {
     Login,
     CancelLogin,
+    CopyLoginUrl,
     Logout,
 }
 
@@ -76,6 +106,7 @@ impl ButtonAction {
         match self {
             Self::Login => "使用 ChatGPT 登录",
             Self::CancelLogin => "取消登录",
+            Self::CopyLoginUrl => "复制授权链接",
             Self::Logout => "退出登录",
         }
     }
@@ -84,8 +115,11 @@ impl ButtonAction {
         match self {
             Self::Login => state.model_identity().is_none(),
             Self::CancelLogin => {
-                state.operation.is_some() && !state.signing_out && !state.source_settling
+                state.operation.is_some()
+                    && state.phase() != Some(AccountPhase::SigningOut)
+                    && !state.source_settling
             }
+            Self::CopyLoginUrl => state.authorization_url.is_some() && !state.source_settling,
             Self::Logout => state.codex.is_some(),
         }
     }
@@ -94,7 +128,8 @@ impl ButtonAction {
         state.runtime_failed
             || match self {
                 Self::Login | Self::Logout => state.is_busy() || model_busy,
-                Self::CancelLogin => state.source_settling,
+                Self::CancelLogin => state.phase() == Some(AccountPhase::Cancelling),
+                Self::CopyLoginUrl => state.phase() == Some(AccountPhase::Cancelling),
             }
     }
 }
@@ -103,21 +138,26 @@ impl ButtonAction {
 enum AccountText {
     Status,
     Identity,
-    Error,
+    Message,
 }
 
 impl AccountText {
     fn content(self, state: &AccountState) -> String {
         let source = state.codex.as_ref();
         match self {
-            Self::Status if state.signing_out => "正在退出登录并收尾…".into(),
-            Self::Status if state.source_settling => "正在回收旧账号的任务并保存待办…".into(),
-            Self::Status if state.waiting => "正在等待浏览器授权…".into(),
-            Self::Status if state.operation.is_some() => "正在准备浏览器登录…".into(),
-            Self::Status => match source {
-                Some(CodexStatus::Read { .. }) => "已登录 ChatGPT",
-                Some(CodexStatus::Failed(_)) => "登录凭据不可用",
-                None => "未登录 ChatGPT",
+            Self::Status => match state.phase() {
+                Some(AccountPhase::SigningOut) => "正在退出登录并收尾…",
+                _ if state.source_settling => "正在回收旧账号的任务并保存待办…",
+                Some(AccountPhase::OpeningBrowser) => "正在打开浏览器…",
+                Some(AccountPhase::WaitingForBrowser) => "正在等待浏览器授权…",
+                Some(AccountPhase::ManualBrowser) => "请复制授权链接并在浏览器中打开",
+                Some(AccountPhase::LinkCopied) => "已复制授权链接，请在浏览器中打开",
+                Some(AccountPhase::Cancelling) => "正在取消登录…",
+                None => match source {
+                    Some(CodexStatus::Read { .. }) => "已登录 ChatGPT",
+                    Some(CodexStatus::Failed(_)) => "登录凭据不可用",
+                    None => "未登录 ChatGPT",
+                },
             }
             .into(),
             Self::Identity => match source {
@@ -134,8 +174,8 @@ impl AccountText {
                 }
                 _ => String::new(),
             },
-            Self::Error => match (&state.error, source) {
-                (Some(error), _) | (None, Some(CodexStatus::Failed(error))) => error.clone(),
+            Self::Message => match (state.error.as_ref().or(state.notice.as_ref()), source) {
+                (Some(message), _) | (None, Some(CodexStatus::Failed(message))) => message.clone(),
                 _ => String::new(),
             },
         }
@@ -189,11 +229,12 @@ pub(crate) fn account_panel(state: &AccountState, model_busy: bool) -> impl Scen
         Children [
             @text(state, AccountText::Status, "AccountStatus")--
             @text(state, AccountText::Identity, "AccountIdentity")--
-            @text(state, AccountText::Error, "AccountError")--
+            @text(state, AccountText::Message, "AccountMessage")--
             Node { flex_wrap: FlexWrap::Wrap, column_gap: px(ACCOUNT_GAP), row_gap: px(ACCOUNT_GAP) }
             Children [
                 @button(state, ButtonAction::Login, "AccountLogin", model_busy)--
                 @button(state, ButtonAction::CancelLogin, "AccountCancelLogin", model_busy)--
+                @button(state, ButtonAction::CopyLoginUrl, "AccountCopyLoginUrl", model_busy)--
                 @button(state, ButtonAction::Logout, "AccountLogout", model_busy)
             ]
         ]
@@ -214,6 +255,7 @@ fn activate(
     match action {
         ButtonAction::Login => commands.queue(crate::authentication::begin_login),
         ButtonAction::CancelLogin => commands.queue(crate::authentication::cancel_login),
+        ButtonAction::CopyLoginUrl => commands.queue(crate::authentication::copy_login_url),
         ButtonAction::Logout => commands.queue(crate::authentication::logout),
     }
     Ok(())
@@ -246,9 +288,18 @@ fn update_panel(
             &mut commands,
             entity,
             match action {
-                ButtonAction::Login => state.operation.is_some() && !state.signing_out,
-                ButtonAction::Logout => state.signing_out,
-                ButtonAction::CancelLogin => false,
+                ButtonAction::Login => matches!(
+                    state.phase(),
+                    Some(
+                        AccountPhase::OpeningBrowser
+                            | AccountPhase::WaitingForBrowser
+                            | AccountPhase::ManualBrowser
+                            | AccountPhase::LinkCopied
+                    )
+                ),
+                ButtonAction::Logout => state.phase() == Some(AccountPhase::SigningOut),
+                ButtonAction::CancelLogin => state.phase() == Some(AccountPhase::Cancelling),
+                ButtonAction::CopyLoginUrl => false,
             },
         );
     }

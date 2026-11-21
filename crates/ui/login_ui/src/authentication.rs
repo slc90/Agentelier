@@ -1,4 +1,4 @@
-use crate::account::CodexStatus;
+use crate::account::{AccountOperation, AccountPhase, CodexStatus};
 use crate::{AccountState, DataDirectoryReady};
 use agentelier_account_bridge::{AccountEventKind, SourceSnapshot};
 use agentelier_agent_host::{AccountEvent, AgentHost, HostFailed, ReceiveAgentEvents};
@@ -34,8 +34,11 @@ pub(crate) fn begin_login(world: &mut World) -> Result {
     let mut state = world.resource_mut::<AccountState>();
     match result {
         Ok(id) => {
-            state.operation = Some(id);
-            state.error = None;
+            state.clear_operation();
+            state.operation = Some(AccountOperation {
+                id,
+                phase: AccountPhase::OpeningBrowser,
+            });
             info!(operation_id = id, "用户请求使用 ChatGPT 登录");
         }
         Err(failure) => {
@@ -48,20 +51,68 @@ pub(crate) fn begin_login(world: &mut World) -> Result {
 
 pub(crate) fn cancel_login(world: &mut World) -> Result {
     let state = world.resource::<AccountState>();
-    let Some(id) = state.operation else {
+    let Some(operation) = state.operation.as_ref() else {
         return Ok(());
     };
-    let host = world.resource::<AgentHost>();
-    if !state.source_settling
-        && !state.signing_out
-        && !state.runtime_failed
-        && !host.is_stopping()?
-        && let Err(failure) = host.cancel_login(id)
+    if matches!(
+        operation.phase,
+        AccountPhase::Cancelling | AccountPhase::SigningOut
+    ) || state.source_settling
+        || state.runtime_failed
     {
-        error!(operation_id = id, error = %failure, "无法取消浏览器登录");
-        world.resource_mut::<AccountState>().error = Some(failure.to_string());
+        return Ok(());
+    }
+    let id = operation.id;
+    let host = world.resource::<AgentHost>();
+    if host.is_stopping()? {
+        return Ok(());
+    }
+    let result = host.cancel_login(id);
+    let mut state = world.resource_mut::<AccountState>();
+    match result {
+        Ok(()) => {
+            state.operation = Some(AccountOperation {
+                id,
+                phase: AccountPhase::Cancelling,
+            });
+            state.authorization_url = None;
+            state.error = None;
+        }
+        Err(failure) => {
+            error!(operation_id = id, error = %failure, "无法取消浏览器登录");
+            state.error = Some(failure.to_string());
+        }
     }
     Ok(())
+}
+
+pub(crate) fn copy_login_url(world: &mut World) {
+    let state = world.resource::<AccountState>();
+    if state.source_settling || state.runtime_failed {
+        return;
+    }
+    let Some(url) = state.authorization_url.clone() else {
+        return;
+    };
+    let result = match world.get_resource_mut::<bevy::clipboard::Clipboard>() {
+        Some(mut clipboard) => clipboard
+            .set_text(&url)
+            .map_err(|failure| failure.to_string()),
+        None => Err("剪贴板服务不可用".into()),
+    };
+    let mut state = world.resource_mut::<AccountState>();
+    match result {
+        Ok(()) => {
+            if let Some(operation) = &mut state.operation {
+                operation.phase = AccountPhase::LinkCopied;
+            }
+            state.error = None;
+        }
+        Err(failure) => {
+            error!(error = %failure, "无法复制授权链接");
+            state.error = Some(format!("无法复制授权链接：{failure}"));
+        }
+    }
 }
 
 pub(crate) fn logout(world: &mut World) -> Result {
@@ -74,9 +125,11 @@ pub(crate) fn logout(world: &mut World) -> Result {
     let mut state = world.resource_mut::<AccountState>();
     match result {
         Ok(id) => {
-            state.operation = Some(id);
-            state.signing_out = true;
-            state.error = None;
+            state.clear_operation();
+            state.operation = Some(AccountOperation {
+                id,
+                phase: AccountPhase::SigningOut,
+            });
             info!(operation_id = id, "用户请求退出 ChatGPT 登录");
         }
         Err(failure) => {
@@ -97,25 +150,42 @@ fn receive(
         return Ok(());
     }
     for event in events.read() {
-        if event.operation_id != 0 && state.operation != Some(event.operation_id) {
+        if event.operation_id != 0
+            && state.operation.as_ref().map(|operation| operation.id) != Some(event.operation_id)
+        {
             continue;
         }
         match &event.kind {
-            AccountEventKind::LoginWaiting { browser_error, .. } => {
-                state.waiting = true;
-                if let Some(failure) = browser_error {
-                    error!(operation_id = event.operation_id, error = %failure, "无法打开系统浏览器");
-                    state.error = Some(format!("无法打开系统浏览器：{failure}"));
+            AccountEventKind::LoginWaiting(manual) => {
+                let Some(operation) = &mut state.operation else {
+                    continue;
+                };
+                if operation.phase != AccountPhase::OpeningBrowser {
+                    continue;
+                }
+                if let Some(manual) = manual {
+                    operation.phase = AccountPhase::ManualBrowser;
+                    state.authorization_url = Some(manual.authorization_url.clone());
+                    state.error = Some(format!("无法打开系统浏览器：{}", manual.reason));
+                    error!(operation_id = event.operation_id, error = %manual.reason, "无法打开系统浏览器");
+                } else {
+                    operation.phase = AccountPhase::WaitingForBrowser;
                 }
             }
-            AccountEventKind::SourceSettling => state.source_settling = true,
+            AccountEventKind::LoginCancelled => {
+                state.clear_operation();
+                state.notice = Some("已取消登录".into());
+                info!(operation_id = event.operation_id, "已取消浏览器登录");
+            }
+            AccountEventKind::SourceSettling => {
+                state.source_settling = true;
+                state.authorization_url = None;
+            }
             AccountEventKind::LogoutFinished {
                 source,
                 remote_warning,
             } => {
-                state.operation = None;
-                state.signing_out = false;
-                state.source_settling = false;
+                state.clear_operation();
                 state.error = match (source, remote_warning) {
                     (SourceSnapshot::Unavailable(local), Some(remote)) => {
                         Some(format!("{local}\n{remote}"))
@@ -126,9 +196,7 @@ fn receive(
             }
             AccountEventKind::SourceChanged(result) => {
                 if event.operation_id != 0 {
-                    state.operation = None;
-                    state.waiting = false;
-                    state.error = None;
+                    state.clear_operation();
                 }
                 match result {
                     Ok(snapshot) => {
@@ -144,12 +212,9 @@ fn receive(
         }
     }
     if let Some(failure) = failures.read().last() {
-        state.operation = None;
+        state.clear_operation();
         state.error = Some(failure.reason.to_string());
         state.runtime_failed = true;
-        state.waiting = false;
-        state.signing_out = false;
-        state.source_settling = false;
         error!(error = %failure.reason, "认证后台运行失败");
     }
     Ok(())
