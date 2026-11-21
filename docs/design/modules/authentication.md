@@ -18,6 +18,8 @@ Account 是当前来源及凭据分发的所有者。CredentialClient 合并同�
 
 ## 模块边界
 
-Login 负责数据环境、只读文件解析和凭据值。Account 负责来源、共享请求和执行身份。Runtime 提供 Tokio 调度及收尾。LLM Model 通过同一 CredentialClient 发送目录、连接验证、聊天和长期记忆请求。Bridge 与 Bevy 只接收路径、安全摘要和状态错误，Token 留在执行侧。[账号界面](account-ui.md) · [模型请求](model-request.md)
+Login 负责数据环境、浏览器 OAuth、凭据解析和凭据值。Account 负责来源、共享请求和执行身份。Runtime 提供 Tokio 调度及收尾。LLM Model 通过同一 CredentialClient 发送目录、连接验证、聊天和长期记忆请求。Bridge 与 Bevy 只接收路径、安全摘要和状态错误，Token 留在执行侧。[账号界面](account-ui.md) · [模型请求](model-request.md)
+
+Login 提供一次性的浏览器授权操作，使用回环监听与 Authorization Code + PKCE S256 交换凭据。授权 URL 使用实际绑定的端口，浏览器启动失败时可手动打开。回调核对本次 State，完成、失败、取消或超时后释放监听。授权结果包含 Token、Access Token 到期时间和账号摘要，供后续接入 Account。
 
 外部凭据结构参考官方 Codex 的 [auth.json 存储](https://github.com/openai/codex/blob/main/codex-rs/login/src/auth/storage.rs)与 [TokenData](https://github.com/openai/codex/blob/main/codex-rs/login/src/token_data.rs)。

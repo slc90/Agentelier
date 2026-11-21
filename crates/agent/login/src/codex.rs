@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_AUTH_BYTES: u64 = 64 * 1024;
-const ISSUER: &str = "https://auth.openai.com";
+pub(crate) const ISSUER: &str = "https://auth.openai.com";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodexAccountSummary {
@@ -106,27 +106,42 @@ pub fn read_codex_credentials(path: &Path) -> Result<CodexCredentials, CodexRead
         Some(_) => CodexReadFailure::MissingTokens,
         None => CodexReadFailure::Unsupported,
     })?;
-    let id = claims(required_token(tokens.id_token.as_deref())?)?;
     let access_token = tokens.access_token.ok_or(CodexReadFailure::MissingTokens)?;
-    let access = claims(required_token(Some(&access_token))?)?;
-    required_token(tokens.refresh_token.as_deref())?;
+    let (summary, _) = summarize_tokens(
+        required_token(tokens.id_token.as_deref())?,
+        &access_token,
+        required_token(tokens.refresh_token.as_deref())?,
+    )?;
+    if tokens
+        .account_id
+        .is_some_and(|account| account != summary.identity.workspace_id)
+    {
+        return Err(CodexReadFailure::IdentityMismatch);
+    }
+    Ok(CodexCredentials {
+        summary,
+        access_token,
+    })
+}
+
+pub(crate) fn summarize_tokens(
+    id_token: &str,
+    access_token: &str,
+    refresh_token: &str,
+) -> Result<(CodexAccountSummary, u64), CodexReadFailure> {
+    let id = claims(required_token(Some(id_token))?)?;
+    let access = claims(required_token(Some(access_token))?)?;
+    required_token(Some(refresh_token))?;
     let workspace_id = &access.auth.chatgpt_account_id;
     if id.sub != access.sub
         || &id.auth.chatgpt_account_id != workspace_id
-        || tokens
-            .account_id
-            .as_ref()
-            .is_some_and(|account| account != workspace_id)
         || matches!((id.auth.user(), access.auth.user()), (Some(a), Some(b)) if a != b)
     {
         return Err(CodexReadFailure::IdentityMismatch);
     }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| CodexReadFailure::Clock)?
-        .as_secs();
-    Ok(CodexCredentials {
-        summary: CodexAccountSummary {
+    let now = unix_time()?;
+    Ok((
+        CodexAccountSummary {
             identity: CodexIdentity {
                 subject: id.sub,
                 workspace_id: access.auth.chatgpt_account_id,
@@ -139,8 +154,15 @@ pub fn read_codex_credentials(path: &Path) -> Result<CodexCredentials, CodexRead
             }),
             expired: access.exp <= now,
         },
-        access_token,
-    })
+        access.exp,
+    ))
+}
+
+pub(crate) fn unix_time() -> Result<u64, CodexReadFailure> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|time| time.as_secs())
+        .map_err(|_| CodexReadFailure::Clock)
 }
 
 impl ChatGptClaims {
@@ -172,7 +194,7 @@ fn claims(token: &str) -> Result<Claims, CodexReadFailure> {
     if header["alg"] != "RS256" {
         return Err(CodexReadFailure::InvalidTokens);
     }
-    // Imported claims describe the local file. This path has no signing keys or remote session check.
+    // These claims are used for identity consistency. The API verifies bearer authorization.
     let payload = URL_SAFE_NO_PAD
         .decode(payload)
         .map_err(|_| CodexReadFailure::InvalidTokens)?;

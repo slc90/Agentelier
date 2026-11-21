@@ -13,7 +13,7 @@
 - `crates/ui/agent_host/`（`agentelier_agent_host`）：共享执行连接、Winit 唤醒、命令转交、业务消息分发和执行收尾。
 - `crates/ui/chat_ui/`（`agentelier_chat_ui`）：模型准备、聊天输入和展示投影，不接管认证、HTTP、会话权威或运行线程。
 - `crates/ui/assets/`：统一管理应用 Asset。
-- `crates/agent/login/`（`agentelier_login`）：Codex OAuth 凭据文件的只读解析、凭据值及数据环境，不承担统一运行调度。
+- `crates/agent/login/`（`agentelier_login`）：Codex 浏览器 OAuth、凭据解析、凭据值及数据环境，不承担统一运行调度。
 - `crates/agent/account/`（`agentelier_account`）：Codex 来源状态、共享凭据请求和执行身份门控，具体文件解析由 Login 实现。
 - `crates/agent/llm_model/`（`agentelier_llm_model`）：模型服务通信，包括模型目录、Responses 和 Codex Images，通过 Account 取得凭据，不维护第二份账号状态或读写认证文件。
 - `crates/agent/conversation/`（`agentelier_conversation`）：聊天会话、设置快照、Turn、展示与历史业务，不接管线程或网络。
