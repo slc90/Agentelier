@@ -165,6 +165,7 @@ enum Command {
     SpawnAgent(Box<spawn_agent::Invocation>),
     Mailbox(mailbox::Command),
     ChildFinished(Result<child_runtime::FinishedChild, tokio::task::JoinError>),
+    RootStopping,
     Stream(Option<RunnerEvent>),
     Session(SessionCommand),
     TaskAction {
@@ -336,6 +337,7 @@ impl AgentRuntime {
                         let mut pending_source: Option<SourceSettlement> = None;
                         let mut delivery_failure = None;
                         let mut model: Option<ModelTask> = None;
+                        let mut stopping_root = None;
                         let mut session_tools: Option<(SessionId, tool_jobs::SessionTools)> = None;
                         let mut task_receipts = task_control::Receipts::new();
                         let (spawn_sender, mut spawn_requests) = mpsc::channel(COMMAND_CAPACITY);
@@ -357,8 +359,17 @@ impl AgentRuntime {
                             }
                             loop {
                                 let idle_work = session_tools.as_ref().map(|(_, tools)| tools.work.clone());
+                                let root_cancel = model.as_ref()
+                                    .filter(|task| task.chat && stopping_root != Some(task.id))
+                                    .map(|task| task.control.cancel.clone());
                                 let command = tokio::select! { biased;
                                     _ = runtime_shutdown.cancelled() => break,
+                                    _ = async move {
+                                        match root_cancel {
+                                            Some(cancel) => cancel.cancelled().await,
+                                            None => std::future::pending().await,
+                                        }
+                                    } => Command::RootStopping,
                                     update = account_login::next(&mut login), if login.is_some() => update,
                                     completed = async {
                                         match &mut refresh {
@@ -477,7 +488,21 @@ impl AgentRuntime {
                                         }).await;
                                     }
                                     Command::ChildFinished(result) => {
-                                        if let Some(agent) = children.finish(result, &store.client(), &mut conversation).await?
+                                        let ready = match children.finish(result, &store.client(), &mut conversation).await {
+                                            Ok(ready) => ready,
+                                            Err(failure) => {
+                                                error!(%failure, "子 Agent 回收或保存未确认");
+                                                if let Some(view) = conversation.fail_storage(failure.to_string()) {
+                                                    if let Some(task) = &model {
+                                                        task.control.cancel.cancel();
+                                                    } else {
+                                                        emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::IdleUpdated(view)))?;
+                                                    }
+                                                }
+                                                None
+                                            }
+                                        };
+                                        if let Some(agent) = ready
                                             && let Some(view) = conversation.current()
                                             && let Err(failure) = children.wake_pending(&mut conversation, view.id, agent, spawn_agent::SpawnEnvironment {
                                                 store: &store.client(), credentials: &owner_credentials, operations: &operations,
@@ -485,6 +510,12 @@ impl AgentRuntime {
                                             }).await {
                                             tracing::error!(session_id = %view.id, agent_id = %agent, error = %failure, "唤醒待处理 Follow-up 失败");
                                         }
+                                    }
+                                    Command::RootStopping => {
+                                        let task = model.as_ref().ok_or(RuntimeFailure::ModelState)?;
+                                        stopping_root = Some(task.id);
+                                        children.cancel_active();
+                                        debug!(operation_id = task.id, "Root 停止已阻断协作准入，正在回收子 Agent");
                                     }
                                     Command::AudioDraft(id, session, path) => {
                                         if !audio_jobs.is_empty() || !conversation.is_current(session) {
@@ -754,9 +785,7 @@ impl AgentRuntime {
                                         let task =
                                             model.take().ok_or(RuntimeFailure::ModelState)?;
                                         task.check_instance(&conversation)?;
-                                        if task.chat && task.control.cancel.is_cancelled() {
-                                            children.cancel_active();
-                                        }
+                                        stopping_root = None;
                                         if let Some(bound) = task.control.turn.get() {
                                             children.clear_wait(agentelier_conversation::AgentId::for_root(bound.session));
                                         }
@@ -764,6 +793,12 @@ impl AgentRuntime {
                                         drain_progress(&mut conversation, task.id, &mut progress_events, &store.client(), &publish)?;
                                         let event = complete(&mut conversation, task.id, task.chat, result)?;
                                         if task.chat {
+                                            if task.control.cancel.is_cancelled()
+                                                && let Err(failure) = children.settle_active(&store.client(), &mut conversation, Some(&mut mailbox_requests)).await
+                                            {
+                                                error!(operation_id = task.id, %failure, "Root 停止后的 Agent Tree 收尾未确认");
+                                                conversation.fail_storage(failure.to_string());
+                                            }
                                             if conversation.current().is_some_and(|view| view.execution_blocked)
                                                 && let Some((_, tools)) = &session_tools {
                                                 tools.admission.block();
@@ -836,7 +871,11 @@ impl AgentRuntime {
                                     }
                                     Command::Stream(event) => {
                                         if let Some(RunnerEvent::Inbox(request)) = event {
-                                            children.inbox(request, &mut conversation, model.as_ref(), &store.client()).await;
+                                            if model.as_ref().is_some_and(|task| task.control.cancel.is_cancelled()) {
+                                                children.settle_inbox(request, &mut conversation, model.as_ref(), &store.client()).await;
+                                            } else {
+                                                children.inbox(request, &mut conversation, model.as_ref(), &store.client()).await;
+                                            }
                                         } else if let Some(event) = event {
                                             let task = model
                                                 .as_ref()
@@ -889,11 +928,21 @@ impl AgentRuntime {
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("仍有任务控制正在确认结果".into())))?;
                                             continue;
                                         }
+                                        if replacing && matches!(&request, ConversationRequest::Reset { .. } | ConversationRequest::Delete { .. })
+                                            && conversation.current().is_some_and(|view| view.execution_blocked)
+                                        {
+                                            control.finished.cancel();
+                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("当前会话有未确认的执行或保存结果".into())))?;
+                                            continue;
+                                        }
                                         if model.is_some() || creating.is_some() || loading.is_some() || deleting.is_some() || suspending != 0 || finalizing || pending_queue {
                                             control.finished.cancel();
                                             let reason = if replacing { "任务正在回收或会话保存正在进行，暂不能替换会话" } else { "排队任务已经开始，当前发送未接纳，草稿保留" };
                                             emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Rejected(reason.into())))?;
                                             continue;
+                                        }
+                                        if replacing {
+                                            children.release_idle(&mut conversation)?;
                                         }
                                         match request {
                                             ConversationRequest::Delete { session } => {
@@ -1035,6 +1084,10 @@ impl AgentRuntime {
                                             pending_source = Some(SourceSettlement::Publish(event));
                                         }
                                         if starting_settlement {
+                                            if let Some(task) = &model {
+                                                task.control.cancel.cancel();
+                                            }
+                                            children.settle_active(&store.client(), &mut conversation, Some(&mut mailbox_requests)).await?;
                                             if model.is_some() { stop_model(&mut model, &mut progress_events, &mut conversation, &store, &publish).await?; }
                                             if let Some((session, tools)) = session_tools.take() {
                                                 let processes = tools.process_views.clone();
@@ -1089,11 +1142,15 @@ impl AgentRuntime {
                             }
                         }
                         drop(spawn_requests);
-                        drop(mailbox_requests);
+                        if let Some(task) = &model {
+                            task.control.cancel.cancel();
+                        }
                         capture_delivery(
-                            children.stop(&store.client(), &mut conversation).await,
+                            children.stop(&store.client(), &mut conversation, &mut mailbox_requests).await,
                             &mut delivery_failure,
                         );
+                        drop(mailbox_requests);
+                        drop(children);
                         capture_delivery(
                             stop_model(
                                 &mut model,
@@ -1147,7 +1204,11 @@ impl AgentRuntime {
                                 delivery_failure = delivery_failure.or(Some(RuntimeFailure::ModelState));
                             }
                         }
+                        drop(conversation);
                         let stored = store.finish().await.map_err(RuntimeFailure::Store);
+                        if stored.is_ok() {
+                            debug!("会话存储已排空并关闭");
+                        }
                         let logout_completion = match logout {
                             Some((id, task)) => Some((id, task.await.map_err(|_| "退出登录后台任务异常结束".into()))),
                             None if stored.is_ok() && execution.is_ok() && delivery_failure.is_none() => {
@@ -1174,7 +1235,6 @@ impl AgentRuntime {
                         } else {
                             Ok(())
                         };
-                        drop(conversation);
                         let memory_finished = if let Ok(memory) = memory {
                             let result = tokio::task::spawn_blocking(move || memory.close())
                                 .await.map_err(io::Error::other).and_then(|result| result);

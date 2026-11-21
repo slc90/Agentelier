@@ -7,14 +7,11 @@ Agent Tree 的可恢复性建立在 Agentelier 现有 Session Store 上，不新
 需要持久化的内容包括：
 
 - AgentCreated：Agent ID、Session ID、父 Agent、Agent Path、角色、Spawn 来源、Fork 边界和配置快照引用。
-- AgentStateChanged：业务状态变化及原因。
-- AgentMessageQueued / AgentMessageConsumed：消息 ID、发送者、接收者、投递模式、顺序和消费事实。
-- AgentTaskAssigned / AgentTaskCompleted：任务来源、原始调用 ID、任务内容引用、结果或失败摘要。
-- AgentStopRequested：按来源和操作 ID 记录定向中断的接纳及子树范围。后续 AgentExecution 记录经确认的执行终态。没有后续终态的请求在重启后保持未确认。
-- AgentEviction：记录准备释放的精确空闲实例。冷恢复重放原子线程，已领取 Mail 按已保存的输入或轮次接纳事实判定消费。缺少接纳证据的领取恢复为待处理。
-- AgentRuntimeEvicted / AgentRuntimeRestored：驻留状态变化及恢复实例身份。
-
-事件名称可以与现有 `RecordEvent` 命名协调，但语义必须能区分请求已接纳、消息已投递、消息已消费、取消已请求和资源已真实回收。不能用一个笼统的 `AgentUpdated` 事件覆盖所有阶段。
+- AgentExecution：启动、创建后失败或已确认的执行终态。正常收尾的终态可以同时登记给父级的结果交付。
+- Mailbox：区分消息投递、领取和消费，保留顺序、发送者和接收者。
+- AgentStopRequested：按来源和操作 ID 记录定向中断的接纳及子树范围。没有后续终态的请求在重启后保持未确认。
+- AgentEviction：记录准备释放的精确空闲实例。
+- AgentTurn：属于子线程的历史和执行事实，按所属会话统一存档。
 
 ## 提交与执行边界
 
@@ -27,6 +24,12 @@ Session Store 继续沿用现有 JSONL 日志、单写入者、连续序号、Fl
 打开 Session 时先恢复 Root Conversation 与 Agent 图元数据；不自动启动所有子 Agent Runtime。用户继续任务或 Root 需要联系某个子 Agent 时，Agent Control 再按需恢复目标 Runtime。已消费消息不会再次消费；已交付结果不会重复交付；只持久化了消息投递但未消费的消息保留在 Mailbox。
 
 如果执行开始记录存在而完成结果不存在，恢复应将其标记为上次执行中断或结果未知。工具副作用可能已经发生，禁止自动重新执行原工具调用。父 Agent 读取该状态后决定是否安排新的补救任务。
+
+已领取的 Mail 根据已保存的输入或轮次接纳事实判定消费。缺少接纳证据的领取恢复为待处理。
+
+## 停止与关闭
+
+Root Stop 完成前必须确认活动子 Runner 的执行和资源。会话替换在子 Runner、工具或存档提交仍在收尾时由 Runtime 拒绝，离开会话时释放空闲驻留和通知订阅。应用退出停止协作接纳，在保存已接纳的收尾和结果交付后释放驻留与订阅，再排空并接合 Session Store。
 
 ## 模块职责映射
 

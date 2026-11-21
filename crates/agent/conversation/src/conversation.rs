@@ -100,6 +100,8 @@ pub enum TaskPhase {
 }
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolView {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub collaboration: bool,
     pub request_index: u32,
     pub id: String,
     pub output_index: usize,
@@ -114,6 +116,11 @@ pub struct ToolView {
     #[serde(skip)]
     pub generated_image: Option<agentelier_tools::ImageDescriptor>,
     pub retained: bool,
+}
+
+pub(crate) fn is_collaboration_tool(tool: &agentelier_tools::ToolDefinition) -> bool {
+    matches!(&tool.source, agentelier_tools::ToolSource::Extension { provider, .. }
+        if provider == "agentelier.collaboration")
 }
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct TurnView {

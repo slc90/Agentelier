@@ -29,6 +29,7 @@ mod inbox;
 mod interrupt;
 mod limits;
 mod residency;
+mod shutdown;
 mod wake;
 
 #[derive(Clone, Deserialize)]
@@ -514,12 +515,18 @@ impl Children {
         let session = finished.identity.session;
         self.finishing.insert(finished.identity.id, finished);
         let mut wake = None;
+        let mut first_failure = None;
         while let Some(id) = self.finishing.keys().copied().find(|&id| {
             conversation
                 .agent_registry()
                 .get(session, id)
                 .is_ok_and(|node| {
-                    node.state != AgentState::Stopping
+                    let stopping = node.state == AgentState::Stopping
+                        || self
+                            .active
+                            .get(&id)
+                            .is_some_and(|child| child.stop.is_cancelled());
+                    !stopping
                         || conversation
                             .agent_registry()
                             .subtree(session, id)
@@ -545,14 +552,14 @@ impl Children {
                 }
                 let error = format!("子 Agent 收尾未确认：{}", node.identity.path);
                 tracing::error!(session_id = %session, agent_id = %id, agent_path = %node.identity.path, turn_id = finished.assignment.turn.0, call_id = %finished.assignment.call_id, state = ?finished.state, "子 Agent 收尾未确认，保留活动占用");
-                conversation.fail_storage(error);
+                first_failure.get_or_insert_with(|| ConversationFailure::new(error));
                 continue;
             }
             if let Some(agent) = self.commit_finish(finished, store, conversation).await? {
                 wake = Some(agent);
             }
         }
-        Ok(wake)
+        first_failure.map_or(Ok(wake), |failure| Err(failure.into()))
     }
 
     async fn commit_finish(
@@ -632,27 +639,6 @@ impl Children {
             );
         }
         Ok(resume.then_some(identity.id))
-    }
-
-    pub(super) async fn stop(
-        &mut self,
-        store: &SessionStoreClient,
-        conversation: &mut Conversation,
-    ) -> Result<(), RuntimeFailure> {
-        self.stop.cancel();
-        conversation.mailboxes_mut().close();
-        let mut first_failure = None;
-        while let Some(result) = self.jobs.join_next().await {
-            if let Err(failure) = self.finish(result, store, conversation).await {
-                first_failure.get_or_insert(failure);
-            }
-        }
-        if self.has_active() {
-            first_failure.get_or_insert_with(|| {
-                ConversationFailure::new("部分子 Agent 尚无可确认的收尾结果").into()
-            });
-        }
-        first_failure.map_or(Ok(()), Err)
     }
 }
 

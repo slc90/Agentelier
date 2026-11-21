@@ -20,6 +20,27 @@ pub(super) enum Command {
     List(super::list_agents::Request),
 }
 
+impl Command {
+    pub(super) fn close(self) {
+        let message = "Agent Control 正在停止接纳工作";
+        match self {
+            Self::Send(request) => {
+                drop(
+                    request
+                        .reply
+                        .send(ToolResult::not_executed("mailbox_closed", message)),
+                );
+            }
+            Self::Inbox(request) => request.close(),
+            Self::Wait(request) => drop(request.reply.send(Err(ConversationFailure::new(message)))),
+            Self::Interrupt(request) => {
+                drop(request.reply.send(super::interrupt_agent::cancelled()))
+            }
+            Self::List(request) => request.respond(Err(ConversationFailure::new(message))),
+        }
+    }
+}
+
 pub(super) struct Outgoing {
     pub(super) origin: ProcessOrigin,
     pub(super) target: String,

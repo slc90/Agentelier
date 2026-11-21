@@ -1741,6 +1741,14 @@ impl Conversation {
         mut restored: RestoredSession,
         tools: &[agentelier_tools::ToolRegistration],
     ) -> Result<(SessionView, crate::AgentRuntimeId), crate::AgentRegistryError> {
+        let collaboration: HashSet<_> = restored
+            .initial
+            .settings
+            .tools
+            .iter()
+            .filter(|tool| crate::conversation::is_collaboration_tool(tool))
+            .map(|tool| tool.name.as_str())
+            .collect();
         for turn in restored
             .state
             .previous_turns
@@ -1748,6 +1756,9 @@ impl Conversation {
             .chain(restored.state.turn.iter_mut().map(Box::as_mut))
         {
             turn.operation_id = 0;
+            for tool in &mut turn.tools {
+                tool.collaboration = collaboration.contains(tool.name.as_str());
+            }
         }
         let settings = &restored.initial.settings;
         let tools = if settings.codex.is_none() {

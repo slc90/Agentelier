@@ -63,6 +63,7 @@ pub enum ChatHistoryItem {
 }
 #[derive(Clone, Reflect, PartialEq)]
 pub struct ChatTool {
+    pub collaboration: bool,
     pub request_index: u32,
     pub id: String,
     pub output_index: usize,
@@ -1077,6 +1078,7 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
             .tools
             .into_iter()
             .map(|tool| ChatTool {
+                collaboration: tool.collaboration,
                 request_index: tool.request_index,
                 id: tool.id,
                 output_index: tool.output_index,
@@ -1668,7 +1670,7 @@ fn reconcile(world: &mut World) -> Result {
                         ));
                     }
                 }
-                if turn.messages.is_empty() && turn.tools.is_empty() {
+                if turn.messages.is_empty() && turn.tools.iter().all(|tool| tool.collaboration) {
                     desired.push((
                         ChatRow {
                             session: session.id,
@@ -1717,7 +1719,7 @@ fn reconcile(world: &mut World) -> Result {
                         },
                     ));
                 }
-                for tool in &turn.tools {
+                for tool in turn.tools.iter().filter(|tool| !tool.collaboration) {
                     output.push((
                         ChatRow {
                             session: session.id,

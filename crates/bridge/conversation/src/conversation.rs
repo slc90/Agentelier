@@ -73,6 +73,7 @@ pub struct MessageView {
 }
 #[derive(Clone)]
 pub struct ToolView {
+    pub collaboration: bool,
     pub request_index: u32,
     pub id: String,
     pub output_index: usize,
@@ -759,6 +760,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
             .tools
             .into_iter()
             .map(|tool| ToolView {
+                collaboration: tool.collaboration,
                 request_index: tool.request_index,
                 id: tool.id,
                 output_index: tool.output_index,

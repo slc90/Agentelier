@@ -46,6 +46,18 @@ impl Children {
         root_task: Option<&ModelTask>,
         environment: SpawnEnvironment<'_>,
     ) {
+        if self.stop.is_cancelled()
+            || root_task.is_some_and(|task| task.chat && task.control.cancel.is_cancelled())
+        {
+            match command {
+                mailbox::Command::Inbox(inbox) => {
+                    self.settle_inbox(inbox, conversation, root_task, environment.store)
+                        .await
+                }
+                command => command.close(),
+            }
+            return;
+        }
         match command {
             mailbox::Command::Send(outgoing) => {
                 let result = self
@@ -90,6 +102,20 @@ impl Children {
                     });
                 request.respond(result);
             }
+        }
+    }
+
+    pub(in crate::runtime) async fn settle_inbox(
+        &mut self,
+        request: InboxRequest,
+        conversation: &mut Conversation,
+        root_task: Option<&ModelTask>,
+        store: &SessionStoreClient,
+    ) {
+        if matches!(request.action, InboxAction::Consumed { .. }) {
+            self.inbox(request, conversation, root_task, store).await;
+        } else {
+            request.close();
         }
     }
 

@@ -799,6 +799,9 @@ impl ActiveTurn<'_> {
             arguments.truncate(end);
         }
         let view = ToolView {
+            collaboration: catalog
+                .definition(&call.name)
+                .is_some_and(crate::conversation::is_collaboration_tool),
             request_index: turn.request_index,
             id: call.id,
             output_index: call.output_index,

@@ -190,6 +190,8 @@ Conversation 的内存 Agent Registry 管理 Session 内的 Root 身份及子 Ag
 
 `spawn_agent` 由 Runtime 按当前调用来源接纳。Conversation 准备子配置、校验身份与路径，Runtime 通过现有 Session Store 确认身份记录和启动事实后，为子 Agent 启动独立的 Conversation 和 Turn Runner。在同一个 Tokio Runtime 内，各 Agent 的模型请求和工具工作可并发，子轮次记录按 Thread 保存在所属会话。详见 [创建子 Agent 时如何形成独立上下文](multi-agent-v2/02-spawn-context-and-config.md)。
 
+Agent Control 在会话内统一接纳协作请求，并持有子 Runner、驻留实例和 Mailbox 通知。定向中断、Root 停止和退出分别协调对应范围的收尾，Session Store 保留可复原的身份、消息和子轮次。普通聊天展示 Root 对话，协作工具记录可在请求检查中查看。详见 [Multi-Agent v2](multi-agent-v2/README.md)。
+
 LLM Model 解析 Responses 输出项、内容段、公开 phase 和文本增量；只有 response.completed 及可接受完整输出才成功。聊天无总生成时长限制，合法流式事件维持 120 秒空闲期限；连接验证仍保留原总超时。聊天启用固定 Direct function tools；LLM Model 只解析调用和映射结果，Runner 在完整响应和身份检查后执行。普通拒绝正文正常展示。任务 join 后才释放操作占用，失败/取消保留已经显示的部分回复。
 
 网络任务经容量为 32 的有界 Tokio 通道传递文本变化。Runner 将增量交给运行时的会话所有者，Runtime 从最新状态生成累计展示快照。Bridge 合并可替换快照，并通过可靠队列送达任务回执和终态。任务账本另按会话 UUID 和修订投影，独立于当前前台操作。AgentHost 每次更新最多消费 32 项，仍有消息时继续唤醒。
