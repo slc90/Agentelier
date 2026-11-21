@@ -18,6 +18,8 @@ const MAX_EXPRESSION_DEPTH: usize = 64;
 const MAX_STRING_BYTES: usize = 1024 * 1024;
 const MAX_COLLECTION_SIZE: usize = 8192;
 
+static DESKTOP_CLEANUP_CONFIRMED: AsyncMutex<bool> = AsyncMutex::const_new(true);
+
 pub struct ScriptOutput {
     pub text: String,
     pub image: Option<Arc<ImagePayload>>,
@@ -74,14 +76,36 @@ impl ScriptSession {
             () = cancel.cancelled() => return Err(cancelled()),
             state = self.state.clone().lock_owned() => state,
         };
+        let mut desktop = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(cancelled()),
+            desktop = DESKTOP_CLEANUP_CONFIRMED.lock() => desktop,
+        };
+        if !*desktop {
+            return Err(ToolFailure::new(
+                "desktop_unconfirmed",
+                "桌面输入清理尚未确认，当前无法接受新的桌面操作",
+            ));
+        }
+        let worker_cancel = cancel.child_token();
+        let _cancel_on_drop = worker_cancel.clone().drop_guard();
         let control = Control {
-            cancel: cancel.clone(),
+            cancel: worker_cancel,
             deadline: Instant::now() + SCRIPT_TIMEOUT,
         };
         let script = script.to_owned();
-        tokio::task::spawn_blocking(move || state.run(&script, control))
-            .await
-            .map_err(|error| ToolFailure::new("script_worker_failed", error.to_string()))?
+        tokio::task::spawn_blocking(move || {
+            // Keep desktop ownership on this worker, including on unwind or dropped awaiters.
+            *desktop = false;
+            let result = state.run(&script, control);
+            *desktop = result
+                .as_ref()
+                .err()
+                .is_none_or(|error| error.code != "desktop_input_cleanup");
+            result
+        })
+        .await
+        .map_err(|error| ToolFailure::new("script_worker_failed", error.to_string()))?
     }
 }
 
@@ -118,11 +142,13 @@ impl ScriptState {
             control.clone(),
             self.observed.clone(),
         )));
-        self.engine.set_default_tag(Dynamic::from(desktop.clone()));
-        let result = self
-            .engine
-            .eval_ast_with_scope::<Dynamic>(&mut self.scope, &program);
-        self.engine.set_default_tag(Dynamic::UNIT);
+        let result = {
+            self.engine.set_default_tag(Dynamic::from(desktop.clone()));
+            let tagged = TaggedEngine(&mut self.engine);
+            tagged
+                .0
+                .eval_ast_with_scope::<Dynamic>(&mut self.scope, &program)
+        };
         let (mapping, image) = desktop
             .lock()
             .map_err(|error| ToolFailure::new("desktop_input_cleanup", error.to_string()))?
@@ -142,6 +168,14 @@ impl ScriptState {
             text: std::mem::take(&mut output),
             image,
         })
+    }
+}
+
+struct TaggedEngine<'a>(&'a mut Engine);
+
+impl Drop for TaggedEngine<'_> {
+    fn drop(&mut self) {
+        self.0.set_default_tag(Dynamic::UNIT);
     }
 }
 

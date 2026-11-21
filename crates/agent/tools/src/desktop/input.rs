@@ -88,6 +88,7 @@ pub struct TrajectoryPoint {
 
 pub struct DesktopInput {
     cancel: CancellationToken,
+    deadline: Option<Instant>,
     buttons: Vec<MouseButton>,
     keys: Vec<HeldKey>,
 }
@@ -96,9 +97,16 @@ impl DesktopInput {
     pub fn new(cancel: CancellationToken) -> Self {
         Self {
             cancel,
+            deadline: None,
             buttons: Vec::new(),
             keys: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_deadline(cancel: CancellationToken, deadline: Instant) -> Self {
+        let mut input = Self::new(cancel);
+        input.deadline = Some(deadline);
+        input
     }
 
     pub fn move_mouse(&self, target: PointerTarget) -> Result<ScreenPoint, ToolFailure> {
@@ -269,6 +277,11 @@ impl DesktopInput {
     fn check_cancel(&self) -> Result<(), ToolFailure> {
         if self.cancel.is_cancelled() {
             Err(ToolFailure::new("cancelled", "已停止后续桌面输入"))
+        } else if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            Err(ToolFailure::new("timeout", "桌面输入超过脚本的执行期限"))
         } else {
             Ok(())
         }

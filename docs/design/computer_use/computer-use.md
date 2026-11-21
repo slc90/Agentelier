@@ -1,6 +1,6 @@
 # Computer Use 设计
 
-实施状态：Windows Driver、持续 Rhai 会话和 Rhai Computer API 已实现。后续能力见[实施方案总览](../../../plans/computer-use/00-overview.md)。
+实施状态：Windows Driver、持续 Rhai 会话、Rhai Computer API 和桌面独占生命周期已实现。后续能力见[实施方案总览](../../../plans/computer-use/00-overview.md)。
 
 Computer Use 让 Agentelier 中的模型直接操作当前 Windows 桌面上的应用。模型通过普通 Responses Function Calling 提交 Rhai 脚本；Agentelier 在本地解释脚本，由 Rust 提供的 Computer API 调用 Windows 桌面能力，再把执行结果和截图作为工具结果反馈给模型。
 
@@ -129,6 +129,10 @@ Computer Use 是 `agent/tools` 固定目录中的内置 Function Tool。模型�
 当前 `ToolRegistration::new/with_origin` 默认采用 `Exclusive`，且默认允许图片结果。Computer Use 必须保持独占访问，不改成 `SharedRead`。独占许可需要覆盖完整脚本执行及输入收尾，不能在脚本仍可能操作桌面时提前释放。
 
 ## 执行生命周期
+
+所有脚本会话共享进程内桌面许可。等待会话或桌面许可期间可以取消。准入后，桌面许可和脚本状态一同移交给实际工作线程。工作线程完成脚本、清理输入并退出后才归还许可。桌面输入等待和轨迹也检查同一执行期限。同步捕获正在进行时，上层等待它返回，再完成清理和回收。
+
+清理结果未确认或工作线程异常退出时，桌面入口会拒绝本次应用运行中的进一步操作。
 
 Rhai Runtime 的上下文在同一 Computer Use 会话的多次调用之间持续存在；Windows Driver 每次操作真实桌面，并不缓存过期的窗口状态来代替重新观察。
 

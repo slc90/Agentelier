@@ -20,7 +20,7 @@ pub(super) struct Run {
 impl Run {
     pub(super) fn new(control: Control, mapping: Option<CaptureMapping>) -> Self {
         Self {
-            input: DesktopInput::new(control.cancel.clone()),
+            input: DesktopInput::with_deadline(control.cancel.clone(), control.deadline),
             control,
             mapping,
             image: None,
