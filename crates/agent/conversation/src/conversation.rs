@@ -242,6 +242,7 @@ pub struct Conversation {
     pub(crate) extensions: Arc<[ToolRegistration]>,
     pub(crate) queue_pause_revision: u64,
     agents: AgentRegistry,
+    pub(crate) mailboxes: crate::Mailboxes,
 }
 
 impl Conversation {
@@ -305,6 +306,7 @@ impl Conversation {
         {
             self.session = None;
             self.next_turn = 0;
+            self.mailboxes = crate::Mailboxes::default();
         }
     }
     pub fn current(&self) -> Option<SessionView> {
@@ -516,6 +518,7 @@ impl Conversation {
         let instance = self.activate_root(&view)?;
         self.session = Some(prepared.session);
         self.next_turn = 0;
+        self.mailboxes = crate::Mailboxes::default();
         Ok((view, instance))
     }
 
@@ -656,6 +659,14 @@ impl Conversation {
 
     pub fn agent_registry_mut(&mut self) -> &mut AgentRegistry {
         &mut self.agents
+    }
+
+    pub fn mailboxes(&self) -> &crate::Mailboxes {
+        &self.mailboxes
+    }
+
+    pub fn mailboxes_mut(&mut self) -> &mut crate::Mailboxes {
+        &mut self.mailboxes
     }
 
     pub fn root_instance(&self, session: SessionId) -> Option<AgentRuntimeId> {

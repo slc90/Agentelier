@@ -92,6 +92,10 @@ pub enum RecordEvent {
         agent: crate::AgentId,
         event: Box<RecordEvent>,
     },
+    Mailbox {
+        session: SessionId,
+        event: crate::MailboxEvent,
+    },
     AudioDraft {
         session: SessionId,
         attachment: Option<crate::AudioAttachment>,
@@ -215,6 +219,7 @@ impl RecordEvent {
             Self::AgentCreated { session, .. }
             | Self::AgentExecution { session, .. }
             | Self::AgentTurn { session, .. }
+            | Self::Mailbox { session, .. }
             | Self::AudioDraft { session, .. }
             | Self::TranscriptionStarted { session, .. }
             | Self::TranscriptionFinished { session, .. } => *session,
@@ -227,6 +232,7 @@ impl RecordEvent {
             Self::AgentCreated { .. }
             | Self::AgentExecution { .. }
             | Self::AgentTurn { .. }
+            | Self::Mailbox { .. }
             | Self::Process { .. }
             | Self::AudioDraft { .. }
             | Self::TranscriptionStarted { .. }

@@ -97,3 +97,5 @@ RequestProgress 保存已准备请求的发送阶段与传输回执。HTTP 保�
 ## 子 Agent 创建与执行记录
 
 子 Agent 使用同一 Session JSONL 中的 `AgentCreated`、`AgentExecution` 与 `AgentTurn` 记录。身份记录包括父级及来源调用、冻结配置和独立历史起点。各条轮次记录关联子 Agent ID 和 Thread，承载内层 Runner 原有事件。单写入者确认外层 Session 后，以该 Thread 作为内部提交回执的归属。附件保存在所属 Session 的原有资源目录。重开时校验身份、记录顺序和 Thread 归属，缺少已确认终态的 Agent 保留身份并显示执行未确认。
+
+同一 Session JSONL 的 `Mailbox` 事件登记消息接纳、按队列序号领取和轮次消费确认。Conversation 重开时沿日志顺序恢复消息，保留已领取但缺少消费确认的状态。消息和子轮次各自保留来源及终态，可以独立检查提交边界。

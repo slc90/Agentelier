@@ -19,6 +19,11 @@ pub use child_config::{
 };
 mod control;
 mod conversation;
+mod mailbox;
+pub use mailbox::{
+    AgentMessage, AgentMessageId, DeliveryMode, MAX_AGENT_MESSAGE_CHARS, MailboxEntry,
+    MailboxEvent, Mailboxes, MessageClaim, MessageStatus,
+};
 mod memory_evidence;
 mod processes;
 mod queue;

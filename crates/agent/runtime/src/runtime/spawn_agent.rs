@@ -1,10 +1,12 @@
 use super::child_runtime::{ChildTurn, Execution, FinishedChild};
+use super::mailbox::MailboxActivity;
 use super::{ModelTask, RuntimeFailure};
 use agentelier_account::{CredentialClient, ExecutionIdentity};
 use agentelier_conversation::{
-    AgentCreationRecord, AgentId, AgentIdentity, AgentNode, AgentState, ChildPreparation,
-    ChildRegistration, Conversation, ConversationFailure, ForkMode, PreparedChild, RecordEvent,
-    SessionId, TurnId,
+    AgentCreationRecord, AgentId, AgentIdentity, AgentMessage, AgentMessageId, AgentNode,
+    AgentState, ChildPreparation, ChildRegistration, Conversation, ConversationFailure,
+    DeliveryMode, ForkMode, MAX_AGENT_MESSAGE_CHARS, MailboxEvent, MessageClaim, PreparedChild,
+    RecordEvent, SessionId, TurnId,
 };
 use agentelier_llm_model::{ModelInfo, ProtocolArchive};
 use agentelier_prompts::{Library, RoleSnapshot};
@@ -21,7 +23,6 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 const TOOL: &str = "spawn_agent";
-const MAX_TASK_CHARS: usize = 16_384;
 const MAX_TITLE_CHARS: usize = 128;
 
 #[derive(Clone, Deserialize)]
@@ -92,7 +93,7 @@ pub(super) fn registration(
         name: TOOL.into(),
         description: "Start an independent child Agent with an assigned task. Set unused options to null. Fresh context includes the task and current project instructions. Full history requires a closed parent request history. Success returns the stable Agent ID, path, and starting status.".into(),
         parameters: json!({"type":"object","properties":{
-            "task":{"type":"string","maxLength":MAX_TASK_CHARS},
+            "task":{"type":"string","maxLength":MAX_AGENT_MESSAGE_CHARS},
             "task_name":{"type":["string","null"],"maxLength":MAX_TITLE_CHARS},
             "role":{"type":["string","null"]},
             "model":{"type":["string","null"]},
@@ -126,7 +127,7 @@ async fn invoke(
         let mut arguments: Arguments = serde_json::from_str(raw).map_err(rejection)?;
         arguments.task = arguments.task.trim().to_owned();
         if arguments.task.is_empty()
-            || arguments.task.chars().count() > MAX_TASK_CHARS
+            || arguments.task.chars().count() > MAX_AGENT_MESSAGE_CHARS
             || arguments
                 .task_name
                 .as_ref()
@@ -193,6 +194,7 @@ pub(super) struct Children {
     pub(super) jobs: JoinSet<FinishedChild>,
     stop: CancellationToken,
     active: HashMap<AgentId, ChildHandle>,
+    mailbox: MailboxActivity,
 }
 
 struct ChildHandle {
@@ -387,6 +389,26 @@ impl Children {
             .commit(reservation)
             .map_err(unknown)?;
         tracing::info!(session_id = %session, agent_id = %id, agent_path = %identity.path, turn_id = origin.turn, call_id = %origin.call_id, "子 Agent 身份已持久登记");
+        let message = AgentMessage {
+            id: AgentMessageId::initial(&identity),
+            sender: parent,
+            receiver: id,
+            turn,
+            call_id: origin.call_id.clone(),
+            mode: DeliveryMode::TriggerTurn,
+            text: request.task.clone(),
+        };
+        self.mailbox
+            .commit(
+                conversation,
+                store,
+                session,
+                MailboxEvent::Queued {
+                    message: message.clone(),
+                },
+            )
+            .await
+            .map_err(unknown)?;
         let starting = if invocation.cancel.is_cancelled()
             || spec.identity.is_invalidated()
             || parent_stop.is_cancelled()
@@ -398,7 +420,7 @@ impl Children {
                 .allocate()
                 .map_err(|failure| ConversationFailure::new(failure.to_string()))
                 .and_then(|operation| {
-                    ChildTurn::new(&identity, prepared, request.task.clone(), operation)
+                    ChildTurn::new(&identity, prepared, message.text.clone(), operation)
                 })
                 .map_err(|failure| AgentState::Failed(failure.to_string()))
         };
@@ -407,6 +429,23 @@ impl Children {
                 .await
                 .map_err(unknown)?,
             Ok(turn) => {
+                let claim = MessageClaim {
+                    receiver: id,
+                    message: message.id,
+                    turn: turn.turn_id().map_err(unknown)?,
+                };
+                let mailbox = self
+                    .mailbox
+                    .subscribe(id, conversation.mailboxes().revision());
+                self.mailbox
+                    .commit(
+                        conversation,
+                        store,
+                        session,
+                        MailboxEvent::Claimed { claim },
+                    )
+                    .await
+                    .map_err(unknown)?;
                 let instance = conversation
                     .agent_registry_mut()
                     .attach(session, id)
@@ -443,6 +482,8 @@ impl Children {
                         stop,
                         parent_stop,
                         commands: incoming,
+                        mailbox,
+                        claim,
                     }
                     .run(),
                 );
@@ -470,6 +511,16 @@ impl Children {
             .agent_registry_mut()
             .detach(identity.session, identity.id, finished.instance)
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+        if let Some(claim) = finished.consumed {
+            self.mailbox
+                .commit(
+                    conversation,
+                    store,
+                    identity.session,
+                    MailboxEvent::Consumed { claim },
+                )
+                .await?;
+        }
         apply_execution(
             store,
             conversation,
@@ -487,6 +538,7 @@ impl Children {
         conversation: &mut Conversation,
     ) -> Result<(), RuntimeFailure> {
         self.stop.cancel();
+        conversation.mailboxes_mut().close();
         let mut first_failure = None;
         while let Some(result) = self.jobs.join_next().await {
             if let Err(failure) = self.finish(result, store, conversation).await {

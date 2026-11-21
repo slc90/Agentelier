@@ -27,6 +27,7 @@ pub struct RestoredSession {
     notice: Option<String>,
     recovered_results: Vec<RecoveredResult>,
     agents: Vec<(crate::AgentIdentity, crate::AgentState)>,
+    mailboxes: crate::Mailboxes,
     pub normalized: bool,
 }
 
@@ -463,6 +464,7 @@ pub fn restore(
     let mut agents: Vec<(crate::AgentIdentity, crate::AgentState)> = Vec::new();
     let mut agent_positions = HashMap::new();
     let mut spawn_sources = HashSet::new();
+    let mut mailboxes = crate::Mailboxes::default();
     for record in records {
         if record.session != initial.session || record.event.session() != initial.session {
             return Err(ConversationFailure::new("存档事件属于另一会话"));
@@ -534,12 +536,25 @@ pub fn restore(
                         RecordEvent::AgentCreated { .. }
                             | RecordEvent::AgentExecution { .. }
                             | RecordEvent::AgentTurn { .. }
+                            | RecordEvent::Mailbox { .. }
                     )
                 {
                     return Err(ConversationFailure::new(
                         "子 Agent 轮次记录的所属线程或状态不匹配",
                     ));
                 }
+            }
+            RecordEvent::Mailbox { event, .. } => {
+                let root = crate::AgentId::for_root(initial.session);
+                let registered = |agent| agent == root || agent_positions.contains_key(&agent);
+                if !registered(event.receiver())
+                    || matches!(&event, crate::MailboxEvent::Queued { message } if !registered(message.sender))
+                {
+                    return Err(ConversationFailure::new(
+                        "Mailbox 记录的发送方或接收方未在会话登记",
+                    ));
+                }
+                mailboxes.apply(event, record.sequence)?;
             }
             RecordEvent::AudioDraft { attachment, .. } => {
                 if let Some(audio) = &attachment {
@@ -1459,6 +1474,7 @@ pub fn restore(
         normalized,
         recovered_results,
         agents,
+        mailboxes,
     })
 }
 
@@ -1590,6 +1606,7 @@ impl Conversation {
             task_policy: Box::new(restored.state.task_policy),
         };
         let instance = self.activate_restored_root(&view, restored.agents)?;
+        self.mailboxes = restored.mailboxes;
         self.next_turn = restored.next_turn;
         self.session = Some(ChatSession {
             idle: None,

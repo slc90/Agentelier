@@ -17,6 +17,7 @@ mod deleting;
 mod image_attachment;
 pub use image_attachment::{ImageAttachmentAction, ImageAttachmentReply};
 mod loading;
+mod mailbox;
 mod memory;
 pub use memory::{MemoryReply, MemoryRequest};
 mod model_task;

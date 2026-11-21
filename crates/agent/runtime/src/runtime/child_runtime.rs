@@ -4,7 +4,8 @@ use super::{AgentEventKind, ModelControl};
 use agentelier_account::CredentialClient;
 use agentelier_conversation::{
     AgentIdentity, AgentRuntimeId, AgentState, Conversation, ConversationEvent,
-    ConversationFailure, ConversationRequest, PreparedChild, RecordEvent, SessionView, TurnStatus,
+    ConversationFailure, ConversationRequest, MessageClaim, PreparedChild, RecordEvent,
+    SessionView, TurnId, TurnStatus,
 };
 use agentelier_llm_model::ProtocolArchive;
 use agentelier_session_store::SessionStoreClient;
@@ -46,6 +47,14 @@ impl ChildTurn {
     pub(super) fn view(&self) -> &SessionView {
         &self.view
     }
+
+    pub(super) fn turn_id(&self) -> Result<TurnId, ConversationFailure> {
+        self.view
+            .turn
+            .as_ref()
+            .map(|turn| turn.id)
+            .ok_or_else(|| ConversationFailure::new("子 Agent 接纳任务时缺少 Turn ID"))
+    }
 }
 
 pub(super) struct Execution {
@@ -58,6 +67,8 @@ pub(super) struct Execution {
     pub(super) stop: CancellationToken,
     pub(super) parent_stop: CancellationToken,
     pub(super) commands: mpsc::Receiver<Preparation>,
+    pub(super) mailbox: tokio::sync::watch::Receiver<u64>,
+    pub(super) claim: MessageClaim,
 }
 
 pub(super) struct FinishedChild {
@@ -65,13 +76,16 @@ pub(super) struct FinishedChild {
     pub(super) instance: AgentRuntimeId,
     pub(super) state: AgentState,
     pub(super) output: Option<ProtocolArchive>,
+    pub(super) consumed: Option<MessageClaim>,
 }
 
 impl Execution {
     pub(super) async fn run(self) -> FinishedChild {
         let identity = self.identity.clone();
         let instance = self.instance;
+        let claim = self.claim;
         let result = self.execute().await;
+        let consumed = result.as_ref().ok().map(|_| claim);
         let (state, output) = match result {
             Ok(result) => result,
             Err(failure) => (AgentState::Failed(failure.to_string()), None),
@@ -81,6 +95,7 @@ impl Execution {
             instance,
             state,
             output,
+            consumed,
         }
     }
 
@@ -139,6 +154,10 @@ impl Execution {
                         spec.prepare(&mut conversation, operation, &origin)
                     };
                     drop(reply.send(result));
+                }
+                Ok(()) = self.mailbox.changed() => {
+                    let sequence = *self.mailbox.borrow_and_update();
+                    tracing::debug!(session_id = %identity.session, agent_id = %identity.id, sequence, "子 Agent 收到 Mailbox 活动通知");
                 }
                 event = async {
                     match &mut incoming {
