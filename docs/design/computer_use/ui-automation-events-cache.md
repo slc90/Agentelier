@@ -84,6 +84,8 @@ Agentelier 另外维护面向模型的有界快照。快照包含：
 
 UIA Cache Request 减少单次读取成本；Agentelier 快照负责跨多次工具调用的读取复用。两者不能混为一谈。
 
+每个会话最多保留 8 个快照，每个快照最多记录 64 个节点。快照通过单元素 Cache Request 读取指定属性，记录选定视图范围内的前序节点及其父引用。状态包含 `dirty`、`rebuild_required`、`truncated` 和窗口可用性。刷新范围可选 `auto`、`full` 或快照内的节点引用。成功刷新后递增代次，未执行读取的 `unchanged` 保持原代次。Provider 没有发出预期通知时，可请求 `full`。
+
 ## 事件驱动失效与增量刷新
 
 - PropertyChanged：使对应元素的对应属性失效；不需要重建整棵树。
@@ -93,6 +95,8 @@ UIA Cache Request 减少单次读取成本；Agentelier 快照负责跨多次工
 - 事件丢失、队列溢出或无法定位变化范围：将窗口快照整体标记为 dirty，下次读取时完整重建。
 
 增量更新不是 UIA Provider 自动给出的结果，而是 Agentelier 根据事件信号重新读取并合并自身快照。副作用操作前，必须重新验证目标元素的当前状态，不能只依赖旧快照。
+
+快照使用逐节点的属性订阅识别变更归属。已知的 ChildRemoved RuntimeId 可定位父节点并刷新子树；Win32 的其他结构变化可能没有 RuntimeId，此时重建窗口投影。快照的 `ValueValue` 字段可由值属性变化和 TextChanged 通知触发回读。快照队列溢出令该窗口重建，公开事件队列溢出令会话快照重建。重建和结构刷新会使窗口分页游标失效。Provider 读取失败时保留上一次完成的快照和待重建状态。来源见 [Win32 结构事件参数](https://learn.microsoft.com/en-us/windows/win32/api/uiautomationclient/nf-uiautomationclient-iuiautomationstructurechangedeventhandler-handlestructurechangedevent)。
 
 ## Accessibility Insights 对照
 

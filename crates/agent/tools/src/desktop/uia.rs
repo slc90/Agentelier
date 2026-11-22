@@ -10,6 +10,7 @@ mod patterns;
 mod properties;
 mod references;
 mod scrolling;
+mod snapshot;
 mod text;
 mod transform;
 mod tree;
@@ -25,6 +26,7 @@ pub(crate) use metadata::{LegacyAction, MetadataAction};
 pub(crate) use patterns::{BasicAction, Expansion, SelectionChange};
 pub(crate) use properties::CacheRequest;
 pub(crate) use scrolling::{ItemLookup, ScrollAmounts};
+pub(crate) use snapshot::SnapshotRequest;
 pub(crate) use text::{TextAction, TextRangeAction};
 pub(crate) use transform::TransformAction;
 pub(crate) use tree::{TreePage, TreeRequest};
@@ -69,6 +71,7 @@ struct WorkerHandle {
 
 struct Worker {
     tree: tree::TreeState,
+    snapshots: snapshot::SnapshotState,
     events: events::EventState,
     elements: elements::Registry,
     virtual_items: scrolling::VirtualItems,
@@ -208,6 +211,7 @@ fn run_worker(
         }
     }
     let input_cleanup = worker.synchronized_input.close();
+    worker.close_snapshots();
     let event_cleanup = worker.events.close(&worker.automation);
     let cursor_cleanup = worker.tree.close(&worker.automation);
     let fallback = events::worker_disconnected(&worker.automation);
@@ -257,6 +261,7 @@ fn connect() -> Result<(CoUninitializeGuard, Worker), ToolFailure> {
         com,
         Worker {
             tree: tree::TreeState::default(),
+            snapshots: snapshot::SnapshotState::default(),
             events: events::EventState::default(),
             elements: elements::Registry::default(),
             virtual_items: scrolling::VirtualItems::default(),

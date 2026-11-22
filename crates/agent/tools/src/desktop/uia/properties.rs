@@ -393,7 +393,10 @@ impl Worker {
     }
 }
 
-fn element_cache(automation: &UIAutomation, view: TreeView) -> Result<UICacheRequest, ToolFailure> {
+pub(super) fn element_cache(
+    automation: &UIAutomation,
+    view: TreeView,
+) -> Result<UICacheRequest, ToolFailure> {
     let request = automation.create_cache_request().map_err(provider_error)?;
     request
         .set_tree_scope(TreeScope::Element)

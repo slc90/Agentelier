@@ -42,6 +42,7 @@ const DESCRIPTION: &str = concat!(
     "uia_object_model(ref) reports whether the provider exposes an underlying object model. ",
     "uia_subscribe(ref,event,scope,properties) accepts property, structure, focus, or automation:<numeric event ID>, with element/children/descendants/subtree scope (also global for focus). Only property accepts property names, e.g. ValueValue. uia_unsubscribe(id) removes a subscription. uia_events_next(timeout_ms,max_events) drains events and reports overflowed IDs. ",
     "uia_wait(ref,condition,timeout_ms) waits for a live condition. Use #{kind:\"property\",name:\"ValueValue\",equals:value}, #{kind:\"appears\",selector:uia_find_condition}, or kinds disappears (with selector), enabled, focused, focus_changed, and structure_changed. ",
+    "uia_snapshot(window_ref,view,properties,max_nodes) captures up to 64 nodes. uia_snapshot_status(id) reports generation and dirty state. uia_snapshot_refresh(id,auto/full/or a snapshot node ref) refreshes the capture. ",
     "Rhai try/catch can read error.code and error.message. Inputs held by the script are released when the call ends. ",
     "Each admitted script has a 30 second execution deadline."
 );

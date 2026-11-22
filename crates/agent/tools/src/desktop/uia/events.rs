@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex, MutexGuard,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel},
 };
 use std::time::{Duration, Instant};
@@ -245,6 +245,7 @@ pub(super) struct EventState {
     queue: Receiver<(Uuid, Notice)>,
     subscriptions: HashMap<Uuid, Subscription>,
     retired: Vec<Listener>,
+    loss_epoch: Arc<AtomicU64>,
 }
 
 struct Subscription {
@@ -263,6 +264,7 @@ impl Default for EventState {
             queue,
             subscriptions: HashMap::new(),
             retired: Vec::new(),
+            loss_epoch: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -324,6 +326,10 @@ impl Runtime {
 }
 
 impl EventState {
+    pub(super) fn loss_epoch(&self) -> u64 {
+        self.loss_epoch.load(Ordering::Acquire)
+    }
+
     pub(super) fn reap(&mut self, automation: &UIAutomation) -> Result<(), ToolFailure> {
         let mut failure = None;
         self.retired
@@ -366,6 +372,7 @@ impl EventState {
         let sender = self.sender.clone();
         let overflowed = Arc::new(AtomicBool::new(false));
         let overflow_flag = overflowed.clone();
+        let loss_epoch = self.loss_epoch.clone();
         let listener = Listener::register(
             automation,
             &target,
@@ -374,6 +381,7 @@ impl EventState {
             move |notice| {
                 if matches!(sender.try_send((id, notice)), Err(TrySendError::Full(_))) {
                     overflow_flag.store(true, Ordering::Release);
+                    loss_epoch.fetch_add(1, Ordering::Release);
                 }
             },
         )?;

@@ -35,7 +35,7 @@ impl Locator {
 
 #[derive(Clone)]
 pub(super) struct Identity {
-    runtime_id: Vec<i32>,
+    pub(super) runtime_id: Vec<i32>,
     pub(super) name: String,
     pub(super) class_name: String,
     pub(super) control_type: ControlType,
@@ -90,7 +90,7 @@ impl Identity {
         })
     }
 
-    fn same_element(&self, current: &Self) -> bool {
+    pub(super) fn same_element(&self, current: &Self) -> bool {
         let data_item = matches!(
             self.control_type,
             ControlType::ListItem | ControlType::TreeItem | ControlType::DataItem

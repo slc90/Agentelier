@@ -10,6 +10,7 @@ mod events;
 mod grid;
 mod interaction;
 mod metadata;
+mod snapshot;
 mod text;
 mod transform;
 mod window;
@@ -111,6 +112,7 @@ pub(super) fn register(engine: &mut Engine) {
     transform::register(engine);
     interaction::register(engine);
     metadata::register(engine);
+    snapshot::register(engine);
 }
 
 fn scroll_state(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Dynamic> {

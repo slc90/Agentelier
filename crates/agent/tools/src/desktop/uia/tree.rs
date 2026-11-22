@@ -326,6 +326,14 @@ impl Worker {
 }
 
 impl TreeState {
+    pub(super) fn invalidate_window(&self, window: WindowId) {
+        for cursor in &self.cursors {
+            if cursor.window == Some(window) {
+                cursor.watch.changed.store(true, Ordering::Release);
+            }
+        }
+    }
+
     fn begin(
         &mut self,
         automation: &UIAutomation,
