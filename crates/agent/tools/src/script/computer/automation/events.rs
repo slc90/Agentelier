@@ -1,12 +1,16 @@
 use super::{ScriptResult, plain_data, strings, with_run};
-use crate::desktop::uia::EventRequest;
+use crate::{
+    ToolFailure,
+    desktop::uia::{EventRequest, WaitRequest},
+};
 use rhai::{Array, Dynamic, Engine, INT, ImmutableString, NativeCallContext};
 
 pub(super) fn register(engine: &mut Engine) {
     engine
         .register_fn("uia_subscribe", subscribe)
         .register_fn("uia_unsubscribe", unsubscribe)
-        .register_fn("uia_events_next", next);
+        .register_fn("uia_events_next", next)
+        .register_fn("uia_wait", wait);
 }
 
 fn subscribe(
@@ -46,6 +50,22 @@ fn next(ctx: NativeCallContext<'_>, timeout_ms: INT, max_events: INT) -> ScriptR
                 &run.control.cancel,
                 run.control.deadline,
             )
+            .and_then(plain_data)
+    })
+}
+
+fn wait(
+    ctx: NativeCallContext<'_>,
+    reference: ImmutableString,
+    condition: Dynamic,
+    timeout_ms: INT,
+) -> ScriptResult<Dynamic> {
+    with_run(ctx, |run| {
+        let condition = rhai::serde::from_dynamic(&condition)
+            .map_err(|error| ToolFailure::new("uia_invalid_argument", error.to_string()))?;
+        let request = WaitRequest::new(&reference, condition, timeout_ms)?;
+        run.uia
+            .wait(request, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)
     })
 }

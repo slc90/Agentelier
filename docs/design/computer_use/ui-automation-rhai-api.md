@@ -30,7 +30,7 @@ UIA 能力通过现有 `computer_execute` 暴露给模型。Rhai 继续负责组
 | 兼容与元数据 | `uia_legacy_accessible`、`uia_multiple_view`、`uia_annotation`、`uia_styles` | 读取 MSAA、注释和样式，执行旧式操作并切换 Provider 视图 |
 | 对象模型 | `uia_object_model` | 查询底层对象模型和 IDispatch 的可用性 |
 | 事件 | `uia_subscribe`、`uia_unsubscribe`、`uia_events_next` | 管理订阅并读取事件 |
-| 等待 | `uia_wait` | 等待元素/属性/焦点/结构条件 |
+| 等待 | `uia_wait(element_ref, condition, timeout_ms)` | 等待元素、属性、焦点或结构条件，并回读实际状态 |
 | 快照 | `uia_snapshot`、`uia_snapshot_refresh` | 读取和刷新窗口快照 |
 
 具体参数和返回字段在实现方案中保持一致；不要为每个 Pattern 创建重复的元素查找接口。Pattern 操作接收 `element_ref`，由 Worker 解析实际 Pattern wrapper。

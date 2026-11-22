@@ -50,6 +50,15 @@ pub(super) enum Condition {
 }
 
 impl FindRequest {
+    pub(super) fn scan(
+        &self,
+        automation: &UIAutomation,
+        root: &UIElement,
+        control: &RequestControl,
+    ) -> Result<Matches, ToolFailure> {
+        self.scope.scan(automation, root, &self.condition, control)
+    }
+
     pub(crate) fn new(
         reference: &str,
         mut conditions: Value,
@@ -200,14 +209,23 @@ impl Worker {
         control: &RequestControl,
     ) -> Result<Value, ToolFailure> {
         let root = self.resolve_element(request.root, control)?;
+        let matched = request.scan(&self.automation, &root.element, control)?;
+        self.publish_matches(&request, root, matched, control)
+    }
+
+    pub(super) fn publish_matches(
+        &mut self,
+        request: &FindRequest,
+        root: Element,
+        matched: Matches,
+        control: &RequestControl,
+    ) -> Result<Value, ToolFailure> {
         let window = root.window;
         let Matches {
             candidates: matched,
             inspected,
             truncated,
-        } = request
-            .scope
-            .scan(&self.automation, &root.element, &request.condition, control)?;
+        } = matched;
         if matched.is_empty() {
             let message = if truncated {
                 "在节点预算内未找到匹配的 UIA 元素"

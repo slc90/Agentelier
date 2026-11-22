@@ -244,6 +244,7 @@ pub(super) struct EventState {
     sender: SyncSender<(Uuid, Notice)>,
     queue: Receiver<(Uuid, Notice)>,
     subscriptions: HashMap<Uuid, Subscription>,
+    retired: Vec<Listener>,
 }
 
 struct Subscription {
@@ -261,6 +262,7 @@ impl Default for EventState {
             sender,
             queue,
             subscriptions: HashMap::new(),
+            retired: Vec::new(),
         }
     }
 }
@@ -322,6 +324,31 @@ impl Runtime {
 }
 
 impl EventState {
+    pub(super) fn reap(&mut self, automation: &UIAutomation) -> Result<(), ToolFailure> {
+        let mut failure = None;
+        self.retired
+            .retain(|listener| match listener.remove(automation) {
+                Ok(()) => false,
+                Err(error) => {
+                    failure = Some(error);
+                    true
+                }
+            });
+        failure.map_or(Ok(()), Err)
+    }
+
+    pub(super) fn retire(
+        &mut self,
+        automation: &UIAutomation,
+        listener: Listener,
+    ) -> Result<(), ToolFailure> {
+        if let Err(error) = listener.remove(automation) {
+            self.retired.push(listener);
+            return Err(error);
+        }
+        Ok(())
+    }
+
     fn subscribe(
         &mut self,
         automation: &UIAutomation,
@@ -376,7 +403,7 @@ impl EventState {
 
     pub(super) fn close(&mut self, automation: &UIAutomation) -> Result<(), ToolFailure> {
         let ids: Vec<_> = self.subscriptions.keys().copied().collect();
-        let mut failure = None;
+        let mut failure = self.reap(automation).err();
         for id in ids {
             if let Err(error) = self.unsubscribe(automation, id) {
                 failure = Some(error);

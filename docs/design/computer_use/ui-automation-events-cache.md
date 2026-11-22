@@ -51,6 +51,10 @@ UIA 事件让客户端知道界面发生了变化；Cache Request 减少重复�
 
 等待在 Rhai 脚本内部执行，因此当前 `computer_execute` 的 `ToolAdmission::Exclusive` 在等待期间仍然被持有。这与现有 `wait(ms)` 一致。事件监听本身可以跨调用保持订阅，但被动事件接收不持有 ToolPermit，也不主动操作桌面。
 
+`uia_wait` 以 `kind` 区分条件。`appears`、`disappears` 接收与 `uia_find` 相同的 `selector`，在 Control View 的 16 层、512 节点内检查；搜索被截断时不能确认元素已消失。`property` 接收 `name` 和 `equals`，`enabled` 和 `focused` 分别检查 `IsEnabled` 和 `HasKeyboardFocus`。超时为 1–30000 毫秒，并受脚本剩余时间限制。
+
+`focus_changed` 比较当前桌面焦点与注册后的初始焦点，`structure_changed` 比较目标 Control View 中最多 128 个节点的 RuntimeId 及层级。临时订阅使用单独的唤醒通道。通知、或最长 100 毫秒检查间隔结束后，Worker 重读条件。完成、超时和取消均回收临时监听。
+
 ## 两种不同的缓存
 
 ### UIA Cache Request

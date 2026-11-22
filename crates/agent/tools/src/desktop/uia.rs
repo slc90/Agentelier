@@ -13,6 +13,7 @@ mod scrolling;
 mod text;
 mod transform;
 mod tree;
+mod wait;
 mod window;
 
 pub(crate) use elements::RootSummary;
@@ -27,6 +28,7 @@ pub(crate) use scrolling::{ItemLookup, ScrollAmounts};
 pub(crate) use text::{TextAction, TextRangeAction};
 pub(crate) use transform::TransformAction;
 pub(crate) use tree::{TreePage, TreeRequest};
+pub(crate) use wait::WaitRequest;
 pub(crate) use window::WindowAction;
 
 use crate::ToolFailure;

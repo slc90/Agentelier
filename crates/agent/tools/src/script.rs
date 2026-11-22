@@ -166,8 +166,21 @@ impl ScriptState {
             .lock()
             .map_err(|error| ToolFailure::new("desktop_input_cleanup", error.to_string()))?
             .finish()?;
-        control.check()?;
-        let value = result.map_err(|error| computer::script_failure(&error))?;
+        let result = result.map_err(|error| computer::script_failure(&error));
+        control
+            .check()
+            .map_err(|failure| match result.as_ref().err() {
+                Some(error)
+                    if matches!(
+                        (failure.code, error.code),
+                        ("cancelled", "uia_cancelled") | ("timeout", "uia_timeout")
+                    ) =>
+                {
+                    error.clone()
+                }
+                _ => failure,
+            })?;
+        let value = result?;
         self.functions = program.clone_functions_only();
         self.observed = mapping;
 
