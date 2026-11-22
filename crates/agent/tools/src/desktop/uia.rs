@@ -1,3 +1,7 @@
+mod elements;
+
+pub(crate) use elements::RootSummary;
+
 use crate::ToolFailure;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
@@ -5,6 +9,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 use uiautomation::UIAutomation;
+use uiautomation::errors::Error as UiaError;
+use windows::Win32::Foundation::E_ACCESSDENIED;
+use windows::Win32::UI::Accessibility::{UIA_E_ELEMENTNOTAVAILABLE, UIA_E_PROXYASSEMBLYNOTLOADED};
 use winsafe::{co, guard::CoUninitializeGuard};
 
 const REQUEST_CAPACITY: usize = 16;
@@ -31,6 +38,7 @@ struct WorkerHandle {
 
 struct Worker {
     automation: UIAutomation,
+    elements: elements::Registry,
 }
 
 struct RequestControl {
@@ -61,7 +69,7 @@ impl Runtime {
                 .automation
                 .get_control_view_condition()
                 .map(|_| true)
-                .map_err(|error| ToolFailure::new("uia_provider_error", error.to_string()))
+                .map_err(provider_error)
         })
     }
 
@@ -178,9 +186,28 @@ fn connect() -> Result<(CoUninitializeGuard, Worker), ToolFailure> {
     }
     let automation = UIAutomation::new_direct()
         .map_err(|error| ToolFailure::new("uia_initialization_failed", error.to_string()))?;
-    Ok((com, Worker { automation }))
+    Ok((
+        com,
+        Worker {
+            automation,
+            elements: elements::Registry::default(),
+        },
+    ))
 }
 
 fn worker_failed() -> ToolFailure {
     ToolFailure::new("uia_worker_failed", "UIA 工作线程异常退出")
+}
+
+fn provider_error(error: UiaError) -> ToolFailure {
+    let code = match error.code().cast_unsigned() {
+        UIA_E_ELEMENTNOTAVAILABLE => "uia_element_unavailable",
+        UIA_E_PROXYASSEMBLYNOTLOADED => "uia_provider_unavailable",
+        _ if error.result() == Some(E_ACCESSDENIED) => "uia_provider_unavailable",
+        _ => "uia_provider_error",
+    };
+    ToolFailure::new(
+        code,
+        format!("UIA 错误 0x{:08x}：{error}", error.code().cast_unsigned()),
+    )
 }

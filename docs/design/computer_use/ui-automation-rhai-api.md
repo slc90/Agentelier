@@ -10,6 +10,7 @@ UIA 能力通过现有 `computer_execute` 暴露给模型。Rhai 继续负责组
 |---|---|---|
 | 根元素 | `uia_desktop_root()` | 获取桌面根元素引用 |
 | 窗口根元素 | `uia_window_root(window_id)` | 从现有 WindowId 获取 UIA 窗口根元素 |
+| 根元素摘要 | `uia_root_info(element_ref)` | 重新读取根元素并核对 Provider 和窗口身份 |
 | 控件树 | `uia_tree(element_ref, view, depth, limit, cursor)` | 获取有界树页 |
 | 元素属性 | `uia_properties(element_ref, property_names)` | 读取指定属性 |
 | 元素查找 | `uia_find(root_ref, conditions, view, scope, limit)` | 按条件查找 |

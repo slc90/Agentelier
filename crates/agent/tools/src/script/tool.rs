@@ -18,6 +18,8 @@ const DESCRIPTION: &str = concat!(
     "Scroll axes are vertical and horizontal. Each trajectory dt is milliseconds since the previous point, with zero at the first point. ",
     "Use key_down(name), key_up(name), press(name), shortcut([name,...]), type_text(text), and wait(ms). ",
     "Use uia_status() to check whether the session can connect to Windows UI Automation. ",
+    "Use uia_desktop_root() or uia_window_root(id) to get a UI Automation root summary with a session-local ref. ",
+    "Use uia_root_info(ref) to re-read it. Window ids come from windows(). ",
     "Rhai try/catch can read error.code and error.message. Inputs held by the script are released when the call ends. ",
     "Each admitted script has a 30 second execution deadline."
 );

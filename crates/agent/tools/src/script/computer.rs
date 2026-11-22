@@ -9,6 +9,8 @@ use rhai::{Array, Dynamic, Engine, EvalAltResult, INT, ImmutableString, Map, Nat
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+mod automation;
+
 type ScriptResult<T> = Result<T, Box<EvalAltResult>>;
 
 pub(super) struct Run {
@@ -109,8 +111,8 @@ pub(super) fn register(engine: &mut Engine) {
         .register_fn("press", press)
         .register_fn("shortcut", shortcut)
         .register_fn("type_text", type_text)
-        .register_fn("wait", wait)
-        .register_fn("uia_status", uia_status);
+        .register_fn("wait", wait);
+    automation::register(engine);
 }
 
 fn with_run<T>(
@@ -140,12 +142,6 @@ pub(super) fn script_failure(error: &EvalAltResult) -> ToolFailure {
         return (*failure).clone();
     }
     ToolFailure::new("script_evaluation_failed", error.to_string())
-}
-
-fn uia_status(ctx: NativeCallContext<'_>) -> ScriptResult<bool> {
-    with_run(ctx, |run| {
-        run.uia.status(&run.control.cancel, run.control.deadline)
-    })
 }
 
 fn list_windows(ctx: NativeCallContext<'_>) -> ScriptResult<Array> {
