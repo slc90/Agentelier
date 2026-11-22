@@ -35,6 +35,7 @@ const DESCRIPTION: &str = concat!(
     "Read Text2 caret and annotations via uia_text_caret(ref), uia_text_annotation_range(ref,annotation), edit state via uia_text_edit_state(ref), and a TextChild range via uia_text_child_range(ref). ",
     "Use uia_grid_info(ref), uia_grid_cell(ref,row,column) with zero-based indices, and uia_grid_item_info(ref). uia_table_info(ref), uia_table_headers(ref) and uia_table_item_info(ref) report structure and headers. ",
     "Use uia_spreadsheet_info(ref[,cell_name]) for named cells and uia_spreadsheet_item_info(ref) for formula, value and annotations when supported. ",
+    "Use uia_window_state(ref) and uia_window_action(ref,action) with restore, maximize, minimize, close, or wait_for_input_idle. An explicit idle timeout is in milliseconds. ",
     "Rhai try/catch can read error.code and error.message. Inputs held by the script are released when the call ends. ",
     "Each admitted script has a 30 second execution deadline."
 );

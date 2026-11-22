@@ -8,6 +8,7 @@ mod references;
 mod scrolling;
 mod text;
 mod tree;
+mod window;
 
 pub(crate) use elements::RootSummary;
 pub(crate) use find::FindRequest;
@@ -17,6 +18,7 @@ pub(crate) use properties::CacheRequest;
 pub(crate) use scrolling::{ItemLookup, ScrollAmounts};
 pub(crate) use text::{TextAction, TextRangeAction};
 pub(crate) use tree::{TreePage, TreeRequest};
+pub(crate) use window::WindowAction;
 
 use crate::ToolFailure;
 use std::sync::Mutex;
