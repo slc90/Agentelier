@@ -32,6 +32,11 @@ pub(super) struct SnapshotState {
     entries: HashMap<Uuid, Snapshot>,
 }
 
+pub(crate) struct SnapshotResult {
+    pub data: Value,
+    pub generation: i64,
+}
+
 pub(crate) struct SnapshotRequest {
     root: Uuid,
     view: TreeView,
@@ -121,7 +126,7 @@ impl Runtime {
         request: SnapshotRequest,
         cancel: &CancellationToken,
         deadline: Instant,
-    ) -> Result<Value, ToolFailure> {
+    ) -> Result<SnapshotResult, ToolFailure> {
         self.call(cancel, deadline, move |worker, control| {
             if worker.snapshots.entries.len() >= MAX_SNAPSHOTS {
                 return Err(ToolFailure::new(
@@ -154,7 +159,7 @@ impl Runtime {
         scope: &str,
         cancel: &CancellationToken,
         deadline: Instant,
-    ) -> Result<Value, ToolFailure> {
+    ) -> Result<SnapshotResult, ToolFailure> {
         let id = snapshot_id(id)?;
         let scope = match scope {
             "auto" => Scope::Auto,
@@ -178,7 +183,7 @@ impl Runtime {
         id: &str,
         cancel: &CancellationToken,
         deadline: Instant,
-    ) -> Result<Value, ToolFailure> {
+    ) -> Result<SnapshotResult, ToolFailure> {
         let id = snapshot_id(id)?;
         self.call(cancel, deadline, move |worker, _| {
             let snapshot = worker
@@ -192,7 +197,10 @@ impl Runtime {
             if snapshot.dirty.full || !snapshot.dirty.branches.is_empty() {
                 worker.tree.invalidate_window(snapshot.window);
             }
-            Ok(snapshot.summary(id, window_available))
+            Ok(SnapshotResult {
+                data: snapshot.summary(id, window_available),
+                generation: snapshot.generation,
+            })
         })
     }
 }
@@ -320,7 +328,7 @@ impl Snapshot {
         id: Uuid,
         scope: Scope,
         control: &RequestControl,
-    ) -> Result<Value, ToolFailure> {
+    ) -> Result<SnapshotResult, ToolFailure> {
         validate_window(self.window)?;
         self.drain(worker.events.loss_epoch());
         let requested = match scope {
@@ -636,14 +644,14 @@ impl Snapshot {
     fn summary(&self, id: Uuid, window_available: bool) -> Value {
         json!({
             "snapshot_id":id.to_string(), "window_id":self.window.token(), "root":reference_token(self.request.root),
-            "view":self.request.view.name(), "generation":self.generation, "source":"snapshot",
+            "view":self.request.view.name(),
             "dirty":self.dirty.any(), "rebuild_required":self.dirty.full, "dirty_nodes":self.dirty.fields.len(),
             "dirty_branches":self.dirty.branches.len(), "focus_dirty":self.dirty.focus, "text_dirty":self.dirty.text,
             "truncated":self.truncated, "count":self.nodes.len(), "window_available":window_available,
         })
     }
 
-    fn result(&self, id: Uuid, refresh: &str) -> Value {
+    fn result(&self, id: Uuid, refresh: &str) -> SnapshotResult {
         let mut data = self.summary(id, true);
         data["refresh"] = json!(refresh);
         data["nodes"] = json!(
@@ -655,7 +663,10 @@ impl Snapshot {
                 }))
                 .collect::<Vec<_>>()
         );
-        data
+        SnapshotResult {
+            data,
+            generation: self.generation,
+        }
     }
 
     fn close(mut self, worker: &mut Worker) {

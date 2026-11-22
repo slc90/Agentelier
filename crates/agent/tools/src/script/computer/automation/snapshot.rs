@@ -1,6 +1,6 @@
-use super::{ScriptResult, plain_data, strings, with_run};
+use super::{Reply, ScriptResult, Source, strings, with_reply};
 use crate::desktop::uia::SnapshotRequest;
-use rhai::{Array, Dynamic, Engine, INT, ImmutableString, NativeCallContext};
+use rhai::{Array, Engine, INT, ImmutableString, Map, NativeCallContext};
 
 pub(super) fn register(engine: &mut Engine) {
     engine
@@ -15,12 +15,12 @@ fn create(
     view: ImmutableString,
     properties: Array,
     max_nodes: INT,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+) -> ScriptResult<Map> {
+    with_reply(ctx, Source::Snapshot, |run| {
         let request = SnapshotRequest::new(&reference, &view, &strings(properties)?, max_nodes)?;
         run.uia
             .snapshot(request, &run.control.cancel, run.control.deadline)
-            .and_then(plain_data)
+            .and_then(Reply::snapshot)
     })
 }
 
@@ -28,18 +28,18 @@ fn refresh(
     ctx: NativeCallContext<'_>,
     id: ImmutableString,
     scope: ImmutableString,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+) -> ScriptResult<Map> {
+    with_reply(ctx, Source::Snapshot, |run| {
         run.uia
             .snapshot_refresh(&id, &scope, &run.control.cancel, run.control.deadline)
-            .and_then(plain_data)
+            .and_then(Reply::snapshot)
     })
 }
 
-fn status(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+fn status(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Map> {
+    with_reply(ctx, Source::Snapshot, |run| {
         run.uia
             .snapshot_status(&id, &run.control.cancel, run.control.deadline)
-            .and_then(plain_data)
+            .and_then(Reply::snapshot)
     })
 }

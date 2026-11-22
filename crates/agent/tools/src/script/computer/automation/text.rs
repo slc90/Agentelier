@@ -1,9 +1,9 @@
-use super::{ScriptResult, plain_data, with_run};
+use super::{ScriptResult, plain_data, with_uia};
 use crate::{
     ToolFailure,
     desktop::uia::{SelectionChange, TextAction, TextRangeAction},
 };
-use rhai::{Dynamic, Engine, INT, ImmutableString, NativeCallContext};
+use rhai::{Engine, INT, ImmutableString, Map, NativeCallContext};
 
 pub(super) fn register(engine: &mut Engine) {
     engine
@@ -113,12 +113,8 @@ pub(super) fn register(engine: &mut Engine) {
         );
 }
 
-fn text(
-    ctx: NativeCallContext<'_>,
-    id: ImmutableString,
-    action: TextAction,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+fn text(ctx: NativeCallContext<'_>, id: ImmutableString, action: TextAction) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia
             .text_action(&id, action, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)
@@ -129,8 +125,8 @@ fn range(
     ctx: NativeCallContext<'_>,
     id: ImmutableString,
     action: Result<TextRangeAction, ToolFailure>,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia
             .text_range_action(&id, action?, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)

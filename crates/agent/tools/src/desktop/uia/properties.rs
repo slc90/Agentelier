@@ -281,7 +281,6 @@ impl Worker {
         }
         Ok(json!({
             "ref": reference_token(id),
-            "source": if cached { "cache" } else { "live" },
             "properties": fields,
         }))
     }
@@ -344,7 +343,7 @@ impl Worker {
             }
         }
         Ok(json!({
-            "ref": reference_token(id), "source": "cache", "scope": request.scope.name(),
+            "ref": reference_token(id), "scope": request.scope.name(),
             "cached_refs": refs, "truncated": truncated,
             "properties": request.properties.iter().map(|prop| prop.name).collect::<Vec<_>>(),
             "patterns": request.patterns.iter().map(|pattern| pattern.name).collect::<Vec<_>>(),
@@ -389,7 +388,7 @@ impl Worker {
         if let Some(window) = entry.window {
             validate_window(window)?;
         }
-        Ok(json!({"ref": reference_token(id), "source": "live", "patterns": available}))
+        Ok(json!({"ref": reference_token(id), "patterns": available}))
     }
 }
 

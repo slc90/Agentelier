@@ -155,7 +155,7 @@ impl Runtime {
                 "ref": summary.reference, "window_id": summary.window_id, "generation": entry.generation,
                 "name": summary.name, "class_name": summary.class_name,
                 "control_type": summary.control_type, "automation_id": entry.identity.automation_id,
-                "runtime_id": entry.identity.runtime_id, "status": entry.state.name(), "source": "live",
+                "runtime_id": entry.identity.runtime_id, "status": entry.state.name(),
             }))
         })
     }

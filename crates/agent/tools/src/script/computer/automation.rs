@@ -1,4 +1,4 @@
-use super::{ScriptResult, fields, with_run};
+use super::{Run, ScriptResult, fields, with_run};
 use crate::ToolFailure;
 use crate::desktop::uia::{
     BasicAction, CacheRequest, Expansion, FindRequest, ItemLookup, RootSummary, ScrollAmounts,
@@ -115,8 +115,8 @@ pub(super) fn register(engine: &mut Engine) {
     snapshot::register(engine);
 }
 
-fn scroll_state(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+fn scroll_state(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia
             .scroll(&id, None, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)
@@ -128,8 +128,8 @@ fn scroll(
     id: ImmutableString,
     horizontal: ImmutableString,
     vertical: ImmutableString,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         let amounts = ScrollAmounts::new(&horizontal, &vertical)?;
         run.uia
             .scroll(
@@ -142,8 +142,8 @@ fn scroll(
     })
 }
 
-fn scroll_item(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+fn scroll_item(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia
             .scroll_item(&id, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)
@@ -155,7 +155,7 @@ fn find_first_item(
     container: ImmutableString,
     property: ImmutableString,
     value: ImmutableString,
-) -> ScriptResult<Dynamic> {
+) -> ScriptResult<Map> {
     find_in_container(ctx, container, property, value, None)
 }
 
@@ -165,7 +165,7 @@ fn find_item(
     property: ImmutableString,
     value: ImmutableString,
     after: ImmutableString,
-) -> ScriptResult<Dynamic> {
+) -> ScriptResult<Map> {
     find_in_container(ctx, container, property, value, Some(after))
 }
 
@@ -175,8 +175,8 @@ fn find_in_container(
     property: ImmutableString,
     value: ImmutableString,
     after: Option<ImmutableString>,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         let lookup = ItemLookup::new(&property, value.into_owned())?;
         run.uia
             .find_item(
@@ -190,8 +190,8 @@ fn find_in_container(
     })
 }
 
-fn realize(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+fn realize(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia
             .realize(&id, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)
@@ -202,22 +202,22 @@ fn basic(
     ctx: NativeCallContext<'_>,
     id: ImmutableString,
     action: Result<BasicAction, ToolFailure>,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia
             .basic_pattern(&id, action?, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)
     })
 }
 
-fn status(ctx: NativeCallContext<'_>) -> ScriptResult<bool> {
-    with_run(ctx, |run| {
+fn status(ctx: NativeCallContext<'_>) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia.status(&run.control.cancel, run.control.deadline)
     })
 }
 
 fn desktop_root(ctx: NativeCallContext<'_>) -> ScriptResult<Map> {
-    with_run(ctx, |run| {
+    with_uia(ctx, |run| {
         run.uia
             .desktop_root(&run.control.cancel, run.control.deadline)
             .map(root_fields)
@@ -225,7 +225,7 @@ fn desktop_root(ctx: NativeCallContext<'_>) -> ScriptResult<Map> {
 }
 
 fn window_root(ctx: NativeCallContext<'_>, window_id: ImmutableString) -> ScriptResult<Map> {
-    with_run(ctx, |run| {
+    with_uia(ctx, |run| {
         run.uia
             .window_root(&window_id, &run.control.cancel, run.control.deadline)
             .map(root_fields)
@@ -233,7 +233,7 @@ fn window_root(ctx: NativeCallContext<'_>, window_id: ImmutableString) -> Script
 }
 
 fn root_info(ctx: NativeCallContext<'_>, reference: ImmutableString) -> ScriptResult<Map> {
-    with_run(ctx, |run| {
+    with_uia(ctx, |run| {
         run.uia
             .root_info(&reference, &run.control.cancel, run.control.deadline)
             .map(root_fields)
@@ -255,14 +255,14 @@ fn root_fields(summary: RootSummary) -> Map {
 }
 
 fn default_tree(ctx: NativeCallContext<'_>, reference: ImmutableString) -> ScriptResult<Map> {
-    with_run(ctx, |run| {
+    with_reply(ctx, Source::Live, |run| {
         run.uia
             .tree(
                 TreeRequest::for_root(&reference)?,
                 &run.control.cancel,
                 run.control.deadline,
             )
-            .map(tree_fields)
+            .map(tree_reply)
     })
 }
 
@@ -274,7 +274,7 @@ fn tree(
     max_nodes: INT,
     cursor: Dynamic,
 ) -> ScriptResult<Map> {
-    with_run(ctx, |run| {
+    with_reply(ctx, Source::Live, |run| {
         let cursor =
             if cursor.is_unit() {
                 None
@@ -292,7 +292,7 @@ fn tree(
         )?;
         run.uia
             .tree(request, &run.control.cancel, run.control.deadline)
-            .map(tree_fields)
+            .map(tree_reply)
     })
 }
 
@@ -301,8 +301,8 @@ fn tree_related(
     reference: ImmutableString,
     view: ImmutableString,
     relation: ImmutableString,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         let related = run.uia.tree_related(
             &reference,
             view.parse()?,
@@ -314,7 +314,7 @@ fn tree_related(
     })
 }
 
-fn tree_fields(page: TreePage) -> Map {
+fn tree_reply(page: TreePage) -> Reply {
     let nodes = page
         .nodes
         .into_iter()
@@ -328,16 +328,20 @@ fn tree_fields(page: TreePage) -> Map {
             map.into()
         })
         .collect::<Array>();
-    let issue = page.issue.map_or(Dynamic::UNIT, |issue| {
+    let issue_details = page.issue.as_ref().map_or(Dynamic::UNIT, |issue| {
         fields([
-            ("code", issue.cause.code.into()),
-            ("message", issue.cause.to_string().into()),
-            ("parent", issue.parent.map_or(Dynamic::UNIT, Dynamic::from)),
+            (
+                "parent",
+                issue
+                    .parent
+                    .as_ref()
+                    .map_or(Dynamic::UNIT, |parent| Dynamic::from(parent.clone())),
+            ),
             ("depth", (issue.depth as INT).into()),
         ])
         .into()
     });
-    fields([
+    let data = fields([
         ("view", page.view.name().into()),
         ("root", page.root.into()),
         ("generation", page.generation.into()),
@@ -345,15 +349,20 @@ fn tree_fields(page: TreePage) -> Map {
         ("nodes", nodes.into()),
         ("has_more", page.cursor.is_some().into()),
         ("cursor", page.cursor.map_or(Dynamic::UNIT, Dynamic::from)),
-        ("error", issue),
-    ])
+        ("issue", issue_details),
+    ]);
+    Reply {
+        data: data.into(),
+        issue: page.issue.map(|issue| issue.cause),
+        generation: None,
+    }
 }
 
 fn properties(
     ctx: NativeCallContext<'_>,
     reference: ImmutableString,
     names: Array,
-) -> ScriptResult<Dynamic> {
+) -> ScriptResult<Map> {
     read_properties(ctx, reference, names, false)
 }
 
@@ -361,7 +370,7 @@ fn cached_properties(
     ctx: NativeCallContext<'_>,
     reference: ImmutableString,
     names: Array,
-) -> ScriptResult<Dynamic> {
+) -> ScriptResult<Map> {
     read_properties(ctx, reference, names, true)
 }
 
@@ -370,8 +379,9 @@ fn read_properties(
     reference: ImmutableString,
     names: Array,
     cached: bool,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+) -> ScriptResult<Map> {
+    let source = if cached { Source::Cache } else { Source::Live };
+    with_reply(ctx, source, |run| {
         run.uia
             .properties(
                 &reference,
@@ -381,6 +391,7 @@ fn read_properties(
                 run.control.deadline,
             )
             .and_then(plain_data)
+            .map(Reply::data)
     })
 }
 
@@ -391,8 +402,8 @@ fn prefetch(
     pattern_names: Array,
     view: ImmutableString,
     scope: ImmutableString,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+) -> ScriptResult<Map> {
+    with_reply(ctx, Source::Cache, |run| {
         let request = CacheRequest::new(
             &strings(property_names)?,
             &strings(pattern_names)?,
@@ -407,30 +418,28 @@ fn prefetch(
                 run.control.deadline,
             )
             .and_then(plain_data)
+            .map(Reply::data)
     })
 }
 
-fn patterns(ctx: NativeCallContext<'_>, reference: ImmutableString) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+fn patterns(ctx: NativeCallContext<'_>, reference: ImmutableString) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia
             .patterns(&reference, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)
     })
 }
 
-fn ref_info(ctx: NativeCallContext<'_>, reference: ImmutableString) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+fn ref_info(ctx: NativeCallContext<'_>, reference: ImmutableString) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia
             .ref_info(&reference, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)
     })
 }
 
-fn refresh_element(
-    ctx: NativeCallContext<'_>,
-    reference: ImmutableString,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+fn refresh_element(ctx: NativeCallContext<'_>, reference: ImmutableString) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia
             .refresh_element(&reference, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)
@@ -446,8 +455,8 @@ fn find(
     max_depth: INT,
     max_nodes: INT,
     max_results: INT,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         let conditions = rhai::serde::from_dynamic(&conditions)
             .map_err(|error| ToolFailure::new("uia_invalid_argument", error.to_string()))?;
         let request = FindRequest::new(
@@ -479,4 +488,91 @@ fn strings(items: Array) -> Result<Vec<String>, ToolFailure> {
 fn plain_data(value: serde_json::Value) -> Result<Dynamic, ToolFailure> {
     rhai::serde::to_dynamic(value)
         .map_err(|error| ToolFailure::new("uia_result_conversion_failed", error.to_string()))
+}
+
+#[derive(Clone, Copy)]
+enum Source {
+    Live,
+    Cache,
+    Snapshot,
+}
+
+struct Reply {
+    data: Dynamic,
+    issue: Option<ToolFailure>,
+    generation: Option<INT>,
+}
+
+impl Reply {
+    fn data(data: impl Into<Dynamic>) -> Self {
+        Self {
+            data: data.into(),
+            issue: None,
+            generation: None,
+        }
+    }
+
+    fn snapshot(result: crate::desktop::uia::SnapshotResult) -> Result<Self, ToolFailure> {
+        Ok(Self {
+            data: plain_data(result.data)?,
+            issue: None,
+            generation: Some(result.generation),
+        })
+    }
+
+    fn into_fields(self, source: Source) -> Map {
+        let error = self.issue.as_ref().map_or(Dynamic::UNIT, |error| {
+            fields([
+                ("code", error.code.into()),
+                ("message", error.to_string().into()),
+            ])
+            .into()
+        });
+        let source = match source {
+            Source::Live => "live",
+            Source::Cache => "cache",
+            Source::Snapshot => "snapshot",
+        };
+        fields([
+            ("ok", self.issue.is_none().into()),
+            ("data", self.data),
+            ("error", error),
+            ("source", source.into()),
+            (
+                "generation",
+                self.generation.map_or(Dynamic::UNIT, Dynamic::from),
+            ),
+        ])
+    }
+}
+
+fn with_uia<T: Into<Dynamic>>(
+    ctx: NativeCallContext<'_>,
+    call: impl FnOnce(&mut Run) -> Result<T, ToolFailure>,
+) -> ScriptResult<Map> {
+    with_reply(ctx, Source::Live, |run| call(run).map(Reply::data))
+}
+
+fn with_reply(
+    ctx: NativeCallContext<'_>,
+    source: Source,
+    call: impl FnOnce(&mut Run) -> Result<Reply, ToolFailure>,
+) -> ScriptResult<Map> {
+    with_run(ctx, |run| {
+        let reply = match call(run) {
+            Ok(reply) => reply,
+            Err(error)
+                if matches!(error.code, "uia_cancelled" | "uia_timeout")
+                    && run.control.check().is_err() =>
+            {
+                return Err(error);
+            }
+            Err(error) => Reply {
+                data: Dynamic::UNIT,
+                issue: Some(error),
+                generation: None,
+            },
+        };
+        Ok(reply.into_fields(source))
+    })
 }

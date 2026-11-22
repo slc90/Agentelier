@@ -1,9 +1,9 @@
-use super::{ScriptResult, plain_data, strings, with_run};
+use super::{ScriptResult, plain_data, strings, with_uia};
 use crate::{
     ToolFailure,
     desktop::uia::{EventRequest, WaitRequest},
 };
-use rhai::{Array, Dynamic, Engine, INT, ImmutableString, NativeCallContext};
+use rhai::{Array, Dynamic, Engine, INT, ImmutableString, Map, NativeCallContext};
 
 pub(super) fn register(engine: &mut Engine) {
     engine
@@ -19,8 +19,8 @@ fn subscribe(
     event: ImmutableString,
     scope: ImmutableString,
     properties: Array,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         let request = EventRequest::new(&event, &scope, &strings(properties)?)?;
         run.uia
             .subscribe(
@@ -33,16 +33,16 @@ fn subscribe(
     })
 }
 
-fn unsubscribe(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+fn unsubscribe(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia
             .unsubscribe(&id, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)
     })
 }
 
-fn next(ctx: NativeCallContext<'_>, timeout_ms: INT, max_events: INT) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+fn next(ctx: NativeCallContext<'_>, timeout_ms: INT, max_events: INT) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia
             .events_next(
                 timeout_ms,
@@ -59,8 +59,8 @@ fn wait(
     reference: ImmutableString,
     condition: Dynamic,
     timeout_ms: INT,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         let condition = rhai::serde::from_dynamic(&condition)
             .map_err(|error| ToolFailure::new("uia_invalid_argument", error.to_string()))?;
         let request = WaitRequest::new(&reference, condition, timeout_ms)?;

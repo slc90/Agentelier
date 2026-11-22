@@ -1,6 +1,6 @@
-use super::{ScriptResult, plain_data, with_run};
+use super::{ScriptResult, plain_data, with_uia};
 use crate::{ToolFailure, desktop::uia::TransformAction};
-use rhai::{Array, Dynamic, Engine, ImmutableString, NativeCallContext};
+use rhai::{Array, Dynamic, Engine, ImmutableString, Map, NativeCallContext};
 
 pub(super) fn register(engine: &mut Engine) {
     engine
@@ -40,8 +40,8 @@ fn transform(
     ctx: NativeCallContext<'_>,
     id: ImmutableString,
     action: Result<TransformAction, ToolFailure>,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia
             .transform(&id, action?, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)

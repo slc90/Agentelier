@@ -26,7 +26,7 @@ pub(crate) use metadata::{LegacyAction, MetadataAction};
 pub(crate) use patterns::{BasicAction, Expansion, SelectionChange};
 pub(crate) use properties::CacheRequest;
 pub(crate) use scrolling::{ItemLookup, ScrollAmounts};
-pub(crate) use snapshot::SnapshotRequest;
+pub(crate) use snapshot::{SnapshotRequest, SnapshotResult};
 pub(crate) use text::{TextAction, TextRangeAction};
 pub(crate) use transform::TransformAction;
 pub(crate) use tree::{TreePage, TreeRequest};

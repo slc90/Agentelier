@@ -69,40 +69,40 @@ Accessibility Insights 的事件功能在 Troubleshooting / Events 视图中，�
 
 | Pattern ID | 上游 Rust 封装状态 | Agentelier API | Notepad Provider | Explorer Provider | 操作验证 |
 |---|---|---|---|---|---|
-| Invoke | `UIInvokePattern` | 记录 | 支持/不支持/未观察 | 支持/不支持/未观察 | 通过/失败/不适用 |
-| Selection | `UISelectionPattern` | 记录 | 同上 | 同上 | 同上 |
-| Value | `UIValuePattern` | 记录 | 同上 | 同上 | 同上 |
-| RangeValue | `UIRangeValuePattern` | 记录 | 同上 | 同上 | 同上 |
-| Scroll | `UIScrollPattern` | 记录 | 同上 | 同上 | 同上 |
-| ExpandCollapse | `UIExpandCollapsePattern` | 记录 | 同上 | 同上 | 同上 |
-| Grid | `UIGridPattern` | 记录 | 同上 | 同上 | 同上 |
-| GridItem | `UIGridItemPattern` | 记录 | 同上 | 同上 | 同上 |
-| MultipleView | `UIMultipleViewPattern` | 记录 | 同上 | 同上 | 同上 |
-| Window | `UIWindowPattern` | 记录 | 同上 | 同上 | 同上 |
-| SelectionItem | `UISelectionItemPattern` | 记录 | 同上 | 同上 | 同上 |
-| Dock | `UIDockPattern` | 记录 | 同上 | 同上 | 同上 |
-| Table | `UITablePattern` | 记录 | 同上 | 同上 | 同上 |
-| TableItem | `UITableItemPattern` | 记录 | 同上 | 同上 | 同上 |
-| Text | `UITextPattern` | 记录 | 同上 | 同上 | 同上 |
-| Toggle | `UITogglePattern` | 记录 | 同上 | 同上 | 同上 |
-| Transform | `UITransformPattern` | 记录 | 同上 | 同上 | 同上 |
-| ScrollItem | `UIScrollItemPattern` | 记录 | 同上 | 同上 | 同上 |
-| LegacyIAccessible | `UILegacyIAccessiblePattern` | 记录 | 同上 | 同上 | 同上 |
-| ItemContainer | `UIItemContainerPattern` | 记录 | 同上 | 同上 | 同上 |
-| VirtualizedItem | `UIVirtualizedItemPattern` | 记录 | 同上 | 同上 | 同上 |
-| SynchronizedInput | `UISynchronizedInputPattern` | 记录 | 同上 | 同上 | 同上 |
-| ObjectModel | 无专用 wrapper；使用 `windows` 绑定适配 | 记录 | 同上 | 同上 | 同上 |
-| Annotation | `UIAnnotationPattern` | 记录 | 同上 | 同上 | 同上 |
-| Text2 | 集成于 `UITextPattern` wrapper | 记录 | 同上 | 同上 | 同上 |
-| Styles | `UIStylesPattern` | 记录 | 同上 | 同上 | 同上 |
-| Spreadsheet | `UISpreadsheetPattern` | 记录 | 同上 | 同上 | 同上 |
-| SpreadsheetItem | `UISpreadsheetItemPattern` | 记录 | 同上 | 同上 | 同上 |
-| Transform2 | 集成于 `UITransformPattern` wrapper | 记录 | 同上 | 同上 | 同上 |
-| TextChild | `UITextChildPattern` | 记录 | 同上 | 同上 | 同上 |
-| Drag | `UIDragPattern` | 记录 | 同上 | 同上 | 同上 |
-| DropTarget | `UIDropTargetPattern` | 记录 | 同上 | 同上 | 同上 |
-| TextEdit | `UITextEditPattern` | 记录 | 同上 | 同上 | 同上 |
-| CustomNavigation | `UICustomNavigationPattern` | 记录 | 同上 | 同上 | 同上 |
+| Invoke (10000) | `UIInvokePattern` | `uia_invoke` | 未观察 | 文件条目支持 | 通过，Accessibility Insights 的录制按钮触发并回读 |
+| Selection (10001) | `UISelectionPattern` | `uia_selection` | 未观察 | 项目视图支持 | 通过，Explorer 回读被选中的 A-Child |
+| Value (10002) | `UIValuePattern` | `uia_value_get / uia_value_set` | Edit 支持 | 项目视图支持 | 通过，记事本设置、回读并恢复原文 |
+| RangeValue (10003) | `UIRangeValuePattern` | `uia_range_value_get / uia_range_value_set` | 未观察 | 未观察 | 未验证实际操作 |
+| Scroll (10004) | `UIScrollPattern` | `uia_scroll` | Edit 支持 | 项目视图支持 | 通过，Explorer 垂直滚动到约 73.56% |
+| ExpandCollapse (10005) | `UIExpandCollapsePattern` | `uia_expand_collapse` | 未观察 | 导航树节点支持 | 通过，临时窗口导航树节点折叠→展开→折叠 |
+| Grid (10006) | `UIGridPattern` | `uia_grid_info / uia_grid_cell` | 未观察 | 详细信息列表支持 | 通过，两次回读 46×4、44×4；46 行时取得单元格 (45,0) |
+| GridItem (10007) | `UIGridItemPattern` | `uia_grid_item_info` | 未观察 | 详细信息单元格支持 | 通过，回读单元格行列及跨度 |
+| MultipleView (10008) | `UIMultipleViewPattern` | `uia_multiple_view` | 未观察 | 项目视图支持 | 通过，Explorer 枚举 8 种视图，5→4→5 |
+| Window (10009) | `UIWindowPattern` | `uia_window_state / uia_window_action` | 窗口支持 | 窗口支持 | 记事本最小化、恢复及临时窗口关闭通过；输入空闲等待收到 Provider 错误 |
+| SelectionItem (10010) | `UISelectionItemPattern` | `uia_select` | 未观察 | 目录和文件条目支持 | 通过，Explorer 选中临时条目并回读 |
+| Dock (10011) | `UIDockPattern` | `uia_dock_position` | 窗口不支持 | 窗口不支持 | 受测窗口不支持 |
+| Table (10012) | `UITablePattern` | `uia_table_info / uia_table_headers` | 未观察 | 详细信息列表支持 | 通过，回读 4 个列标题 |
+| TableItem (10013) | `UITableItemPattern` | `uia_table_item_info` | 未观察 | 详细信息单元格支持 | 通过，回读单元格列标题 |
+| Text (10014) | `UITextPattern` | `uia_text_document_range / uia_text_get / uia_text_find / uia_text_range_select` | Edit 不支持 | 未观察 | 通过，Accessibility Insights 的 WPF 编辑框全文、截断、查找 Beta、选区及范围移动 |
+| Toggle (10015) | `UITogglePattern` | `uia_toggle` | Edit 不支持 | 未观察 | 记事本 Edit 返回不支持 |
+| Transform (10016) | `UITransformPattern` | `uia_transform_capabilities / uia_transform` | 窗口支持 | 窗口支持，最大化时不可移动/缩放 | 通过，记事本实际移动和缩放，回读并恢复边界 |
+| ScrollItem (10017) | `UIScrollItemPattern` | `uia_scroll_item` | 未观察 | 文件条目支持 | 通过，Explorer 离屏项回读 IsOffscreen=false |
+| LegacyIAccessible (10018) | `UILegacyIAccessiblePattern` | `uia_legacy_accessible` | Edit 支持 | 项目视图支持 | 通过，记事本读取 MSAA 数据并写入、回读文本 |
+| ItemContainer (10019) | `UIItemContainerPattern` | `uia_find_item` | 未观察 | 项目视图支持 | 通过，Explorer 定位尚未实例化的 item-100.txt |
+| VirtualizedItem (10020) | `UIVirtualizedItemPattern` | `uia_realize` | 未观察 | 离屏占位文件支持 | 通过，条目同一引用由占位变为有效，代次 1→2 |
+| SynchronizedInput (10021) | `UISynchronizedInputPattern` | `uia_synchronized_input` | 未观察 | 未观察 | 通过，Accessibility Insights WPF Edit 启动、回读、取消 key_down 监听 |
+| ObjectModel (10022) | 无专用 wrapper；使用 `windows` 绑定适配 | `uia_object_model` | Edit 不支持 | 项目视图不支持 | 受测目标返回不支持；未观察到可取回底层对象的 Provider |
+| Annotation (10023) | `UIAnnotationPattern` | `uia_annotation` | Edit 不支持 | 未观察 | 记事本 Edit 返回不支持 |
+| Text2 (10024) | 集成于 `UITextPattern` wrapper | `uia_text_caret / uia_text_annotation_range` | 未观察 | 未观察 | 未验证实际操作 |
+| Styles (10025) | `UIStylesPattern` | `uia_styles` | Edit 不支持 | 未观察 | 记事本 Edit 返回不支持 |
+| Spreadsheet (10026) | `UISpreadsheetPattern` | `uia_spreadsheet_info` | 未观察 | 项目视图不支持 | Explorer 列表返回不支持 |
+| SpreadsheetItem (10027) | `UISpreadsheetItemPattern` | `uia_spreadsheet_item_info` | 未观察 | 未观察 | 未验证实际操作 |
+| Transform2 (10028) | 集成于 `UITransformPattern` wrapper | `uia_transform (zoom / zoom_by_unit)` | 窗口不支持 | 窗口不支持 | 受测窗口不支持 |
+| TextChild (10029) | `UITextChildPattern` | `uia_text_child_range` | 未观察 | 未观察 | 未验证实际操作 |
+| Drag (10030) | `UIDragPattern` | `uia_drag_info` | 窗口根不支持 | 窗口根不支持 | 受测窗口根返回不支持 |
+| DropTarget (10031) | `UIDropTargetPattern` | `uia_drop_target_info` | 窗口根不支持 | 窗口根不支持 | 受测窗口根返回不支持 |
+| TextEdit (10032) | `UITextEditPattern` | `uia_text_edit_state` | 未观察 | 未观察 | 未验证实际操作 |
+| CustomNavigation (10033) | `UICustomNavigationPattern` | `uia_custom_navigation` | 窗口根不支持 | 窗口根不支持 | 受测窗口根返回不支持 |
 
 TextRange 是 Text Pattern 返回的范围对象，不是独立 Pattern ID。SelectionPattern2 是 Selection 的扩展接口，不另列一个 Pattern ID。
 
@@ -127,3 +127,19 @@ TextRange 是 Text Pattern 返回的范围对象，不是独立 Pattern ID。Sel
 每项验收记录前置条件、目标应用、操作场景、预期行为、实际观察、通过条件和失败条件。状态区分通过、失败、应用不支持、环境不满足、未验证。不得将未执行的操作写成通过。
 
 遵守 Agentelier 项目规则：不编写任何 Unit Test、Integration Test、Regression Test、Benchmark 或 Example。使用实际运行的 Agentelier、Notepad、File Explorer、Accessibility Insights、日志和必要调试信息完成验证。BRP 只用于 Agentelier 自身 Bevy GUI 行为变化；本次 UIA 目标应用不是 Bevy App，不使用 BRP 代替 UIA 验收。
+
+### 实际运行记录
+
+在 Windows x64 调试构建中，Agentelier 通过真实 `computer_execute` 控制独立的记事本临时文档和 Explorer 临时目录。临时目录含 A-Child、B-Child 以及用于滚动和实例化的 100 个编号文件。
+
+| 场景 | 通过条件 | 实际观察 |
+|---|---|---|
+| 结果与窗口树 | 三种来源使用同一外层字段，三种树视图可分页读取 | `live`、`cache`、`snapshot` 三种来源均回读成功。记事本 Raw/Control/Content 共 27/27/15 节点，Explorer 临时目录共 133/127/115 节点。 |
+| 记事本属性和文本 | 找到同一编辑控件，写入后回读并恢复原文，明确报告 Text 能力 | AutomationId 15 的 Edit 回读 Name、ClassName、边界、框架和焦点等属性。Value 和 LegacyIAccessible 两条路径验证了读写、恢复；本机 Edit 的 Text 返回 `uia_pattern_not_supported`。Accessibility Insights 的 WPF 编辑框验证了 TextRange 和选区。 |
+| Explorer 列表和引用 | 三种视图可查找文件和目录，测试条目可选中、滚动及实例化，目录切换后验证旧引用 | 按属性组合找到临时条目，选择后回读；详细信息列表读取 4 个列标题。item-100.txt 从占位变为有效，随后滚动入视野。目录切换后实测旧引用不可用，返回原目录后实测唯一重定位。 |
+| Accessibility Insights 对照 | 实时树可找到同一窗口和控件，Events 能记录实际操作 | 记事本的编辑区两端名称和边界一致，Live Inspect 命中的是 Document 投影，Agentelier 也验证了树中的 Edit 投影。Explorer 项目视图对照出 Selection、Grid、Table、MultipleView 与 ItemContainer。记事本改写期间记录到属性变化 20004；Explorer 目录切换期间记录到 StructureChanged，录制区间也观测到 SelectionItem_ElementSelected。 |
+| 会话监听和等待 | 四类通知能跨脚本读取；取消订阅生效；超时和取消可区分 | 实测焦点 20005、结构 20002 与 RuntimeId、选择 20012、属性 20004 与 30045。Accessibility Insights 录制按钮的属性事件提供字符串值。取消后未交付旧订阅通知。Explorer 导航与实际焦点切换唤醒等待并重读状态；返回了 `uia_timeout` 和 `uia_cancelled`。工具始终以 Exclusive 接纳。 |
+| 快照和事件丢失 | 更新后的窗口状态有新代次；遗漏事件使旧快照要求重建 | 记事本 ValueValue 变化触发增量更新，编辑引用保持一致；显式刷新编辑子树也保留节点关系。Explorer 导航触发重建并回读新标题。实际队列溢出后 `rebuild_required` 为 true，`auto` 完整重建并回读恢复后的文本。 |
+| 关闭后的引用 | 临时窗口关闭后，根和子元素操作返回稳定错误 | 两个窗口的 Window Pattern 都接受关闭请求。记事本在保存提示中选择不保存后退出，Explorer 原 HWND 已消失。两个根引用和两个子元素引用的后续读取均返回 `ok=false` 和 `uia_window_unavailable`。 |
+
+上表的通过记录限于实际观察到的 Provider 行为。缺少对应 Provider 的操作和未诱发的场景单独保留结果。未注入在途 COM 挂起、分页中途 Provider 故障或重复重定位候选。未单独验证无任何通知时条件从假转真，以及能独立定位到单个父节点的 ChildRemoved 刷新。

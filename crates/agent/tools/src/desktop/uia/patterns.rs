@@ -320,7 +320,7 @@ pub(super) fn optional_provider<T>(
 
 pub(super) fn pattern_result(id: Uuid, pattern: &str, operation: &str, data: Value) -> Value {
     json!({"ref": reference_token(id), "pattern": pattern, "operation": operation,
-        "source": "live", "data": data})
+        "result": data})
 }
 
 pub(super) fn invalid_pattern_argument(message: impl Into<String>) -> ToolFailure {

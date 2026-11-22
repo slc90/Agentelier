@@ -102,7 +102,7 @@ UIA Cache Request 减少单次读取成本；Agentelier 快照负责跨多次工
 
 Accessibility Insights for Windows 的 Live Inspect 能显示 UIA Tree、元素属性和支持的 Pattern；Troubleshooting 中的 Events 视图可监听 UIA 事件。
 
-未来验收时，对同一个窗口和相同 UI 状态：
+对照同一窗口和相同 UI 状态时：
 1. 在 Live Inspect 选择 Raw/Control/Content 视图并查看目标元素。
 2. 在 Properties 和 Patterns 区域记录属性及 Pattern。
 3. 在元素菜单选择 Listen to Events，配置焦点、属性和结构事件并开始记录。

@@ -283,7 +283,7 @@ impl Worker {
             self.elements.insert(id, entry)?;
         }
         Ok(json!({
-            "root": reference_token(request.root), "view": request.scope.view.name(), "source": "live",
+            "root": reference_token(request.root), "view": request.scope.view.name(),
             "count": candidates.len(), "ambiguous": candidates.len() > 1,
             "inspected": inspected, "truncated": truncated, "candidates": candidates,
         }))

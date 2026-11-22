@@ -6,7 +6,7 @@ UIA 能力通过现有 `computer_execute` 暴露给模型。Rhai 继续负责组
 
 所有新增函数使用 `uia_` 前缀，避免与现有 `windows()`、`window()`、`click()`、`wait()` 等 Computer API 名称冲突。
 
-| 能力 | 建议 API | 行为 |
+| 能力 | API | 行为 |
 |---|---|---|
 | 根元素 | `uia_desktop_root()` | 获取桌面根元素引用 |
 | 窗口根元素 | `uia_window_root(window_id)` | 从现有 WindowId 获取 UIA 窗口根元素 |
@@ -48,22 +48,22 @@ Rhai 可以将引用保存在持久变量中，但变量本身不持有 COM 对�
 | 字段 | 含义 |
 |---|---|
 | `ok` | 本次 UIA 请求是否成功 |
-| `data` | 成功时的普通结构化结果 |
-| `error` | 失败时的稳定错误代码和消息 |
+| `data` | 成功值或已读取的部分树页；无数据时为 `()` |
+| `error` | 失败时为含 `code` 和 `message` 的 Map；成功时为 `()` |
 | `source` | `live`、`cache` 或 `snapshot` |
-| `generation` | 对树快照有意义时的快照代次 |
+| `generation` | 窗口快照的代次；其余调用为 `()` |
 
-元素摘要包含 `ref`、`name`、`automation_id`、`control_type`、`class_name`、`bounds`、`enabled`、`offscreen`、`focused`、`framework_id` 和实际支持的 `patterns`。按需属性读取不能强制每个节点都包含所有扩展属性。
+调用方先检查 `ok`，再读取 `data` 或 `error`。例如 `uia_window_root(window_id).data.ref` 取得窗口根引用。元素摘要包含 `ref`、`window_id`、`name`、`class_name` 和 `control_type`。查找候选另含 `automation_id`。边界、焦点、可用性和 Pattern 支持通过独立属性请求取得。
 
-树结果包含视图、根引用、节点列表、父子关系、节点数、是否还有后续页、继续读取游标和快照代次。查找结果包含匹配数、候选元素摘要及是否存在歧义。
+树页的 `data` 包含视图、根引用、节点、父引用、节点数、继续读取游标和分页代次。读取部分节点后失败时，`ok` 为 `false`，`data` 保留已读取节点及 `issue` 位置。查找结果包含匹配数、候选元素摘要与歧义标志。引用的重新定位歧义以 `uia_ambiguous_target` 返回。
 
-Pattern 操作结果包含目标引用、Pattern 名称、操作名、实际返回值和必要的操作后状态。Invoke 只报告 Pattern 调用结果，不推断应用业务流程已经完成。
+Pattern 的 `data` 包含 `ref`、`pattern`、`operation`、`result`。事件的 `data` 包含事件数组与溢出的订阅 ID。等待返回实际重查的值或状态；整体脚本期限到达或请求取消时，工具层结束执行并报告对应错误。
 
 ## 错误代码
 
 | 错误代码 | 含义 |
 |---|---|
-| `uia_runtime_unavailable` | Worker 未启动或已退出 |
+| `uia_worker_failed` / `uia_closed` | Worker 异常退出或会话已关闭 |
 | `uia_com_initialization_failed` | MTA/COM 初始化失败 |
 | `uia_queue_full` | 请求队列达到容量 |
 | `uia_window_unavailable` | WindowId 已失效 |

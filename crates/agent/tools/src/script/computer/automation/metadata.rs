@@ -1,9 +1,9 @@
-use super::{ScriptResult, plain_data, with_run};
+use super::{ScriptResult, plain_data, with_uia};
 use crate::{
     ToolFailure,
     desktop::uia::{LegacyAction, MetadataAction},
 };
-use rhai::{Dynamic, Engine, INT, ImmutableString, NativeCallContext};
+use rhai::{Engine, INT, ImmutableString, Map, NativeCallContext};
 
 pub(super) fn register(engine: &mut Engine) {
     engine
@@ -87,8 +87,8 @@ pub(super) fn register(engine: &mut Engine) {
         );
 }
 
-fn object_model(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+fn object_model(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia
             .object_model(&id, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)
@@ -99,8 +99,8 @@ fn metadata(
     ctx: NativeCallContext<'_>,
     id: ImmutableString,
     action: Result<MetadataAction, ToolFailure>,
-) -> ScriptResult<Dynamic> {
-    with_run(ctx, |run| {
+) -> ScriptResult<Map> {
+    with_uia(ctx, |run| {
         run.uia
             .metadata_pattern(&id, action?, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)
