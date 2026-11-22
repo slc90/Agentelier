@@ -1,0 +1,3211 @@
+{
+  "scenarios": "scenarios.json",
+  "scenarios_sha256": "cc83c26d34bb30e8fcfd73e212bad735e18ce73d9e135fe628ab0aa94fb6386d",
+  "model": "gpt-6.2-sol",
+  "reasoning": "high",
+  "authentication_source": "Codex OAuth",
+  "working_directory": "agentelier-origin-long-dialogue (专用临时目录)",
+  "project_instruction_sources": 0,
+  "base": "default",
+  "memory_publication_id": "e31c5595-007c-4fd3-b279-81ea8dc55f8f",
+  "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad",
+  "skill_catalog_sha256": "f39bc1455d32b7a4db9920ebf28252c28a29ca33289be8e0ee9372f94bf5a48f",
+  "tool_permissions": [
+    "computer_execute",
+    "view_image",
+    "apply_patch",
+    "exec_command",
+    "write_stdin",
+    "generate_image",
+    "search_memory",
+    "read_memory",
+    "revise_memory",
+    "spawn_agent",
+    "send_message",
+    "followup_task",
+    "wait_agent",
+    "interrupt_agent",
+    "list_agents"
+  ],
+  "tool_configuration_sha256": "475b386f7870c9940313b5fc66c050a4880ea3840e919973a3ee32a519effe45",
+  "image_input": true,
+  "context_limits": {
+    "window": 500000,
+    "effective": 475000,
+    "automatic": 450000,
+    "comp_hash": "3000"
+  },
+  "origin": {
+    "version": "v0.3",
+    "source": "codex_data/基础提示词.md",
+    "sha256": "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660"
+  },
+  "execution_order": [
+    {
+      "scene": "S1",
+      "condition": "A0"
+    },
+    {
+      "scene": "S2",
+      "condition": "A0"
+    },
+    {
+      "scene": "S3",
+      "condition": "A0"
+    },
+    {
+      "scene": "S4",
+      "condition": "A0"
+    },
+    {
+      "scene": "S5",
+      "condition": "A0"
+    },
+    {
+      "scene": "S6",
+      "condition": "A0"
+    },
+    {
+      "scene": "S1",
+      "condition": "P1"
+    },
+    {
+      "scene": "S2",
+      "condition": "P1"
+    },
+    {
+      "scene": "S3",
+      "condition": "P1"
+    },
+    {
+      "scene": "S4",
+      "condition": "P1"
+    },
+    {
+      "scene": "S5",
+      "condition": "P1"
+    },
+    {
+      "scene": "S6",
+      "condition": "P1"
+    }
+  ],
+  "session_count": 12,
+  "completed_turn_count": 120,
+  "sessions": [
+    {
+      "scene": "S1",
+      "condition": "A0",
+      "session_id": "9eafa3a7-32da-4c8a-9e57-566edd5eaa85",
+      "created_at": "2026-11-22T18:34:48+08:00",
+      "completed_turns": 10,
+      "instructions": [
+        {
+          "slot": "Collaboration",
+          "role": "developer",
+          "reference": {
+            "id": "agentelier.collaboration.explicit_request_only",
+            "version": 2
+          },
+          "sha256": "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+        }
+      ],
+      "turns": [
+        {
+          "round": 1,
+          "turn_id": 1,
+          "started_at": "2026-11-22T18:35:28+08:00",
+          "finished_at": "2026-11-22T18:35:37+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 0,
+              "payload_sha256": "5612c9c4d68e7249737184b981de364b8d0f660d0639f7e72a572c7b56db902a",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 2,
+          "turn_id": 2,
+          "started_at": "2026-11-22T18:36:46+08:00",
+          "finished_at": "2026-11-22T18:36:53+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 3,
+              "payload_sha256": "5d0973ed10f7e41b7755d7b9b9d0f3fa18329761766facb19ffa1880e2ec1116",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 3,
+          "turn_id": 3,
+          "started_at": "2026-11-22T18:36:55+08:00",
+          "finished_at": "2026-11-22T18:37:05+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 6,
+              "payload_sha256": "ede8bba5ce12500292f64c11ff588894d4a6e5e85c502dc519311220793ca8e2",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 4,
+          "turn_id": 4,
+          "started_at": "2026-11-22T18:37:07+08:00",
+          "finished_at": "2026-11-22T18:37:15+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 9,
+              "payload_sha256": "f1af6e630b2e0c2be94271848cb1842ca602212541ec59124b6be934daf360c5",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 5,
+          "turn_id": 5,
+          "started_at": "2026-11-22T18:37:17+08:00",
+          "finished_at": "2026-11-22T18:37:26+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 12,
+              "payload_sha256": "b6fd7c3b1e7f2c7e74f15b4b6d727800024d0f58095c75bdb38ecd8c59d0862d",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 6,
+          "turn_id": 6,
+          "started_at": "2026-11-22T18:37:27+08:00",
+          "finished_at": "2026-11-22T18:37:37+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 15,
+              "payload_sha256": "2d4b5c56008296c6b7e1fb60a90fe464cf5dc2a0cba504f255af3380080e2af8",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 7,
+          "turn_id": 7,
+          "started_at": "2026-11-22T18:37:40+08:00",
+          "finished_at": "2026-11-22T18:37:50+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 18,
+              "payload_sha256": "aa2fd086b7c56be75ddb0fe83224a860f7cf001f042a0d6810332565b3d4d75e",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 8,
+          "turn_id": 8,
+          "started_at": "2026-11-22T18:37:53+08:00",
+          "finished_at": "2026-11-22T18:38:04+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 21,
+              "payload_sha256": "b12cdf0b25efd47a3e8275eeb154f2ea43e7e869161b5475177d055413413abf",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 9,
+          "turn_id": 9,
+          "started_at": "2026-11-22T18:38:07+08:00",
+          "finished_at": "2026-11-22T18:38:19+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 24,
+              "payload_sha256": "276ed574b480421b5364c2273e6f76e54d46eb08b2f167305e8be5bb6223155f",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 10,
+          "turn_id": 10,
+          "started_at": "2026-11-22T18:38:23+08:00",
+          "finished_at": "2026-11-22T18:38:32+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 27,
+              "payload_sha256": "2ceff3dab7ef5cebd2fec3ecf44c1a0be641906ac1dab01c34c6777b6c048d17",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        }
+      ]
+    },
+    {
+      "scene": "S1",
+      "condition": "P1",
+      "session_id": "0245fd76-c94d-48b6-81fe-2b8d67d9cfe2",
+      "created_at": "2026-11-22T18:51:59+08:00",
+      "completed_turns": 10,
+      "instructions": [
+        {
+          "slot": "Supplement",
+          "role": "developer",
+          "reference": {
+            "id": "67875891-d063-495f-bccc-4d6349df323a",
+            "version": 1
+          },
+          "sha256": "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660"
+        },
+        {
+          "slot": "Collaboration",
+          "role": "developer",
+          "reference": {
+            "id": "agentelier.collaboration.explicit_request_only",
+            "version": 2
+          },
+          "sha256": "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+        }
+      ],
+      "turns": [
+        {
+          "round": 1,
+          "turn_id": 1,
+          "started_at": "2026-11-22T18:52:01+08:00",
+          "finished_at": "2026-11-22T18:52:12+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 0,
+              "payload_sha256": "805762f6080166f1c85fcd9b4c11ab505690439868f2e04c34172261caae60b4",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 2,
+          "turn_id": 2,
+          "started_at": "2026-11-22T18:52:15+08:00",
+          "finished_at": "2026-11-22T18:52:21+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 3,
+              "payload_sha256": "d7dfada8c7ae0a90ed69a319e16fa8ce2daeb11346c06ed0e0c9c143fa701cb2",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 3,
+          "turn_id": 3,
+          "started_at": "2026-11-22T18:52:23+08:00",
+          "finished_at": "2026-11-22T18:52:32+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 5,
+              "payload_sha256": "29256a301f6f1def0e3e70df063c4f768529ffe91ec94eb1927596becb510597",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 4,
+          "turn_id": 4,
+          "started_at": "2026-11-22T18:52:34+08:00",
+          "finished_at": "2026-11-22T18:52:42+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 8,
+              "payload_sha256": "60a864932e45420529e698165c1386898c041713f30d4187cf04e4f65e5dbd41",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 5,
+          "turn_id": 5,
+          "started_at": "2026-11-22T18:52:44+08:00",
+          "finished_at": "2026-11-22T18:52:54+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 11,
+              "payload_sha256": "da9fbc981fe4c356c3d917b6228a12b4e0e5ac66ee0cb33eca55ac68913f47cc",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 6,
+          "turn_id": 6,
+          "started_at": "2026-11-22T18:52:56+08:00",
+          "finished_at": "2026-11-22T18:53:08+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 14,
+              "payload_sha256": "19564886367fc99c3a01da0e317f6c533515e5d9f7434bed493ff4f0d5bf3c3d",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 7,
+          "turn_id": 7,
+          "started_at": "2026-11-22T18:53:10+08:00",
+          "finished_at": "2026-11-22T18:53:17+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 17,
+              "payload_sha256": "ca8ee545a7f78ad3e249c6422ea022dbb7069ac706ffe6adb1cade95c2cd3af6",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 8,
+          "turn_id": 8,
+          "started_at": "2026-11-22T18:53:21+08:00",
+          "finished_at": "2026-11-22T18:53:36+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 20,
+              "payload_sha256": "17c35ec74140dd3a76ab9d8ab399f399cd535f842a601c33f9d6e499b58b0ebb",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 9,
+          "turn_id": 9,
+          "started_at": "2026-11-22T18:53:40+08:00",
+          "finished_at": "2026-11-22T18:53:52+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 23,
+              "payload_sha256": "574b3a95b7b94d222cd4194f54c403aa02fbd122f9e2f174300b96f3547749b5",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 10,
+          "turn_id": 10,
+          "started_at": "2026-11-22T18:53:58+08:00",
+          "finished_at": "2026-11-22T18:54:07+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 26,
+              "payload_sha256": "db9a8f3281c60a4af3ba7e2e62745ea65efb08671bc238e6d6069e1b4e6953a4",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        }
+      ]
+    },
+    {
+      "scene": "S2",
+      "condition": "A0",
+      "session_id": "89f32042-8903-4090-8ea7-3f53e4b0d6cf",
+      "created_at": "2026-11-22T18:40:28+08:00",
+      "completed_turns": 10,
+      "instructions": [
+        {
+          "slot": "Collaboration",
+          "role": "developer",
+          "reference": {
+            "id": "agentelier.collaboration.explicit_request_only",
+            "version": 2
+          },
+          "sha256": "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+        }
+      ],
+      "turns": [
+        {
+          "round": 1,
+          "turn_id": 1,
+          "started_at": "2026-11-22T18:40:30+08:00",
+          "finished_at": "2026-11-22T18:40:39+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 0,
+              "payload_sha256": "25cabe35583dc2f906a8445c7e8139dda011d5d7652877a045fac5a4ca012c87",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 2,
+          "turn_id": 2,
+          "started_at": "2026-11-22T18:40:41+08:00",
+          "finished_at": "2026-11-22T18:40:51+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 3,
+              "payload_sha256": "9d3805dd2de10eeb7a381b5209db939a488a555934453a1fd3ea127cb37b1a6a",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 3,
+          "turn_id": 3,
+          "started_at": "2026-11-22T18:40:53+08:00",
+          "finished_at": "2026-11-22T18:41:03+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 6,
+              "payload_sha256": "875843b34099904affd036d85a0f6786bcc3251b2b8800d0be42e5f56f9e0d1c",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 4,
+          "turn_id": 4,
+          "started_at": "2026-11-22T18:41:04+08:00",
+          "finished_at": "2026-11-22T18:41:14+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 9,
+              "payload_sha256": "e9643814563b7e3c83e53b4c7f8efb51b983e942a27ba043b0e4eb5987bd5519",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 5,
+          "turn_id": 5,
+          "started_at": "2026-11-22T18:41:16+08:00",
+          "finished_at": "2026-11-22T18:41:26+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 12,
+              "payload_sha256": "158287821e19a2839483b48fe27d61b4d9c65d0915c114530fd4f004db8dc151",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 6,
+          "turn_id": 6,
+          "started_at": "2026-11-22T18:41:28+08:00",
+          "finished_at": "2026-11-22T18:41:39+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 15,
+              "payload_sha256": "f104f204cef889a5adf49be83fd41ebc7efc03903d09fab2c9f067fdc415b75d",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 7,
+          "turn_id": 7,
+          "started_at": "2026-11-22T18:41:41+08:00",
+          "finished_at": "2026-11-22T18:41:51+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 18,
+              "payload_sha256": "9741f748674475f30fcb311bc1ef55c42edcf75016044ecdc59247abf4c09825",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 8,
+          "turn_id": 8,
+          "started_at": "2026-11-22T18:41:53+08:00",
+          "finished_at": "2026-11-22T18:42:05+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 21,
+              "payload_sha256": "c1b041ce6aac33ac41d4f4bb61b807deccdd8a20cac1d274ee4fe6c83c89228c",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 9,
+          "turn_id": 9,
+          "started_at": "2026-11-22T18:42:08+08:00",
+          "finished_at": "2026-11-22T18:42:19+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 24,
+              "payload_sha256": "c594307a327e30ade1fc32d241e9aa4cd701fb05f798adc5235ceb2663217abf",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 10,
+          "turn_id": 10,
+          "started_at": "2026-11-22T18:42:24+08:00",
+          "finished_at": "2026-11-22T18:42:33+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 27,
+              "payload_sha256": "b6419e0c68c1489c3abf6e63953f0bd00f82038f8e4a5e40427b4eb10d04466f",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        }
+      ]
+    },
+    {
+      "scene": "S2",
+      "condition": "P1",
+      "session_id": "30af8b98-b715-4b91-8232-95cdef881f90",
+      "created_at": "2026-11-22T18:54:13+08:00",
+      "completed_turns": 10,
+      "instructions": [
+        {
+          "slot": "Supplement",
+          "role": "developer",
+          "reference": {
+            "id": "67875891-d063-495f-bccc-4d6349df323a",
+            "version": 1
+          },
+          "sha256": "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660"
+        },
+        {
+          "slot": "Collaboration",
+          "role": "developer",
+          "reference": {
+            "id": "agentelier.collaboration.explicit_request_only",
+            "version": 2
+          },
+          "sha256": "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+        }
+      ],
+      "turns": [
+        {
+          "round": 1,
+          "turn_id": 1,
+          "started_at": "2026-11-22T18:54:15+08:00",
+          "finished_at": "2026-11-22T18:54:23+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 0,
+              "payload_sha256": "b4d1eb212c9ff479112d6b8215b45fd330033d2cc0b8ed9bc8c9202848c580e4",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 2,
+          "turn_id": 2,
+          "started_at": "2026-11-22T18:54:25+08:00",
+          "finished_at": "2026-11-22T18:54:35+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 2,
+              "payload_sha256": "accf04f0f4c50c4c42efaa33ad75aa187de96939568c5086defc537bcccbb01c",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 3,
+          "turn_id": 3,
+          "started_at": "2026-11-22T18:54:37+08:00",
+          "finished_at": "2026-11-22T18:54:48+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 5,
+              "payload_sha256": "b75e0e15c502398cceb3237b669fe3025e9cc55cedc6a2a43337885de00648f6",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 4,
+          "turn_id": 4,
+          "started_at": "2026-11-22T18:54:50+08:00",
+          "finished_at": "2026-11-22T18:54:59+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 8,
+              "payload_sha256": "94263fda796e860135681a1bc3cd25131cabdd4a3bf0159dbf4327872033fcec",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 5,
+          "turn_id": 5,
+          "started_at": "2026-11-22T18:55:01+08:00",
+          "finished_at": "2026-11-22T18:55:12+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 11,
+              "payload_sha256": "dc881e2a4e94b3dffb6488e3c39d97052b9ed68d0b4b25ad1393f16c061ece6e",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 6,
+          "turn_id": 6,
+          "started_at": "2026-11-22T18:55:15+08:00",
+          "finished_at": "2026-11-22T18:55:30+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 14,
+              "payload_sha256": "c86a2d5103d681f01879863036a59ea3d6ec3889c6604c7d60547d6af58d1396",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 7,
+          "turn_id": 7,
+          "started_at": "2026-11-22T18:55:33+08:00",
+          "finished_at": "2026-11-22T18:55:43+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 17,
+              "payload_sha256": "004093da32baa6132a5226287d2528a465f3ba69e7f73ab588eff9f75a873d3e",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 8,
+          "turn_id": 8,
+          "started_at": "2026-11-22T18:55:47+08:00",
+          "finished_at": "2026-11-22T18:55:56+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 20,
+              "payload_sha256": "70f2c1cbbde29101984d583d5bdf05c3a093792bc9c056511176257ca84cd6c2",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 9,
+          "turn_id": 9,
+          "started_at": "2026-11-22T18:56:00+08:00",
+          "finished_at": "2026-11-22T18:56:15+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 23,
+              "payload_sha256": "ec0af1af79a39778d8c7266dfab15f3ad1e4414b114e77efd73ecb44e2a44c86",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 10,
+          "turn_id": 10,
+          "started_at": "2026-11-22T18:56:20+08:00",
+          "finished_at": "2026-11-22T18:56:28+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 26,
+              "payload_sha256": "05a8e5b587fcb1407e2dd3139161581f1e6c04a2ce4b4354b6f7ba288886061a",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        }
+      ]
+    },
+    {
+      "scene": "S3",
+      "condition": "A0",
+      "session_id": "6285f692-fab1-404b-b05a-44f6799612b7",
+      "created_at": "2026-11-22T18:42:37+08:00",
+      "completed_turns": 10,
+      "instructions": [
+        {
+          "slot": "Collaboration",
+          "role": "developer",
+          "reference": {
+            "id": "agentelier.collaboration.explicit_request_only",
+            "version": 2
+          },
+          "sha256": "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+        }
+      ],
+      "turns": [
+        {
+          "round": 1,
+          "turn_id": 1,
+          "started_at": "2026-11-22T18:42:39+08:00",
+          "finished_at": "2026-11-22T18:42:50+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 0,
+              "payload_sha256": "fdb409cfab5350e78bdfc4237b2524dc3c3e64112cc21db543f3ccccfc525fa3",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 2,
+          "turn_id": 2,
+          "started_at": "2026-11-22T18:42:52+08:00",
+          "finished_at": "2026-11-22T18:43:02+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 3,
+              "payload_sha256": "f5a37cbf52f205042481a161bc67ef2fede08a1d8d46558a0ce58b71bf031e1d",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 3,
+          "turn_id": 3,
+          "started_at": "2026-11-22T18:43:04+08:00",
+          "finished_at": "2026-11-22T18:43:14+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 6,
+              "payload_sha256": "ec93007b9315de9404eef5c532b5d13df446621ff56321e79b71f4e81d721034",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 4,
+          "turn_id": 4,
+          "started_at": "2026-11-22T18:43:16+08:00",
+          "finished_at": "2026-11-22T18:43:28+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 9,
+              "payload_sha256": "5f92624d637820b6da6ae41a88d2d552bc48ac896edf9f12eb7567ae2392908b",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 5,
+          "turn_id": 5,
+          "started_at": "2026-11-22T18:43:30+08:00",
+          "finished_at": "2026-11-22T18:43:44+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 12,
+              "payload_sha256": "3196b52bd6354b983a5fc2b7bd87caad1450f1e72b1d54e70fbdb5d4c0c82b3a",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 6,
+          "turn_id": 6,
+          "started_at": "2026-11-22T18:43:46+08:00",
+          "finished_at": "2026-11-22T18:43:59+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 15,
+              "payload_sha256": "b2eea1cb95f0c240dc1be0e4f61a2e424d0966f095f7d6747bae10899541b6a3",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 7,
+          "turn_id": 7,
+          "started_at": "2026-11-22T18:44:01+08:00",
+          "finished_at": "2026-11-22T18:44:12+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 18,
+              "payload_sha256": "49f3bb1f1a2395a7ad159a5bda4a888c96a08ac1a7a434c3ac5c9d35f10ee5be",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 8,
+          "turn_id": 8,
+          "started_at": "2026-11-22T18:44:15+08:00",
+          "finished_at": "2026-11-22T18:44:28+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 21,
+              "payload_sha256": "ecf816117ca7205f56f5b637efaf03d3c8ce1292d27638b8432dfeccf1fcb34f",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 9,
+          "turn_id": 9,
+          "started_at": "2026-11-22T18:44:31+08:00",
+          "finished_at": "2026-11-22T18:44:45+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 24,
+              "payload_sha256": "7275a42d3494f9d88e024ff800954c7a1b6a6e05d7003d55a0c58e8e931b7faa",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 10,
+          "turn_id": 10,
+          "started_at": "2026-11-22T18:44:52+08:00",
+          "finished_at": "2026-11-22T18:45:04+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 27,
+              "payload_sha256": "2aff3744f2b92e69aed79db39c5b57e3708ec05cbb341e1594f53dd382d5913c",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        }
+      ]
+    },
+    {
+      "scene": "S3",
+      "condition": "P1",
+      "session_id": "8ea5d42c-47df-4d28-b27e-9a3f7d58d1d7",
+      "created_at": "2026-11-22T18:56:35+08:00",
+      "completed_turns": 10,
+      "instructions": [
+        {
+          "slot": "Supplement",
+          "role": "developer",
+          "reference": {
+            "id": "67875891-d063-495f-bccc-4d6349df323a",
+            "version": 1
+          },
+          "sha256": "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660"
+        },
+        {
+          "slot": "Collaboration",
+          "role": "developer",
+          "reference": {
+            "id": "agentelier.collaboration.explicit_request_only",
+            "version": 2
+          },
+          "sha256": "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+        }
+      ],
+      "turns": [
+        {
+          "round": 1,
+          "turn_id": 1,
+          "started_at": "2026-11-22T18:56:37+08:00",
+          "finished_at": "2026-11-22T18:56:51+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 0,
+              "payload_sha256": "5e690dd7c392bfc253838650a1f46bf4f27ac8468168b82f0d77241ee5bec294",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 2,
+          "turn_id": 2,
+          "started_at": "2026-11-22T18:56:53+08:00",
+          "finished_at": "2026-11-22T18:57:04+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 3,
+              "payload_sha256": "9884c28fdc9189cd02cc989da7a6261593ba4f0b60be836b6f82d6e5e316fd72",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 3,
+          "turn_id": 3,
+          "started_at": "2026-11-22T18:57:06+08:00",
+          "finished_at": "2026-11-22T18:57:22+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 6,
+              "payload_sha256": "7c82060ee08528d0ce4903d046e7d2b2edaa247f7c5470513cf21346495b077d",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 4,
+          "turn_id": 4,
+          "started_at": "2026-11-22T18:57:24+08:00",
+          "finished_at": "2026-11-22T18:57:44+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 9,
+              "payload_sha256": "dc49ce7d2310df4c8fc912610b80226ab3469960e2dfa8986d9ead1a99619f32",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 5,
+          "turn_id": 5,
+          "started_at": "2026-11-22T18:57:46+08:00",
+          "finished_at": "2026-11-22T18:58:03+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 12,
+              "payload_sha256": "e0f307d75efabefabe669a1d7ad648fece889ec1648372b78f02e30b082c2575",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 6,
+          "turn_id": 6,
+          "started_at": "2026-11-22T18:58:05+08:00",
+          "finished_at": "2026-11-22T18:58:19+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 15,
+              "payload_sha256": "7d3b8e9cc8b06a019783aeff0100465d5434d0beabc146c6971bc0980984765c",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 7,
+          "turn_id": 7,
+          "started_at": "2026-11-22T18:58:21+08:00",
+          "finished_at": "2026-11-22T18:58:37+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 18,
+              "payload_sha256": "b5bd91bb3603a0f94a12d6ad2cf316966dbca0d704f43f52b1d72060b9480c66",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 8,
+          "turn_id": 8,
+          "started_at": "2026-11-22T18:58:41+08:00",
+          "finished_at": "2026-11-22T18:58:57+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 21,
+              "payload_sha256": "50ee6b37d33c15466fc06185a2e1e10b6ffa6f086b2a27321233d9a72f1a4413",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 9,
+          "turn_id": 9,
+          "started_at": "2026-11-22T18:59:02+08:00",
+          "finished_at": "2026-11-22T18:59:20+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 24,
+              "payload_sha256": "0e8195b616f6f0514f364ec32d1584348a11b70473e178f4c6d005807e5623fe",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 10,
+          "turn_id": 10,
+          "started_at": "2026-11-22T18:59:25+08:00",
+          "finished_at": "2026-11-22T18:59:37+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 27,
+              "payload_sha256": "07730f96e4f2a0a1be0acbae87a5846ee921d757ff56b42603e7195068b43d1e",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        }
+      ]
+    },
+    {
+      "scene": "S4",
+      "condition": "A0",
+      "session_id": "4c34cb4e-e1e7-4efa-abc1-638c50fec5fa",
+      "created_at": "2026-11-22T18:45:11+08:00",
+      "completed_turns": 10,
+      "instructions": [
+        {
+          "slot": "Collaboration",
+          "role": "developer",
+          "reference": {
+            "id": "agentelier.collaboration.explicit_request_only",
+            "version": 2
+          },
+          "sha256": "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+        }
+      ],
+      "turns": [
+        {
+          "round": 1,
+          "turn_id": 1,
+          "started_at": "2026-11-22T18:45:13+08:00",
+          "finished_at": "2026-11-22T18:45:22+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 0,
+              "payload_sha256": "c8693ee24a61e622f95368b1f8458ef5c7a62521a87847fd48404f499b662ef8",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 2,
+          "turn_id": 2,
+          "started_at": "2026-11-22T18:45:24+08:00",
+          "finished_at": "2026-11-22T18:45:34+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 3,
+              "payload_sha256": "40f5a2f12e8054787e21a4f3c94c762d22888dd875cd3260c99bcbbe5217fa75",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 3,
+          "turn_id": 3,
+          "started_at": "2026-11-22T18:45:36+08:00",
+          "finished_at": "2026-11-22T18:45:45+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 6,
+              "payload_sha256": "3c745124a3a43f99e33f92fc9d2f3e78b0de5094177e159923504ecd4292f655",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 4,
+          "turn_id": 4,
+          "started_at": "2026-11-22T18:45:47+08:00",
+          "finished_at": "2026-11-22T18:45:55+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 9,
+              "payload_sha256": "a827001c0f9539e5688a2e4f1059c1e49111884bdf99abe48821920463c0c7a6",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 5,
+          "turn_id": 5,
+          "started_at": "2026-11-22T18:45:59+08:00",
+          "finished_at": "2026-11-22T18:46:06+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 12,
+              "payload_sha256": "db20308af1588251693cf77dcce1610373f4f426b57587de0ff07d42f0e6afa7",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 6,
+          "turn_id": 6,
+          "started_at": "2026-11-22T18:46:09+08:00",
+          "finished_at": "2026-11-22T18:46:21+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 14,
+              "payload_sha256": "ab5fcdcb9cc6dfaf17bae2c15b518451849e8111c5dd31bea6ea0f161bdb8d53",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 7,
+          "turn_id": 7,
+          "started_at": "2026-11-22T18:46:23+08:00",
+          "finished_at": "2026-11-22T18:46:33+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 17,
+              "payload_sha256": "a2f39066c4631029371f12bc5578f9a14a5a9258b20d14033a989f03920743b9",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 8,
+          "turn_id": 8,
+          "started_at": "2026-11-22T18:46:36+08:00",
+          "finished_at": "2026-11-22T18:46:48+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 20,
+              "payload_sha256": "d5d9d1214d6f882b48f4afe893941738b3ce0f92da850d84c75ad7c6a4965a66",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 9,
+          "turn_id": 9,
+          "started_at": "2026-11-22T18:46:52+08:00",
+          "finished_at": "2026-11-22T18:47:04+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 23,
+              "payload_sha256": "49f27ab0f7a10ff4f0b094b673a9ea5ac86cf2d72c3dc5ee37d597118454d65f",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 10,
+          "turn_id": 10,
+          "started_at": "2026-11-22T18:47:10+08:00",
+          "finished_at": "2026-11-22T18:47:19+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 26,
+              "payload_sha256": "182d135a44cbc83a770dbba2d17d24891eeb82f5a2465a6a563e75beabbec464",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        }
+      ]
+    },
+    {
+      "scene": "S4",
+      "condition": "P1",
+      "session_id": "67b46d28-2a99-4cd6-b541-0216189ce5b4",
+      "created_at": "2026-11-22T18:59:45+08:00",
+      "completed_turns": 10,
+      "instructions": [
+        {
+          "slot": "Supplement",
+          "role": "developer",
+          "reference": {
+            "id": "67875891-d063-495f-bccc-4d6349df323a",
+            "version": 1
+          },
+          "sha256": "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660"
+        },
+        {
+          "slot": "Collaboration",
+          "role": "developer",
+          "reference": {
+            "id": "agentelier.collaboration.explicit_request_only",
+            "version": 2
+          },
+          "sha256": "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+        }
+      ],
+      "turns": [
+        {
+          "round": 1,
+          "turn_id": 1,
+          "started_at": "2026-11-22T18:59:47+08:00",
+          "finished_at": "2026-11-22T18:59:57+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 0,
+              "payload_sha256": "18c0f7a6a9efc01f72b287172b1448902cfc6dd677c029e04bcb02a76bbb71db",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 2,
+          "turn_id": 2,
+          "started_at": "2026-11-22T19:00:00+08:00",
+          "finished_at": "2026-11-22T19:00:07+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 3,
+              "payload_sha256": "b065ead514272cc1cd51cfe717ab18b5749c97036dbfabed2c40149000b24c7f",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 3,
+          "turn_id": 3,
+          "started_at": "2026-11-22T19:00:11+08:00",
+          "finished_at": "2026-11-22T19:00:22+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 6,
+              "payload_sha256": "e41465737b94e6b00829268770dabfbddae6a0d9998968bccf2c72ad039e06b8",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 4,
+          "turn_id": 4,
+          "started_at": "2026-11-22T19:00:24+08:00",
+          "finished_at": "2026-11-22T19:00:34+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 9,
+              "payload_sha256": "58b74629c4a92b3d3e97a13019890048aef9d0f7e5822ca3160c721c4eb71ac9",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 5,
+          "turn_id": 5,
+          "started_at": "2026-11-22T19:00:37+08:00",
+          "finished_at": "2026-11-22T19:00:43+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 12,
+              "payload_sha256": "e8959760d7c06a94702d354f59682c56fa47ec826b6d9f333640acdf365a5986",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 6,
+          "turn_id": 6,
+          "started_at": "2026-11-22T19:00:46+08:00",
+          "finished_at": "2026-11-22T19:00:55+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 15,
+              "payload_sha256": "8aeb399e4fd5704c9b0785b05ede441362908bae53bc274d477bc94efd6ec8fd",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 7,
+          "turn_id": 7,
+          "started_at": "2026-11-22T19:00:59+08:00",
+          "finished_at": "2026-11-22T19:01:09+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 18,
+              "payload_sha256": "2e39c7e99a051405d8206fdf5f4034aaadc2dc7547787c6367e16e258d5ae20c",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 8,
+          "turn_id": 8,
+          "started_at": "2026-11-22T19:01:13+08:00",
+          "finished_at": "2026-11-22T19:01:29+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 21,
+              "payload_sha256": "846ff728f27de024736cec7a5fd725f0f43b9c2d903d460230c3431cdee3f620",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 9,
+          "turn_id": 9,
+          "started_at": "2026-11-22T19:01:32+08:00",
+          "finished_at": "2026-11-22T19:01:46+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 24,
+              "payload_sha256": "59686183a6c6c0e0f2992e8f721379f0ecbd12a7aedfa4abec7352b931ca8b84",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 10,
+          "turn_id": 10,
+          "started_at": "2026-11-22T19:01:51+08:00",
+          "finished_at": "2026-11-22T19:02:01+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 27,
+              "payload_sha256": "f8c57a91e30c3c027d948c7cd5919cb3a326fd1169653cfaabaddc4f08b7d3e9",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        }
+      ]
+    },
+    {
+      "scene": "S5",
+      "condition": "A0",
+      "session_id": "47df7ff9-8ad3-4193-8fdc-be875a402862",
+      "created_at": "2026-11-22T18:47:24+08:00",
+      "completed_turns": 10,
+      "instructions": [
+        {
+          "slot": "Collaboration",
+          "role": "developer",
+          "reference": {
+            "id": "agentelier.collaboration.explicit_request_only",
+            "version": 2
+          },
+          "sha256": "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+        }
+      ],
+      "turns": [
+        {
+          "round": 1,
+          "turn_id": 1,
+          "started_at": "2026-11-22T18:47:26+08:00",
+          "finished_at": "2026-11-22T18:47:34+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 0,
+              "payload_sha256": "fb3230b99a871f5091eeadf193b6ff837419a70530003ef0dd601340d11a7974",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 2,
+          "turn_id": 2,
+          "started_at": "2026-11-22T18:47:36+08:00",
+          "finished_at": "2026-11-22T18:47:44+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 3,
+              "payload_sha256": "1f0405f38ddffd1164ebe4fdda36bbcadc2a171f7c2c62e2958f817f442d8bd1",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 3,
+          "turn_id": 3,
+          "started_at": "2026-11-22T18:47:47+08:00",
+          "finished_at": "2026-11-22T18:47:54+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 6,
+              "payload_sha256": "e297acfc42ba17318a86f74630d3dac971d72b0e2bece8a43985a56e4cff8d5b",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 4,
+          "turn_id": 4,
+          "started_at": "2026-11-22T18:47:56+08:00",
+          "finished_at": "2026-11-22T18:48:04+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 9,
+              "payload_sha256": "127180d0644440ceb8c9c548fffcc589c02ebc748681183023826e09d764b112",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 5,
+          "turn_id": 5,
+          "started_at": "2026-11-22T18:48:07+08:00",
+          "finished_at": "2026-11-22T18:48:14+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 12,
+              "payload_sha256": "2599c0060a1597d06ba3af79a407f3ffa4f2f21bbaf4f8d70345e2566a14203f",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 6,
+          "turn_id": 6,
+          "started_at": "2026-11-22T18:48:17+08:00",
+          "finished_at": "2026-11-22T18:48:29+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 15,
+              "payload_sha256": "a4532e0ed474bd51ef1c261cf6463ee90b4498ea494dadb67d8b01fc45e4020e",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 7,
+          "turn_id": 7,
+          "started_at": "2026-11-22T18:48:31+08:00",
+          "finished_at": "2026-11-22T18:48:40+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 18,
+              "payload_sha256": "89ca686774cc3b704b667959160dba5c3ec85b58d3b255dab1102d02652f51ca",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 8,
+          "turn_id": 8,
+          "started_at": "2026-11-22T18:48:43+08:00",
+          "finished_at": "2026-11-22T18:48:53+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 21,
+              "payload_sha256": "bf1dc4a707954e0a360e720eae34445e9524e2df1179159422c3c83eeaec9dd5",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 9,
+          "turn_id": 9,
+          "started_at": "2026-11-22T18:48:57+08:00",
+          "finished_at": "2026-11-22T18:49:06+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 24,
+              "payload_sha256": "377055f0934a08cfd8fcc2becc7fd13ba2636fa6fb3eceda4c2c710c47f0c025",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 10,
+          "turn_id": 10,
+          "started_at": "2026-11-22T18:49:10+08:00",
+          "finished_at": "2026-11-22T18:49:20+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 27,
+              "payload_sha256": "066818e0d19df4f807556ab8c780a8bf9bf636997f0d84d10e9b1e6f31c7ccfa",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        }
+      ]
+    },
+    {
+      "scene": "S5",
+      "condition": "P1",
+      "session_id": "1e5d09ca-f676-40d3-8527-70d559ee2383",
+      "created_at": "2026-11-22T19:02:07+08:00",
+      "completed_turns": 10,
+      "instructions": [
+        {
+          "slot": "Supplement",
+          "role": "developer",
+          "reference": {
+            "id": "67875891-d063-495f-bccc-4d6349df323a",
+            "version": 1
+          },
+          "sha256": "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660"
+        },
+        {
+          "slot": "Collaboration",
+          "role": "developer",
+          "reference": {
+            "id": "agentelier.collaboration.explicit_request_only",
+            "version": 2
+          },
+          "sha256": "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+        }
+      ],
+      "turns": [
+        {
+          "round": 1,
+          "turn_id": 1,
+          "started_at": "2026-11-22T19:02:09+08:00",
+          "finished_at": "2026-11-22T19:02:14+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 0,
+              "payload_sha256": "339bbbcee98c6480a024fcfbf57ef0c91d17832badce11642cde2c2aceb6fbd1",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 2,
+          "turn_id": 2,
+          "started_at": "2026-11-22T19:02:17+08:00",
+          "finished_at": "2026-11-22T19:02:29+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 2,
+              "payload_sha256": "272d711f926168e8f129e3759278f1db963d37b222081b8a78d5ba68cfff7df1",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 3,
+          "turn_id": 3,
+          "started_at": "2026-11-22T19:02:31+08:00",
+          "finished_at": "2026-11-22T19:02:38+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 5,
+              "payload_sha256": "661023e1e2038858d24555385a57334d20a314d3165d9656a37a659c69952f96",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 4,
+          "turn_id": 4,
+          "started_at": "2026-11-22T19:02:40+08:00",
+          "finished_at": "2026-11-22T19:02:48+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 7,
+              "payload_sha256": "05ee88845f341d988461ef0148e22a5da1da88e616baf770785e03d656e3c8e7",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 5,
+          "turn_id": 5,
+          "started_at": "2026-11-22T19:02:50+08:00",
+          "finished_at": "2026-11-22T19:03:01+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 10,
+              "payload_sha256": "b6cd59a0b7ced51ed8e5042029b231824f5c5fd8c51572caf9909d74a097739f",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 6,
+          "turn_id": 6,
+          "started_at": "2026-11-22T19:03:04+08:00",
+          "finished_at": "2026-11-22T19:03:12+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 13,
+              "payload_sha256": "cc73b6288323461969f4f6b36181bbb7a1d0bbd4679e3d6818b2979eeed81ad5",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 7,
+          "turn_id": 7,
+          "started_at": "2026-11-22T19:03:15+08:00",
+          "finished_at": "2026-11-22T19:03:26+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 16,
+              "payload_sha256": "383438c39722dafabf5382be564dbe472db2b40118785d25e1391e6482c30cee",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 8,
+          "turn_id": 8,
+          "started_at": "2026-11-22T19:03:29+08:00",
+          "finished_at": "2026-11-22T19:03:40+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 19,
+              "payload_sha256": "5641cbfc0cb97fa32290fba34cf6538cf10967950327bbd640b998dc0202942d",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 9,
+          "turn_id": 9,
+          "started_at": "2026-11-22T19:03:42+08:00",
+          "finished_at": "2026-11-22T19:03:57+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 22,
+              "payload_sha256": "73c2bdfccf87cb8c702473816cdddb88d3d3a05850a7e54cc0704930c926e219",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 10,
+          "turn_id": 10,
+          "started_at": "2026-11-22T19:04:01+08:00",
+          "finished_at": "2026-11-22T19:04:14+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 25,
+              "payload_sha256": "696845eab68879f5563c4b2141dabdb288421fcd5ad2349b3c5f1e4361df520c",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        }
+      ]
+    },
+    {
+      "scene": "S6",
+      "condition": "A0",
+      "session_id": "6a6f3d48-81cc-4aa1-b936-181cb7c3194c",
+      "created_at": "2026-11-22T18:49:24+08:00",
+      "completed_turns": 10,
+      "instructions": [
+        {
+          "slot": "Collaboration",
+          "role": "developer",
+          "reference": {
+            "id": "agentelier.collaboration.explicit_request_only",
+            "version": 2
+          },
+          "sha256": "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+        }
+      ],
+      "turns": [
+        {
+          "round": 1,
+          "turn_id": 1,
+          "started_at": "2026-11-22T18:49:26+08:00",
+          "finished_at": "2026-11-22T18:49:34+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 0,
+              "payload_sha256": "7814814ee383d1cdc4fe2550dc42cca232290d2c7227195ddc4568466af1f916",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 2,
+          "turn_id": 2,
+          "started_at": "2026-11-22T18:49:36+08:00",
+          "finished_at": "2026-11-22T18:49:45+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 2,
+              "payload_sha256": "e029a2dc4366476e7d9961d63acc851c8cdaa5c30423fc8e294a0f2dfcb59e6d",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 3,
+          "turn_id": 3,
+          "started_at": "2026-11-22T18:49:47+08:00",
+          "finished_at": "2026-11-22T18:49:58+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 5,
+              "payload_sha256": "192df91d1208a9bd798f6bbde3928fdfd699928df1dc09daab13abf97716617f",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 4,
+          "turn_id": 4,
+          "started_at": "2026-11-22T18:50:00+08:00",
+          "finished_at": "2026-11-22T18:50:09+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 8,
+              "payload_sha256": "1be737eadd930b1733efbba24d3d0712abc0fb136da38a2a926f2611c9392424",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 5,
+          "turn_id": 5,
+          "started_at": "2026-11-22T18:50:11+08:00",
+          "finished_at": "2026-11-22T18:50:23+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 11,
+              "payload_sha256": "dce0827256fcaae95979ea2e17170a08612b0b58f9bba14d73f3edb269cfd93b",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 6,
+          "turn_id": 6,
+          "started_at": "2026-11-22T18:50:25+08:00",
+          "finished_at": "2026-11-22T18:50:35+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 14,
+              "payload_sha256": "0e6f294ad1149c397df2dc77d4bcfbcd6f736832d2f49b87bdbc6cc2d0ee5f11",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 7,
+          "turn_id": 7,
+          "started_at": "2026-11-22T18:50:37+08:00",
+          "finished_at": "2026-11-22T18:50:47+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 17,
+              "payload_sha256": "4d65d34c5fdc183c647907574ced8d113601955df09aff19953cf60f92283da7",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 8,
+          "turn_id": 8,
+          "started_at": "2026-11-22T18:50:50+08:00",
+          "finished_at": "2026-11-22T18:51:00+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 20,
+              "payload_sha256": "4125134027970429859c26df01e47118cad793857471ad40dee659a6857fecca",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 9,
+          "turn_id": 9,
+          "started_at": "2026-11-22T18:51:03+08:00",
+          "finished_at": "2026-11-22T18:51:17+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 23,
+              "payload_sha256": "daac3ad087a23dac22066968311f248f3424f7bd0bdc6be7510c1fd76d5081e7",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 10,
+          "turn_id": 10,
+          "started_at": "2026-11-22T18:51:20+08:00",
+          "finished_at": "2026-11-22T18:51:26+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 26,
+              "payload_sha256": "ff6ffdfb9ae7362aa2b4af6213d81717f9ca93a5e5486105986dd4d2cdf10df2",
+              "developer_sha256": [
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        }
+      ]
+    },
+    {
+      "scene": "S6",
+      "condition": "P1",
+      "session_id": "e5ac8612-095f-4577-8ca8-23214a19d001",
+      "created_at": "2026-11-22T19:04:19+08:00",
+      "completed_turns": 10,
+      "instructions": [
+        {
+          "slot": "Supplement",
+          "role": "developer",
+          "reference": {
+            "id": "67875891-d063-495f-bccc-4d6349df323a",
+            "version": 1
+          },
+          "sha256": "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660"
+        },
+        {
+          "slot": "Collaboration",
+          "role": "developer",
+          "reference": {
+            "id": "agentelier.collaboration.explicit_request_only",
+            "version": 2
+          },
+          "sha256": "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+        }
+      ],
+      "turns": [
+        {
+          "round": 1,
+          "turn_id": 1,
+          "started_at": "2026-11-22T19:04:22+08:00",
+          "finished_at": "2026-11-22T19:04:29+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 0,
+              "payload_sha256": "714354e2ab9751bd37b1a3509e124db1e76d2410bcc0d2713ede2dd0a309a10e",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 2,
+          "turn_id": 2,
+          "started_at": "2026-11-22T19:04:31+08:00",
+          "finished_at": "2026-11-22T19:04:39+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 2,
+              "payload_sha256": "72b2b2d986ecbec11f08e756e671a9921ea933b97a4273be0e8b826c9517d777",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 3,
+          "turn_id": 3,
+          "started_at": "2026-11-22T19:04:41+08:00",
+          "finished_at": "2026-11-22T19:04:51+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 5,
+              "payload_sha256": "9d1d170d1d498b92abe3d34583bdf29be0cd1c708a2b6baff037d3baaeab3712",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 4,
+          "turn_id": 4,
+          "started_at": "2026-11-22T19:04:54+08:00",
+          "finished_at": "2026-11-22T19:05:05+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 8,
+              "payload_sha256": "1a520e616f3a7dde84d898d812a84bcce51f13f7e1dbfef955ff8ba08439244d",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 5,
+          "turn_id": 5,
+          "started_at": "2026-11-22T19:05:07+08:00",
+          "finished_at": "2026-11-22T19:05:17+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 11,
+              "payload_sha256": "23ea4e8392e8bca45bcc346068204a1396f8d983662a5caaa53c15d181ed4307",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 6,
+          "turn_id": 6,
+          "started_at": "2026-11-22T19:05:19+08:00",
+          "finished_at": "2026-11-22T19:05:30+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 14,
+              "payload_sha256": "8b12e1d3366ab74e1ef64009cbf4b0ad82630fd0a7f5c98fec22515f1213816a",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 7,
+          "turn_id": 7,
+          "started_at": "2026-11-22T19:05:32+08:00",
+          "finished_at": "2026-11-22T19:05:40+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 17,
+              "payload_sha256": "9c0524f1b80cb559fc655f38b3b35ef2480c983a79dbffe69028188e8f1ea641",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 8,
+          "turn_id": 8,
+          "started_at": "2026-11-22T19:05:44+08:00",
+          "finished_at": "2026-11-22T19:05:56+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 20,
+              "payload_sha256": "eae211440d8808efc5f2987066788eb55a8e0397b95229e15558da9c684a7063",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 9,
+          "turn_id": 9,
+          "started_at": "2026-11-22T19:06:00+08:00",
+          "finished_at": "2026-11-22T19:06:14+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 23,
+              "payload_sha256": "30f247ea290e4d2fdf92ffe8c2f5594b2783e5b8dc8366d52e8b090686522345",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        },
+        {
+          "round": 10,
+          "turn_id": 10,
+          "started_at": "2026-11-22T19:06:22+08:00",
+          "finished_at": "2026-11-22T19:06:30+08:00",
+          "status": "Completed",
+          "requests": [
+            {
+              "request": 1,
+              "route": "codex",
+              "http_status": 200,
+              "response_accepted": true,
+              "window": 0,
+              "history_position": 26,
+              "payload_sha256": "f8630a2f65337a4c4ce7d729188404b952a68a5d6f4122e9ac5f18a3f9ad7f6a",
+              "developer_sha256": [
+                "2da9eeb9df6ecb5ed0fa521a19ab1f8182d6e9c8960c207de404a9ef5c61e660",
+                "348856c8c6b4d9bfde1c3feee08cfc1274ded4a06e18a6a02f321c4e04b29f06"
+              ],
+              "memory_sha256": "1eb95b02a4b31435f5e06b65893d43923492e947d3826144953a037344abf4ad"
+            }
+          ],
+          "tool_calls": 0
+        }
+      ]
+    }
+  ]
+}
