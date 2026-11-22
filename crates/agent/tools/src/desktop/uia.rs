@@ -1,7 +1,10 @@
 mod elements;
+mod native;
+mod properties;
 mod tree;
 
 pub(crate) use elements::RootSummary;
+pub(crate) use properties::CacheRequest;
 pub(crate) use tree::{TreePage, TreeRequest};
 
 use crate::ToolFailure;
@@ -13,7 +16,9 @@ use tokio_util::sync::CancellationToken;
 use uiautomation::UIAutomation;
 use uiautomation::errors::Error as UiaError;
 use windows::Win32::Foundation::E_ACCESSDENIED;
-use windows::Win32::UI::Accessibility::{UIA_E_ELEMENTNOTAVAILABLE, UIA_E_PROXYASSEMBLYNOTLOADED};
+use windows::Win32::UI::Accessibility::{
+    UIA_E_ELEMENTNOTAVAILABLE, UIA_E_PROXYASSEMBLYNOTLOADED, UIA_E_TIMEOUT,
+};
 use winsafe::{co, guard::CoUninitializeGuard};
 
 const REQUEST_CAPACITY: usize = 16;
@@ -212,6 +217,7 @@ fn provider_error(error: UiaError) -> ToolFailure {
     let code = match error.code().cast_unsigned() {
         UIA_E_ELEMENTNOTAVAILABLE => "uia_element_unavailable",
         UIA_E_PROXYASSEMBLYNOTLOADED => "uia_provider_unavailable",
+        UIA_E_TIMEOUT => "uia_timeout",
         _ if error.result() == Some(E_ACCESSDENIED) => "uia_provider_unavailable",
         _ => "uia_provider_error",
     };

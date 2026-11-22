@@ -97,6 +97,7 @@ Agentelier 根 Workspace 当前使用 `windows = "0.62"`；`uiautomation` 0.25.3
 | Feature | 用途 | 本次是否需要 |
 |---|---|---|
 | `control` | 控件封装；同时启用 `pattern` | 是 |
+| `pattern` | Control Pattern 枚举与封装 | 属性预取和 Pattern 查询直接使用 |
 | `event` | UIA 事件注册与处理 | 是 |
 | `input` | 库自身键鼠模拟 | 0.25.3 的核心模块直接导入了 `inputs::MouseButton`。该 Feature 还需要 Tools 显式启用 `windows/Win32_UI_WindowsAndMessaging` |
 | `screenshot` | 库自身截图 | 否，已有 Desktop Driver |

@@ -14,6 +14,8 @@ UIA 能力通过现有 `computer_execute` 暴露给模型。Rhai 继续负责组
 | 控件树 | `uia_tree(element_ref, view, depth, limit, cursor)` | 获取有界树页 |
 | 树导航 | `uia_tree_related(element_ref, view, relation)` | 查询父、首子、前一兄弟或后一兄弟 |
 | 元素属性 | `uia_properties(element_ref, property_names)` | 读取指定属性 |
+| 属性缓存 | `uia_prefetch(element_ref, property_names, pattern_names, view, scope)` | 按选定视图和范围批量预取属性与 Pattern |
+| 读取缓存 | `uia_cached_properties(element_ref, property_names)` | 读取已预取的属性 |
 | 元素查找 | `uia_find(root_ref, conditions, view, scope, limit)` | 按条件查找 |
 | Pattern 能力 | `uia_patterns(element_ref)` | 返回当前元素支持的 Pattern |
 | 元素刷新 | `uia_refresh_element(element_ref)` | 重新读取当前元素状态 |

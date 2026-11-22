@@ -65,6 +65,10 @@ Agentelier 应在 UIA Worker 中实现有界 DFS 遍历。请求至少包含：
 
 按需属性可扩展到 IsPassword、IsControlElement、IsContentElement、ItemStatus、ItemType、LabeledBy、ProviderDescription、HeadingLevel 和 IsDialog 等。缺失属性应表达为缺失/不可用，不把它伪装成空字符串或默认值。
 
+属性读取使用 Windows 的 Current/Cached Ex 接口。Provider 未提供的属性以 Rhai 的 `()` 表示，Provider 返回的空字符串和 `false` 原样保留。结果的 `source` 表明数据来自 `live` 还是 `cache`。读取未预取的属性返回 `uia_cache_unavailable`。
+
+预取支持 `element`、`children`、`descendants` 和 `subtree`。Worker 按所选视图选取至多 32 个目标，对每个目标通过一个 Cache Request 批量加载属性和所请求的 Pattern。结果的 `cached_refs` 可直接用于后续缓存读取，超出数量或深度时设置 `truncated`。再次预取单个元素会替换该引用的缓存。实际可用的 Pattern 由 `uia_patterns(ref)` 查询。
+
 ## 查找条件
 
 `UIAutomation` 提供 `create_property_condition`、`create_and_condition`、`create_or_condition` 和 `create_not_condition`；`UIElement` 提供 `find_first`、`find_all` 及 BuildCache 变体。可用条件组合 Name、AutomationId、ControlType、ClassName、ProcessId 等属性。

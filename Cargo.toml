@@ -133,7 +133,7 @@ features = [
 ]
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 warnings = "deny"
 
 [workspace.lints.clippy]

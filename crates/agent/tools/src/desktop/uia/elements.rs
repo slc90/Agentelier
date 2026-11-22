@@ -1,3 +1,4 @@
+use super::properties::CachedElement;
 use super::{RequestControl, Runtime, Worker, provider_error};
 use crate::{
     ToolFailure,
@@ -22,6 +23,18 @@ pub(super) struct Element {
     pub(super) element: UIElement,
     pub(super) window: Option<WindowId>,
     pub(super) is_root: bool,
+    pub(super) cache: Option<CachedElement>,
+}
+
+impl Element {
+    pub(super) fn new(element: UIElement, window: Option<WindowId>, is_root: bool) -> Self {
+        Self {
+            element,
+            window,
+            is_root,
+            cache: None,
+        }
+    }
 }
 
 pub(crate) struct RootSummary {
@@ -87,11 +100,7 @@ impl Worker {
         }
         .map_err(provider_error)?;
         let id = Uuid::new_v4();
-        let entry = Element {
-            element,
-            window,
-            is_root: true,
-        };
+        let entry = Element::new(element, window, true);
         let summary = summarize(id, &entry, control)?;
         self.elements.insert(id, entry)?;
         Ok(summary)
@@ -103,14 +112,23 @@ impl Registry {
         self.entries.get(&id).ok_or_else(element_unavailable)
     }
 
+    pub(super) fn get_mut(&mut self, id: Uuid) -> Result<&mut Element, ToolFailure> {
+        self.entries.get_mut(&id).ok_or_else(element_unavailable)
+    }
+
     pub(super) fn insert(&mut self, id: Uuid, element: Element) -> Result<(), ToolFailure> {
-        if self.entries.len() >= MAX_REFERENCES {
+        self.reserve(1)?;
+        self.entries.insert(id, element);
+        Ok(())
+    }
+
+    pub(super) fn reserve(&self, additional: usize) -> Result<(), ToolFailure> {
+        if additional > MAX_REFERENCES.saturating_sub(self.entries.len()) {
             return Err(ToolFailure::new(
                 "uia_reference_limit",
                 "UIA 会话元素引用已达上限",
             ));
         }
-        self.entries.insert(id, element);
         Ok(())
     }
 }

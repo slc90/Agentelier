@@ -1,6 +1,6 @@
 use super::{ScriptResult, fields, with_run};
 use crate::ToolFailure;
-use crate::desktop::uia::{RootSummary, TreePage, TreeRequest};
+use crate::desktop::uia::{CacheRequest, RootSummary, TreePage, TreeRequest};
 use rhai::{Array, Dynamic, Engine, INT, ImmutableString, Map, NativeCallContext};
 
 pub(super) fn register(engine: &mut Engine) {
@@ -11,7 +11,11 @@ pub(super) fn register(engine: &mut Engine) {
         .register_fn("uia_root_info", root_info)
         .register_fn("uia_tree", default_tree)
         .register_fn("uia_tree", tree)
-        .register_fn("uia_tree_related", tree_related);
+        .register_fn("uia_tree_related", tree_related)
+        .register_fn("uia_properties", properties)
+        .register_fn("uia_cached_properties", cached_properties)
+        .register_fn("uia_prefetch", prefetch)
+        .register_fn("uia_patterns", patterns);
 }
 
 fn status(ctx: NativeCallContext<'_>) -> ScriptResult<bool> {
@@ -151,4 +155,89 @@ fn tree_fields(page: TreePage) -> Map {
         ("cursor", page.cursor.map_or(Dynamic::UNIT, Dynamic::from)),
         ("error", issue),
     ])
+}
+
+fn properties(
+    ctx: NativeCallContext<'_>,
+    reference: ImmutableString,
+    names: Array,
+) -> ScriptResult<Dynamic> {
+    read_properties(ctx, reference, names, false)
+}
+
+fn cached_properties(
+    ctx: NativeCallContext<'_>,
+    reference: ImmutableString,
+    names: Array,
+) -> ScriptResult<Dynamic> {
+    read_properties(ctx, reference, names, true)
+}
+
+fn read_properties(
+    ctx: NativeCallContext<'_>,
+    reference: ImmutableString,
+    names: Array,
+    cached: bool,
+) -> ScriptResult<Dynamic> {
+    with_run(ctx, |run| {
+        run.uia
+            .properties(
+                &reference,
+                &strings(names)?,
+                cached,
+                &run.control.cancel,
+                run.control.deadline,
+            )
+            .and_then(plain_data)
+    })
+}
+
+fn prefetch(
+    ctx: NativeCallContext<'_>,
+    reference: ImmutableString,
+    property_names: Array,
+    pattern_names: Array,
+    view: ImmutableString,
+    scope: ImmutableString,
+) -> ScriptResult<Dynamic> {
+    with_run(ctx, |run| {
+        let request = CacheRequest::new(
+            &strings(property_names)?,
+            &strings(pattern_names)?,
+            &view,
+            &scope,
+        )?;
+        run.uia
+            .prefetch(
+                &reference,
+                request,
+                &run.control.cancel,
+                run.control.deadline,
+            )
+            .and_then(plain_data)
+    })
+}
+
+fn patterns(ctx: NativeCallContext<'_>, reference: ImmutableString) -> ScriptResult<Dynamic> {
+    with_run(ctx, |run| {
+        run.uia
+            .patterns(&reference, &run.control.cancel, run.control.deadline)
+            .and_then(plain_data)
+    })
+}
+
+fn strings(items: Array) -> Result<Vec<String>, ToolFailure> {
+    items
+        .into_iter()
+        .map(|item| {
+            item.try_cast::<ImmutableString>()
+                .map(|name| name.into_owned())
+                .ok_or_else(|| ToolFailure::new("uia_invalid_argument", "名称列表的值须为字符串"))
+        })
+        .collect()
+}
+
+fn plain_data(value: serde_json::Value) -> Result<Dynamic, ToolFailure> {
+    rhai::serde::to_dynamic(value)
+        .map_err(|error| ToolFailure::new("uia_result_conversion_failed", error.to_string()))
 }

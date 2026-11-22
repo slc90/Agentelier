@@ -1,0 +1,30 @@
+use super::provider_error;
+use crate::ToolFailure;
+use uiautomation::{UIAutomation, UIElement, types::UIProperty, variants::Variant};
+use windows::Win32::UI::Accessibility::{IUIAutomation, IUIAutomationElement};
+
+#[allow(unsafe_code)]
+pub(super) fn property(
+    automation: &UIAutomation,
+    element: &UIElement,
+    property: UIProperty,
+    cached: bool,
+) -> Result<Option<Variant>, ToolFailure> {
+    let raw: &IUIAutomationElement = element.as_ref();
+    // SAFETY: The initialized MTA worker owns both interfaces and keeps them alive for the calls.
+    // The binding owns the out parameter until success, then Variant takes ownership.
+    let value = unsafe {
+        if cached {
+            raw.GetCachedPropertyValueEx(property.into(), true)
+        } else {
+            raw.GetCurrentPropertyValueEx(property.into(), true)
+        }
+    }
+    .map(Variant::from)
+    .map_err(|error| provider_error(error.into()))?;
+    let automation: &IUIAutomation = automation.as_ref();
+    // SAFETY: The VARIANT remains initialized and borrowed for this call on the same worker.
+    let missing = unsafe { automation.CheckNotSupported(value.as_ref()) }
+        .map_err(|error| provider_error(error.into()))?;
+    Ok((!missing.as_bool()).then_some(value))
+}

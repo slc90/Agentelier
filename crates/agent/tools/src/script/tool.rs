@@ -22,6 +22,8 @@ const DESCRIPTION: &str = concat!(
     "Use uia_root_info(ref) to re-read it. Window ids come from windows(). ",
     "uia_tree(ref) reads a bounded Control View page. Use uia_tree(ref,view,max_depth,max_nodes,cursor), with raw/control/content, depth 0..32, node limit 1..64, and cursor () for the first page. ",
     "Reuse the same root, view and depth with the returned cursor. uia_tree_related(ref,view,relation) reads parent, first_child, next_sibling, or previous_sibling. ",
+    "uia_properties(ref,names) reads live properties; pass [] for common properties. uia_patterns(ref) lists provider-supported patterns. ",
+    "uia_prefetch(ref,property_names,pattern_names,view,scope) prepares caches for element, children, descendants, or subtree, returning cached_refs. Use uia_cached_properties(ref,names) to read them. ",
     "Rhai try/catch can read error.code and error.message. Inputs held by the script are released when the call ends. ",
     "Each admitted script has a 30 second execution deadline."
 );
@@ -69,7 +71,7 @@ pub(crate) async fn execute(
         Err(error) => {
             let status = match error.code {
                 "cancelled" => ToolStatus::Cancelled,
-                "timeout" => ToolStatus::TimedOut,
+                "timeout" | "uia_timeout" => ToolStatus::TimedOut,
                 "desktop_unconfirmed" => ToolStatus::NotExecuted,
                 "desktop_input_cleanup" | "script_worker_failed" | "uia_worker_failed" => {
                     ToolStatus::Unconfirmed

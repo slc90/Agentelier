@@ -6,6 +6,10 @@
 
 具体禁止项由 Workspace Lint 配置执行。
 
+## Windows 原生接口
+
+Workspace 默认拒绝 `unsafe`。UI Automation 缺少可用的安全封装时，允许在 MTA Worker 的原生接口调用处局部使用 `#[allow(unsafe_code)]`，并说明调用所依赖的线程、所有权或指针有效性条件。
+
 ## 错误处理与传播
 
 ### 错误语义

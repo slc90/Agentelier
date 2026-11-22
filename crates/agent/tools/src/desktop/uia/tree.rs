@@ -13,7 +13,7 @@ use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 use uiautomation::{
     UIAutomation, UIElement,
-    core::UITreeWalker,
+    core::{UICondition, UITreeWalker},
     errors::Error as UiaError,
     events::{CustomStructureChangedEventHandlerFn, UIStructureChangeEventHandler},
     types::TreeScope,
@@ -38,11 +38,20 @@ pub(crate) enum TreeView {
 }
 
 impl TreeView {
-    fn walker(self, automation: &UIAutomation) -> Result<UITreeWalker, ToolFailure> {
+    pub(super) fn walker(self, automation: &UIAutomation) -> Result<UITreeWalker, ToolFailure> {
         match self {
             Self::Raw => automation.get_raw_view_walker(),
             Self::Control => automation.get_control_view_walker(),
             Self::Content => automation.get_content_view_walker(),
+        }
+        .map_err(provider_error)
+    }
+
+    pub(super) fn filter(self, automation: &UIAutomation) -> Result<UICondition, ToolFailure> {
+        match self {
+            Self::Raw => automation.create_true_condition(),
+            Self::Control => automation.get_control_view_condition(),
+            Self::Content => automation.get_content_view_condition(),
         }
         .map_err(provider_error)
     }
@@ -290,11 +299,7 @@ impl Worker {
             return Ok(None);
         };
         let new_id = Uuid::new_v4();
-        let entry = Element {
-            element,
-            window: entry.window,
-            is_root: false,
-        };
+        let entry = Element::new(element, entry.window, false);
         let summary = summarize_node(new_id, &entry, control)?;
         if let Some(window) = entry.window {
             validate_window(window)?;
@@ -404,11 +409,7 @@ impl Cursor {
             } else {
                 Uuid::new_v4()
             };
-            let entry = Element {
-                element: element.clone(),
-                window: self.window,
-                is_root: false,
-            };
+            let entry = Element::new(element.clone(), self.window, false);
             let summary = summarize_node(id, &entry, control).map_err(|cause| self.issue(cause))?;
             if parent.is_some() {
                 registry
@@ -490,7 +491,9 @@ impl StructureWatch {
     }
 }
 
-fn neighbor(result: Result<UIElement, UiaError>) -> Result<Option<UIElement>, ToolFailure> {
+pub(super) fn neighbor(
+    result: Result<UIElement, UiaError>,
+) -> Result<Option<UIElement>, ToolFailure> {
     match result {
         Ok(element) => Ok(Some(element)),
         // windows-rs turns a successful null TreeWalker neighbor into Error::empty().

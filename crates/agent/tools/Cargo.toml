@@ -7,12 +7,12 @@ edition.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-rhai.workspace = true
+rhai = { workspace = true, features = ["serde"] }
 process-wrap.workspace = true
 win32job.workspace = true
 windows = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"] }
 winsafe = { workspace = true, features = ["dwm", "ole"] }
-uiautomation = { workspace = true, features = ["input", "event"] }
+uiautomation = { workspace = true, features = ["input", "event", "pattern"] }
 tokio.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true

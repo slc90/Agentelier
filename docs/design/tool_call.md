@@ -42,7 +42,7 @@ flowchart TD
 | write_stdin | 对同一会话的有效进程写入 stdin、读取新输出、EOF 或终止并回收 |
 | apply_patch | 通过严格 JSON 接收文本补丁，完整准备后逐文件提交并保留实际变化日志 |
 | view_image | 读取静态 PNG/JPEG，保存不可变图像并通过结构化工具结果交给模型 |
-| computer_execute | 通过 Rhai 操作 Windows 桌面，复用会话内脚本状态，支持 UI Automation 根元素和有界树遍历，返回文本和可选的最后一张截图 |
+| computer_execute | 通过 Rhai 操作 Windows 桌面，复用会话内脚本状态，支持 UI Automation 根元素、有界遍历及属性和 Pattern 查询，返回文本和可选的最后一张截图 |
 
 目录仍在会话创建时固定，模型声明与执行查找共用同一份定义。工作目录是路径基准，不构成沙箱。工具参数、取消、调用身份、批次处理、历史封闭和资源回收不随诊断退役改变。
 
