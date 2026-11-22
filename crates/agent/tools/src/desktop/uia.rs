@@ -1,12 +1,14 @@
 mod elements;
 mod find;
 mod native;
+mod patterns;
 mod properties;
 mod references;
 mod tree;
 
 pub(crate) use elements::RootSummary;
 pub(crate) use find::FindRequest;
+pub(crate) use patterns::{BasicAction, Expansion, SelectionChange};
 pub(crate) use properties::CacheRequest;
 pub(crate) use tree::{TreePage, TreeRequest};
 

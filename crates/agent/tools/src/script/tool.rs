@@ -26,6 +26,8 @@ const DESCRIPTION: &str = concat!(
     "uia_prefetch(ref,property_names,pattern_names,view,scope) prepares caches for element, children, descendants, or subtree, returning cached_refs. Use uia_cached_properties(ref,names) to read them. ",
     "uia_find(ref,conditions,view,scope,depth,node_limit,result_limit) matches Name, AutomationId, ClassName and ControlType. Combine keys with AND, use all/any arrays or not with a nested map, and set first:true only for an explicitly requested first match. ",
     "Keep element refs in Rhai variables across calls. uia_ref_info(ref) reads status and generation; uia_refresh_element(ref) verifies or uniquely rebinds a stale ref in its original scope. ",
+    "Use uia_invoke(ref), uia_value_get(ref), uia_value_set(ref,text), uia_toggle(ref,change), uia_range_value_get(ref), and uia_range_value_set(ref,number). ",
+    "Use uia_selection(ref) for the container, uia_select(ref,select/add/remove) for an item, and uia_expand_collapse(ref,state/expand/collapse). Patterns must be supported by the target provider. ",
     "Rhai try/catch can read error.code and error.message. Inputs held by the script are released when the call ends. ",
     "Each admitted script has a 30 second execution deadline."
 );

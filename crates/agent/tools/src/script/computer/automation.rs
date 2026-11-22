@@ -1,7 +1,10 @@
 use super::{ScriptResult, fields, with_run};
 use crate::ToolFailure;
-use crate::desktop::uia::{CacheRequest, FindRequest, RootSummary, TreePage, TreeRequest};
-use rhai::{Array, Dynamic, Engine, INT, ImmutableString, Map, NativeCallContext};
+use crate::desktop::uia::{
+    BasicAction, CacheRequest, Expansion, FindRequest, RootSummary, SelectionChange, TreePage,
+    TreeRequest,
+};
+use rhai::{Array, Dynamic, Engine, FLOAT, INT, ImmutableString, Map, NativeCallContext};
 
 pub(super) fn register(engine: &mut Engine) {
     engine
@@ -18,7 +21,87 @@ pub(super) fn register(engine: &mut Engine) {
         .register_fn("uia_patterns", patterns)
         .register_fn("uia_find", find)
         .register_fn("uia_ref_info", ref_info)
-        .register_fn("uia_refresh_element", refresh_element);
+        .register_fn("uia_refresh_element", refresh_element)
+        .register_fn(
+            "uia_invoke",
+            |ctx: NativeCallContext, id: ImmutableString| basic(ctx, id, Ok(BasicAction::Invoke)),
+        )
+        .register_fn(
+            "uia_value_get",
+            |ctx: NativeCallContext, id: ImmutableString| basic(ctx, id, Ok(BasicAction::ValueGet)),
+        )
+        .register_fn(
+            "uia_value_set",
+            |ctx: NativeCallContext, id: ImmutableString, value: ImmutableString| {
+                basic(ctx, id, Ok(BasicAction::ValueSet(value.into_owned())))
+            },
+        )
+        .register_fn(
+            "uia_toggle",
+            |ctx: NativeCallContext, id: ImmutableString| {
+                basic(ctx, id, Ok(BasicAction::Toggle { change: true }))
+            },
+        )
+        .register_fn(
+            "uia_toggle",
+            |ctx: NativeCallContext, id: ImmutableString, change: bool| {
+                basic(ctx, id, Ok(BasicAction::Toggle { change }))
+            },
+        )
+        .register_fn(
+            "uia_range_value_get",
+            |ctx: NativeCallContext, id: ImmutableString| basic(ctx, id, Ok(BasicAction::RangeGet)),
+        )
+        .register_fn(
+            "uia_range_value_set",
+            |ctx: NativeCallContext, id: ImmutableString, value: FLOAT| {
+                basic(ctx, id, Ok(BasicAction::RangeSet(value)))
+            },
+        )
+        .register_fn(
+            "uia_range_value_set",
+            |ctx: NativeCallContext, id: ImmutableString, value: INT| {
+                basic(ctx, id, Ok(BasicAction::RangeSet(value as FLOAT)))
+            },
+        )
+        .register_fn(
+            "uia_selection",
+            |ctx: NativeCallContext, id: ImmutableString| {
+                basic(ctx, id, Ok(BasicAction::Selection))
+            },
+        )
+        .register_fn(
+            "uia_select",
+            |ctx: NativeCallContext, id: ImmutableString, action: ImmutableString| {
+                basic(
+                    ctx,
+                    id,
+                    action.parse::<SelectionChange>().map(BasicAction::Select),
+                )
+            },
+        )
+        .register_fn(
+            "uia_expand_collapse",
+            |ctx: NativeCallContext, id: ImmutableString, action: ImmutableString| {
+                basic(
+                    ctx,
+                    id,
+                    action.parse::<Expansion>().map(BasicAction::ExpandCollapse),
+                )
+            },
+        );
+}
+
+fn basic(
+    ctx: NativeCallContext<'_>,
+    id: ImmutableString,
+    action: Result<BasicAction, ToolFailure>,
+) -> ScriptResult<Dynamic> {
+    with_run(ctx, |run| {
+        run.uia
+            .basic_pattern(&id, action?, &run.control.cancel, run.control.deadline)
+            .and_then(plain_data)
+    })
 }
 
 fn status(ctx: NativeCallContext<'_>) -> ScriptResult<bool> {

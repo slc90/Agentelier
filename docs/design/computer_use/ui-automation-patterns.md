@@ -56,6 +56,8 @@ Control Type 描述元素是什么类型；Control Pattern 描述元素提供什
 
 ### 基础交互
 
+基础操作结果包含 `ref`、`pattern`、`operation` 和 Provider 回读的 `data`。`uia_toggle(ref, false)` 仅读取状态，`uia_toggle(ref)` 切换后回读。选择项使用 `select`、`add` 或 `remove`，展开折叠使用 `state`、`expand` 或 `collapse`。Value 和 RangeValue 设置前检查只读状态，RangeValue 还检查 Provider 的范围。
+
 Invoke、Value、Toggle、RangeValue、Selection、SelectionItem 和 ExpandCollapse 是第一组模型高频操作。
 
 - Invoke 只表示 Provider 接受/完成 Invoke 调用，不推断业务流程已经完成。
