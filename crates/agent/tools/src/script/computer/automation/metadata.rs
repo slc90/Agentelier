@@ -7,6 +7,7 @@ use rhai::{Dynamic, Engine, INT, ImmutableString, NativeCallContext};
 
 pub(super) fn register(engine: &mut Engine) {
     engine
+        .register_fn("uia_object_model", object_model)
         .register_fn(
             "uia_legacy_accessible",
             |ctx: NativeCallContext, id: ImmutableString| {
@@ -84,6 +85,14 @@ pub(super) fn register(engine: &mut Engine) {
                 metadata(ctx, id, Ok(MetadataAction::Styles))
             },
         );
+}
+
+fn object_model(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Dynamic> {
+    with_run(ctx, |run| {
+        run.uia
+            .object_model(&id, &run.control.cancel, run.control.deadline)
+            .and_then(plain_data)
+    })
 }
 
 fn metadata(

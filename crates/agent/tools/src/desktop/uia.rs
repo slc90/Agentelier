@@ -4,6 +4,7 @@ mod grid;
 mod interaction;
 mod metadata;
 mod native;
+mod object_model;
 mod patterns;
 mod properties;
 mod references;

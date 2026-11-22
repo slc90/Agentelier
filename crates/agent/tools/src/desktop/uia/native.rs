@@ -4,9 +4,22 @@ use uiautomation::{
     UIAutomation, UIElement, errors::Error as UiaError, patterns::UIItemContainerPattern,
     types::UIProperty, variants::Variant,
 };
-use windows::Win32::UI::Accessibility::{
-    IUIAutomation, IUIAutomationElement, IUIAutomationItemContainerPattern,
+use windows::{
+    Win32::UI::Accessibility::{
+        IUIAutomation, IUIAutomationElement, IUIAutomationItemContainerPattern,
+        IUIAutomationObjectModelPattern,
+    },
+    core::IUnknown,
 };
+
+#[allow(unsafe_code)]
+pub(super) fn underlying_object_model(
+    pattern: &IUIAutomationObjectModelPattern,
+) -> Result<IUnknown, UiaError> {
+    // SAFETY: The Worker owns and calls the pattern on the initialized MTA. The binding
+    // initializes the output and retains the returned interface until the Worker drops it.
+    unsafe { pattern.GetUnderlyingObjectModel() }.map_err(UiaError::from)
+}
 
 #[allow(unsafe_code)]
 pub(super) fn property(

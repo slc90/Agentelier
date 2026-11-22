@@ -105,6 +105,8 @@ LegacyIAccessible 报告 MSAA 角色、状态、名称、值、描述、快捷�
 
 Annotation 读取注释类型、作者、日期和目标元素摘要。Styles 读取样式 ID、名称、填充、形状、颜色和扩展属性。Provider 未提供的属性返回空值。Pattern 缺失与读取失败分别报告。
 
+`uia_object_model` 通过 Windows 绑定读取 ObjectModel Pattern，报告底层对象是否存在及其是否支持 IDispatch。接口获取、探测与释放均在 MTA Worker 内进行，Rhai 只收到普通字段。
+
 ## 错误语义
 
 所有 Pattern 操作至少区分：
