@@ -135,6 +135,13 @@ fn resolve(id: WindowId) -> Result<HWND, ToolFailure> {
         .ok_or_else(window_unavailable)
 }
 
+fn id_for_handle(handle: usize) -> Result<Option<WindowId>, ToolFailure> {
+    Ok(top_level_windows()?
+        .iter()
+        .find(|window| window.ptr().addr() == handle)
+        .map(WindowId::read))
+}
+
 fn top_level_windows() -> Result<Vec<HWND>, ToolFailure> {
     let mut windows = Vec::new();
     winsafe::EnumWindows(|window| {

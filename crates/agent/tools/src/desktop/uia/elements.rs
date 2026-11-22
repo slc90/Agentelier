@@ -1,4 +1,5 @@
 use super::properties::CachedElement;
+use super::references::{Identity, Locator, ReferenceState};
 use super::{RequestControl, Runtime, Worker, provider_error};
 use crate::{
     ToolFailure,
@@ -7,7 +8,7 @@ use crate::{
 use std::collections::HashMap;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
-use uiautomation::{UIElement, types::Handle};
+use uiautomation::{UIAutomation, UIElement, types::Handle};
 use uuid::Uuid;
 
 const MAX_REFERENCES: usize = 4096;
@@ -24,16 +25,43 @@ pub(super) struct Element {
     pub(super) window: Option<WindowId>,
     pub(super) is_root: bool,
     pub(super) cache: Option<CachedElement>,
+    pub(super) identity: Identity,
+    pub(super) locator: Option<Locator>,
+    pub(super) generation: i64,
+    pub(super) state: ReferenceState,
 }
 
 impl Element {
-    pub(super) fn new(element: UIElement, window: Option<WindowId>, is_root: bool) -> Self {
-        Self {
+    pub(super) fn capture(
+        automation: &UIAutomation,
+        element: UIElement,
+        window: Option<WindowId>,
+        is_root: bool,
+        locator: Option<Locator>,
+        control: &RequestControl,
+    ) -> Result<Self, ToolFailure> {
+        let window = if window.is_none() && !is_root {
+            control.check()?;
+            let handle = isize::from(element.get_native_window_handle().map_err(provider_error)?);
+            if handle != 0 {
+                desktop::id_for_handle(handle.cast_unsigned())?
+            } else {
+                None
+            }
+        } else {
+            window
+        };
+        let identity = Identity::read(automation, &element, control)?;
+        Ok(Self {
             element,
             window,
             is_root,
             cache: None,
-        }
+            identity,
+            locator,
+            generation: 1,
+            state: ReferenceState::Valid,
+        })
     }
 }
 
@@ -77,8 +105,8 @@ impl Runtime {
     ) -> Result<RootSummary, ToolFailure> {
         let id = parse_reference(reference)?;
         self.call(cancel, deadline, move |worker, control| {
-            let entry = worker.elements.get(id)?;
-            summarize(id, entry, control)
+            let entry = worker.resolve_element(id, control)?;
+            summarize(id, &entry, control)
         })
     }
 }
@@ -100,7 +128,7 @@ impl Worker {
         }
         .map_err(provider_error)?;
         let id = Uuid::new_v4();
-        let entry = Element::new(element, window, true);
+        let entry = Element::capture(&self.automation, element, window, true, None, control)?;
         let summary = summarize(id, &entry, control)?;
         self.elements.insert(id, entry)?;
         Ok(summary)
@@ -168,17 +196,22 @@ pub(super) fn summarize_node(
     control: &RequestControl,
 ) -> Result<RootSummary, ToolFailure> {
     control.check()?;
-    let name = entry.element.get_name().map_err(provider_error)?;
-    control.check()?;
-    let class_name = entry.element.get_classname().map_err(provider_error)?;
-    control.check()?;
-    let control_type = entry.element.get_control_type().map_err(provider_error)?;
     Ok(RootSummary {
         reference: reference_token(id),
         window_id: entry.window.map(WindowId::token),
-        name: name.chars().take(MAX_SUMMARY_CHARS).collect(),
-        class_name: class_name.chars().take(MAX_SUMMARY_CHARS).collect(),
-        control_type: format!("{control_type:?}"),
+        name: entry
+            .identity
+            .name
+            .chars()
+            .take(MAX_SUMMARY_CHARS)
+            .collect(),
+        class_name: entry
+            .identity
+            .class_name
+            .chars()
+            .take(MAX_SUMMARY_CHARS)
+            .collect(),
+        control_type: format!("{:?}", entry.identity.control_type),
     })
 }
 

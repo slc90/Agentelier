@@ -18,6 +18,7 @@ UIA 能力通过现有 `computer_execute` 暴露给模型。Rhai 继续负责组
 | 读取缓存 | `uia_cached_properties(element_ref, property_names)` | 读取已预取的属性 |
 | 元素查找 | `uia_find(root_ref, conditions, view, scope, max_depth, max_nodes, max_results)` | 在节点和候选预算内按组合条件查找 |
 | Pattern 能力 | `uia_patterns(element_ref)` | 返回当前元素支持的 Pattern |
+| 引用状态 | `uia_ref_info(element_ref)` | 查看引用是否有效、代次以及能否尝试重定位 |
 | 元素刷新 | `uia_refresh_element(element_ref)` | 重新读取当前元素状态 |
 | 基础 Pattern | `uia_invoke`、`uia_value_get`、`uia_value_set`、`uia_toggle`、`uia_range_value`、`uia_select`、`uia_expand_collapse` | 执行对应语义操作 |
 | 文本 | `uia_text`、`uia_text_range`、`uia_text_select` 等 | 读取文本和范围 |

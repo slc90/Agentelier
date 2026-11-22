@@ -16,7 +16,9 @@ pub(super) fn register(engine: &mut Engine) {
         .register_fn("uia_cached_properties", cached_properties)
         .register_fn("uia_prefetch", prefetch)
         .register_fn("uia_patterns", patterns)
-        .register_fn("uia_find", find);
+        .register_fn("uia_find", find)
+        .register_fn("uia_ref_info", ref_info)
+        .register_fn("uia_refresh_element", refresh_element);
 }
 
 fn status(ctx: NativeCallContext<'_>) -> ScriptResult<bool> {
@@ -223,6 +225,25 @@ fn patterns(ctx: NativeCallContext<'_>, reference: ImmutableString) -> ScriptRes
     with_run(ctx, |run| {
         run.uia
             .patterns(&reference, &run.control.cancel, run.control.deadline)
+            .and_then(plain_data)
+    })
+}
+
+fn ref_info(ctx: NativeCallContext<'_>, reference: ImmutableString) -> ScriptResult<Dynamic> {
+    with_run(ctx, |run| {
+        run.uia
+            .ref_info(&reference, &run.control.cancel, run.control.deadline)
+            .and_then(plain_data)
+    })
+}
+
+fn refresh_element(
+    ctx: NativeCallContext<'_>,
+    reference: ImmutableString,
+) -> ScriptResult<Dynamic> {
+    with_run(ctx, |run| {
+        run.uia
+            .refresh_element(&reference, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)
     })
 }

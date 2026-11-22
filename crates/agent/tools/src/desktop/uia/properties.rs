@@ -1,4 +1,5 @@
 use super::elements::{Element, parse_reference, reference_token, validate_window};
+use super::references::Locator;
 use super::tree::{TreeView, neighbor};
 use super::{RequestControl, Runtime, Worker, native, provider_error};
 use crate::ToolFailure;
@@ -240,16 +241,13 @@ impl Runtime {
 
 impl Worker {
     fn read_properties(
-        &self,
+        &mut self,
         id: Uuid,
         properties: &[Property],
         cached: bool,
         control: &RequestControl,
     ) -> Result<Json, ToolFailure> {
-        let entry = self.elements.get(id)?;
-        if let Some(window) = entry.window {
-            validate_window(window)?;
-        }
+        let entry = self.resolve_element(id, control)?;
         let element = if cached {
             let cache = entry
                 .cache
@@ -293,10 +291,7 @@ impl Worker {
         request: &CacheRequest,
         control: &RequestControl,
     ) -> Result<Json, ToolFailure> {
-        let root = self.elements.get(id)?;
-        if let Some(window) = root.window {
-            validate_window(window)?;
-        }
+        let root = self.resolve_element(id, control)?;
         let window = root.window;
         let handle = request.build(&self.automation)?;
         let (targets, truncated) =
@@ -329,7 +324,19 @@ impl Worker {
                 refs.push(reference_token(id));
             } else {
                 let target_id = Uuid::new_v4();
-                let mut entry = Element::new(target, window, false);
+                let depth = if matches!(request.scope, CacheScope::Children) {
+                    1
+                } else {
+                    MAX_CACHE_DEPTH
+                };
+                let mut entry = Element::capture(
+                    &self.automation,
+                    target,
+                    window,
+                    false,
+                    Some(Locator::new(id, request.view, depth)),
+                    control,
+                )?;
                 entry.cache = Some(cache);
                 self.elements.insert(target_id, entry)?;
                 refs.push(reference_token(target_id));
@@ -343,11 +350,8 @@ impl Worker {
         }))
     }
 
-    fn read_patterns(&self, id: Uuid, control: &RequestControl) -> Result<Json, ToolFailure> {
-        let entry = self.elements.get(id)?;
-        if let Some(window) = entry.window {
-            validate_window(window)?;
-        }
+    fn read_patterns(&mut self, id: Uuid, control: &RequestControl) -> Result<Json, ToolFailure> {
+        let entry = self.resolve_element(id, control)?;
         let request = element_cache(&self.automation, TreeView::Raw)?;
         for pattern in PATTERNS {
             request

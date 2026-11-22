@@ -2,6 +2,7 @@ mod elements;
 mod find;
 mod native;
 mod properties;
+mod references;
 mod tree;
 
 pub(crate) use elements::RootSummary;

@@ -1,12 +1,13 @@
 use super::elements::{Element, parse_reference, reference_token, summarize_node, validate_window};
+use super::references::Locator;
 use super::tree::{MAX_TREE_DEPTH, TreeView, advance, neighbor};
-use super::{RequestControl, Runtime, Worker, native, provider_error};
+use super::{RequestControl, Runtime, Worker, provider_error};
 use crate::ToolFailure;
 use serde_json::{Value, json};
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 use uiautomation::{
-    UIAutomation,
+    UIAutomation, UIElement,
     core::UICondition,
     types::{ControlType, TreeScope, UIProperty},
     variants::Variant,
@@ -21,16 +22,26 @@ const MAX_CONDITION_CHARS: usize = 512;
 
 pub(crate) struct FindRequest {
     root: Uuid,
-    view: TreeView,
     condition: Condition,
-    include_root: bool,
-    max_depth: usize,
-    max_nodes: usize,
-    max_results: usize,
-    first: bool,
+    scope: SearchScope,
 }
 
-enum Condition {
+pub(super) struct SearchScope {
+    pub(super) view: TreeView,
+    pub(super) include_root: bool,
+    pub(super) max_depth: usize,
+    pub(super) max_nodes: usize,
+    pub(super) max_results: usize,
+    pub(super) first: bool,
+}
+
+pub(super) struct Matches {
+    pub(super) candidates: Vec<(UIElement, bool)>,
+    pub(super) inspected: usize,
+    pub(super) truncated: bool,
+}
+
+pub(super) enum Condition {
     Text(UIProperty, String),
     ControlType(ControlType),
     All(Vec<Self>),
@@ -82,13 +93,15 @@ impl FindRequest {
         let mut terms = MAX_CONDITION_TERMS;
         Ok(Self {
             root: parse_reference(reference)?,
-            view: view.parse()?,
             condition: Condition::parse(conditions, 0, &mut terms)?,
-            include_root,
-            max_depth: max_depth as usize,
-            max_nodes: max_nodes as usize,
-            max_results: if first { 1 } else { max_results as usize },
-            first,
+            scope: SearchScope {
+                view: view.parse()?,
+                include_root,
+                max_depth: max_depth as usize,
+                max_nodes: max_nodes as usize,
+                max_results: if first { 1 } else { max_results as usize },
+                first,
+            },
         })
     }
 }
@@ -186,43 +199,15 @@ impl Worker {
         request: FindRequest,
         control: &RequestControl,
     ) -> Result<Value, ToolFailure> {
-        let root = self.elements.get(request.root)?;
-        if let Some(window) = root.window {
-            validate_window(window)?;
-        }
+        let root = self.resolve_element(request.root, control)?;
         let window = root.window;
-        let condition = request.condition.compile(&self.automation)?;
-        let walker = request.view.walker(&self.automation)?;
-        let mut ancestors = Vec::new();
-        let mut pending = Some(root.element.clone());
-        let mut matched = Vec::new();
-        let mut inspected = 0;
-        let mut truncated = false;
-        while let Some(element) = pending.take() {
-            control.check()?;
-            let at_root = ancestors.is_empty();
-            if request.include_root || !at_root {
-                inspected += 1;
-                if neighbor(element.find_first(TreeScope::Element, &condition))?.is_some() {
-                    matched.push((element.clone(), at_root));
-                }
-            }
-            if request.first && !matched.is_empty() {
-                break;
-            }
-            pending = advance(
-                &walker,
-                &mut ancestors,
-                element,
-                request.max_depth,
-                control,
-                |element| element,
-            )?;
-            if inspected >= request.max_nodes || matched.len() >= request.max_results {
-                truncated = pending.is_some();
-                break;
-            }
-        }
+        let Matches {
+            candidates: matched,
+            inspected,
+            truncated,
+        } = request
+            .scope
+            .scan(&self.automation, &root.element, &request.condition, control)?;
         if matched.is_empty() {
             let message = if truncated {
                 "在节点预算内未找到匹配的 UIA 元素"
@@ -241,17 +226,28 @@ impl Worker {
             } else {
                 Uuid::new_v4()
             };
-            let entry = Element::new(element, window, at_root);
+            let entry = if at_root {
+                root.clone()
+            } else {
+                Element::capture(
+                    &self.automation,
+                    element,
+                    window,
+                    false,
+                    Some(Locator::new(
+                        request.root,
+                        request.scope.view,
+                        request.scope.max_depth,
+                    )),
+                    control,
+                )?
+            };
             let summary = summarize_node(id, &entry, control)?;
-            let automation_id = native::property(
-                &self.automation,
-                &entry.element,
-                UIProperty::AutomationId,
-                false,
-            )?
-            .map(|value| value.get_string().map_err(provider_error))
-            .transpose()?
-            .map(|value| value.chars().take(MAX_CONDITION_CHARS).collect::<String>());
+            let automation_id = entry
+                .identity
+                .automation_id
+                .as_deref()
+                .map(|value| value.chars().take(MAX_CONDITION_CHARS).collect::<String>());
             candidates.push(json!({
                 "ref": summary.reference, "window_id": summary.window_id, "name": summary.name,
                 "class_name": summary.class_name, "control_type": summary.control_type,
@@ -269,10 +265,56 @@ impl Worker {
             self.elements.insert(id, entry)?;
         }
         Ok(json!({
-            "root": reference_token(request.root), "view": request.view.name(), "source": "live",
+            "root": reference_token(request.root), "view": request.scope.view.name(), "source": "live",
             "count": candidates.len(), "ambiguous": candidates.len() > 1,
             "inspected": inspected, "truncated": truncated, "candidates": candidates,
         }))
+    }
+}
+
+impl SearchScope {
+    pub(super) fn scan(
+        &self,
+        automation: &UIAutomation,
+        root: &UIElement,
+        condition: &Condition,
+        control: &RequestControl,
+    ) -> Result<Matches, ToolFailure> {
+        let condition = condition.compile(automation)?;
+        let walker = self.view.walker(automation)?;
+        let mut ancestors = Vec::new();
+        let mut pending = Some(root.clone());
+        let mut candidates = Vec::new();
+        let mut inspected = 0;
+        while let Some(element) = pending.take() {
+            control.check()?;
+            let at_root = ancestors.is_empty();
+            if self.include_root || !at_root {
+                inspected += 1;
+                if neighbor(element.find_first(TreeScope::Element, &condition))?.is_some() {
+                    candidates.push((element.clone(), at_root));
+                }
+            }
+            if self.first && !candidates.is_empty() {
+                break;
+            }
+            pending = advance(
+                &walker,
+                &mut ancestors,
+                element,
+                self.max_depth,
+                control,
+                |element| element,
+            )?;
+            if inspected >= self.max_nodes || candidates.len() >= self.max_results {
+                break;
+            }
+        }
+        Ok(Matches {
+            candidates,
+            inspected,
+            truncated: pending.is_some(),
+        })
     }
 }
 

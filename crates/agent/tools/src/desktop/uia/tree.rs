@@ -1,6 +1,7 @@
 use super::elements::{
     Element, Registry, parse_reference, reference_token, summarize_node, validate_window,
 };
+use super::references::Locator;
 use super::{RequestControl, RootSummary, Runtime, Worker, provider_error, worker_failed};
 use crate::{ToolFailure, desktop::WindowId};
 use std::collections::VecDeque;
@@ -78,6 +79,7 @@ impl FromStr for TreeView {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) enum TreeRelation {
     Parent,
     FirstChild,
@@ -227,12 +229,9 @@ impl Worker {
         let mut cursor = if let Some(id) = request.cursor {
             self.tree.take(id, &request)?
         } else {
-            let root = self.elements.get(request.root)?;
-            if let Some(window) = root.window {
-                validate_window(window)?;
-            }
+            let root = self.resolve_element(request.root, control)?;
             control.check()?;
-            self.tree.begin(&self.automation, &request, root)?
+            self.tree.begin(&self.automation, &request, &root)?
         };
         let page = self.read_page(&mut cursor, request.max_nodes, control);
         if page.as_ref().is_ok_and(|page| page.cursor.is_some()) {
@@ -253,7 +252,14 @@ impl Worker {
         let walker = cursor.view.walker(&self.automation)?;
         let mut nodes = Vec::with_capacity(limit);
         let issue = cursor
-            .read_nodes(&walker, &mut self.elements, limit, control, &mut nodes)
+            .read_nodes(
+                &self.automation,
+                &walker,
+                &mut self.elements,
+                limit,
+                control,
+                &mut nodes,
+            )
             .err();
         let issue = issue.or_else(|| cursor.check().err().map(|cause| cursor.issue(cause)));
         if nodes.is_empty()
@@ -280,26 +286,38 @@ impl Worker {
         relation: TreeRelation,
         control: &RequestControl,
     ) -> Result<Option<RootSummary>, ToolFailure> {
-        let entry = self.elements.get(id)?;
+        let entry = self.resolve_element(id, control)?;
         if let Some(window) = entry.window {
             validate_window(window)?;
             if entry.is_root && !matches!(relation, TreeRelation::FirstChild) {
                 return Ok(None);
             }
         }
-        let view = view.walker(&self.automation)?;
+        let walker = view.walker(&self.automation)?;
         control.check()?;
         let related = match relation {
-            TreeRelation::Parent => view.get_parent(&entry.element),
-            TreeRelation::FirstChild => view.get_first_child(&entry.element),
-            TreeRelation::NextSibling => view.get_next_sibling(&entry.element),
-            TreeRelation::PreviousSibling => view.get_previous_sibling(&entry.element),
+            TreeRelation::Parent => walker.get_parent(&entry.element),
+            TreeRelation::FirstChild => walker.get_first_child(&entry.element),
+            TreeRelation::NextSibling => walker.get_next_sibling(&entry.element),
+            TreeRelation::PreviousSibling => walker.get_previous_sibling(&entry.element),
         };
         let Some(element) = neighbor(related)? else {
             return Ok(None);
         };
         let new_id = Uuid::new_v4();
-        let entry = Element::new(element, entry.window, false);
+        let locator = match relation {
+            TreeRelation::FirstChild => Some(Locator::new(id, view, 1)),
+            TreeRelation::NextSibling | TreeRelation::PreviousSibling => entry.locator,
+            TreeRelation::Parent => None,
+        };
+        let entry = Element::capture(
+            &self.automation,
+            element,
+            entry.window,
+            false,
+            locator,
+            control,
+        )?;
         let summary = summarize_node(new_id, &entry, control)?;
         if let Some(window) = entry.window {
             validate_window(window)?;
@@ -388,6 +406,7 @@ impl Cursor {
 
     fn read_nodes(
         &mut self,
+        automation: &UIAutomation,
         walker: &UITreeWalker,
         registry: &mut Registry,
         limit: usize,
@@ -402,14 +421,28 @@ impl Cursor {
             let Some(element) = self.pending.take() else {
                 break;
             };
-            let parent = self.parents.last().map(|parent| reference_token(parent.id));
+            let parent_id = self.parents.last().map(|parent| parent.id);
+            let parent = parent_id.map(reference_token);
             let depth = self.parents.len();
             let id = if parent.is_none() {
                 self.root
             } else {
                 Uuid::new_v4()
             };
-            let entry = Element::new(element.clone(), self.window, false);
+            let entry = if let Some(parent_id) = parent_id {
+                let owner = registry.get(parent_id).map_err(|cause| self.issue(cause))?;
+                Element::capture(
+                    automation,
+                    element.clone(),
+                    owner.window,
+                    false,
+                    Some(Locator::new(parent_id, self.view, 1)),
+                    control,
+                )
+                .map_err(|cause| self.issue(cause))?
+            } else {
+                registry.get(id).map_err(|cause| self.issue(cause))?.clone()
+            };
             let summary = summarize_node(id, &entry, control).map_err(|cause| self.issue(cause))?;
             if parent.is_some() {
                 registry
