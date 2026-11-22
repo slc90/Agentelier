@@ -7,6 +7,7 @@ mod properties;
 mod references;
 mod scrolling;
 mod text;
+mod transform;
 mod tree;
 mod window;
 
@@ -17,6 +18,7 @@ pub(crate) use patterns::{BasicAction, Expansion, SelectionChange};
 pub(crate) use properties::CacheRequest;
 pub(crate) use scrolling::{ItemLookup, ScrollAmounts};
 pub(crate) use text::{TextAction, TextRangeAction};
+pub(crate) use transform::TransformAction;
 pub(crate) use tree::{TreePage, TreeRequest};
 pub(crate) use window::WindowAction;
 

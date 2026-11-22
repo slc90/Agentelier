@@ -89,6 +89,8 @@ Grid/GridItem 提供行列数和单元格索引；Table/TableItem 进一步提�
 
 Window Pattern 可请求还原、最大化、最小化、关闭和等待输入空闲。可视状态操作回读实际状态并标明是否达到目标。关闭结果分别记录 Provider 是否接受请求、原 Win32 窗口身份是否已消失，以及 UIA 元素是否还能读取。 `topmost` 来自 Window Pattern，`top_level` 来自当前顶层窗口身份。
 
+Transform 先核对对应的 Provider 能力，再用 UIA 原生屏幕坐标、尺寸和角度执行。Transform2 的绝对缩放值须落在 Provider 报告的最小与最大比例内，支持按相对单位缩放。结果回读真实边界和缩放比例。Dock 可读取或请求 `top`、`left`、`bottom`、`right`、`fill`、`none`。
+
 Window Pattern 提供窗口关闭、最大化、最小化、恢复等状态操作。Transform/Transform2 提供元素移动、缩放、旋转和缩放单位等能力。Dock 提供停靠位置。操作后应读取状态确认，而不是只看 COM 方法返回成功。
 
 ### 拖放与自定义导航
