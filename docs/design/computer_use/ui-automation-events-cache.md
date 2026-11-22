@@ -14,6 +14,12 @@ UIA 事件让客户端知道界面发生了变化；Cache Request 减少重复�
 
 订阅记录包含订阅 ID、事件类别、目标元素/窗口、TreeScope、属性过滤列表和 handler wrapper。注册与移除均由 MTA Worker 串行执行。Worker 必须持有用于移除订阅的 handler 和目标元素引用，直到 remove 调用完成。
 
+关闭会话时逐一移除它拥有的监听。Windows 的 `RemoveAllEventHandlers` 会清除整个进程的注册，因此只在最后一个 UIA Worker 退出时调用。来源见 [Microsoft UI Automation 事件订阅](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-eventsforclients)。
+
+会话最多保留 32 项公开订阅，事件队列最多 256 条。属性订阅的空过滤列表使用常用属性；`ValueValue` 可用于监听 Value Pattern 的值变化。自动化事件用 `automation:<EventId>`，其余使用 `property`、`structure`、`focus`。焦点使用 Windows 全局监听，默认在 Worker 查询当前焦点后按目标范围筛选，也可显式选择 `global`。
+
+`uia_events_next` 当有可见事件、报告溢出或超时时返回，单次最多 64 条。事件中的 `ref` 指向订阅目标。焦点 ID 是 Worker 处理通知时的当前焦点；属性事件提供属性 ID、可转换值以及 `value_available`；结构事件提供变化类型和 Provider 给出的 RuntimeId。返回的 `overflowed` 是该批次丢过通知的订阅 ID。取消后丢弃该订阅尚未读取的通知。
+
 ## 事件回调只发通知
 
 上游事件 handler 会把 sender 包装成 `UIElement` 后调用自定义回调。Agentelier 的回调不应在其中调用 UIA getter、遍历树或执行 Pattern，也不应把 sender COM 对象放进跨线程队列。

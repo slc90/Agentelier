@@ -22,9 +22,9 @@ const MAX_PROPERTY_CHARS: usize = 512;
 const MAX_ARRAY_ITEMS: usize = 64;
 
 #[derive(Clone, Copy)]
-struct Property {
-    name: &'static str,
-    id: UIProperty,
+pub(super) struct Property {
+    pub(super) name: &'static str,
+    pub(super) id: UIProperty,
 }
 
 macro_rules! property_catalog {
@@ -46,7 +46,7 @@ const COMMON_PROPERTIES: [Property; 11] = property_catalog![
     FrameworkId,
     RuntimeId,
 ];
-const EXTENDED_PROPERTIES: [Property; 16] = property_catalog![
+const EXTENDED_PROPERTIES: [Property; 17] = property_catalog![
     ProcessId,
     NativeWindowHandle,
     LocalizedControlType,
@@ -63,6 +63,7 @@ const EXTENDED_PROPERTIES: [Property; 16] = property_catalog![
     HeadingLevel,
     IsDialog,
     IsRequiredForForm,
+    ValueValue,
 ];
 
 #[derive(Clone, Copy)]
@@ -454,7 +455,7 @@ fn cache_targets(
     ))
 }
 
-fn parse_properties(names: &[String]) -> Result<Vec<Property>, ToolFailure> {
+pub(super) fn parse_properties(names: &[String]) -> Result<Vec<Property>, ToolFailure> {
     if names.is_empty() {
         return Ok(COMMON_PROPERTIES.to_vec());
     }

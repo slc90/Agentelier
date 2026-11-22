@@ -1,13 +1,14 @@
 use super::elements::{
     Element, Registry, parse_reference, reference_token, summarize_node, validate_window,
 };
+use super::events::registration_guard;
 use super::references::Locator;
-use super::{RequestControl, RootSummary, Runtime, Worker, provider_error, worker_failed};
+use super::{RequestControl, RootSummary, Runtime, Worker, provider_error};
 use crate::{ToolFailure, desktop::WindowId};
 use std::collections::VecDeque;
 use std::str::FromStr;
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Instant;
@@ -26,9 +27,6 @@ pub(super) const MAX_TREE_DEPTH: i64 = 32;
 const MAX_PAGE_NODES: i64 = 64;
 const DEFAULT_DEPTH: usize = 2;
 const DEFAULT_PAGE_NODES: usize = 16;
-
-// Windows requires event handler registration and removal to be serialized in the client process.
-static EVENT_REGISTRATION: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) enum TreeView {
@@ -381,14 +379,13 @@ impl TreeState {
     }
 
     pub(super) fn close(&mut self, automation: &UIAutomation) -> Result<(), ToolFailure> {
-        if !self.cursors.is_empty() {
-            let _serial = EVENT_REGISTRATION.lock().map_err(|_| worker_failed())?;
-            automation
-                .remove_all_event_handlers()
-                .map_err(provider_error)?;
-            self.cursors.clear();
+        let mut failure = None;
+        while let Some(cursor) = self.cursors.pop_front() {
+            if let Err(error) = cursor.watch.remove(automation) {
+                failure = Some(error);
+            }
         }
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
 }
 
@@ -522,7 +519,7 @@ impl StructureWatch {
             Ok(())
         });
         let handler = UIStructureChangeEventHandler::from(callback);
-        let _serial = EVENT_REGISTRATION.lock().map_err(|_| worker_failed())?;
+        let _serial = registration_guard()?;
         automation
             .add_structure_changed_event_handler(root, TreeScope::Subtree, None, &handler)
             .map_err(provider_error)?;
@@ -534,7 +531,7 @@ impl StructureWatch {
     }
 
     fn remove(&self, automation: &UIAutomation) -> Result<(), ToolFailure> {
-        let _serial = EVENT_REGISTRATION.lock().map_err(|_| worker_failed())?;
+        let _serial = registration_guard()?;
         automation
             .remove_structure_changed_event_handler(&self.root, &self.handler)
             .map_err(provider_error)

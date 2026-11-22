@@ -1,4 +1,5 @@
 mod elements;
+mod events;
 mod find;
 mod grid;
 mod interaction;
@@ -15,6 +16,7 @@ mod tree;
 mod window;
 
 pub(crate) use elements::RootSummary;
+pub(crate) use events::EventRequest;
 pub(crate) use find::FindRequest;
 pub(crate) use grid::GridAction;
 pub(crate) use interaction::InteractionAction;
@@ -65,6 +67,7 @@ struct WorkerHandle {
 
 struct Worker {
     tree: tree::TreeState,
+    events: events::EventState,
     elements: elements::Registry,
     virtual_items: scrolling::VirtualItems,
     synchronized_input: interaction::SynchronizedInput,
@@ -203,14 +206,30 @@ fn run_worker(
         }
     }
     let input_cleanup = worker.synchronized_input.close();
+    let event_cleanup = worker.events.close(&worker.automation);
     let cursor_cleanup = worker.tree.close(&worker.automation);
-    let cleanup = match (input_cleanup, cursor_cleanup) {
-        (Err(input), Err(cursor)) => Err(ToolFailure::new(
-            "uia_worker_cleanup_failed",
-            format!("同步输入回收失败 {input}。树游标回收失败 {cursor}"),
-        )),
-        (Err(error), _) | (_, Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
+    let fallback = events::worker_disconnected(&worker.automation);
+    let cleanup = if matches!(fallback, Ok(true)) {
+        input_cleanup
+    } else {
+        let errors = [
+            input_cleanup,
+            event_cleanup,
+            cursor_cleanup,
+            fallback.map(|_| ()),
+        ]
+        .into_iter()
+        .filter_map(Result::err)
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(ToolFailure::new(
+                "uia_worker_cleanup_failed",
+                errors.join("；"),
+            ))
+        }
     };
     drop(worker);
     drop(com);
@@ -231,10 +250,12 @@ fn connect() -> Result<(CoUninitializeGuard, Worker), ToolFailure> {
     }
     let automation = UIAutomation::new_direct()
         .map_err(|error| ToolFailure::new("uia_initialization_failed", error.to_string()))?;
+    events::worker_connected()?;
     Ok((
         com,
         Worker {
             tree: tree::TreeState::default(),
+            events: events::EventState::default(),
             elements: elements::Registry::default(),
             virtual_items: scrolling::VirtualItems::default(),
             synchronized_input: interaction::SynchronizedInput::default(),

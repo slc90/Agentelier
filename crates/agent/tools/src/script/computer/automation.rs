@@ -6,6 +6,7 @@ use crate::desktop::uia::{
 };
 use rhai::{Array, Dynamic, Engine, FLOAT, INT, ImmutableString, Map, NativeCallContext};
 
+mod events;
 mod grid;
 mod interaction;
 mod metadata;
@@ -104,6 +105,7 @@ pub(super) fn register(engine: &mut Engine) {
         .register_fn("uia_find_item", find_item)
         .register_fn("uia_realize", realize);
     text::register(engine);
+    events::register(engine);
     grid::register(engine);
     window::register(engine);
     transform::register(engine);
