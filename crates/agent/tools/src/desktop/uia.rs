@@ -1,5 +1,6 @@
 mod elements;
 mod find;
+mod grid;
 mod native;
 mod patterns;
 mod properties;
@@ -10,6 +11,7 @@ mod tree;
 
 pub(crate) use elements::RootSummary;
 pub(crate) use find::FindRequest;
+pub(crate) use grid::GridAction;
 pub(crate) use patterns::{BasicAction, Expansion, SelectionChange};
 pub(crate) use properties::CacheRequest;
 pub(crate) use scrolling::{ItemLookup, ScrollAmounts};

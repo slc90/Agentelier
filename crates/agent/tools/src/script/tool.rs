@@ -33,6 +33,8 @@ const DESCRIPTION: &str = concat!(
     "For Text, use uia_text_document_range(ref), uia_text_selection(ref), uia_text_visible_ranges(ref), then uia_text_get(range,max_chars). uia_text_find(range,text,backward,ignore_case) returns a matching range. ",
     "Use uia_text_range_move(range,unit,count[,endpoint]), uia_text_range_expand(range,unit), uia_text_range_select(range), uia_text_range_scroll(range,align_to_top), and uia_text_range_attribute(range,name). ",
     "Read Text2 caret and annotations via uia_text_caret(ref), uia_text_annotation_range(ref,annotation), edit state via uia_text_edit_state(ref), and a TextChild range via uia_text_child_range(ref). ",
+    "Use uia_grid_info(ref), uia_grid_cell(ref,row,column) with zero-based indices, and uia_grid_item_info(ref). uia_table_info(ref), uia_table_headers(ref) and uia_table_item_info(ref) report structure and headers. ",
+    "Use uia_spreadsheet_info(ref[,cell_name]) for named cells and uia_spreadsheet_item_info(ref) for formula, value and annotations when supported. ",
     "Rhai try/catch can read error.code and error.message. Inputs held by the script are released when the call ends. ",
     "Each admitted script has a 30 second execution deadline."
 );

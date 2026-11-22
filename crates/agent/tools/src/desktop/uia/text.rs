@@ -1,6 +1,7 @@
 use super::elements::{Element, parse_reference};
 use super::patterns::{
-    SelectionChange, get_pattern, invalid_pattern_argument, pattern_result, provider,
+    SelectionChange, get_pattern, invalid_pattern_argument, optional_provider as optional,
+    pattern_result, provider,
 };
 use super::{RequestControl, Runtime, Worker, native, provider_error};
 use crate::ToolFailure;
@@ -423,20 +424,6 @@ impl Worker {
         };
         data["range"] = Value::String(range_ref);
         Ok(pattern_result(entry.owner, "TextRange", operation, data))
-    }
-}
-
-fn optional<T>(
-    control: &RequestControl,
-    operation: impl FnOnce() -> Result<T, UiaError>,
-) -> Result<Option<T>, ToolFailure> {
-    control.check()?;
-    let result = operation();
-    control.check()?;
-    match result {
-        Ok(value) => Ok(Some(value)),
-        Err(error) if error.code() == 0 => Ok(None),
-        Err(error) => Err(provider_error(error)),
     }
 }
 

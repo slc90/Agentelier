@@ -304,6 +304,20 @@ pub(super) fn provider<T>(
     result
 }
 
+pub(super) fn optional_provider<T>(
+    control: &RequestControl,
+    operation: impl FnOnce() -> Result<T, UiaError>,
+) -> Result<Option<T>, ToolFailure> {
+    control.check()?;
+    let result = operation();
+    control.check()?;
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.code() == 0 => Ok(None),
+        Err(error) => Err(provider_error(error)),
+    }
+}
+
 pub(super) fn pattern_result(id: Uuid, pattern: &str, operation: &str, data: Value) -> Value {
     json!({"ref": reference_token(id), "pattern": pattern, "operation": operation,
         "source": "live", "data": data})

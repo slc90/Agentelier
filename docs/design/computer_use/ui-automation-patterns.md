@@ -81,6 +81,8 @@ Text Pattern 返回 DocumentRange、Selection 和 VisibleRanges 等文本范围�
 
 ### 结构化数据
 
+Grid 单元格按从零开始的行列索引逐个查询，Worker 先核对 Provider 报告的范围。Table 和 TableItem 的标题返回逻辑引用，结果保留原数量和截断标记。Spreadsheet 只有命名单元格查询，行列规模仍从实际支持的 Grid Pattern 取得。SpreadsheetItem 返回公式和注释，单元格值由独立的 Value Pattern 提供。
+
 Grid/GridItem 提供行列数和单元格索引；Table/TableItem 进一步提供行列标题；Spreadsheet/SpreadsheetItem 提供公式栏、活动单元格、公式和值等 Provider 能力。所有行列和单元格访问都必须有界，不能默认枚举整个大型表格。
 
 ### 窗口与变换

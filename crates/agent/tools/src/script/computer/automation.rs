@@ -6,6 +6,7 @@ use crate::desktop::uia::{
 };
 use rhai::{Array, Dynamic, Engine, FLOAT, INT, ImmutableString, Map, NativeCallContext};
 
+mod grid;
 mod text;
 
 pub(super) fn register(engine: &mut Engine) {
@@ -99,6 +100,7 @@ pub(super) fn register(engine: &mut Engine) {
         .register_fn("uia_find_item", find_item)
         .register_fn("uia_realize", realize);
     text::register(engine);
+    grid::register(engine);
 }
 
 fn scroll_state(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Dynamic> {
