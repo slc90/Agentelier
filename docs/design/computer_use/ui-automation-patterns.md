@@ -101,7 +101,9 @@ Drag、DropTarget、CustomNavigation 和 SynchronizedInput 面向拖放和自定
 
 ### 兼容与元数据
 
-LegacyIAccessible 用于传统 MSAA 信息和操作；MultipleView、Annotation、Styles 提供额外视图/注释/样式信息。按 Provider 实际支持情况读取，不把这些属性当作所有控件都必有。
+LegacyIAccessible 报告 MSAA 角色、状态、名称、值、描述、快捷键和默认动作名称。调用方可执行默认动作、写入值或传入 MSAA 选择标记。MultipleView 枚举 Provider 当前及可用视图的 ID 和名称，只能切换到 Provider 声明的 ID。
+
+Annotation 读取注释类型、作者、日期和目标元素摘要。Styles 读取样式 ID、名称、填充、形状、颜色和扩展属性。Provider 未提供的属性返回空值。Pattern 缺失与读取失败分别报告。
 
 ## 错误语义
 

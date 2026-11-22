@@ -8,6 +8,7 @@ use rhai::{Array, Dynamic, Engine, FLOAT, INT, ImmutableString, Map, NativeCallC
 
 mod grid;
 mod interaction;
+mod metadata;
 mod text;
 mod transform;
 mod window;
@@ -107,6 +108,7 @@ pub(super) fn register(engine: &mut Engine) {
     window::register(engine);
     transform::register(engine);
     interaction::register(engine);
+    metadata::register(engine);
 }
 
 fn scroll_state(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Dynamic> {

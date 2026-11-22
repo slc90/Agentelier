@@ -27,6 +27,7 @@ UIA 能力通过现有 `computer_execute` 暴露给模型。Rhai 继续负责组
 | 窗口语义 | `uia_window_state`、`uia_window_action` | 读取可视、模态和交互状态，执行 Provider 支持的窗口操作 |
 | 变换与停靠 | `uia_transform_capabilities`、`uia_transform`、`uia_dock_position` | 读取能力、执行变换并回读边界或停靠位置 |
 | 交互元数据与导航 | `uia_drag_info`、`uia_drop_target_info`、`uia_custom_navigation`、`uia_synchronized_input` | 查询拖放语义、导航与管理同步输入请求 |
+| 兼容与元数据 | `uia_legacy_accessible`、`uia_multiple_view`、`uia_annotation`、`uia_styles` | 读取 MSAA、注释和样式，执行旧式操作并切换 Provider 视图 |
 | 事件 | `uia_subscribe`、`uia_unsubscribe`、`uia_events_next` | 管理订阅并读取事件 |
 | 等待 | `uia_wait` | 等待元素/属性/焦点/结构条件 |
 | 快照 | `uia_snapshot`、`uia_snapshot_refresh` | 读取和刷新窗口快照 |

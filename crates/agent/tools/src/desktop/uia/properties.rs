@@ -498,7 +498,10 @@ fn parse_patterns(names: &[String]) -> Result<Vec<Pattern>, ToolFailure> {
     Ok(patterns)
 }
 
-fn format_property(property: UIProperty, variant: &Variant) -> Result<Json, ToolFailure> {
+pub(super) fn format_property(
+    property: UIProperty,
+    variant: &Variant,
+) -> Result<Json, ToolFailure> {
     let value = variant.get_value().map_err(provider_error)?;
     let result = match value {
         Value::EMPTY | Value::NULL | Value::VOID => Json::Null,

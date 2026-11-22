@@ -38,6 +38,7 @@ const DESCRIPTION: &str = concat!(
     "Use uia_window_state(ref) and uia_window_action(ref,action) with restore, maximize, minimize, close, or wait_for_input_idle. An explicit idle timeout is in milliseconds. ",
     "uia_transform_capabilities(ref) reports move, resize, rotate, and zoom support. Use uia_transform(ref,move/resize/rotate/zoom/zoom_by_unit,args) with UIA screen coordinates, dimensions, degrees, or zoom percent. uia_dock_position(ref[,position]) reads or sets dock state. ",
     "uia_drag_info(ref) and uia_drop_target_info(ref) report provider data. uia_custom_navigation(ref,direction) navigates via that provider. uia_synchronized_input(ref,start/status/cancel[,input_type]) manages a session-owned native input notification. ",
+    "uia_legacy_accessible(ref[,default_action]) reads MSAA data or invokes its default action. Use (ref,\"set_value\",value) or (ref,\"select\",flags) for other actions. uia_multiple_view(ref[,view_id]) reads or switches views. uia_annotation(ref) and uia_styles(ref) read metadata. ",
     "Rhai try/catch can read error.code and error.message. Inputs held by the script are released when the call ends. ",
     "Each admitted script has a 30 second execution deadline."
 );
