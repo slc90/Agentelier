@@ -27,11 +27,19 @@ pub(super) fn property(
     }
     .map(Variant::from)
     .map_err(|error| provider_error(error.into()))?;
+    Ok((!property_not_supported(automation, &value)?).then_some(value))
+}
+
+#[allow(unsafe_code)]
+pub(super) fn property_not_supported(
+    automation: &UIAutomation,
+    value: &Variant,
+) -> Result<bool, ToolFailure> {
     let automation: &IUIAutomation = automation.as_ref();
     // SAFETY: The VARIANT remains initialized and borrowed for this call on the same worker.
     let missing = unsafe { automation.CheckNotSupported(value.as_ref()) }
         .map_err(|error| provider_error(error.into()))?;
-    Ok((!missing.as_bool()).then_some(value))
+    Ok(missing.as_bool())
 }
 
 #[allow(unsafe_code)]

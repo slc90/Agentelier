@@ -5,6 +5,7 @@ mod patterns;
 mod properties;
 mod references;
 mod scrolling;
+mod text;
 mod tree;
 
 pub(crate) use elements::RootSummary;
@@ -12,6 +13,7 @@ pub(crate) use find::FindRequest;
 pub(crate) use patterns::{BasicAction, Expansion, SelectionChange};
 pub(crate) use properties::CacheRequest;
 pub(crate) use scrolling::{ItemLookup, ScrollAmounts};
+pub(crate) use text::{TextAction, TextRangeAction};
 pub(crate) use tree::{TreePage, TreeRequest};
 
 use crate::ToolFailure;
@@ -54,6 +56,7 @@ struct Worker {
     tree: tree::TreeState,
     elements: elements::Registry,
     virtual_items: scrolling::VirtualItems,
+    text_ranges: text::TextRanges,
     automation: UIAutomation,
 }
 
@@ -213,6 +216,7 @@ fn connect() -> Result<(CoUninitializeGuard, Worker), ToolFailure> {
             tree: tree::TreeState::default(),
             elements: elements::Registry::default(),
             virtual_items: scrolling::VirtualItems::default(),
+            text_ranges: text::TextRanges::default(),
             automation,
         },
     ))

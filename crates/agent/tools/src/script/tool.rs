@@ -30,6 +30,9 @@ const DESCRIPTION: &str = concat!(
     "Use uia_selection(ref) for the container, uia_select(ref,select/add/remove) for an item, and uia_expand_collapse(ref,state/expand/collapse). Patterns must be supported by the target provider. ",
     "uia_scroll(ref) reads scroll state; uia_scroll(ref,horizontal,vertical) accepts none, small_increment, small_decrement, large_increment, or large_decrement. uia_scroll_item(ref) brings an item into view. ",
     "uia_find_item(container,property,value[,after_ref]) searches ItemContainer by Name, AutomationId, or ClassName. Use uia_realize(ref) for a virtualized result. ",
+    "For Text, use uia_text_document_range(ref), uia_text_selection(ref), uia_text_visible_ranges(ref), then uia_text_get(range,max_chars). uia_text_find(range,text,backward,ignore_case) returns a matching range. ",
+    "Use uia_text_range_move(range,unit,count[,endpoint]), uia_text_range_expand(range,unit), uia_text_range_select(range), uia_text_range_scroll(range,align_to_top), and uia_text_range_attribute(range,name). ",
+    "Read Text2 caret and annotations via uia_text_caret(ref), uia_text_annotation_range(ref,annotation), edit state via uia_text_edit_state(ref), and a TextChild range via uia_text_child_range(ref). ",
     "Rhai try/catch can read error.code and error.message. Inputs held by the script are released when the call ends. ",
     "Each admitted script has a 30 second execution deadline."
 );
