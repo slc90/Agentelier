@@ -1,6 +1,8 @@
 mod elements;
+mod tree;
 
 pub(crate) use elements::RootSummary;
+pub(crate) use tree::{TreePage, TreeRequest};
 
 use crate::ToolFailure;
 use std::sync::Mutex;
@@ -33,12 +35,13 @@ enum State {
 
 struct WorkerHandle {
     requests: SyncSender<Request>,
-    thread: JoinHandle<()>,
+    thread: JoinHandle<Result<(), ToolFailure>>,
 }
 
 struct Worker {
-    automation: UIAutomation,
+    tree: tree::TreeState,
     elements: elements::Registry,
+    automation: UIAutomation,
 }
 
 struct RequestControl {
@@ -149,16 +152,19 @@ impl WorkerHandle {
 
     fn close(self) -> Result<(), ToolFailure> {
         drop(self.requests);
-        self.thread.join().map_err(|_| worker_failed())
+        self.thread.join().map_err(|_| worker_failed())?
     }
 }
 
-fn run_worker(incoming: Receiver<Request>, ready: SyncSender<Result<(), ToolFailure>>) {
+fn run_worker(
+    incoming: Receiver<Request>,
+    ready: SyncSender<Result<(), ToolFailure>>,
+) -> Result<(), ToolFailure> {
     let (com, mut worker) = match connect() {
         Ok(connection) => connection,
         Err(error) => {
             drop(ready.send(Err(error)));
-            return;
+            return Ok(());
         }
     };
     let thread = thread::current().id();
@@ -168,9 +174,11 @@ fn run_worker(incoming: Receiver<Request>, ready: SyncSender<Result<(), ToolFail
             request(&mut worker);
         }
     }
+    let cleanup = worker.tree.close(&worker.automation);
     drop(worker);
     drop(com);
     tracing::debug!(?thread, "UIA MTA 工作线程已释放 COM 资源");
+    cleanup
 }
 
 fn connect() -> Result<(CoUninitializeGuard, Worker), ToolFailure> {
@@ -189,8 +197,9 @@ fn connect() -> Result<(CoUninitializeGuard, Worker), ToolFailure> {
     Ok((
         com,
         Worker {
-            automation,
+            tree: tree::TreeState::default(),
             elements: elements::Registry::default(),
+            automation,
         },
     ))
 }

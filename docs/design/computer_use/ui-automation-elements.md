@@ -20,6 +20,10 @@ UIA 把桌面和应用界面表示为元素树。元素包含可选属性、可�
 
 ## 有界遍历与继续读取
 
+`uia_tree(ref)` 默认按 Control View 读取深度 2、节点数 16 的一页。指定参数时，根节点深度为 0，每页最多 64 个节点，深度上限为 32。页中的 `parent` 指向父节点引用，父节点可能在前一页。继续读取沿用根、视图和深度，代次在同一轮遍历中保持一致。跨页游标由结构变化通知失效，超过 16 个活动游标时回收最久未使用的游标。
+
+`uia_tree_related(ref, view, relation)` 读取父、首子、前一兄弟或后一兄弟。视图中缺少对应节点时返回 Rhai 的 `()`。分页遇到读取错误时，已经读取的节点仍保留，`error` 指出读取失败所在的父节点和深度。
+
 UIA 的 `UITreeWalker` 提供 parent、first child、last child、next sibling、previous sibling 和 normalize，也提供对应的 BuildCache 方法。它没有内建分页游标。
 
 Agentelier 应在 UIA Worker 中实现有界 DFS 遍历。请求至少包含：

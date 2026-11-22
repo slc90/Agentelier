@@ -20,6 +20,8 @@ const DESCRIPTION: &str = concat!(
     "Use uia_status() to check whether the session can connect to Windows UI Automation. ",
     "Use uia_desktop_root() or uia_window_root(id) to get a UI Automation root summary with a session-local ref. ",
     "Use uia_root_info(ref) to re-read it. Window ids come from windows(). ",
+    "uia_tree(ref) reads a bounded Control View page. Use uia_tree(ref,view,max_depth,max_nodes,cursor), with raw/control/content, depth 0..32, node limit 1..64, and cursor () for the first page. ",
+    "Reuse the same root, view and depth with the returned cursor. uia_tree_related(ref,view,relation) reads parent, first_child, next_sibling, or previous_sibling. ",
     "Rhai try/catch can read error.code and error.message. Inputs held by the script are released when the call ends. ",
     "Each admitted script has a 30 second execution deadline."
 );

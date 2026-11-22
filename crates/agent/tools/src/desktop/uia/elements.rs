@@ -17,9 +17,11 @@ pub(super) struct Registry {
     entries: HashMap<Uuid, Element>,
 }
 
-struct Element {
-    element: UIElement,
-    window: Option<WindowId>,
+#[derive(Clone)]
+pub(super) struct Element {
+    pub(super) element: UIElement,
+    pub(super) window: Option<WindowId>,
+    pub(super) is_root: bool,
 }
 
 pub(crate) struct RootSummary {
@@ -85,7 +87,11 @@ impl Worker {
         }
         .map_err(provider_error)?;
         let id = Uuid::new_v4();
-        let entry = Element { element, window };
+        let entry = Element {
+            element,
+            window,
+            is_root: true,
+        };
         let summary = summarize(id, &entry, control)?;
         self.elements.insert(id, entry)?;
         Ok(summary)
@@ -93,11 +99,11 @@ impl Worker {
 }
 
 impl Registry {
-    fn get(&self, id: Uuid) -> Result<&Element, ToolFailure> {
+    pub(super) fn get(&self, id: Uuid) -> Result<&Element, ToolFailure> {
         self.entries.get(&id).ok_or_else(element_unavailable)
     }
 
-    fn insert(&mut self, id: Uuid, element: Element) -> Result<(), ToolFailure> {
+    pub(super) fn insert(&mut self, id: Uuid, element: Element) -> Result<(), ToolFailure> {
         if self.entries.len() >= MAX_REFERENCES {
             return Err(ToolFailure::new(
                 "uia_reference_limit",
@@ -109,14 +115,14 @@ impl Registry {
     }
 }
 
-fn parse_reference(reference: &str) -> Result<Uuid, ToolFailure> {
+pub(super) fn parse_reference(reference: &str) -> Result<Uuid, ToolFailure> {
     reference
         .strip_prefix("uia:")
         .and_then(|id| Uuid::parse_str(id).ok())
         .ok_or_else(element_unavailable)
 }
 
-fn validate_window(window: WindowId) -> Result<(), ToolFailure> {
+pub(super) fn validate_window(window: WindowId) -> Result<(), ToolFailure> {
     desktop::resolve(window)
         .map(|_| ())
         .map_err(|error| ToolFailure::new("uia_window_unavailable", error.to_string()))
@@ -131,21 +137,35 @@ fn summarize(
     if let Some(window) = entry.window {
         validate_window(window)?;
     }
+    let summary = summarize_node(id, entry, control)?;
+    if let Some(window) = entry.window {
+        validate_window(window)?;
+    }
+    Ok(summary)
+}
+
+pub(super) fn summarize_node(
+    id: Uuid,
+    entry: &Element,
+    control: &RequestControl,
+) -> Result<RootSummary, ToolFailure> {
+    control.check()?;
     let name = entry.element.get_name().map_err(provider_error)?;
     control.check()?;
     let class_name = entry.element.get_classname().map_err(provider_error)?;
     control.check()?;
     let control_type = entry.element.get_control_type().map_err(provider_error)?;
-    if let Some(window) = entry.window {
-        validate_window(window)?;
-    }
     Ok(RootSummary {
-        reference: format!("uia:{id}"),
+        reference: reference_token(id),
         window_id: entry.window.map(WindowId::token),
         name: name.chars().take(MAX_SUMMARY_CHARS).collect(),
         class_name: class_name.chars().take(MAX_SUMMARY_CHARS).collect(),
         control_type: format!("{control_type:?}"),
     })
+}
+
+pub(super) fn reference_token(id: Uuid) -> String {
+    format!("uia:{id}")
 }
 
 fn element_unavailable() -> ToolFailure {
