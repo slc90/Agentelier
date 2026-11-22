@@ -95,6 +95,8 @@ Window Pattern 提供窗口关闭、最大化、最小化、恢复等状态操�
 
 ### 拖放与自定义导航
 
+Drag 和 DropTarget 返回 Provider 报告的放置效果，Drag 还返回是否抓取及当前项目。CustomNavigation 返回指定方向的元素引用，方向没有目标时返回空值。每个会话最多持有一个同步输入请求，`status` 报告会话是否持有该请求。Provider 可在收到匹配输入后自行结束监听。脚本可显式取消请求，Worker 在关闭时回收仍持有的请求。
+
 Drag、DropTarget、CustomNavigation 和 SynchronizedInput 面向拖放和自定义交互。它们不应自动替代现有鼠标轨迹：Pattern 提供的是 Provider 暴露的语义能力，Computer Use 仍负责没有对应 Pattern 的通用物理输入。
 
 ### 兼容与元数据

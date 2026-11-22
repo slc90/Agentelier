@@ -1,6 +1,7 @@
 mod elements;
 mod find;
 mod grid;
+mod interaction;
 mod native;
 mod patterns;
 mod properties;
@@ -14,6 +15,7 @@ mod window;
 pub(crate) use elements::RootSummary;
 pub(crate) use find::FindRequest;
 pub(crate) use grid::GridAction;
+pub(crate) use interaction::InteractionAction;
 pub(crate) use patterns::{BasicAction, Expansion, SelectionChange};
 pub(crate) use properties::CacheRequest;
 pub(crate) use scrolling::{ItemLookup, ScrollAmounts};
@@ -62,6 +64,7 @@ struct Worker {
     tree: tree::TreeState,
     elements: elements::Registry,
     virtual_items: scrolling::VirtualItems,
+    synchronized_input: interaction::SynchronizedInput,
     text_ranges: text::TextRanges,
     automation: UIAutomation,
 }
@@ -196,7 +199,16 @@ fn run_worker(
             request(&mut worker);
         }
     }
-    let cleanup = worker.tree.close(&worker.automation);
+    let input_cleanup = worker.synchronized_input.close();
+    let cursor_cleanup = worker.tree.close(&worker.automation);
+    let cleanup = match (input_cleanup, cursor_cleanup) {
+        (Err(input), Err(cursor)) => Err(ToolFailure::new(
+            "uia_worker_cleanup_failed",
+            format!("同步输入回收失败 {input}。树游标回收失败 {cursor}"),
+        )),
+        (Err(error), _) | (_, Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    };
     drop(worker);
     drop(com);
     tracing::debug!(?thread, "UIA MTA 工作线程已释放 COM 资源");
@@ -222,6 +234,7 @@ fn connect() -> Result<(CoUninitializeGuard, Worker), ToolFailure> {
             tree: tree::TreeState::default(),
             elements: elements::Registry::default(),
             virtual_items: scrolling::VirtualItems::default(),
+            synchronized_input: interaction::SynchronizedInput::default(),
             text_ranges: text::TextRanges::default(),
             automation,
         },
