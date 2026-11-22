@@ -1,0 +1,15 @@
+{
+  "id": "persona-v1",
+  "frozen_date": "2026-11-22",
+  "case_count": 24,
+  "cases": {
+    "path": "cases.jsonl",
+    "sha256": "0b95f4ce476e1f2cec08ff9dfb78be82cbc68dfefc2f5ccbb3391951c1baac22",
+    "input_field": "input"
+  },
+  "review_guide": {
+    "path": "review-guide.md",
+    "sha256": "bfd9e5654504b3609d518cd231b91194e21961261560a9c48c9319a485367aa1"
+  },
+  "local_persona_sha256": "ef85195288be8371a0038263eb3f540b46f24c9c9347a1d085df62439b18af2a"
+}
