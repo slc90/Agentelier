@@ -1,7 +1,12 @@
 use super::provider_error;
 use crate::ToolFailure;
-use uiautomation::{UIAutomation, UIElement, types::UIProperty, variants::Variant};
-use windows::Win32::UI::Accessibility::{IUIAutomation, IUIAutomationElement};
+use uiautomation::{
+    UIAutomation, UIElement, errors::Error as UiaError, patterns::UIItemContainerPattern,
+    types::UIProperty, variants::Variant,
+};
+use windows::Win32::UI::Accessibility::{
+    IUIAutomation, IUIAutomationElement, IUIAutomationItemContainerPattern,
+};
 
 #[allow(unsafe_code)]
 pub(super) fn property(
@@ -27,4 +32,20 @@ pub(super) fn property(
     let missing = unsafe { automation.CheckNotSupported(value.as_ref()) }
         .map_err(|error| provider_error(error.into()))?;
     Ok((!missing.as_bool()).then_some(value))
+}
+
+#[allow(unsafe_code)]
+pub(super) fn find_item(
+    pattern: &UIItemContainerPattern,
+    after: Option<&UIElement>,
+    property: UIProperty,
+    value: &Variant,
+) -> Result<UIElement, UiaError> {
+    let raw: &IUIAutomationItemContainerPattern = pattern.as_ref();
+    let after: Option<&IUIAutomationElement> = after.map(AsRef::as_ref);
+    // SAFETY: All interfaces and the borrowed VARIANT stay alive on the initialized MTA worker.
+    // A null start element is accepted by FindItemByProperty and starts at the first item.
+    unsafe { raw.FindItemByProperty(after, property.into(), value.as_ref()) }
+        .map(UIElement::from)
+        .map_err(UiaError::from)
 }

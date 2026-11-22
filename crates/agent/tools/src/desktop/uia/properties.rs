@@ -350,7 +350,11 @@ impl Worker {
         }))
     }
 
-    fn read_patterns(&mut self, id: Uuid, control: &RequestControl) -> Result<Json, ToolFailure> {
+    pub(super) fn read_patterns(
+        &mut self,
+        id: Uuid,
+        control: &RequestControl,
+    ) -> Result<Json, ToolFailure> {
         let entry = self.resolve_element(id, control)?;
         let request = element_cache(&self.automation, TreeView::Raw)?;
         for pattern in PATTERNS {

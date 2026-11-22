@@ -28,6 +28,8 @@ const DESCRIPTION: &str = concat!(
     "Keep element refs in Rhai variables across calls. uia_ref_info(ref) reads status and generation; uia_refresh_element(ref) verifies or uniquely rebinds a stale ref in its original scope. ",
     "Use uia_invoke(ref), uia_value_get(ref), uia_value_set(ref,text), uia_toggle(ref,change), uia_range_value_get(ref), and uia_range_value_set(ref,number). ",
     "Use uia_selection(ref) for the container, uia_select(ref,select/add/remove) for an item, and uia_expand_collapse(ref,state/expand/collapse). Patterns must be supported by the target provider. ",
+    "uia_scroll(ref) reads scroll state; uia_scroll(ref,horizontal,vertical) accepts none, small_increment, small_decrement, large_increment, or large_decrement. uia_scroll_item(ref) brings an item into view. ",
+    "uia_find_item(container,property,value[,after_ref]) searches ItemContainer by Name, AutomationId, or ClassName. Use uia_realize(ref) for a virtualized result. ",
     "Rhai try/catch can read error.code and error.message. Inputs held by the script are released when the call ends. ",
     "Each admitted script has a 30 second execution deadline."
 );

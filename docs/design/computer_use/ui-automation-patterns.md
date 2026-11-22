@@ -69,6 +69,8 @@ Invoke、Value、Toggle、RangeValue、Selection、SelectionItem 和 ExpandColla
 
 ### 滚动和虚拟化
 
+`uia_scroll(ref)` 回读方向、滚动百分比和视口比例。传入两个方向的滚动量时，操作完成后读取实际状态。`uia_scroll_item(ref)` 汇报操作后的屏幕边界与不可见标记。容器查找可以从第一项或给定项目之后开始。虚拟项目使用会话内的有界引用，Realize 后重新读取属性和可用 Pattern。原 COM 对象已经失效时，只在同一容器和属性条件下存在唯一候选时恢复引用。
+
 Scroll、ScrollItem、ItemContainer 和 VirtualizedItem 常用于大型列表。ItemContainer 按属性查找项目；VirtualizedItem 的 Realize 后应重新读取元素属性和 Pattern。不能假设 Realize 之后原 COM element 引用仍是完整、可用的对象。
 
 ### 文本

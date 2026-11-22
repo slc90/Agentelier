@@ -21,6 +21,7 @@ UIA 能力通过现有 `computer_execute` 暴露给模型。Rhai 继续负责组
 | 引用状态 | `uia_ref_info(element_ref)` | 查看引用是否有效、代次以及能否尝试重定位 |
 | 元素刷新 | `uia_refresh_element(element_ref)` | 重新读取当前元素状态 |
 | 基础 Pattern | `uia_invoke`、`uia_value_get`、`uia_value_set`、`uia_toggle`、`uia_range_value_get`、`uia_range_value_set`、`uia_selection`、`uia_select`、`uia_expand_collapse` | 执行对应语义操作 |
+| 滚动与虚拟化 | `uia_scroll`、`uia_scroll_item`、`uia_find_item`、`uia_realize` | 滚动并回读、容器定位和项目实例化 |
 | 文本 | `uia_text`、`uia_text_range`、`uia_text_select` 等 | 读取文本和范围 |
 | 结构化数据 | `uia_grid`、`uia_grid_item`、`uia_table`、`uia_table_item`、`uia_spreadsheet` | 读取行列和单元格 |
 | 事件 | `uia_subscribe`、`uia_unsubscribe`、`uia_events_next` | 管理订阅并读取事件 |

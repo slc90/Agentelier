@@ -1,8 +1,8 @@
 use super::{ScriptResult, fields, with_run};
 use crate::ToolFailure;
 use crate::desktop::uia::{
-    BasicAction, CacheRequest, Expansion, FindRequest, RootSummary, SelectionChange, TreePage,
-    TreeRequest,
+    BasicAction, CacheRequest, Expansion, FindRequest, ItemLookup, RootSummary, ScrollAmounts,
+    SelectionChange, TreePage, TreeRequest,
 };
 use rhai::{Array, Dynamic, Engine, FLOAT, INT, ImmutableString, Map, NativeCallContext};
 
@@ -89,7 +89,96 @@ pub(super) fn register(engine: &mut Engine) {
                     action.parse::<Expansion>().map(BasicAction::ExpandCollapse),
                 )
             },
-        );
+        )
+        .register_fn("uia_scroll", scroll_state)
+        .register_fn("uia_scroll", scroll)
+        .register_fn("uia_scroll_item", scroll_item)
+        .register_fn("uia_find_item", find_first_item)
+        .register_fn("uia_find_item", find_item)
+        .register_fn("uia_realize", realize);
+}
+
+fn scroll_state(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Dynamic> {
+    with_run(ctx, |run| {
+        run.uia
+            .scroll(&id, None, &run.control.cancel, run.control.deadline)
+            .and_then(plain_data)
+    })
+}
+
+fn scroll(
+    ctx: NativeCallContext<'_>,
+    id: ImmutableString,
+    horizontal: ImmutableString,
+    vertical: ImmutableString,
+) -> ScriptResult<Dynamic> {
+    with_run(ctx, |run| {
+        let amounts = ScrollAmounts::new(&horizontal, &vertical)?;
+        run.uia
+            .scroll(
+                &id,
+                Some(amounts),
+                &run.control.cancel,
+                run.control.deadline,
+            )
+            .and_then(plain_data)
+    })
+}
+
+fn scroll_item(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Dynamic> {
+    with_run(ctx, |run| {
+        run.uia
+            .scroll_item(&id, &run.control.cancel, run.control.deadline)
+            .and_then(plain_data)
+    })
+}
+
+fn find_first_item(
+    ctx: NativeCallContext<'_>,
+    container: ImmutableString,
+    property: ImmutableString,
+    value: ImmutableString,
+) -> ScriptResult<Dynamic> {
+    find_in_container(ctx, container, property, value, None)
+}
+
+fn find_item(
+    ctx: NativeCallContext<'_>,
+    container: ImmutableString,
+    property: ImmutableString,
+    value: ImmutableString,
+    after: ImmutableString,
+) -> ScriptResult<Dynamic> {
+    find_in_container(ctx, container, property, value, Some(after))
+}
+
+fn find_in_container(
+    ctx: NativeCallContext<'_>,
+    container: ImmutableString,
+    property: ImmutableString,
+    value: ImmutableString,
+    after: Option<ImmutableString>,
+) -> ScriptResult<Dynamic> {
+    with_run(ctx, |run| {
+        let lookup = ItemLookup::new(&property, value.into_owned())?;
+        run.uia
+            .find_item(
+                &container,
+                lookup,
+                after.as_ref().map(ImmutableString::as_str),
+                &run.control.cancel,
+                run.control.deadline,
+            )
+            .and_then(plain_data)
+    })
+}
+
+fn realize(ctx: NativeCallContext<'_>, id: ImmutableString) -> ScriptResult<Dynamic> {
+    with_run(ctx, |run| {
+        run.uia
+            .realize(&id, &run.control.cancel, run.control.deadline)
+            .and_then(plain_data)
+    })
 }
 
 fn basic(

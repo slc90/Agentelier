@@ -284,6 +284,9 @@ impl Worker {
     }
 
     fn reference_info(&self, id: Uuid, control: &RequestControl) -> Result<Value, ToolFailure> {
+        if let Some(info) = self.virtual_items.info(id) {
+            return info;
+        }
         let entry = self.elements.get(id)?;
         let (state, window_available) = match self.check_identity(entry, control) {
             Ok(Some(_)) => (ReferenceState::Valid, true),
