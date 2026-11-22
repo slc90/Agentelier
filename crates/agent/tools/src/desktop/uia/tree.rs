@@ -21,7 +21,7 @@ use uiautomation::{
 use uuid::Uuid;
 
 const MAX_CURSORS: usize = 16;
-const MAX_TREE_DEPTH: i64 = 32;
+pub(super) const MAX_TREE_DEPTH: i64 = 32;
 const MAX_PAGE_NODES: i64 = 64;
 const DEFAULT_DEPTH: usize = 2;
 const DEFAULT_PAGE_NODES: usize = 16;
@@ -430,27 +430,17 @@ impl Cursor {
     fn advance(
         &mut self,
         walker: &UITreeWalker,
-        mut current: Position,
+        current: Position,
         control: &RequestControl,
     ) -> Result<(), ToolFailure> {
-        control.check()?;
-        if self.parents.len() < self.max_depth
-            && let Some(child) = neighbor(walker.get_first_child(&current.element))?
-        {
-            self.parents.push(current);
-            self.pending = Some(child);
-            return Ok(());
-        }
-        while !self.parents.is_empty() {
-            control.check()?;
-            if let Some(next) = neighbor(walker.get_next_sibling(&current.element))? {
-                self.pending = Some(next);
-                break;
-            }
-            if let Some(parent) = self.parents.pop() {
-                current = parent;
-            }
-        }
+        self.pending = advance(
+            walker,
+            &mut self.parents,
+            current,
+            self.max_depth,
+            control,
+            |position| &position.element,
+        )?;
         Ok(())
     }
 
@@ -461,6 +451,33 @@ impl Cursor {
             depth: self.parents.len(),
         }
     }
+}
+
+pub(super) fn advance<T>(
+    walker: &UITreeWalker,
+    parents: &mut Vec<T>,
+    mut current: T,
+    max_depth: usize,
+    control: &RequestControl,
+    element: impl Fn(&T) -> &UIElement,
+) -> Result<Option<UIElement>, ToolFailure> {
+    control.check()?;
+    if parents.len() < max_depth
+        && let Some(child) = neighbor(walker.get_first_child(element(&current)))?
+    {
+        parents.push(current);
+        return Ok(Some(child));
+    }
+    while !parents.is_empty() {
+        control.check()?;
+        if let Some(next) = neighbor(walker.get_next_sibling(element(&current)))? {
+            return Ok(Some(next));
+        }
+        if let Some(parent) = parents.pop() {
+            current = parent;
+        }
+    }
+    Ok(None)
 }
 
 impl StructureWatch {

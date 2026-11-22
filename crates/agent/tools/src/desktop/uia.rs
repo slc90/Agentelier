@@ -1,9 +1,11 @@
 mod elements;
+mod find;
 mod native;
 mod properties;
 mod tree;
 
 pub(crate) use elements::RootSummary;
+pub(crate) use find::FindRequest;
 pub(crate) use properties::CacheRequest;
 pub(crate) use tree::{TreePage, TreeRequest};
 

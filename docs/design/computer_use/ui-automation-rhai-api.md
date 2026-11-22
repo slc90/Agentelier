@@ -16,7 +16,7 @@ UIA 能力通过现有 `computer_execute` 暴露给模型。Rhai 继续负责组
 | 元素属性 | `uia_properties(element_ref, property_names)` | 读取指定属性 |
 | 属性缓存 | `uia_prefetch(element_ref, property_names, pattern_names, view, scope)` | 按选定视图和范围批量预取属性与 Pattern |
 | 读取缓存 | `uia_cached_properties(element_ref, property_names)` | 读取已预取的属性 |
-| 元素查找 | `uia_find(root_ref, conditions, view, scope, limit)` | 按条件查找 |
+| 元素查找 | `uia_find(root_ref, conditions, view, scope, max_depth, max_nodes, max_results)` | 在节点和候选预算内按组合条件查找 |
 | Pattern 能力 | `uia_patterns(element_ref)` | 返回当前元素支持的 Pattern |
 | 元素刷新 | `uia_refresh_element(element_ref)` | 重新读取当前元素状态 |
 | 基础 Pattern | `uia_invoke`、`uia_value_get`、`uia_value_set`、`uia_toggle`、`uia_range_value`、`uia_select`、`uia_expand_collapse` | 执行对应语义操作 |

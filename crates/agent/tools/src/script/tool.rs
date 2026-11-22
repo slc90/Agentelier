@@ -24,6 +24,7 @@ const DESCRIPTION: &str = concat!(
     "Reuse the same root, view and depth with the returned cursor. uia_tree_related(ref,view,relation) reads parent, first_child, next_sibling, or previous_sibling. ",
     "uia_properties(ref,names) reads live properties; pass [] for common properties. uia_patterns(ref) lists provider-supported patterns. ",
     "uia_prefetch(ref,property_names,pattern_names,view,scope) prepares caches for element, children, descendants, or subtree, returning cached_refs. Use uia_cached_properties(ref,names) to read them. ",
+    "uia_find(ref,conditions,view,scope,depth,node_limit,result_limit) matches Name, AutomationId, ClassName and ControlType. Combine keys with AND, use all/any arrays or not with a nested map, and set first:true only for an explicitly requested first match. ",
     "Rhai try/catch can read error.code and error.message. Inputs held by the script are released when the call ends. ",
     "Each admitted script has a 30 second execution deadline."
 );

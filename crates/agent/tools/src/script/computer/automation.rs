@@ -1,6 +1,6 @@
 use super::{ScriptResult, fields, with_run};
 use crate::ToolFailure;
-use crate::desktop::uia::{CacheRequest, RootSummary, TreePage, TreeRequest};
+use crate::desktop::uia::{CacheRequest, FindRequest, RootSummary, TreePage, TreeRequest};
 use rhai::{Array, Dynamic, Engine, INT, ImmutableString, Map, NativeCallContext};
 
 pub(super) fn register(engine: &mut Engine) {
@@ -15,7 +15,8 @@ pub(super) fn register(engine: &mut Engine) {
         .register_fn("uia_properties", properties)
         .register_fn("uia_cached_properties", cached_properties)
         .register_fn("uia_prefetch", prefetch)
-        .register_fn("uia_patterns", patterns);
+        .register_fn("uia_patterns", patterns)
+        .register_fn("uia_find", find);
 }
 
 fn status(ctx: NativeCallContext<'_>) -> ScriptResult<bool> {
@@ -222,6 +223,34 @@ fn patterns(ctx: NativeCallContext<'_>, reference: ImmutableString) -> ScriptRes
     with_run(ctx, |run| {
         run.uia
             .patterns(&reference, &run.control.cancel, run.control.deadline)
+            .and_then(plain_data)
+    })
+}
+
+fn find(
+    ctx: NativeCallContext<'_>,
+    reference: ImmutableString,
+    conditions: Dynamic,
+    view: ImmutableString,
+    scope: ImmutableString,
+    max_depth: INT,
+    max_nodes: INT,
+    max_results: INT,
+) -> ScriptResult<Dynamic> {
+    with_run(ctx, |run| {
+        let conditions = rhai::serde::from_dynamic(&conditions)
+            .map_err(|error| ToolFailure::new("uia_invalid_argument", error.to_string()))?;
+        let request = FindRequest::new(
+            &reference,
+            conditions,
+            &view,
+            &scope,
+            max_depth,
+            max_nodes,
+            max_results,
+        )?;
+        run.uia
+            .find(request, &run.control.cancel, run.control.deadline)
             .and_then(plain_data)
     })
 }

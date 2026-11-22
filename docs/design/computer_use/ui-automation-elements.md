@@ -77,6 +77,8 @@ Agentelier 应在 UIA Worker 中实现有界 DFS 遍历。请求至少包含：
 
 对于小范围精确条件优先使用 UIA 原生条件与 FindFirst/FindAll。FindAll 会一次返回所有匹配元素，不能只在结果序列化时截断就宣称底层读取有界。大范围查找应使用 Agentelier 自己的有界 TreeWalker 搜索，设置最大节点数、深度和结果数。
 
+`uia_find` 用指定视图遍历并对每个候选应用已编译的原生条件。条件 Map 的多个键默认取交集，`all`、`any` 接受条件数组，`not` 接受一个条件 Map。顶层指定 `first: true` 才在找到第一个匹配时停止。结果中的 `truncated` 表明预算用尽时仍有未读取节点，`ambiguous` 表明已找到多个候选。
+
 ## 逻辑元素引用
 
 Rhai 只保存不透明的字符串引用，例如 `uia:element:<id>`。真正的 `UIElement` COM wrapper 保存在所属 MTA Worker 的元素表中。
