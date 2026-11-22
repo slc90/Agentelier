@@ -64,7 +64,7 @@ Driver 能枚举当前桌面的顶层窗口，并读取后续识别和定位所�
 
 Rust 侧通过 WinSafe 调用 Win32 枚举和 DWM 查询。窗口列表过滤隐藏、被 DWM 隐藏、无标题、桌面外壳和普通工具窗口，保留最小化标记。边界是可见窗口框的物理屏幕像素，右边界和下边界为开区间。窗口标识包含 HWND 及原进程和线程身份，每次操作都从当前顶层窗口重新解析。激活要求窗口已可见且未最小化，调用后实际核对前台窗口，区分目标失效、最小化和系统拒绝激活。
 
-窗口管理不负责理解窗口内部控件。本次不实现 UI Automation，不读取控件树、Automation ID 或 Control Pattern。
+控件树、元素定位和 Control Pattern 操作见 [UI Automation 设计](ui-automation.md)。该设计沿用现有 `WindowId` 和 `computer_execute` 执行路径。
 
 ### 桌面截图与坐标
 
@@ -221,12 +221,12 @@ Rhai Runtime 的上下文在同一 Computer Use 会话的多次调用之间持�
 - 不得只修改局部装饰来代替整体修正。
 - 最终保存 Krita `.kra` 工程文件，并导出 PNG 成品。
 
-## 本次明确不包含
+## 首期范围之外
 
 - 浏览器自动化继续使用 MCP，不纳入 Computer Use。
 - 不接入 OpenAI 原生 `computer` 工具，不使用 Python 或 Node.js REPL。
 - 不引入第三方 Computer Use 库。
-- 不实现 Windows UI Automation；控件树、Automation ID、Control Pattern 和语义元素定位留待后续自行实现。
+- 控件树、Automation ID、Control Pattern 和语义元素定位属于 UI Automation 设计的范围。
 - 不单独建立权限与安全模块。
 - 不增加 Computer Use 专用活动展示 UI，沿用现有工具结果展示。
 - 不设计 Application Runtime、通用脚本插件体系或其他未来扩展结构。
@@ -297,7 +297,6 @@ stateDiagram-v2
 - Rhai 是本次唯一脚本运行环境，不引入 Python 或 Node.js。
 - Windows Driver 使用 Rust 和 Windows 原生桌面能力。
 - 浏览器自动化继续使用 MCP。
-- 本次不实现 UI Automation，不引入第三方 Computer Use 库。
 - 桌面控制使用现有 `ToolAdmission::Exclusive`，不建立新的桌面调度体系。
 - 不单独设计权限与安全模块，不增加 Computer Use 活动展示 UI。
 - 不设计 Application Runtime、通用脚本插件体系或未来扩展层。

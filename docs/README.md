@@ -14,7 +14,8 @@
 - [Skills](design/skills/README.md)：来源发现、任务目录快照、隐式/显式调用与内置创建器的边界。
 - [Markdown 展示](design/modules/markdown.md)：正文解析、实体投影与阅读状态。
 - [Direct 工具调用](design/tool_call.md)：工具协议、执行循环、运行中补充与队列。
-- [Computer Use](design/computer_use/computer-use.md)：Windows 桌面能力、当前实施状态和后续设计。
+- [Computer Use](design/computer_use/computer-use.md)：Windows 窗口管理、截图、键鼠输入和 Rhai 执行。
+- [UI Automation](design/computer_use/ui-automation.md)：Computer Use 的控件语义操作设计，涵盖元素定位、Control Pattern、事件和缓存。
 - [已知问题](known_issues.md)：已确认但尚未解决的上游限制及影响。
 
 `design/modules/` 与 `design/mechanisms/` 分别保存模块与跨模块机制设计。按任务需要查阅相关内容，不另建 Feature 文档、功能目录或逐项功能使用说明。阶段目标设计应明确区分已实现的起点与待实施部分。
