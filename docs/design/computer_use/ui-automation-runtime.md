@@ -29,6 +29,8 @@ Worker 不按每次 `computer_execute` 创建，也不作为全局进程静态�
 
 ## COM 初始化与 UIAutomation 创建
 
+Rhai 的 `uia_status()` 通过 Runtime 在 Worker 上查询 Control View 条件。首次探测启动 Worker，成功返回 `true`，启动或 Provider 错误沿现有脚本错误路径返回。
+
 `uiautomation` 0.25.3 的 `UIAutomation::new()` 会调用 `CoInitializeEx(None, COINIT_MULTITHREADED)`；`UIAutomation::new_direct()` 直接 `CoCreateInstance`，前提是调用方已经初始化 COM。当前上游 wrapper 没有在 Drop 中配对 `CoUninitialize`。
 
 Worker 启动流程：

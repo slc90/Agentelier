@@ -98,14 +98,14 @@ Agentelier 根 Workspace 当前使用 `windows = "0.62"`；`uiautomation` 0.25.3
 |---|---|---|
 | `control` | 控件封装；同时启用 `pattern` | 是 |
 | `event` | UIA 事件注册与处理 | 是 |
-| `input` | 库自身键鼠模拟 | 否，已有 Computer Use |
+| `input` | 库自身键鼠模拟 | 0.25.3 的核心模块直接导入了 `inputs::MouseButton`。该 Feature 还需要 Tools 显式启用 `windows/Win32_UI_WindowsAndMessaging` |
 | `screenshot` | 库自身截图 | 否，已有 Desktop Driver |
 | `process` | 库提供的进程辅助筛选 | 否，可用 UIA ProcessId 属性 |
 | `clipboard` | 剪贴板 | 否 |
 | `dialog` | 消息框辅助 | 否 |
 | `log` | crate 内部日志 | 非必要 |
 
-`control` Feature 依赖 `pattern`，`event` 默认关闭。使用 `default-features = false` 并显式启用 `control`、`event`，避免引入重复的键鼠、截图和剪贴板实现。
+`control` Feature 依赖 `pattern`，`event` 默认关闭。保持 `default-features = false`，按接口实际使用启用 Feature。Rhai 的键鼠和截图仍由 Desktop Driver 提供。
 
 ## COM 与执行线程
 

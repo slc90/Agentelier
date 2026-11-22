@@ -3,7 +3,10 @@ mod tool;
 
 pub(crate) use tool::{definition as tool_definition, execute as execute_tool};
 
-use crate::{ImagePayload, ToolFailure, desktop::CaptureMapping};
+use crate::{
+    ImagePayload, ToolFailure,
+    desktop::{CaptureMapping, uia},
+};
 use rhai::{AST, Dynamic, Engine, Scope};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -38,6 +41,7 @@ struct ScriptState {
     scope: Scope<'static>,
     functions: AST,
     observed: Option<CaptureMapping>,
+    uia: Arc<uia::Runtime>,
 }
 
 impl Default for ScriptState {
@@ -58,11 +62,16 @@ impl Default for ScriptState {
             scope: Scope::new(),
             functions: AST::empty(),
             observed: None,
+            uia: Arc::default(),
         }
     }
 }
 
 impl ScriptSession {
+    pub async fn close_uia(&self) -> Result<(), ToolFailure> {
+        self.state.lock().await.uia.close().await
+    }
+
     pub async fn run(
         &self,
         script: &str,
@@ -144,6 +153,7 @@ impl ScriptState {
         let desktop = Arc::new(Mutex::new(computer::Run::new(
             control.clone(),
             self.observed.clone(),
+            self.uia.clone(),
         )));
         let result = {
             self.engine.set_default_tag(Dynamic::from(desktop.clone()));

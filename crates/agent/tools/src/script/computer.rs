@@ -2,6 +2,7 @@ use super::Control;
 use crate::desktop::{
     self, Capture, CaptureMapping, DesktopInput, Key, MouseButton, PointerTarget, ScreenPoint,
     ScreenRect, ScreenshotPixel, ScrollAxis, TrajectoryPoint, WindowId, WindowInfo, WindowPoint,
+    uia,
 };
 use crate::{ImagePayload, ToolFailure};
 use rhai::{Array, Dynamic, Engine, EvalAltResult, INT, ImmutableString, Map, NativeCallContext};
@@ -15,15 +16,21 @@ pub(super) struct Run {
     input: DesktopInput,
     mapping: Option<CaptureMapping>,
     image: Option<Arc<ImagePayload>>,
+    uia: Arc<uia::Runtime>,
 }
 
 impl Run {
-    pub(super) fn new(control: Control, mapping: Option<CaptureMapping>) -> Self {
+    pub(super) fn new(
+        control: Control,
+        mapping: Option<CaptureMapping>,
+        uia: Arc<uia::Runtime>,
+    ) -> Self {
         Self {
             input: DesktopInput::with_deadline(control.cancel.clone(), control.deadline),
             control,
             mapping,
             image: None,
+            uia,
         }
     }
 
@@ -102,7 +109,8 @@ pub(super) fn register(engine: &mut Engine) {
         .register_fn("press", press)
         .register_fn("shortcut", shortcut)
         .register_fn("type_text", type_text)
-        .register_fn("wait", wait);
+        .register_fn("wait", wait)
+        .register_fn("uia_status", uia_status);
 }
 
 fn with_run<T>(
@@ -132,6 +140,12 @@ pub(super) fn script_failure(error: &EvalAltResult) -> ToolFailure {
         return (*failure).clone();
     }
     ToolFailure::new("script_evaluation_failed", error.to_string())
+}
+
+fn uia_status(ctx: NativeCallContext<'_>) -> ScriptResult<bool> {
+    with_run(ctx, |run| {
+        run.uia.status(&run.control.cancel, run.control.deadline)
+    })
 }
 
 fn list_windows(ctx: NativeCallContext<'_>) -> ScriptResult<Array> {

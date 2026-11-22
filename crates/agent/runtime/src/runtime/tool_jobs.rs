@@ -477,10 +477,16 @@ async fn run(
         }
     }
     if let Some((reason, reply)) = cleanup {
+        let uia_cleanup = execution.scripts.close_uia().await;
         let mut report = execution
             .processes
             .cleanup(reason, agentelier_tools::ProcessScope::All)
             .await;
+        if let Err(error) = uia_cleanup {
+            report.failed = true;
+            execution.admission.block();
+            tracing::error!(reason, code = error.code, %error, "UIA 会话资源回收未确认");
+        }
         report.failed |= execution.admission.is_blocked();
         if let Some(reply) = reply {
             drop(reply.send(report));

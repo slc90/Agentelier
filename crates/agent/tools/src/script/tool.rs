@@ -17,6 +17,7 @@ const DESCRIPTION: &str = concat!(
     "For window-local drag or trajectory, add id as the first argument. Buttons are left, right, middle. ",
     "Scroll axes are vertical and horizontal. Each trajectory dt is milliseconds since the previous point, with zero at the first point. ",
     "Use key_down(name), key_up(name), press(name), shortcut([name,...]), type_text(text), and wait(ms). ",
+    "Use uia_status() to check whether the session can connect to Windows UI Automation. ",
     "Rhai try/catch can read error.code and error.message. Inputs held by the script are released when the call ends. ",
     "Each admitted script has a 30 second execution deadline."
 );
@@ -66,7 +67,9 @@ pub(crate) async fn execute(
                 "cancelled" => ToolStatus::Cancelled,
                 "timeout" => ToolStatus::TimedOut,
                 "desktop_unconfirmed" => ToolStatus::NotExecuted,
-                "desktop_input_cleanup" | "script_worker_failed" => ToolStatus::Unconfirmed,
+                "desktop_input_cleanup" | "script_worker_failed" | "uia_worker_failed" => {
+                    ToolStatus::Unconfirmed
+                }
                 _ => ToolStatus::Failed,
             };
             let mut result = ToolResult::error(status, error.code, &error.to_string());

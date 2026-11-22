@@ -5,6 +5,7 @@ use winsafe::{DwmAttr, HWND, co};
 
 mod capture;
 mod input;
+pub(crate) mod uia;
 pub(crate) use capture::CaptureMapping;
 pub use capture::{
     Capture, ScreenPoint, ScreenshotPixel, WindowPoint, capture_desktop, capture_window,

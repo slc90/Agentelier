@@ -10,8 +10,9 @@ serde_json.workspace = true
 rhai.workspace = true
 process-wrap.workspace = true
 win32job.workspace = true
-windows.workspace = true
-winsafe = { workspace = true, features = ["dwm"] }
+windows = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"] }
+winsafe = { workspace = true, features = ["dwm", "ole"] }
+uiautomation = { workspace = true, features = ["input"] }
 tokio.workspace = true
 tokio-util.workspace = true
 uuid.workspace = true

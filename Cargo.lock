@@ -393,6 +393,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "uiautomation",
  "uuid",
  "win32job",
  "windows",
@@ -7152,6 +7153,28 @@ name = "typewit"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "214ca0b2191785cbc06209b9ca1861e048e39b5ba33574b3cedd58363d5bb5f6"
+
+[[package]]
+name = "uiautomation"
+version = "0.25.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4915ae07066ba748456eea8551a89b1f8b9bae7abf7de4a4ce26e80e9604aacb"
+dependencies = [
+ "uiautomation_derive",
+ "windows",
+ "windows-core",
+]
+
+[[package]]
+name = "uiautomation_derive"
+version = "0.7.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8baf05e7430496612b91bca9ccf94a26898bef3500d0488efe0e9543327f928e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
+]
 
 [[package]]
 name = "unicase"
