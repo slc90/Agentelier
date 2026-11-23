@@ -4,7 +4,7 @@
 
 ## 首次启动，明确选择目录
 
-`agentelier_application` 先建立可执行文件旁的 `logs/` 日志，再加载同一位置的 `config/config.ron`。配置缺失时创建初始配置，`data_directory` 为 `None`；旧配置缺少该字段时也视为尚未选择，保留缩放和 BRP 设置。
+`agentelier_application` 先建立可执行文件旁的 `logs/` 日志，再加载同一位置的 `config/config.ron`。配置缺失时创建初始配置，`data_directory` 为 `None`；旧配置缺少该字段时也视为尚未选择。新会话的 `default_model_slug` 和 `default_reasoning_effort` 分别默认为 `gpt-6.2-sol` 和 `high`，旧配置缺少对应字段时分别应用默认值。
 
 `login_ui` 在现有窗口装配的内容宿主中显示 Widgetry `PickDirectory` 选择器。窗口标题为“选择应用数据目录”。浏览位置只是导航，点击确认才交付目录；取消正常结束启动。应用不将主目录、安装目录或当前工作目录作为默认业务目录。选择器可以浏览这些位置，浏览本身不创建账号记录。
 
@@ -47,7 +47,7 @@ flowchart TD
 
 | 记录 | 位置 | 当前行为 |
 | --- | --- | --- |
-| 应用配置 | 可执行文件旁的 `config/config.ron` | 缩放、BRP 设置、`data_directory` 绝对路径 |
+| 应用配置 | 可执行文件旁的 `config/config.ron` | 缩放、BRP 设置、`data_directory` 绝对路径、新会话默认模型和推理强度 |
 | 运行日志 | 可执行文件旁的 `logs/` | 统一启动、目录选择、运行与收尾日志 |
 | MCP 服务器配置 | 所选目录的 `mcp_servers.json` | Agent 侧独立校验及原子保存，保留服务器稳定身份 |
 | Codex OAuth 凭据 | 所选目录的 `codex-oauth.json` | Login 原子保存并恢复本次数据环境的授权 |

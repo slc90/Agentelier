@@ -59,8 +59,8 @@ pub use conversation::PreparedSession;
 
 pub use conversation::{
     CompactionContinuation, Conversation, ConversationEvent, ConversationFailure,
-    ConversationRequest, MAX_TURN_REQUESTS, SessionId, SessionSettings, SessionView, TaskPhase,
-    ToolView, TurnId, TurnStatus, TurnView,
+    ConversationRequest, MAX_TURN_REQUESTS, SessionCreate, SessionId, SessionSettings, SessionView,
+    TaskPhase, ToolView, TurnId, TurnStatus, TurnView,
 };
 
 pub use agentelier_llm_model::ProtocolItemSummary;

@@ -335,6 +335,8 @@ impl AgentRuntime {
                         let mut refresh: Option<tokio::task::JoinHandle<RefreshCompletion>> = None;
                         let mut logout: Option<(u64, tokio::task::JoinHandle<LogoutCompletion>)> = None;
                         let mut pending_source: Option<SourceSettlement> = None;
+                        let mut requesting_catalog = None;
+                        let mut model_catalog = None;
                         let mut delivery_failure = None;
                         let mut model: Option<ModelTask> = None;
                         let mut stopping_root = None;
@@ -773,6 +775,10 @@ impl AgentRuntime {
                                             emit(&publish,id,AgentEventKind::ModelCompleted(Err(agentelier_llm_model::ModelFailure {usage:None,response_id:None,kind:agentelier_llm_model::ModelFailureKind::Service,status:None,code:None,request_id:None,message:"当前任务正在执行，不能插入模型操作".into()})))?;
                                             continue;
                                         }
+                                        if matches!(&request, ModelRequest::Catalog) {
+                                            model_catalog = None;
+                                            requesting_catalog = account.codex_identity().cloned();
+                                        }
                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?=Some(control.clone());
                                         model = Some(ModelTask::start(
                                             id,
@@ -792,6 +798,12 @@ impl AgentRuntime {
                                         debug!(operation_id = task.id, "模型操作已真实结束并回收");
                                         drain_progress(&mut conversation, task.id, &mut progress_events, &store.client(), &publish)?;
                                         let event = complete(&mut conversation, task.id, task.chat, result)?;
+                                        if let Some(source) = requesting_catalog.take()
+                                            && account.codex_identity() == Some(&source)
+                                            && let AgentEventKind::ModelCompleted(Ok(ModelResult::Catalog(models))) = &event
+                                        {
+                                            model_catalog = Some((source, models.clone()));
+                                        }
                                         if task.chat {
                                             if task.control.cancel.is_cancelled()
                                                 && let Err(failure) = children.settle_active(&store.client(), &mut conversation, Some(&mut mailbox_requests)).await
@@ -963,16 +975,18 @@ impl AgentRuntime {
                                                     }
                                                 }
                                             }
-                                            mut request @ (ConversationRequest::Create(_) | ConversationRequest::Reset { .. }) => {
-                                                let binding = model_source(&account).and_then(|source| {
-                                                    if let ConversationRequest::Create(settings) = &mut request {
-                                                        settings.codex = Some(source.clone());
-                                                        Ok(())
-                                                    } else {
-                                                        conversation.validate_model_source(source)
+                                            request @ (ConversationRequest::Create(_) | ConversationRequest::Reset { .. }) => {
+                                                let source = match model_source(&account) {
+                                                    Ok(source) => source.clone(),
+                                                    Err(failure) => {
+                                                        control.finished.cancel();
+                                                        emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
+                                                        continue;
                                                     }
-                                                });
-                                                if let Err(failure) = binding {
+                                                };
+                                                if matches!(&request, ConversationRequest::Reset { .. })
+                                                    && let Err(failure) = conversation.validate_model_source(&source)
+                                                {
                                                     control.finished.cancel();
                                                     emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
                                                     continue;
@@ -986,7 +1000,17 @@ impl AgentRuntime {
                                                         }
                                                     }
                                                 } else { None };
-                                                match creation::Creation::start(id, control.clone(), request, &conversation, &store, &mcp_connections, snapshot) {
+                                                let tools = mcp_connections.registrations();
+                                                let prepared = match request {
+                                                    ConversationRequest::Create(create) => model_catalog.as_ref()
+                                                        .filter(|(owner, _)| owner == &source)
+                                                        .ok_or_else(|| ConversationFailure::new("请先刷新当前账号的模型目录"))
+                                                        .and_then(|(_, models)| create.resolve(source, models))
+                                                        .and_then(|settings| conversation.prepare(settings, &tools, snapshot)),
+                                                    ConversationRequest::Reset { session } => conversation.prepare_reset(session, &tools, snapshot),
+                                                    _ => return Err(RuntimeFailure::ModelState),
+                                                };
+                                                match prepared.and_then(|prepared| creation::Creation::start(id, control.clone(), prepared, &store)) {
                                                     Ok(pending) => {
                                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control);
                                                         creating = Some(pending);
@@ -1084,6 +1108,8 @@ impl AgentRuntime {
                                             pending_source = Some(SourceSettlement::Publish(event));
                                         }
                                         if starting_settlement {
+                                            requesting_catalog = None;
+                                            model_catalog = None;
                                             if let Some(task) = &model {
                                                 task.control.cancel.cancel();
                                             }

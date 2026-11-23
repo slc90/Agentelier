@@ -34,17 +34,6 @@ pub struct ModelChoice {
     pub comp_hash: Option<String>,
 }
 
-impl ModelChoice {
-    pub(crate) fn context_limits(&self) -> Box<agentelier_conversation_bridge::ContextLimits> {
-        Box::new(agentelier_conversation_bridge::ContextLimits {
-            window: self.context_window,
-            effective: self.effective_window,
-            automatic: self.auto_compact_limit,
-            comp_hash: self.comp_hash.clone(),
-        })
-    }
-}
-
 #[derive(Clone, Copy, Default, Reflect, PartialEq, Eq)]
 pub enum ModelPhase {
     #[default]
@@ -89,6 +78,9 @@ impl ModelState {
             && self.selected_model().is_some()
             && reasoning::choices(self.selected_model()).contains(&self.reasoning)
     }
+    pub(crate) fn can_create_session(&self, account: &AccountState) -> bool {
+        self.can_request(account) && self.catalog_loaded && self.catalog_error.is_none()
+    }
     pub(crate) fn clear_reply(&mut self) {
         self.error = None;
         self.text = None;
@@ -114,11 +106,17 @@ struct ModelStatus;
 #[derive(Component, Clone, Default)]
 struct ModelText;
 
-pub fn install(app: &mut App) -> Result {
+pub fn install(
+    app: &mut App,
+    model_defaults: impl Fn() -> io::Result<crate::SessionModelDefaults> + Send + Sync + 'static,
+) -> Result {
     crate::archives::install(app)?;
     app.add_plugins(agentelier_markdown::MarkdownPlugin);
     crate::reading::install(app);
     reasoning::install(app)?;
+    app.insert_resource(crate::conversation::SessionDefaultsSource(Box::new(
+        model_defaults,
+    )));
     crate::conversation::install(app);
     crate::working_directory::install(app);
     crate::prompts::install(app)?;

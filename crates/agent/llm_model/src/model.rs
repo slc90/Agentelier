@@ -128,10 +128,7 @@ pub fn select_agent_model<'a>(
     slug: &str,
     effort: Option<&str>,
 ) -> Result<(&'a ModelInfo, Option<&'a str>), AgentModelError> {
-    let model = models
-        .iter()
-        .find(|model| model.slug == slug)
-        .ok_or_else(|| AgentModelError::Unavailable { slug: slug.into() })?;
+    let model = find_model(models, slug)?;
     match model.multi_agent {
         MultiAgentCapability::SupportedV2 => {}
         MultiAgentCapability::Unsupported => {
@@ -142,18 +139,7 @@ pub fn select_agent_model<'a>(
         }
     }
     let effort = match effort {
-        Some(effort) => Some(
-            model
-                .supported_reasoning_levels
-                .iter()
-                .find(|supported| supported.as_str() == effort)
-                .map(String::as_str)
-                .ok_or_else(|| AgentModelError::UnsupportedEffort {
-                    slug: slug.into(),
-                    requested: effort.into(),
-                    available: model.supported_reasoning_levels.clone(),
-                })?,
-        ),
+        Some(effort) => Some(explicit_effort(model, effort)?),
         None if model.default_reasoning_level.is_none()
             && !model.supported_reasoning_levels.is_empty() =>
         {
@@ -165,6 +151,36 @@ pub fn select_agent_model<'a>(
         None => model.default_reasoning_level.as_deref(),
     };
     Ok((model, effort))
+}
+
+pub fn select_session_model<'a>(
+    models: &'a [ModelInfo],
+    slug: &str,
+    effort: &str,
+) -> Result<&'a ModelInfo, AgentModelError> {
+    let model = find_model(models, slug)?;
+    explicit_effort(model, effort)?;
+    Ok(model)
+}
+
+fn find_model<'a>(models: &'a [ModelInfo], slug: &str) -> Result<&'a ModelInfo, AgentModelError> {
+    models
+        .iter()
+        .find(|model| model.slug == slug)
+        .ok_or_else(|| AgentModelError::Unavailable { slug: slug.into() })
+}
+
+fn explicit_effort<'a>(model: &'a ModelInfo, effort: &str) -> Result<&'a str, AgentModelError> {
+    model
+        .supported_reasoning_levels
+        .iter()
+        .find(|supported| supported.as_str() == effort)
+        .map(String::as_str)
+        .ok_or_else(|| AgentModelError::UnsupportedEffort {
+            slug: model.slug.clone(),
+            requested: effort.into(),
+            available: model.supported_reasoning_levels.clone(),
+        })
 }
 
 pub enum ModelRequest {

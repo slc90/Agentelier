@@ -6,7 +6,7 @@ use agentelier_agent_host::{
 };
 use agentelier_conversation_bridge::SessionId;
 use agentelier_conversation_bridge::{
-    ConversationEvent, ConversationRequest, SessionSettings, SessionView, TurnStatus,
+    ConversationEvent, ConversationRequest, SessionCreate, SessionView, TurnStatus,
 };
 use agentelier_login_ui::AccountState;
 use agentelier_markdown::{MarkdownSource, MarkdownView};
@@ -181,18 +181,27 @@ impl ChatSession {
 }
 
 #[derive(Clone, Reflect)]
-pub struct ChatReplacement {
-    pub reset_session: Option<SessionId>,
-    pub slug: String,
-    pub display_name: String,
-    pub effort: Option<String>,
-    pub image_input: Option<bool>,
-    #[reflect(ignore)]
-    pub context_limits: Box<agentelier_conversation_bridge::ContextLimits>,
-    pub working_directory: String,
-    #[reflect(ignore)]
-    pub instructions: Arc<InstructionSnapshot>,
+pub enum ChatReplacement {
+    Create {
+        slug: String,
+        effort: String,
+        working_directory: String,
+        #[reflect(ignore)]
+        instructions: Arc<InstructionSnapshot>,
+    },
+    Reset(SessionId),
 }
+
+pub struct SessionModelDefaults {
+    pub slug: String,
+    pub effort: String,
+}
+
+#[derive(Resource)]
+pub(crate) struct SessionDefaultsSource(
+    pub(crate) Box<dyn Fn() -> io::Result<SessionModelDefaults> + Send + Sync>,
+);
+
 #[derive(Resource, Clone, Reflect, Default)]
 #[reflect(Resource)]
 pub struct ChatState {
@@ -551,43 +560,34 @@ fn create_session(world: &mut World) -> Result {
     let account = world.resource::<AccountState>();
     if state.operation.is_some()
         || state.replacement.is_some()
-        || !model.can_verify(account)
+        || !model.can_create_session(account)
         || world.resource::<AgentHost>().model_busy()?
     {
         return Ok(());
     }
-    let choice = model
-        .selected_model()
-        .ok_or_else(|| io::Error::other("聊天准备区缺少所选模型"))?;
-    let settings = SessionSettings {
-        slug: choice.slug.clone(),
-        display_name: choice.display_name.clone(),
-        effort: model.reasoning.effort(),
-        image_input: choice.image_input,
-        context_limits: choice.context_limits(),
-        instructions: Arc::new(crate::prompts::snapshot(world)?),
-        working_directory: world
-            .resource::<crate::working_directory::DirectoryState>()
-            .input
-            .clone()
-            .into(),
-    };
+    let SessionModelDefaults { slug, effort } = (world.resource::<SessionDefaultsSource>().0)()?;
+    let instructions = Arc::new(crate::prompts::snapshot(world)?);
+    let working_directory = world
+        .resource::<crate::working_directory::DirectoryState>()
+        .input
+        .clone();
     if state.session.is_some() {
-        world.resource_mut::<ChatState>().replacement = Some(ChatReplacement {
-            reset_session: None,
-            slug: settings.slug,
-            display_name: settings.display_name,
-            effort: settings.effort,
-            image_input: settings.image_input,
-            context_limits: settings.context_limits,
-            instructions: settings.instructions,
-            working_directory: settings.working_directory.to_string_lossy().into_owned(),
+        world.resource_mut::<ChatState>().replacement = Some(ChatReplacement::Create {
+            slug,
+            effort,
+            instructions,
+            working_directory,
         });
         return Ok(());
     }
     let result = world
         .resource::<AgentHost>()
-        .request_conversation(ConversationRequest::Create(settings));
+        .request_conversation(ConversationRequest::Create(SessionCreate {
+            slug,
+            effort,
+            instructions,
+            working_directory: working_directory.into(),
+        }));
     let mut state = world.resource_mut::<ChatState>();
     match result {
         Ok(id) => {
@@ -620,16 +620,7 @@ fn prepare_reset(world: &mut World) -> Result {
     if !session.matches_account(world.resource::<AccountState>()) {
         return Ok(());
     }
-    let pending = ChatReplacement {
-        reset_session: Some(session.id),
-        slug: session.slug.clone(),
-        display_name: session.display_name.clone(),
-        effort: session.effort.clone(),
-        image_input: session.image_input,
-        context_limits: session.context_limits.clone(),
-        instructions: Arc::new(serde_json::from_str(&session.instruction_snapshot)?),
-        working_directory: session.working_directory.clone(),
-    };
+    let pending = ChatReplacement::Reset(session.id);
     world.resource_mut::<ChatState>().replacement = Some(pending);
     Ok(())
 }
@@ -642,25 +633,28 @@ fn confirm_replacement(world: &mut World) -> Result {
         return Ok(());
     };
     let account = world.resource::<AccountState>();
-    if !world.resource::<ModelState>().can_request(account)
-        || pending.reset_session.is_some()
-            && state
-                .session
-                .as_ref()
-                .is_none_or(|session| !session.matches_account(account))
-    {
+    if !world.resource::<ModelState>().can_request(account) {
         return Ok(());
     }
-    let request = match pending.reset_session {
-        Some(session) => ConversationRequest::Reset { session },
-        None => ConversationRequest::Create(SessionSettings {
-            slug: pending.slug,
-            display_name: pending.display_name,
-            effort: pending.effort,
-            image_input: pending.image_input,
-            context_limits: pending.context_limits,
-            instructions: pending.instructions,
-            working_directory: pending.working_directory.into(),
+    let request = match pending {
+        ChatReplacement::Reset(session)
+            if state.session.as_ref().is_some_and(|current| {
+                current.id == session && current.matches_account(account)
+            }) =>
+        {
+            ConversationRequest::Reset { session }
+        }
+        ChatReplacement::Reset(_) => return Ok(()),
+        ChatReplacement::Create {
+            slug,
+            effort,
+            instructions,
+            working_directory,
+        } => ConversationRequest::Create(SessionCreate {
+            slug,
+            effort,
+            instructions,
+            working_directory: working_directory.into(),
         }),
     };
     let result = world.resource::<AgentHost>().request_conversation(request);
@@ -1986,7 +1980,7 @@ fn update(
                 state.replacement.is_none()
                     && state.operation.is_none()
                     && !activity.model_busy
-                    && model.can_verify(&account)
+                    && model.can_create_session(&account)
             }
             ChatAction::Reset => {
                 state

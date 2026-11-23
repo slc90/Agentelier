@@ -107,12 +107,12 @@ fn run_application(
     }
     let host_plugin = AgentHostPlugin::default();
     let backend = host_plugin.host();
-    app.insert_resource(config_store)
+    app.insert_resource(config_store.clone())
         .add_plugins((AppAssetPlugin, WidgetryWindowPlugin, host_plugin, login_ui))
         .add_systems(Startup, setup)
         .add_observer(enter_main)
         .add_observer(mount_chat);
-    agentelier_chat_ui::install(&mut app)?;
+    agentelier_chat_ui::install(&mut app, move || config_store.session_model_defaults())?;
     let manager = app.world().resource::<JobManager>().clone();
     shutdown::install(&mut app);
     debug!("应用装配完成，进入主循环");

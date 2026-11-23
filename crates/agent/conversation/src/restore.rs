@@ -469,7 +469,10 @@ fn replay(
         .map_err(|failure| ConversationFailure::new(format!("存档指令无效：{failure}")))?;
     let mut state = StoredState {
         project_error: None,
-        context: Box::default(),
+        context: Box::new(crate::ContextState {
+            limits: initial.settings.context_limits.as_ref().clone(),
+            ..Default::default()
+        }),
         session: initial.session,
         turn: None,
         previous_turns: Vec::new(),

@@ -1,7 +1,6 @@
 use super::ModelControl;
 use agentelier_conversation::{
-    AgentId, Conversation, ConversationEvent, ConversationFailure, ConversationRequest,
-    PreparedSession,
+    AgentId, Conversation, ConversationEvent, ConversationFailure, PreparedSession,
 };
 use agentelier_session_store::{Commit, SessionStore};
 use std::io;
@@ -19,22 +18,9 @@ impl Creation {
     pub(super) fn start(
         id: u64,
         control: ModelControl,
-        request: ConversationRequest,
-        conversation: &Conversation,
+        prepared: PreparedSession,
         store: &SessionStore,
-        mcp: &agentelier_mcp::Connections,
-        memory: Option<agentelier_llm_model::MemorySnapshot>,
     ) -> Result<Self, ConversationFailure> {
-        let tools = mcp.registrations();
-        let prepared = match request {
-            ConversationRequest::Create(settings) => {
-                conversation.prepare(settings, &tools, memory)?
-            }
-            ConversationRequest::Reset { session } => {
-                conversation.prepare_reset(session, &tools, memory)?
-            }
-            _ => return Err(ConversationFailure::new("存档创建收到非创建请求")),
-        };
         let reply = store
             .create(prepared.initial.clone())
             .map_err(|failure| ConversationFailure::new(format!("无法创建会话存档：{failure}")))?;

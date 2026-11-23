@@ -1,5 +1,6 @@
 pub use agentelier_conversation::{
-    ContextLimits, SessionId, TaskAction, TaskActionOutcome, TaskActionReceipt, TaskId,
+    ContextLimits, SessionCreate, SessionId, TaskAction, TaskActionOutcome, TaskActionReceipt,
+    TaskId,
 };
 use agentelier_prompts::{InstructionMessage, InstructionSnapshot};
 use std::sync::Arc;
@@ -24,7 +25,7 @@ pub enum ConversationRequest {
     Delete {
         session: SessionId,
     },
-    Create(SessionSettings),
+    Create(SessionCreate),
     Reset {
         session: SessionId,
     },
@@ -509,19 +510,8 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
         ConversationRequest::Open { session } => {
             agentelier_conversation::ConversationRequest::Open { session }
         }
-        ConversationRequest::Create(settings) => {
-            agentelier_conversation::ConversationRequest::Create(
-                agentelier_conversation::SessionSettings {
-                    codex: None,
-                    slug: settings.slug,
-                    display_name: settings.display_name,
-                    effort: settings.effort,
-                    image_input: settings.image_input,
-                    context_limits: settings.context_limits,
-                    instructions: settings.instructions,
-                    working_directory: settings.working_directory,
-                },
-            )
+        ConversationRequest::Create(create) => {
+            agentelier_conversation::ConversationRequest::Create(create)
         }
         ConversationRequest::Reset { session } => {
             agentelier_conversation::ConversationRequest::Reset { session }

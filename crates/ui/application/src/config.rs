@@ -23,6 +23,10 @@ pub(crate) struct AppConfig {
     pub(crate) brp_render_port: u16,
     #[serde(default, serialize_with = "serialize_optional_path")]
     pub(crate) data_directory: Option<PathBuf>,
+    #[serde(default = "default_model_slug")]
+    pub(crate) default_model_slug: String,
+    #[serde(default = "default_reasoning_effort")]
+    pub(crate) default_reasoning_effort: String,
     #[serde(
         default,
         rename = "codex_auth_file",
@@ -34,6 +38,14 @@ pub(crate) struct AppConfig {
 
 const fn default_brp_render_port() -> u16 {
     DEFAULT_BRP_RENDER_PORT
+}
+
+fn default_model_slug() -> String {
+    "gpt-6.2-sol".into()
+}
+
+fn default_reasoning_effort() -> String {
+    "high".into()
 }
 
 fn ignore_legacy_codex_file<'de, D: Deserializer<'de>>(deserializer: D) -> Result<(), D::Error> {
@@ -58,6 +70,8 @@ impl Default for AppConfig {
             brp_port: DEFAULT_BRP_PORT,
             brp_render_port: default_brp_render_port(),
             data_directory: None,
+            default_model_slug: default_model_slug(),
+            default_reasoning_effort: default_reasoning_effort(),
             _legacy_codex_auth_file: (),
         }
     }
@@ -142,6 +156,19 @@ impl ConfigStore {
 
     pub(crate) fn remember_data_directory(&self, path: &Path) -> io::Result<()> {
         self.update(|config| config.data_directory = Some(path.to_path_buf()))
+    }
+
+    pub(crate) fn session_model_defaults(
+        &self,
+    ) -> io::Result<agentelier_chat_ui::SessionModelDefaults> {
+        let current = self
+            .0
+            .lock()
+            .map_err(|_| io::Error::other("应用配置状态不可用"))?;
+        Ok(agentelier_chat_ui::SessionModelDefaults {
+            slug: current.config.default_model_slug.clone(),
+            effort: current.config.default_reasoning_effort.clone(),
+        })
     }
 
     fn update(&self, change: impl FnOnce(&mut AppConfig)) -> io::Result<()> {

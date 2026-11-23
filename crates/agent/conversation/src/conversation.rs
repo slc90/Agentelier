@@ -52,6 +52,35 @@ impl SessionSettings {
         Ok(())
     }
 }
+#[derive(Clone)]
+pub struct SessionCreate {
+    pub slug: String,
+    pub effort: String,
+    pub instructions: Arc<InstructionSnapshot>,
+    pub working_directory: std::path::PathBuf,
+}
+
+impl SessionCreate {
+    pub fn resolve(
+        self,
+        source: agentelier_llm_model::CodexIdentity,
+        catalog: &[agentelier_llm_model::ModelInfo],
+    ) -> Result<SessionSettings, ConversationFailure> {
+        let model = agentelier_llm_model::select_session_model(catalog, &self.slug, &self.effort)
+            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+        Ok(SessionSettings {
+            codex: Some(source),
+            slug: self.slug,
+            display_name: model.display_name.clone(),
+            effort: Some(self.effort),
+            image_input: model.image_input,
+            context_limits: Box::new(model.context_limits.clone()),
+            instructions: self.instructions,
+            working_directory: self.working_directory,
+        })
+    }
+}
+
 pub enum ConversationRequest {
     ProcessResults {
         session: SessionId,
@@ -62,7 +91,7 @@ pub enum ConversationRequest {
     Delete {
         session: SessionId,
     },
-    Create(SessionSettings),
+    Create(SessionCreate),
     Reset {
         session: SessionId,
     },

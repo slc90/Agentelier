@@ -23,7 +23,8 @@ mod transcription;
 mod working_directory;
 
 pub use conversation::{
-    ChatHistoryItem, ChatMessage, ChatReplacement, ChatSession, ChatState, ChatTurn, ChatTurnStatus,
+    ChatHistoryItem, ChatMessage, ChatReplacement, ChatSession, ChatState, ChatTurn,
+    ChatTurnStatus, SessionModelDefaults,
 };
 pub use preparation::{ChatUiHost, ModelChoice, ModelPhase, ModelState, install};
 pub use reasoning::ReasoningSetting;
