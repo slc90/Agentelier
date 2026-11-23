@@ -16,6 +16,7 @@ bevy_widgetry = { workspace = true, features = [
   "button",
   "job",
   "scroll_area",
+  "text_field",
 ] }
 tracing.workspace = true
 

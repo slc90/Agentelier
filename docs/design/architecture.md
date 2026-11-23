@@ -110,7 +110,7 @@ flowchart TD
 
 `application` 安装由 controls 提供的应用主题与共享控件插件。登录、目录设置和聊天界面的普通按钮由 `AgentelierButton` 组合，业务内容和事件处理留在调用方。样式与焦点环由 controls 更新，Widgetry 持有输入、禁用及 Loading 状态。账号和对话使用 `AgentelierAvatar`，通过 Assets 提供的图像句柄显示内嵌头像。详见[控件体系](ui/components.md)。
 
-主窗口以 Widgetry Window 提供原生边缘缩放和标题栏拖动。chat_ui 装配固定导航栏与两层 Widgetry Splitter。会话导航、聊天和任务区域分别嵌入 C、D、E，右栏的下半区保持空白。标题栏投影当前会话的上下文占用和账号额度，账号界面由 B 区入口打开独立窗口。关闭主窗口触发应用收尾。
+主窗口以 Widgetry Window 提供原生边缘缩放和标题栏拖动。chat_ui 装配固定导航栏与两层 Widgetry Splitter。会话导航、聊天和任务区域分别嵌入 C、D、E，右栏的下半区保持空白。标题栏投影当前会话的上下文占用和账号额度，B 区账号入口按登录状态提供手动授权窗口或右键登出菜单。关闭主窗口触发应用收尾。
 
 C 区使用 Widgetry Tree 同时显示项目与单独聊天。项目定义与会话归属由 Session Store 写入，Conversation 定义命令和目录投影。界面通过 Bridge 取得保存后的目录，并在 Agent 确认打开后切换 D 区。Runtime 保留原会话仍在使用的后台工具资源，并发布跨会话的安全任务快照。[项目组织与归属](modules/session-store.md#项目组织与归属)
 

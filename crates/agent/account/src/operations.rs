@@ -19,12 +19,8 @@ pub struct AccountEvent {
     pub kind: AccountEventKind,
 }
 
-pub enum LoginPrompt {
-    Opened,
-    Manual {
-        authorization_url: String,
-        reason: String,
-    },
+pub struct LoginPrompt {
+    pub authorization_url: String,
 }
 
 pub enum LoginFailure {
@@ -158,16 +154,11 @@ impl Account {
         prompt: impl FnOnce(LoginPrompt),
     ) -> Result<CodexOAuthCredentials, LoginFailure> {
         let login = BrowserLogin::start().await?;
-        let opened = tokio::select! { biased;
-            () = cancellation.cancelled() => return Err(LoginFailure::Cancelled),
-            opened = login.open_browser() => opened,
-        };
-        prompt(match opened {
-            Ok(()) => LoginPrompt::Opened,
-            Err(failure) => LoginPrompt::Manual {
-                authorization_url: login.authorization_url().to_owned(),
-                reason: failure.to_string(),
-            },
+        if cancellation.is_cancelled() {
+            return Err(LoginFailure::Cancelled);
+        }
+        prompt(LoginPrompt {
+            authorization_url: login.authorization_url().to_owned(),
         });
         Ok(login.complete(cancellation).await?)
     }

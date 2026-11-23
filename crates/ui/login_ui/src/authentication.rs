@@ -27,7 +27,7 @@ fn ready(
 pub(crate) fn begin_login(world: &mut World) -> Result {
     let state = world.resource::<AccountState>();
     let host = world.resource::<AgentHost>();
-    if state.is_busy() || state.runtime_failed || host.is_stopping()? {
+    if state.signed_in() || state.is_busy() || state.runtime_failed || host.is_stopping()? {
         return Ok(());
     }
     let result = host.begin_login();
@@ -37,7 +37,7 @@ pub(crate) fn begin_login(world: &mut World) -> Result {
             state.clear_operation();
             state.operation = Some(AccountOperation {
                 id,
-                phase: AccountPhase::OpeningBrowser,
+                phase: AccountPhase::PreparingLink,
             });
             info!(operation_id = id, "用户请求使用 ChatGPT 登录");
         }
@@ -118,7 +118,7 @@ pub(crate) fn copy_login_url(world: &mut World) {
 pub(crate) fn logout(world: &mut World) -> Result {
     let state = world.resource::<AccountState>();
     let host = world.resource::<AgentHost>();
-    if state.is_busy() || state.runtime_failed || host.is_stopping()? {
+    if !state.signed_in() || state.is_busy() || state.runtime_failed || host.is_stopping()? {
         return Ok(());
     }
     let result = host.logout();
@@ -160,16 +160,14 @@ fn receive(
                 let Some(operation) = &mut state.operation else {
                     continue;
                 };
-                if operation.phase != AccountPhase::OpeningBrowser {
+                if operation.phase != AccountPhase::PreparingLink {
                     continue;
                 }
-                if let Some(manual) = manual {
-                    operation.phase = AccountPhase::ManualBrowser;
-                    state.authorization_url = Some(manual.authorization_url.clone());
-                    state.error = Some(format!("无法打开系统浏览器：{}", manual.reason));
-                    error!(operation_id = event.operation_id, error = %manual.reason, "无法打开系统浏览器");
+                operation.phase = AccountPhase::WaitingForBrowser;
+                if manual.authorization_url.trim().is_empty() {
+                    state.error = Some("未收到有效的授权链接".into());
                 } else {
-                    operation.phase = AccountPhase::WaitingForBrowser;
+                    state.authorization_url = Some(manual.authorization_url.clone());
                 }
             }
             AccountEventKind::LoginCancelled => {
@@ -198,9 +196,15 @@ fn receive(
                     (SourceSnapshot::Unavailable(local), Some(remote)) => {
                         Some(format!("{local}\n{remote}"))
                     }
+                    (SourceSnapshot::Unavailable(local), None) => Some(local.clone()),
                     (_, remote) => remote.clone(),
                 };
-                apply_source(&mut state, source, event.operation_id);
+                if matches!(source, SourceSnapshot::Unavailable(_)) && state.signed_in() {
+                    state.logout_cleanup_failed = true;
+                    state.quota = None;
+                } else {
+                    apply_source(&mut state, source, event.operation_id);
+                }
             }
             AccountEventKind::SourceChanged(result) => {
                 if event.operation_id != 0 {
@@ -230,6 +234,7 @@ fn receive(
 }
 
 fn apply_source(state: &mut AccountState, snapshot: &SourceSnapshot, operation_id: u64) {
+    state.logout_cleanup_failed = false;
     state.codex = match snapshot {
         SourceSnapshot::Disconnected => None,
         SourceSnapshot::Codex(summary) => Some(CodexStatus::Read {

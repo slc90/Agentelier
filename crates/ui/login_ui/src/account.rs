@@ -1,21 +1,26 @@
 use agentelier_account_bridge::QuotaStatus;
-use agentelier_controls::{
-    AgentelierAvatar, AgentelierButton, AgentelierButtonLoading, AgentelierButtonStyle,
+use agentelier_agent_host::HostActivity;
+use agentelier_controls::{AgentelierAvatar, AgentelierButton, AgentelierButtonStyle};
+use bevy::picking::{
+    events::{PointerClick, PointerPress},
+    pointer::PointerButton,
 };
 use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::{InteractionDisabled, UiSystems};
-use bevy::ui_widgets::Activate;
+use bevy::ui_widgets::{
+    Activate,
+    popover::{Popover, PopoverAlign, PopoverPlacement, PopoverSide},
+};
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
+use bevy_widgetry::style::z_index;
 use bevy_widgetry::text::WidgetryText;
+use bevy_widgetry::text_field::{AutoSize, WidgetryReadOnlyTextField, WidgetryTextFieldHeadless};
+use bevy_widgetry::theme::WidgetryTheme;
 use bevy_widgetry::window::{
     WidgetryWindowBackground, WidgetryWindowControlsConfig, WidgetryWindowTitle,
     owned_widgetry_window,
 };
-
-const ACCOUNT_GAP: f32 = 12.0;
-const BUTTON_HEIGHT: f32 = 40.0;
-const BUTTON_WIDTH: f32 = 168.0;
 
 #[derive(Resource, Reflect, Clone, Default)]
 #[reflect(Resource)]
@@ -28,6 +33,7 @@ pub struct AccountState {
     pub(crate) error: Option<String>,
     pub(crate) notice: Option<String>,
     pub runtime_failed: bool,
+    pub(crate) logout_cleanup_failed: bool,
     #[reflect(ignore)]
     pub(crate) quota: Option<QuotaStatus>,
 }
@@ -40,9 +46,8 @@ pub(crate) struct AccountOperation {
 
 #[derive(Reflect, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AccountPhase {
-    OpeningBrowser,
+    PreparingLink,
     WaitingForBrowser,
-    ManualBrowser,
     LinkCopied,
     Cancelling,
     SigningOut,
@@ -67,6 +72,10 @@ impl AccountState {
         self.notice = None;
     }
 
+    pub fn signed_in(&self) -> bool {
+        matches!(self.codex, Some(CodexStatus::Read { .. }))
+    }
+
     pub fn is_busy(&self) -> bool {
         self.operation.is_some() || self.source_settling
     }
@@ -81,20 +90,23 @@ impl AccountState {
         if self.operation.is_some() {
             return Some("正在使用 ChatGPT 登录");
         }
-        match self.codex.as_ref() {
-            Some(CodexStatus::Read { .. }) => None,
-            Some(CodexStatus::Failed(_)) | None => Some("请先使用 ChatGPT 登录"),
+        if self.logout_cleanup_failed {
+            return Some("登出未完成，请重试");
         }
+        (!self.signed_in()).then_some("请先使用 ChatGPT 登录")
     }
 
     pub fn model_identity(&self) -> Option<(&str, &str)> {
+        if self.logout_cleanup_failed {
+            return None;
+        }
         match self.codex.as_ref()? {
             CodexStatus::Read {
                 subject,
                 workspace_id,
                 ..
             } => Some((subject, workspace_id)),
-            _ => None,
+            CodexStatus::Failed(_) => None,
         }
     }
 }
@@ -110,264 +122,265 @@ pub(crate) enum CodexStatus {
 }
 
 #[derive(Component, Clone, Copy)]
-enum ButtonAction {
-    Login,
-    CancelLogin,
-    CopyLoginUrl,
-    Logout,
-}
-
-impl ButtonAction {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Login => "使用 ChatGPT 登录",
-            Self::CancelLogin => "取消登录",
-            Self::CopyLoginUrl => "复制授权链接",
-            Self::Logout => "退出登录",
-        }
-    }
-
-    fn visible(self, state: &AccountState) -> bool {
-        match self {
-            Self::Login => state.model_identity().is_none(),
-            Self::CancelLogin => {
-                state.operation.is_some()
-                    && state.phase() != Some(AccountPhase::SigningOut)
-                    && !state.source_settling
-            }
-            Self::CopyLoginUrl => state.authorization_url.is_some() && !state.source_settling,
-            Self::Logout => state.codex.is_some(),
-        }
-    }
-
-    fn disabled(self, state: &AccountState, model_busy: bool) -> bool {
-        state.runtime_failed
-            || match self {
-                Self::Login | Self::Logout => state.is_busy() || model_busy,
-                Self::CancelLogin => state.phase() == Some(AccountPhase::Cancelling),
-                Self::CopyLoginUrl => state.phase() == Some(AccountPhase::Cancelling),
-            }
-    }
-}
-
-#[derive(Component, Clone, Copy)]
-enum AccountText {
+enum AuthorizationText {
     Status,
-    Identity,
     Message,
 }
 
-impl AccountText {
+impl AuthorizationText {
     fn content(self, state: &AccountState) -> String {
-        let source = state.codex.as_ref();
         match self {
             Self::Status => match state.phase() {
-                Some(AccountPhase::SigningOut) => "正在退出登录并收尾…",
-                _ if state.source_settling => "正在回收旧账号的任务并保存待办…",
-                Some(AccountPhase::OpeningBrowser) => "正在打开浏览器…",
-                Some(AccountPhase::WaitingForBrowser) => "正在等待浏览器授权…",
-                Some(AccountPhase::ManualBrowser) => "请复制授权链接并在浏览器中打开",
+                Some(AccountPhase::PreparingLink) => "正在生成授权链接…",
+                Some(AccountPhase::WaitingForBrowser) => "请复制授权链接并在浏览器中打开",
                 Some(AccountPhase::LinkCopied) => "已复制授权链接，请在浏览器中打开",
                 Some(AccountPhase::Cancelling) => "正在取消登录…",
-                None => match source {
-                    Some(CodexStatus::Read { .. }) => "已登录 ChatGPT",
-                    Some(CodexStatus::Failed(_)) => "登录凭据不可用",
-                    None => "未登录 ChatGPT",
-                },
+                Some(AccountPhase::SigningOut) => "正在退出登录…",
+                None if state.signed_in() => "已登录 ChatGPT",
+                None => "未登录 ChatGPT",
             }
             .into(),
-            Self::Identity => match source {
-                Some(CodexStatus::Read {
-                    subject,
-                    workspace_id,
-                    email,
-                    ..
-                }) => {
-                    format!(
-                        "{} · 工作区 {workspace_id}",
-                        email.as_deref().unwrap_or(subject)
-                    )
-                }
-                _ => String::new(),
-            },
-            Self::Message => match (state.error.as_ref().or(state.notice.as_ref()), source) {
-                (Some(message), _) | (None, Some(CodexStatus::Failed(message))) => message.clone(),
-                _ => String::new(),
-            },
+            Self::Message => state
+                .error
+                .as_ref()
+                .or(state.notice.as_ref())
+                .or(match &state.codex {
+                    Some(CodexStatus::Failed(message)) => Some(message),
+                    _ => None,
+                })
+                .cloned()
+                .unwrap_or_default(),
         }
     }
 }
+
+#[derive(Component, Clone, Default)]
+struct AuthorizationWindow;
+
+#[derive(Component, Clone, Default)]
+struct AuthorizationLink;
+
+#[derive(Component, Clone, Default)]
+struct CopyLink;
+
+#[derive(Component, Clone, Default)]
+struct LogoutMenu;
 
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<AccountState>()
         .register_type::<AccountState>()
-        .add_systems(PostUpdate, update_panel.before(UiSystems::Content));
+        .add_observer(close_authorization)
+        .add_systems(Update, dismiss_menu)
+        .add_systems(
+            PostUpdate,
+            (update_authorization, update_link).before(UiSystems::Content),
+        );
 }
 
-fn button(
-    state: &AccountState,
-    action: ButtonAction,
-    name: &'static str,
-    model_busy: bool,
-) -> impl Scene {
-    let label = action.label();
-    let visibility = display(action.visible(state));
-    let disabled = action.disabled(state, model_busy);
-    let style = match action {
-        ButtonAction::Login => AgentelierButtonStyle::Primary,
-        ButtonAction::CancelLogin | ButtonAction::CopyLoginUrl => AgentelierButtonStyle::Secondary,
-        ButtonAction::Logout => AgentelierButtonStyle::Danger,
+pub fn login_entry(avatar_size: f32) -> impl Scene {
+    bsn! {
+        @AgentelierButton {
+            @style: AgentelierButtonStyle::Icon,
+            @children: {Some(Box::new(bsn_list! {
+                @AgentelierAvatar { @size: avatar_size }
+            }) as Box<dyn SceneList>)}
+        }
+        Name("WorkspaceLogin")
+        on(open_authorization)
+        on(secondary_click)
+    }
+}
+
+fn open_authorization(
+    _event: On<Activate>,
+    state: Res<AccountState>,
+    model: Res<HostActivity>,
+    windows: Query<(), With<AuthorizationWindow>>,
+    mut commands: Commands,
+) {
+    if state.signed_in() || model.model_busy {
+        return;
+    }
+    if windows.is_empty() {
+        commands.spawn_scene_with_error_handler(authorization_window());
+    }
+    commands.queue(crate::authentication::begin_login);
+}
+
+fn authorization_window() -> impl Scene {
+    bsn! {
+        AuthorizationWindow Name("AuthorizationWindow")
+        @owned_widgetry_window(
+            Window { title: "ChatGPT 授权".into(), resolution: (640, 330).into(), ..default() },
+            WidgetryWindowControlsConfig { minimize_visible: false, maximize_visible: false, ..default() },
+            WidgetryWindowBackground::Theme,
+            Default::default(),
+            bsn_list! { WidgetryWindowTitle WidgetryText Pickable::IGNORE },
+            bsn_list! {
+                Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(12), padding: UiRect::all(px(16)) }
+                Children [
+                    Text::default() WidgetryText template(|_| Ok(AuthorizationText::Status)) Name("AuthorizationStatus")--
+                    @WidgetryReadOnlyTextField {
+                        @multiline: true,
+                        @auto_size: {Some(AutoSize { min_rows: 2, max_rows: 4 })},
+                    }
+                    AuthorizationLink Name("AuthorizationLink")
+                    Node { width: percent(100), min_width: px(0), display: Display::None }--
+                    @AgentelierButton {
+                        @children: {Some(Box::new(bsn_list! { Text("复制授权链接") WidgetryText }) as Box<dyn SceneList>)}
+                    }
+                    CopyLink Name("CopyAuthorizationLink")
+                    Node { align_self: AlignSelf::Start, display: Display::None }
+                    on(copy_link)--
+                    Text::default() WidgetryText template(|_| Ok(AuthorizationText::Message)) Name("AuthorizationMessage")
+                    TextLayout::linebreak(LineBreak::AnyCharacter)
+                ]
+            },
+        )
+    }
+}
+
+fn copy_link(_event: On<Activate>, mut commands: Commands) {
+    commands.queue(crate::authentication::copy_login_url);
+}
+
+fn close_authorization(_event: On<Despawn<AuthorizationWindow>>, mut commands: Commands) {
+    commands.queue(crate::authentication::cancel_login);
+}
+
+fn update_authorization(
+    state: Res<AccountState>,
+    mut labels: Query<(&AuthorizationText, &mut Text)>,
+    mut buttons: Query<&mut Node, With<CopyLink>>,
+) {
+    for (field, mut text) in &mut labels {
+        text.set_if_neq(Text(field.content(&state)));
+    }
+    let display = link_display(&state);
+    for mut node in &mut buttons {
+        node.display = display;
+    }
+}
+
+fn update_link(world: &mut World) -> Result {
+    let Ok(field) = world
+        .query_filtered::<Entity, With<AuthorizationLink>>()
+        .single(world)
+    else {
+        return Ok(());
     };
+    let state = world.resource::<AccountState>();
+    let display = link_display(state);
+    let text = state.authorization_url.clone().unwrap_or_default();
+    let shown = WidgetryTextFieldHeadless::text(world, field)
+        .map_err(|failure| failure.into_bevy_error())?;
+    if shown != text {
+        WidgetryTextFieldHeadless::set_text_in_world(world, field, &text)
+            .map_err(|failure| failure.into_bevy_error())?;
+    }
+    if let Some(mut node) = world.get_mut::<Node>(field) {
+        node.display = display;
+    }
+    Ok(())
+}
+
+fn link_display(state: &AccountState) -> Display {
+    if state.authorization_url.is_some() && !state.source_settling && !state.runtime_failed {
+        Display::Flex
+    } else {
+        Display::None
+    }
+}
+
+fn secondary_click(
+    mut event: On<PointerClick>,
+    state: Res<AccountState>,
+    model: Res<HostActivity>,
+    theme: Res<WidgetryTheme>,
+    menus: Query<Entity, With<LogoutMenu>>,
+    mut commands: Commands,
+) {
+    if event.button != PointerButton::Secondary || !state.signed_in() {
+        return;
+    }
+    event.propagate(false);
+    if let Ok(menu) = menus.single() {
+        commands.entity(menu).try_despawn();
+        return;
+    }
+    let anchor = event.entity;
+    let disabled = state.is_busy() || state.runtime_failed || model.model_busy;
+    let background = theme.window.frame.normal.background;
+    let border = theme.window.frame.normal.border;
+    commands.spawn_scene_with_error_handler(bsn! {
+        LogoutMenu Name("AccountLogoutMenu") ChildOf(anchor) GlobalZIndex(z_index::POPUP)
+        Popover {
+            positions: {vec![PopoverPlacement { side: PopoverSide::Right, align: PopoverAlign::Start, gap: 4.0 }]},
+            window_margin: 8.0,
+        }
+        BackgroundColor(background) BorderColor::all(border)
+        Node { position_type: PositionType::Absolute, min_width: px(104), padding: UiRect::all(px(4)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)) }
+        Children [ @logout_item(disabled) ]
+    });
+}
+
+fn logout_item(disabled: bool) -> impl Scene {
     (
         bsn! {
             @AgentelierButton {
-                @style: style,
-                @children: {Some(Box::new(bsn_list! {
-                    Text(label) WidgetryText
-                }) as Box<dyn SceneList>)}
+                @style: AgentelierButtonStyle::Secondary,
+                @children: {Some(Box::new(bsn_list! { Text("登出") WidgetryText Pickable::IGNORE }) as Box<dyn SceneList>)}
             }
-            Name(name) template(move |_| Ok(action))
-            Node { min_width: px(BUTTON_WIDTH), height: px(BUTTON_HEIGHT), align_self: AlignSelf::Start, flex_shrink: 0.0, display: visibility }
-            on(activate)
+            Name("AccountLogout")
+            Node { width: percent(100) }
+            on(logout)
         },
         disabled.then_some(bsn! { InteractionDisabled }),
     )
 }
 
-fn text(state: &AccountState, field: AccountText, name: &'static str) -> impl Scene {
-    let value = field.content(state);
-    let visibility = display(!value.is_empty());
-    bsn! {
-        Text(value) WidgetryText Name(name) template(move |_| Ok(field))
-        TextLayout::linebreak(LineBreak::AnyCharacter)
-        Node { width: percent(100), min_width: px(0), display: visibility }
-    }
-}
-
-pub(crate) fn account_panel(state: &AccountState, model_busy: bool) -> impl Scene {
-    bsn! {
-        Name("AccountPanel")
-        Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(ACCOUNT_GAP) }
-        Children [
-            Node { align_items: AlignItems::Center, column_gap: px(ACCOUNT_GAP) }
-            Children [
-                @AgentelierAvatar Name("AccountAvatar")--
-                @text(state, AccountText::Status, "AccountStatus")
-            ]--
-            @text(state, AccountText::Identity, "AccountIdentity")--
-            @text(state, AccountText::Message, "AccountMessage")--
-            Node { flex_wrap: FlexWrap::Wrap, column_gap: px(ACCOUNT_GAP), row_gap: px(ACCOUNT_GAP) }
-            Children [
-                @button(state, ButtonAction::Login, "AccountLogin", model_busy)--
-                @button(state, ButtonAction::CancelLogin, "AccountCancelLogin", model_busy)--
-                @button(state, ButtonAction::CopyLoginUrl, "AccountCopyLoginUrl", model_busy)--
-                @button(state, ButtonAction::Logout, "AccountLogout", model_busy)
-            ]
-        ]
-    }
-}
-
-#[derive(Component, Clone, Default)]
-struct AccountWindow;
-
-pub fn open_account_window(world: &mut World) -> Result {
-    if world
-        .query_filtered::<Entity, With<AccountWindow>>()
-        .iter(world)
-        .next()
-        .is_some()
-    {
-        return Ok(());
-    }
-    let account = world.resource::<AccountState>().clone();
-    let model_busy = world
-        .resource::<agentelier_agent_host::HostActivity>()
-        .model_busy;
-    world.commands().spawn_scene_with_error_handler(bsn! {
-        AccountWindow Name("AccountWindow")
-        @owned_widgetry_window(
-            Window { title: "账号".into(), resolution: (560, 300).into(), ..default() },
-            WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
-            WidgetryWindowBackground::Theme,
-            Default::default(),
-            bsn_list! { WidgetryWindowTitle WidgetryText Pickable::IGNORE },
-            bsn_list! {
-                Node { padding: UiRect::all(px(16)), width: percent(100) }
-                Children [@account_panel(&account, model_busy)]
-            },
-        )
-    });
-    Ok(())
-}
-
-fn activate(
-    event: On<Activate>,
-    actions: Query<&ButtonAction>,
+fn dismiss_menu(
+    mut press: MessageReader<PointerPress>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    parents: Query<&ChildOf>,
+    menus: Query<(Entity, &ChildOf), With<LogoutMenu>>,
     state: Res<AccountState>,
-    model: Res<agentelier_agent_host::HostActivity>,
-    mut commands: Commands,
-) -> Result {
-    let action = *actions.get(event.entity)?;
-    if action.disabled(&state, model.model_busy) || !action.visible(&state) {
-        return Ok(());
-    }
-    match action {
-        ButtonAction::Login => commands.queue(crate::authentication::begin_login),
-        ButtonAction::CancelLogin => commands.queue(crate::authentication::cancel_login),
-        ButtonAction::CopyLoginUrl => commands.queue(crate::authentication::copy_login_url),
-        ButtonAction::Logout => commands.queue(crate::authentication::logout),
-    }
-    Ok(())
-}
-
-fn update_panel(
-    state: Res<AccountState>,
-    model: Res<agentelier_agent_host::HostActivity>,
-    mut text: Query<(&AccountText, &mut Text, Option<&mut Node>), Without<ButtonAction>>,
-    mut buttons: Query<(Entity, &ButtonAction, &mut Node)>,
     mut commands: Commands,
 ) {
-    if !state.is_changed() && !model.is_changed() {
-        return;
-    }
-    for (field, mut text, node) in &mut text {
-        text.set_if_neq(Text(field.content(&state)));
-        if let Some(mut node) = node {
-            node.display = display(!text.0.is_empty());
+    let outside = |event: &PointerPress, menu: Entity, anchor: Entity| {
+        if event.entity == anchor && event.button == PointerButton::Secondary {
+            return false;
         }
-    }
-    for (entity, action, mut node) in &mut buttons {
-        node.display = display(action.visible(&state));
-        if action.disabled(&state, model.model_busy) {
-            commands.entity(entity).insert(InteractionDisabled);
-        } else {
-            commands.entity(entity).remove::<InteractionDisabled>();
+        event.entity != menu
+            && !parents
+                .iter_ancestors(event.entity)
+                .any(|parent| parent == menu)
+    };
+    let presses = press.read().collect::<Vec<_>>();
+    for (menu, anchor) in &menus {
+        if !state.signed_in()
+            || keyboard.just_pressed(KeyCode::Escape)
+            || presses
+                .iter()
+                .any(|event| outside(event, menu, anchor.parent()))
+        {
+            commands.entity(menu).try_despawn();
         }
-        AgentelierButtonLoading::set(
-            &mut commands,
-            entity,
-            match action {
-                ButtonAction::Login => matches!(
-                    state.phase(),
-                    Some(
-                        AccountPhase::OpeningBrowser
-                            | AccountPhase::WaitingForBrowser
-                            | AccountPhase::ManualBrowser
-                            | AccountPhase::LinkCopied
-                    )
-                ),
-                ButtonAction::Logout => state.phase() == Some(AccountPhase::SigningOut),
-                ButtonAction::CancelLogin => state.phase() == Some(AccountPhase::Cancelling),
-                ButtonAction::CopyLoginUrl => false,
-            },
-        );
     }
 }
 
-fn display(visible: bool) -> Display {
-    if visible {
-        Display::Flex
-    } else {
-        Display::None
+fn logout(
+    event: On<Activate>,
+    state: Res<AccountState>,
+    model: Res<HostActivity>,
+    parents: Query<&ChildOf>,
+    mut commands: Commands,
+) {
+    if !state.signed_in() || state.is_busy() || model.model_busy {
+        return;
     }
+    if let Ok(menu) = parents.get(event.entity) {
+        commands.entity(menu.parent()).try_despawn();
+    }
+    commands.queue(crate::authentication::logout);
 }

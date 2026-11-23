@@ -13,7 +13,6 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{Instant, timeout, timeout_at};
 use tokio_util::sync::CancellationToken;
 use url::{Url, form_urlencoded};
-use winsafe::{self as win, co, prelude::*};
 
 mod refresh;
 mod revoke;
@@ -29,7 +28,6 @@ const DEFAULT_PORT: u16 = 1455;
 const FALLBACK_PORT: u16 = 1457;
 const CALLBACK_PATH: &str = "/auth/callback";
 const LOGIN_TIMEOUT: Duration = Duration::from_mins(5);
-const BROWSER_LAUNCH_TIMEOUT: Duration = Duration::from_secs(8);
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(2);
 const TOKEN_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_CALLBACK_BYTES: usize = 8 * 1024;
@@ -194,22 +192,6 @@ impl BrowserLogin {
 
     pub fn authorization_url(&self) -> &str {
         self.authorization_url.as_str()
-    }
-
-    pub async fn open_browser(&self) -> io::Result<()> {
-        let url = self.authorization_url.clone();
-        let launch = tokio::task::spawn_blocking(move || {
-            let _com =
-                win::CoInitializeEx(co::COINIT::APARTMENTTHREADED | co::COINIT::DISABLE_OLE1DDE)
-                    .map_err(io::Error::other)?;
-            win::HWND::NULL
-                .ShellExecute("open", url.as_str(), None, None, co::SW::SHOWNORMAL)
-                .map_err(io::Error::other)
-        });
-        timeout(BROWSER_LAUNCH_TIMEOUT, launch)
-            .await
-            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "打开系统浏览器超时"))?
-            .map_err(io::Error::other)?
     }
 
     pub async fn complete(

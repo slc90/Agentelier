@@ -1,5 +1,5 @@
 use crate::conversation::ChatState;
-use agentelier_controls::{AgentelierAvatar, AgentelierButton, AgentelierButtonStyle};
+use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
 use agentelier_login_ui::{AccountState, QuotaWindow};
 use bevy::prelude::*;
 use bevy::ui::{InteractionDisabled, UiSystems};
@@ -50,7 +50,6 @@ struct InitialSplit {
 
 #[derive(Component, Clone, Copy)]
 enum Entry {
-    Login,
     Settings,
     Skills,
     Mcp,
@@ -60,7 +59,6 @@ enum Entry {
 impl Entry {
     fn name(self) -> &'static str {
         match self {
-            Self::Login => "WorkspaceLogin",
             Self::Settings => "WorkspaceSettings",
             Self::Skills => "WorkspaceSkills",
             Self::Mcp => "WorkspaceMcp",
@@ -70,7 +68,6 @@ impl Entry {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Login => "登录与账号",
             Self::Settings => "设置",
             Self::Skills => "Skill 管理",
             Self::Mcp => "MCP 管理",
@@ -230,7 +227,7 @@ fn navigation() -> impl Scene {
         BackgroundColor(SIDE_BACKGROUND)
         Node { width: px(NAV_WIDTH), height: percent(100), flex_shrink: 0.0, flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: px(NAV_GAP), padding: UiRect::top(px(NAV_GAP)) }
         Children [
-            @entry(Entry::Login, bsn_list! { @AgentelierAvatar { @size: NAV_AVATAR_SIZE } })--
+            @agentelier_login_ui::login_entry(NAV_AVATAR_SIZE)--
             @entry(Entry::Settings, icon(NavigationIcon::Settings))--
             @entry(Entry::Skills, icon(NavigationIcon::Skills))--
             @entry(Entry::Mcp, icon(NavigationIcon::Mcp))--
@@ -262,7 +259,6 @@ fn entry(entry: Entry, children: impl SceneList + 'static) -> impl Scene {
 
 fn open(event: On<Activate>, entries: Query<&Entry>, mut commands: Commands) -> Result {
     match entries.get(event.entity)? {
-        Entry::Login => commands.queue(agentelier_login_ui::open_account_window),
         Entry::Settings => commands.queue(agentelier_login_ui::open_directory_settings),
         Entry::Skills => {}
         Entry::Mcp => commands.queue(crate::prompts::open_mcp),
