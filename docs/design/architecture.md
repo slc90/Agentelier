@@ -41,6 +41,7 @@ flowchart TD
     App --> UI["UI · login_ui"]
     App --> Assets["UI · assets"]
     App --> Controls["UI · controls"]
+    Controls --> Assets
     App --> Login["Agent · login"]
     UI --> Login
     App --> ChatUI["UI · chat_ui"]
@@ -107,7 +108,7 @@ flowchart TD
 
 `application` 建立可执行文件旁的日志，读取 `config/config.ron`，装配窗口、Asset、缩放与可选 BRP。BRP 的 Main World 和 Render World 端口独立配置。`agent_host` 是唯一 Connection 所有者和接收者，按业务将账号、模型与聊天事件分发到独立 ECS 消息通道，运行错误另行广播；`login_ui` 在宿主接收后消费自己的业务消息，通过 BSN 组合界面，持有面向交互的账号与目录状态；Widgetry 控件自身的状态遵循其公开契约。
 
-`application` 安装由 controls 提供的应用主题与共享控件插件。登录、目录设置和聊天界面的普通按钮由 `AgentelierButton` 组合，业务内容和事件处理留在调用方。样式与焦点环由 controls 更新，Widgetry 持有输入、禁用及 Loading 状态。详见[控件体系](ui/components.md#agentelierbutton)。
+`application` 安装由 controls 提供的应用主题与共享控件插件。登录、目录设置和聊天界面的普通按钮由 `AgentelierButton` 组合，业务内容和事件处理留在调用方。样式与焦点环由 controls 更新，Widgetry 持有输入、禁用及 Loading 状态。账号和对话使用 `AgentelierAvatar`，通过 Assets 提供的图像句柄显示内嵌头像。详见[控件体系](ui/components.md)。
 
 启动界面复用 Widgetry 目录选择器，通过辅助 Job 调用 Login 检查并占用目录。配置由 application 的 ConfigStore 串行合并并完整替换提交；成功后复用同一窗口进入主界面，通过共享 AgentHost 发起账号恢复。数据环境保持到后台执行及日志收尾完成。
 

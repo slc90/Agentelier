@@ -1,9 +1,13 @@
 #[cfg(not(all(target_os = "windows", target_pointer_width = "64")))]
 compile_error!("This application supports Windows x64 only");
 
+mod avatar;
 mod button;
 mod theme;
 
+pub use avatar::{
+    AgentelierAvatar, AgentelierAvatarProps, AvatarCrop, AvatarPresentation, AvatarSource,
+};
 pub use bevy_widgetry::button::WidgetryButtonLoading as AgentelierButtonLoading;
 pub use button::{AgentelierButton, AgentelierButtonProps, AgentelierButtonStyle};
 pub use theme::AGENTELIER_THEME;
@@ -19,5 +23,6 @@ impl Plugin for AgentelierControlsPlugin {
             app.add_plugins(WidgetryButtonPlugin);
         }
         button::install(app);
+        avatar::install(app);
     }
 }

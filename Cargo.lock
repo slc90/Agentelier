@@ -200,6 +200,7 @@ name = "agentelier_controls"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bevy_app_assets",
  "bevy_widgetry",
 ]
 

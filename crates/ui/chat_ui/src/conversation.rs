@@ -4,7 +4,9 @@ use agentelier_agent_host::{
     AgentHost, ConversationEvent as HostConversationEvent, HostActivity, HostFailed,
     ReceiveAgentEvents,
 };
-use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
+use agentelier_controls::{
+    AgentelierAvatar, AgentelierButton, AgentelierButtonStyle, AvatarSource,
+};
 use agentelier_conversation_bridge::SessionId;
 use agentelier_conversation_bridge::{
     ConversationEvent, ConversationRequest, SessionCreate, SessionView, TurnStatus,
@@ -1623,6 +1625,7 @@ fn mount_messages(_event: On<Add<MessageList>>, mut commands: Commands) {
 
 enum RowContent {
     Plain(String),
+    User(String),
     Assistant { label: String, source: String },
     Tool(ChatTool),
     Audio(crate::audio_attachment::ChatAudio),
@@ -1653,7 +1656,7 @@ fn reconcile(world: &mut World) -> Result {
                 if !turn.result_continuation && !desired.iter().any(|(key, _)| key == &user_key) {
                     desired.push((
                         user_key.clone(),
-                        RowContent::Plain(format!("你\n{}", turn.input)),
+                        RowContent::User(format!("你\n{}", turn.input)),
                     ));
                     if let Some(audio) = &turn.audio {
                         let key = ChatRow {
@@ -1748,7 +1751,7 @@ fn reconcile(world: &mut World) -> Result {
                             output_index: None,
                             item_id: Some(format!("steer-{}", input.id)),
                         },
-                        RowContent::Plain(format!(
+                        RowContent::User(format!(
                             "你 · 补充 {} · {label}\n{}",
                             input.id, input.text
                         )),
@@ -1774,6 +1777,20 @@ fn reconcile(world: &mut World) -> Result {
                         world
                             .get_mut::<Text>(*entity)
                             .ok_or_else(|| io::Error::other("聊天消息缺少正文"))?
+                            .set_if_neq(Text(text));
+                    }
+                    RowContent::User(text) => {
+                        let body = world
+                            .get::<Children>(*entity)
+                            .and_then(|children| {
+                                children
+                                    .iter()
+                                    .find(|child| world.get::<Text>(*child).is_some())
+                            })
+                            .ok_or_else(|| io::Error::other("用户消息缺少正文"))?;
+                        world
+                            .get_mut::<Text>(body)
+                            .ok_or_else(|| io::Error::other("用户消息正文不可用"))?
                             .set_if_neq(Text(text));
                     }
                     RowContent::Assistant { label, source } => {
@@ -1821,7 +1838,19 @@ fn reconcile(world: &mut World) -> Result {
                     RowContent::Assistant {label,source} => world.commands().spawn_scene_with_error_handler(bsn! {
                         Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
                         Node {width:percent(100),min_width:px(0),flex_shrink:0.0,flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP)}
-                        Children [Text(label) WidgetryText MessageLabel-- @MarkdownView {@source:source}]
+                        Children [
+                            @AgentelierAvatar { @source: AvatarSource::Assistant } Name("ChatAssistantAvatar")--
+                            Text(label) WidgetryText MessageLabel--
+                            @MarkdownView { @source: source }
+                        ]
+                    }).id(),
+                    RowContent::User(text) => world.commands().spawn_scene_with_error_handler(bsn! {
+                        Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
+                        Node {width:percent(100),min_width:px(0),flex_shrink:0.0,flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP)}
+                        Children [
+                            @AgentelierAvatar Name("ChatUserAvatar") Node { align_self: AlignSelf::End }--
+                            Text(text) WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter)
+                        ]
                     }).id(),
                     RowContent::Plain(text) => world.commands().spawn_scene_with_error_handler(bsn! {
                         Name(name) ChildOf(list) Text(text) WidgetryText template(move |_| Ok(key.clone()))

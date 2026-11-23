@@ -1,4 +1,6 @@
-use agentelier_controls::{AgentelierButton, AgentelierButtonLoading, AgentelierButtonStyle};
+use agentelier_controls::{
+    AgentelierAvatar, AgentelierButton, AgentelierButtonLoading, AgentelierButtonStyle,
+};
 use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::{InteractionDisabled, UiSystems};
@@ -233,7 +235,11 @@ pub(crate) fn account_panel(state: &AccountState, model_busy: bool) -> impl Scen
         Name("AccountPanel")
         Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(ACCOUNT_GAP) }
         Children [
-            @text(state, AccountText::Status, "AccountStatus")--
+            Node { align_items: AlignItems::Center, column_gap: px(ACCOUNT_GAP) }
+            Children [
+                @AgentelierAvatar Name("AccountAvatar")--
+                @text(state, AccountText::Status, "AccountStatus")
+            ]--
             @text(state, AccountText::Identity, "AccountIdentity")--
             @text(state, AccountText::Message, "AccountMessage")--
             Node { flex_wrap: FlexWrap::Wrap, column_gap: px(ACCOUNT_GAP), row_gap: px(ACCOUNT_GAP) }
