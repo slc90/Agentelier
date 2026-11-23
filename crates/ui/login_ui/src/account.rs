@@ -1,8 +1,8 @@
+use agentelier_controls::{AgentelierButton, AgentelierButtonLoading, AgentelierButtonStyle};
 use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::{InteractionDisabled, UiSystems};
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::button::{WidgetryButton, WidgetryButtonLoading};
 use bevy_widgetry::text::WidgetryText;
 
 const ACCOUNT_GAP: f32 = 12.0;
@@ -197,9 +197,15 @@ fn button(
     let label = action.label();
     let visibility = display(action.visible(state));
     let disabled = action.disabled(state, model_busy);
+    let style = match action {
+        ButtonAction::Login => AgentelierButtonStyle::Primary,
+        ButtonAction::CancelLogin | ButtonAction::CopyLoginUrl => AgentelierButtonStyle::Secondary,
+        ButtonAction::Logout => AgentelierButtonStyle::Danger,
+    };
     (
         bsn! {
-            @WidgetryButton {
+            @AgentelierButton {
+                @style: style,
                 @children: {Some(Box::new(bsn_list! {
                     Text(label) WidgetryText
                 }) as Box<dyn SceneList>)}
@@ -284,7 +290,7 @@ fn update_panel(
         } else {
             commands.entity(entity).remove::<InteractionDisabled>();
         }
-        WidgetryButtonLoading::set(
+        AgentelierButtonLoading::set(
             &mut commands,
             entity,
             match action {

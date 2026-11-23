@@ -1,11 +1,11 @@
 use crate::conversation::ChatState;
 use agentelier_agent_host::AgentHost;
+use agentelier_controls::AgentelierButton;
 use agentelier_conversation_bridge::{AudioAttachmentView, SessionId};
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
 use bevy::window::PrimaryWindow;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::file_dialog::{
     WidgetryFileDialog, WidgetryFileDialogFilter, WidgetryFileDialogFilterId,
     WidgetryFileDialogModality, WidgetryFileDialogMode, WidgetryFileDialogResult,
@@ -86,9 +86,9 @@ pub(crate) fn panel() -> impl Scene {
     bsn! {
         Node { width: percent(100), min_width: px(0), column_gap: px(8), row_gap: px(4), flex_wrap: FlexWrap::Wrap, flex_shrink: 0.0, align_items: AlignItems::Center }
         Children [
-            @WidgetryButton { @children: {Some(Box::new(bsn_list!{Text("添加音频") WidgetryText}) as Box<dyn SceneList>)} }
+            @AgentelierButton { @children: {Some(Box::new(bsn_list!{Text("添加音频") WidgetryText}) as Box<dyn SceneList>)} }
             ChooseAudio Name("ChooseAudioAttachment") on(choose)--
-            @WidgetryButton { @children: {Some(Box::new(bsn_list!{Text("移除附件") WidgetryText}) as Box<dyn SceneList>)} }
+            @AgentelierButton { @children: {Some(Box::new(bsn_list!{Text("移除附件") WidgetryText}) as Box<dyn SceneList>)} }
             RemoveAudio Name("RemoveAudioAttachment") Node { display: Display::None } on(remove)--
             Text::default() WidgetryText AudioDraftText Name("AudioDraftStatus")
         ]

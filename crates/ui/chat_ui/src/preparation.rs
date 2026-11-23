@@ -1,5 +1,6 @@
 use crate::reasoning::{self, ReasoningSetting, ReasoningSource};
 use agentelier_agent_host::{AgentHost, HostActivity, HostFailed, ModelEvent, ReceiveAgentEvents};
+use agentelier_controls::{AgentelierButton, AgentelierButtonLoading, AgentelierButtonStyle};
 use agentelier_llm_model_bridge::{ModelEventKind, ModelRequest, ModelResult};
 use agentelier_login_ui::AccountState;
 use bevy::ecs::message::MessageCursor;
@@ -7,7 +8,6 @@ use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::{InteractionDisabled, UiSystems};
 use bevy::ui_widgets::{Activate, ValueChange};
-use bevy_widgetry::button::{WidgetryButton, WidgetryButtonLoading};
 use bevy_widgetry::combo_box::{WidgetryComboBox, WidgetryComboBoxAppExt, WidgetryComboBoxContent};
 use bevy_widgetry::list_view::{WidgetryListItemId, WidgetryListModel, WidgetryListViewRenderer};
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
@@ -204,8 +204,12 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
 }
 
 fn action_button(label: &'static str, name: &'static str, action: ModelAction) -> impl Scene {
+    let style = match action {
+        ModelAction::Refresh => AgentelierButtonStyle::Primary,
+        ModelAction::Verify => AgentelierButtonStyle::Secondary,
+    };
     bsn! {
-        @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)} }
+        @AgentelierButton { @style: style, @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)} }
         Name(name) template(move |_| Ok(action))
         Node { min_width: px(BUTTON_WIDTH), height: px(BUTTON_HEIGHT), flex_shrink: 0.0 }
         on(activate)
@@ -515,7 +519,7 @@ fn update(
             (action, state.phase),
             (ModelAction::Refresh, ModelPhase::Catalog) | (ModelAction::Verify, ModelPhase::Verify)
         );
-        WidgetryButtonLoading::set(&mut commands, entity, loading);
+        AgentelierButtonLoading::set(&mut commands, entity, loading);
     }
     for entity in &selectors {
         if state.can_request(&account) && !state.models.is_empty() {

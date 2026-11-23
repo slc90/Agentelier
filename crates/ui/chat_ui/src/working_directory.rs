@@ -1,8 +1,8 @@
+use agentelier_controls::AgentelierButton;
 use bevy::prelude::*;
 use bevy::text::EditableTextSystems;
 use bevy::ui::UiSystems;
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::file_dialog::{
     WidgetryFileDialog, WidgetryFileDialogMode, WidgetryFileDialogResult,
     WidgetryFileDialogResultEvent,
@@ -56,7 +56,7 @@ pub(crate) fn panel(state: &DirectoryState) -> impl Scene {
                 Text("本地工作目录") WidgetryText--
                 @WidgetryTextField { @value: {input}, @hint_text: {Some("输入已存在的绝对目录路径".into())} }
                 DirectoryInput Name("WorkingDirectoryInput") Node { flex_grow: 1.0, min_width: px(0) }--
-                @WidgetryButton { @children: {Some(Box::new(bsn_list! {Text("选择目录") WidgetryText}) as Box<dyn SceneList>)} }
+                @AgentelierButton { @children: {Some(Box::new(bsn_list! {Text("选择目录") WidgetryText}) as Box<dyn SceneList>)} }
                 Name("ChooseWorkingDirectory") on(choose)
             ]--
             Text(error) WidgetryText DirectoryStatus Name("WorkingDirectoryStatus")

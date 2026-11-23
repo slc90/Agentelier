@@ -1,7 +1,7 @@
 use super::*;
+use agentelier_controls::AgentelierButton;
 use bevy::text::LineBreak;
 use bevy::ui::InteractionDisabled;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::combo_box::WidgetryComboBoxContent;
 use bevy_widgetry::list_view::WidgetryListViewRenderer;
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
@@ -31,7 +31,7 @@ fn button(label: &str, name: &'static str, action: Action, disabled: bool) -> im
     let label = label.to_owned();
     (
         bsn! {
-            @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)} }
+            @AgentelierButton { @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)} }
             Name(name) template(move |_| Ok(action)) on(activate)
             Node { height: px(BUTTON_HEIGHT), flex_shrink: 0.0 }
         },

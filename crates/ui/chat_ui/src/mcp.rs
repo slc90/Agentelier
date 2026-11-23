@@ -2,11 +2,11 @@ use agentelier_agent_host::{
     AgentHost, ConfigChange, ConnectionState, ConnectionStatus, McpConfigEvent, McpStatusEvent,
     ReceiveAgentEvents, Server, ServerId, ServerSettings, Transport,
 };
+use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
 use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{WidgetryTextField, WidgetryTextFieldHeadless};
 use std::{io, path::PathBuf};
@@ -357,7 +357,14 @@ fn button(
     let label = label.into();
     (
         bsn! {
-            @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)} }
+            @AgentelierButton {
+                @style: {match action {
+                    Action::Remove(_) => AgentelierButtonStyle::Danger,
+                    Action::Save | Action::New => AgentelierButtonStyle::Primary,
+                    _ => AgentelierButtonStyle::Secondary,
+                }},
+                @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)}
+            }
             Name(name) template(move |_| Ok(action)) on(activate)
             Node { height: px(BUTTON_HEIGHT), flex_shrink: 0.0 }
         },

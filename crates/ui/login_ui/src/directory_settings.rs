@@ -1,10 +1,10 @@
 use crate::data_directory::RememberDirectory;
+use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
 use agentelier_login::{DataEnvironment, validate_data_directory};
 use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::file_dialog::{
     WidgetryFileDialog, WidgetryFileDialogMode, WidgetryFileDialogResult,
     WidgetryFileDialogResultEvent,
@@ -124,7 +124,8 @@ fn allocate_operation(world: &mut World) -> Result<u64> {
 fn button(label: &'static str, name: &'static str, action: Action, disabled: bool) -> impl Scene {
     (
         bsn! {
-            @WidgetryButton {
+            @AgentelierButton {
+                @style: AgentelierButtonStyle::Secondary,
                 @children: {Some(Box::new(bsn_list! {Text(label) WidgetryText}) as Box<dyn SceneList>)}
             }
             Name(name) Node { min_width: px(BUTTON_WIDTH), height: px(BUTTON_HEIGHT), flex_shrink: 0.0 }

@@ -3,9 +3,9 @@ use agentelier_agent_host::{
     McpMaterialEvent, PromptChoice, ReceiveAgentEvents, ResourceChoice, ServerId,
     expand_resource_uri,
 };
+use agentelier_controls::AgentelierButton;
 use bevy::{prelude::*, text::LineBreak, ui::InteractionDisabled, ui_widgets::Activate};
 use bevy_widgetry::{
-    button::WidgetryButton,
     text::WidgetryText,
     text_field::{WidgetryTextField, WidgetryTextFieldHeadless},
 };
@@ -319,7 +319,7 @@ fn button(
     let label = label.into();
     (
         bsn! {
-            @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)} }
+            @AgentelierButton { @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)} }
             Name(name) template(move |_| Ok(action)) on(activate)
             Node { height: px(BUTTON_HEIGHT), flex_shrink: 0.0 }
         },

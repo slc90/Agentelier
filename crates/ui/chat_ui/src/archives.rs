@@ -1,10 +1,10 @@
 use crate::conversation::ChatState;
 use agentelier_agent_host::{AgentHost, HostActivity};
+use agentelier_controls::AgentelierButton;
 use agentelier_conversation_bridge::{ArchiveEntry, ConversationRequest, SessionId};
 use bevy::prelude::*;
 use bevy::ui::{InteractionDisabled, UiSystems};
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::list_view::{
     WidgetryListModel, WidgetryListSelectionChanged, WidgetryListSelectionMode, WidgetryListView,
     WidgetryListViewAppExt, WidgetryListViewRenderer,
@@ -113,7 +113,7 @@ pub(crate) fn panel(world: &World) -> impl Scene {
                 })},
             }
             Name("LocalSessionSelector") ArchiveSelector Node { width: percent(100), height: px(0), flex_basis: px(0), min_height: px(0), flex_grow: 1.0 } on(select)--
-            @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text("刷新本地会话") WidgetryText }) as Box<dyn SceneList>)} }
+            @AgentelierButton { @children: {Some(Box::new(bsn_list! { Text("刷新本地会话") WidgetryText }) as Box<dyn SceneList>)} }
             Name("RefreshSessionArchives") Node { height: px(CONTROL_HEIGHT) } on(refresh)--
             @crate::session_actions::panel()--
             Text("") WidgetryText ArchiveStatus Name("SessionArchiveStatus")

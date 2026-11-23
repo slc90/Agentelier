@@ -4,6 +4,7 @@ members = [
   "app",
   "crates/ui/application",
   "crates/ui/assets",
+  "crates/ui/controls",
   "crates/ui/login_ui",
   "crates/ui/agent_host",
   "crates/ui/chat_ui",

@@ -1,10 +1,10 @@
 use crate::conversation::ChatState;
+use agentelier_controls::AgentelierButton;
 use agentelier_conversation_bridge::{ProjectCollectionStatus, ProjectContextView};
 use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::UiSystems;
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{AutoSize, WidgetryReadOnlyTextField};
@@ -100,7 +100,7 @@ pub(crate) fn panel(state: &ChatState) -> impl Scene {
         Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(GAP), flex_shrink: 0.0 }
         Children [
             Text(summary) WidgetryText ProjectSummary Name("ProjectContextStatus") TextLayout::linebreak(LineBreak::AnyCharacter)--
-            @WidgetryButton { @children: {Some(Box::new(bsn_list! {Text(label) WidgetryText ToggleLabel}) as Box<dyn SceneList>)} }
+            @AgentelierButton { @children: {Some(Box::new(bsn_list! {Text(label) WidgetryText ToggleLabel}) as Box<dyn SceneList>)} }
             Name("ToggleProjectRules") Node { align_self: AlignSelf::Start } on(toggle)--
             ProjectSources::default() Name("ProjectRuleSources")
             Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(GAP), flex_shrink: 0.0 }

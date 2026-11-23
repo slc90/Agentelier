@@ -11,6 +11,7 @@ agentelier_login = { path = "../../agent/login" }
 agentelier_login_ui = { path = "../login_ui" }
 agentelier_agent_host = { path = "../agent_host" }
 agentelier_chat_ui = { path = "../chat_ui" }
+agentelier_controls = { path = "../controls" }
 bevy_widgetry.workspace = true
 bevy_widgetry_path_display.workspace = true
 bevy_brp_runtime.workspace = true

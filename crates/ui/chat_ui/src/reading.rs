@@ -1,8 +1,8 @@
+use agentelier_controls::AgentelierButton;
 use bevy::prelude::*;
 use bevy::ui::{ScrollPosition, UiSystems};
 use bevy::ui_widgets::Activate;
 use bevy::window::RequestRedraw;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::scroll_area::WidgetryScrollAreaViewport;
 use bevy_widgetry::text::WidgetryText;
 const BOTTOM_TOLERANCE: f32 = 3.0;
@@ -64,7 +64,7 @@ pub(crate) fn switch(
 }
 
 pub(crate) fn bottom_button() -> impl Scene {
-    bsn! { @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text("回到底部") WidgetryText }) as Box<dyn SceneList>)} } Name("ChatBackToBottom") on(bottom) Node { height: px(40), flex_shrink: 0.0 } }
+    bsn! { @AgentelierButton { @children: {Some(Box::new(bsn_list! { Text("回到底部") WidgetryText }) as Box<dyn SceneList>)} } Name("ChatBackToBottom") on(bottom) Node { height: px(40), flex_shrink: 0.0 } }
 }
 fn bottom(_event: On<Activate>, mut reading: ResMut<ChatReading>) {
     reading.following = true;

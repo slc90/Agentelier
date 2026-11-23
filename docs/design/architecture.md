@@ -10,6 +10,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | --- | --- | --- |
 | `crates/ui/application/` | `agentelier_application` | 通用宿主、配置、日志、诊断、窗口装配与整体生命周期 |
 | `crates/ui/assets/` | `bevy_app_assets` | 应用 Asset 的统一注册 |
+| `crates/ui/controls/` | `agentelier_controls` | 应用主题与跨页面的基础控件，复用 Widgetry 的交互状态 |
 | `crates/ui/markdown/` | `agentelier_markdown` | 原生 Markdown 解析、块更新、行内样式、原文复制与用户主动链接交互 |
 | `crates/ui/chat_ui/` | `agentelier_chat_ui` | 模型准备、固定会话侧栏、按会话隔离的草稿与阅读状态、多轮流式聊天和相应交互投影 |
 | `crates/ui/agent_host/` | `agentelier_agent_host` | 唯一 Connection、Winit 唤醒、命令提交、业务消息分发及执行收尾 |
@@ -39,11 +40,14 @@ flowchart TD
     Entry["app · main.rs"] --> App["UI · application"]
     App --> UI["UI · login_ui"]
     App --> Assets["UI · assets"]
+    App --> Controls["UI · controls"]
     App --> Login["Agent · login"]
     UI --> Login
     App --> ChatUI["UI · chat_ui"]
     ChatUI --> Markdown["UI · markdown"]
     ChatUI --> UI
+    ChatUI --> Controls
+    UI --> Controls
     ChatUI --> Host
     App --> Host["UI · agent_host"]
     UI --> Host
@@ -102,6 +106,8 @@ flowchart TD
 ## UI 管理交互与通用宿主
 
 `application` 建立可执行文件旁的日志，读取 `config/config.ron`，装配窗口、Asset、缩放与可选 BRP。BRP 的 Main World 和 Render World 端口独立配置。`agent_host` 是唯一 Connection 所有者和接收者，按业务将账号、模型与聊天事件分发到独立 ECS 消息通道，运行错误另行广播；`login_ui` 在宿主接收后消费自己的业务消息，通过 BSN 组合界面，持有面向交互的账号与目录状态；Widgetry 控件自身的状态遵循其公开契约。
+
+`application` 安装由 controls 提供的应用主题与共享控件插件。登录、目录设置和聊天界面的普通按钮由 `AgentelierButton` 组合，业务内容和事件处理留在调用方。样式与焦点环由 controls 更新，Widgetry 持有输入、禁用及 Loading 状态。详见[控件体系](ui/components.md#agentelierbutton)。
 
 启动界面复用 Widgetry 目录选择器，通过辅助 Job 调用 Login 检查并占用目录。配置由 application 的 ConfigStore 串行合并并完整替换提交；成功后复用同一窗口进入主界面，通过共享 AgentHost 发起账号恢复。数据环境保持到后台执行及日志收尾完成。
 

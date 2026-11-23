@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agentelier_controls = { path = "../controls" }
 agentelier_agent_host = { path = "../agent_host" }
 agentelier_account_bridge = { path = "../../bridge/account" }
 agentelier_login = { path = "../../agent/login" }

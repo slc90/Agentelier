@@ -1,5 +1,6 @@
 use crate::{config, diagnostics, shutdown};
 use agentelier_agent_host::AgentHostPlugin;
+use agentelier_controls::{AGENTELIER_THEME, AgentelierControlsPlugin};
 use agentelier_login::DataEnvironment;
 use agentelier_login_ui::{DataDirectoryReady, HomeContent, LoginUiHost, LoginUiPlugin};
 use bevy::log::LogPlugin;
@@ -108,7 +109,14 @@ fn run_application(
     let host_plugin = AgentHostPlugin::default();
     let backend = host_plugin.host();
     app.insert_resource(config_store.clone())
-        .add_plugins((AppAssetPlugin, WidgetryWindowPlugin, host_plugin, login_ui))
+        .insert_resource(AGENTELIER_THEME)
+        .add_plugins((
+            AppAssetPlugin,
+            AgentelierControlsPlugin,
+            WidgetryWindowPlugin,
+            host_plugin,
+            login_ui,
+        ))
         .add_systems(Startup, setup)
         .add_observer(enter_main)
         .add_observer(mount_chat);

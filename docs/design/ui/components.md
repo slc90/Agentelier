@@ -26,6 +26,8 @@ flowchart TD
 
 所有变体共享 Normal、Hovered、Pressed、Focus、Disabled 状态反馈和尺寸规则。需要等待状态的场景使用统一 Loading 表现。图标与文字内容由调用方通过 BSN Scene / SceneList 提供，控件不硬编码业务文案。
 
+已实现的基础按钮位于 `agentelier_controls`。变体保存在按钮根实体上，切换时只更新根节点的形状和 Widgetry 颜色覆盖。宿主提供绿色主题，焦点环使用主题的焦点色，Loading 通过 `AgentelierButtonLoading` 使用 Widgetry 的受管等待状态。
+
 底层优先使用 `WidgetryButton` 的公开配置；需要完全控制外观时使用 `WidgetryButtonHeadless`，复用其输入和状态行为。右键菜单不属于普通按钮的默认行为；登录按钮的副键菜单由独立的 `LoginContextMenu` 组合处理。
 
 ### AgentelierAvatar

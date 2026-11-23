@@ -4,6 +4,7 @@ use agentelier_agent_host::{
     AgentHost, ConversationEvent as HostConversationEvent, HostActivity, HostFailed,
     ReceiveAgentEvents,
 };
+use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
 use agentelier_conversation_bridge::SessionId;
 use agentelier_conversation_bridge::{
     ConversationEvent, ConversationRequest, SessionCreate, SessionView, TurnStatus,
@@ -20,7 +21,6 @@ use bevy::text::{EditableTextSystems, LineBreak};
 use bevy::ui::{InteractionDisabled, UiSystems};
 use bevy::ui_widgets::Activate;
 use bevy::window::Ime;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::scroll_area::WidgetryScrollArea;
 use bevy_widgetry::text::WidgetryText;
@@ -517,13 +517,22 @@ fn forget_session(world: &mut World, session: SessionId) -> Result {
 }
 
 fn button(label: &'static str, name: &'static str, action: ChatAction) -> impl Scene {
+    let style = match action {
+        ChatAction::Create | ChatAction::Send | ChatAction::ConfirmReplacement => {
+            AgentelierButtonStyle::Primary
+        }
+        ChatAction::Stop | ChatAction::Reset => AgentelierButtonStyle::Danger,
+        ChatAction::Queue | ChatAction::Retry | ChatAction::KeepSession => {
+            AgentelierButtonStyle::Secondary
+        }
+    };
     let children: Box<dyn SceneList> = if matches!(action, ChatAction::Send) {
         Box::new(bsn_list! {Text(label) WidgetryText SendLabel})
     } else {
         Box::new(bsn_list! {Text(label) WidgetryText})
     };
     bsn! {
-        @WidgetryButton { @children: {Some(children)} }
+        @AgentelierButton { @style: style, @children: {Some(children)} }
         Name(name) template(move |_| Ok(action))
         Node { min_width: px(128), height: px(BUTTON_HEIGHT), align_self: AlignSelf::Start, flex_shrink: 0.0 }
         on(activate)

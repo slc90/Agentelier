@@ -1,10 +1,10 @@
 use crate::conversation::{ChatHistoryItem, ChatRequest, ChatState, ChatTurn};
 use crate::project_context::ProjectSnapshot;
+use agentelier_controls::AgentelierButton;
 use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::UiSystems;
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{AutoSize, WidgetryReadOnlyTextField, WidgetryTextFieldHeadless};
@@ -50,7 +50,7 @@ pub(crate) fn install(app: &mut App) {
 }
 fn button(label: &'static str, name: &'static str, action: Navigate) -> impl Scene {
     bsn! {
-        @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)} }
+        @AgentelierButton { @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)} }
         Name(name) action on(navigate)
     }
 }
@@ -82,7 +82,7 @@ pub(crate) fn panel() -> impl Scene {
             @field("SelectedRequestMemory", Body::Memory)--
             Text("自动项目材料 · user · 最终包装正文") WidgetryText--
             @field("SelectedRequestProject", Body::Project)--
-            @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text("展开所选请求来源") WidgetryText SourcesLabel }) as Box<dyn SceneList>)} }
+            @AgentelierButton { @children: {Some(Box::new(bsn_list! { Text("展开所选请求来源") WidgetryText SourcesLabel }) as Box<dyn SceneList>)} }
             Name("ToggleSelectedRequestSources") Node { align_self: AlignSelf::Start } on(toggle)--
             Sources::default() Name("SelectedRequestSources")
             Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(GAP), flex_shrink: 0.0 }--

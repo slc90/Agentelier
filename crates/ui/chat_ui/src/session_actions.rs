@@ -1,10 +1,10 @@
 use agentelier_agent_host::AgentHost;
+use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
 use agentelier_conversation_bridge::{ArchiveEntry, SessionId};
 use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{WidgetryTextField, WidgetryTextFieldHeadless};
 
@@ -48,8 +48,8 @@ pub(crate) fn install(app: &mut App) {
 pub(crate) fn more(session: SessionId) -> impl Scene {
     let name = format!("SessionMore-{session}");
     bsn! {
-        @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text("⋯") WidgetryText }) as Box<dyn SceneList>)} }
-        Name(name) template(move |_| Ok(RenameTarget(session))) Node { flex_shrink: 0.0, height: px(32), width: px(32) }
+        @AgentelierButton { @style: AgentelierButtonStyle::Icon, @children: {Some(Box::new(bsn_list! { Text("⋯") WidgetryText }) as Box<dyn SceneList>)} }
+        Name(name) template(move |_| Ok(RenameTarget(session))) Node { align_self: AlignSelf::Center }
         on(open) on(block_row_click)
     }
 }
@@ -80,7 +80,12 @@ pub(crate) fn panel() -> impl Scene {
     }
 }
 fn action(label: &'static str, name: &'static str, action: Action) -> impl Scene {
-    bsn! { @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)} } Name(name) template(move |_| Ok(action)) on(activate) }
+    let style = match action {
+        Action::Save => AgentelierButtonStyle::Primary,
+        Action::Delete | Action::ConfirmDelete => AgentelierButtonStyle::Danger,
+        Action::Cancel => AgentelierButtonStyle::Secondary,
+    };
+    bsn! { @AgentelierButton { @style: style, @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)} } Name(name) template(move |_| Ok(action)) on(activate) }
 }
 fn open(event: On<Activate>, targets: Query<&RenameTarget>, mut commands: Commands) -> Result {
     let session = targets.get(event.entity)?.0;

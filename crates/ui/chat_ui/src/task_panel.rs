@@ -1,13 +1,13 @@
 use crate::conversation::ChatState;
 use agentelier_agent_host::AgentHost;
+use agentelier_controls::AgentelierButton;
 use agentelier_conversation_bridge::{
     SessionId, SessionProcess, SessionProcesses, TaskAction, TaskActionOutcome, TaskActionReceipt,
     TaskId,
 };
 use bevy::{prelude::*, text::LineBreak, ui_widgets::Activate};
 use bevy_widgetry::{
-    button::WidgetryButton, scene::WidgetrySceneCommandsExt, scroll_area::WidgetryScrollArea,
-    text::WidgetryText,
+    scene::WidgetrySceneCommandsExt, scroll_area::WidgetryScrollArea, text::WidgetryText,
 };
 use std::collections::BTreeMap;
 
@@ -120,7 +120,7 @@ pub(crate) fn receipt(world: &mut World, id: u64, receipt: TaskActionReceipt) {
 
 fn button(label: &'static str, name: String, button: Button) -> impl Scene {
     bsn! {
-        @WidgetryButton {@children:{Some(Box::new(bsn_list! {Text(label) WidgetryText}) as Box<dyn SceneList>)}}
+        @AgentelierButton {@children:{Some(Box::new(bsn_list! {Text(label) WidgetryText}) as Box<dyn SceneList>)}}
         Name(name) template(move |_| Ok(button.clone())) on(activate)
     }
 }

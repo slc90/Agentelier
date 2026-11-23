@@ -1,10 +1,10 @@
 use crate::conversation::{ChatState, ChatTool};
 use crate::generated_image;
+use agentelier_controls::AgentelierButton;
 use agentelier_conversation_bridge::SessionId;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{AutoSize, WidgetryReadOnlyTextField, WidgetryTextFieldHeadless};
@@ -51,7 +51,7 @@ pub(crate) fn card(key: String, session: SessionId, tool: ChatTool, expanded: bo
         Node { width: percent(100), min_width: px(0), flex_shrink: 0.0, flex_direction: FlexDirection::Column, row_gap: px(CARD_GAP), padding: UiRect::all(px(CARD_GAP)) }
         Children [
             Text(summary) WidgetryText ToolSummary--
-            @WidgetryButton { @children: {Some(Box::new(bsn_list! {Text(toggle_label) WidgetryText ToggleLabel}) as Box<dyn SceneList>)} }
+            @AgentelierButton { @children: {Some(Box::new(bsn_list! {Text(toggle_label) WidgetryText ToggleLabel}) as Box<dyn SceneList>)} }
             Name(toggle_name) Node { align_self: AlignSelf::Start } on(toggle)--
             @WidgetryReadOnlyTextField {
                 @value: details, @multiline: true,

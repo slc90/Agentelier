@@ -2,11 +2,11 @@ use agentelier_agent_host::{
     AgentHost, ConversationEvent, HostFailed, MemoryDetail, MemoryEvent, MemoryInspection,
     MemoryReply, MemoryRequest, MemorySource, ReceiveAgentEvents,
 };
+use agentelier_controls::AgentelierButton;
 use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{AutoSize, WidgetryReadOnlyTextField};
 
@@ -204,7 +204,7 @@ fn button(label: String, name: impl Into<String>, action: Action, disabled: bool
     let name = name.into();
     (
         bsn! {
-            @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter) }) as Box<dyn SceneList>)} }
+            @AgentelierButton { @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter) }) as Box<dyn SceneList>)} }
             Name(name) action on(activate)
             Node { align_self: AlignSelf::Start, flex_shrink: 0.0 }
         },

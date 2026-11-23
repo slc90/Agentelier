@@ -1,0 +1,12 @@
+[package]
+name = "agentelier_controls"
+publish = false
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bevy.workspace = true
+bevy_widgetry = { workspace = true, features = ["button"] }
+
+[lints]
+workspace = true

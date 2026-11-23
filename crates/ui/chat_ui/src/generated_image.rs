@@ -3,6 +3,7 @@ use agentelier_agent_host::{
     AgentHost, HostFailed, ImageAttachmentAction, ImageAttachmentEvent, ImageAttachmentReply,
     ReceiveAgentEvents,
 };
+use agentelier_controls::AgentelierButton;
 use agentelier_conversation_bridge::SessionId;
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
@@ -10,7 +11,6 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
 use bevy::window::PrimaryWindow;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::file_dialog::{
     WidgetryFileDialog, WidgetryFileDialogFilter, WidgetryFileDialogFilterId,
     WidgetryFileDialogModality, WidgetryFileDialogMode, WidgetryFileDialogResult,
@@ -91,7 +91,7 @@ pub(crate) fn card(session: SessionId, call: String, image: ChatGeneratedImage) 
             Text(metadata) WidgetryText--
             PreviewNode Name("GeneratedImagePreview") ImageNode::default() Visibility::Hidden
             Node { width: px(width), max_width: percent(100), height: px(height), flex_shrink: 0.0 }--
-            @WidgetryButton { @children: {Some(Box::new(bsn_list! { Text("另存为") WidgetryText }) as Box<dyn SceneList>)} }
+            @AgentelierButton { @children: {Some(Box::new(bsn_list! { Text("另存为") WidgetryText }) as Box<dyn SceneList>)} }
             SaveButton Name("SaveGeneratedImage") Node { align_self: AlignSelf::Start } on(choose)--
             Text("正在读取预览…") WidgetryText ImageStatus Name("GeneratedImageStatus")
         ]

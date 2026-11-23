@@ -1,10 +1,10 @@
 use crate::active_input::PendingDraft;
 use crate::conversation::ChatState;
 use agentelier_agent_host::AgentHost;
+use agentelier_controls::AgentelierButton;
 use agentelier_conversation_bridge::{QueueDecision, QueueEvent, SessionAction};
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::scroll_area::WidgetryScrollArea;
 use bevy_widgetry::text::WidgetryText;
@@ -50,7 +50,7 @@ pub(crate) fn panel() -> impl Scene {
             Node {column_gap:px(ROW_GAP), align_items:AlignItems::Center}
             Children [
                 Text("") WidgetryText QueueSummary--
-                @WidgetryButton {@children:{Some(Box::new(bsn_list! {Text("继续队列") WidgetryText}) as Box<dyn SceneList>)}}
+                @AgentelierButton {@children:{Some(Box::new(bsn_list! {Text("继续队列") WidgetryText}) as Box<dyn SceneList>)}}
                 Name("ResumeChatQueue") template(|_| Ok(Action::Resume)) on(activate)
             ]--
             @WidgetryScrollArea {@children:{Some(Box::new(bsn_list! {
@@ -286,7 +286,7 @@ pub(crate) fn reconcile(world: &mut World) -> Result {
                 ChildOf(list) Node {width:percent(100),min_width:px(0),column_gap:px(ROW_GAP),align_items:AlignItems::Center,flex_shrink:0.0}
                 Children [
                     Text(text) WidgetryText Node {flex_grow:1.0,min_width:px(0)}--
-                    @WidgetryButton {@children:{Some(Box::new(bsn_list! {Text("移除") WidgetryText}) as Box<dyn SceneList>)}}
+                    @AgentelierButton {@children:{Some(Box::new(bsn_list! {Text("移除") WidgetryText}) as Box<dyn SceneList>)}}
                     Name(name) template(move |_| Ok(Action::Remove(operation))) on(activate)
                 ]
             });

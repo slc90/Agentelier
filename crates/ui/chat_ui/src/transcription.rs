@@ -1,12 +1,12 @@
 use crate::conversation::{ChatSession, ChatState};
 use agentelier_agent_host::AgentHost;
+use agentelier_controls::AgentelierButton;
 use agentelier_conversation_bridge::{
     SessionId, TranscriptReferenceView, TranscriptionOutcomeView, TranscriptionView,
 };
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{AutoSize, WidgetryReadOnlyTextField, WidgetryTextFieldHeadless};
 use std::collections::HashMap;
@@ -212,7 +212,7 @@ pub(crate) fn selection_panel() -> impl Scene {
         Node { display: Display::None, min_width: px(0), column_gap: px(8), flex_shrink: 0.0, align_items: AlignItems::Center }
         Children [
             Text::default() WidgetryText SelectionLabel Name("SelectedTranscriptLabel")--
-            @WidgetryButton { @children: {Some(Box::new(bsn_list!{Text("清除文稿引用") WidgetryText}) as Box<dyn SceneList>)} }
+            @AgentelierButton { @children: {Some(Box::new(bsn_list!{Text("清除文稿引用") WidgetryText}) as Box<dyn SceneList>)} }
             Name("ClearTranscriptSelection") on(clear)
         ]
     }
@@ -226,7 +226,7 @@ fn clear(_: On<Activate>, chat: Res<ChatState>, mut state: ResMut<TranscriptionS
 
 fn button(label: &'static str, name: &'static str, action: Action) -> impl Scene {
     bsn! {
-        @WidgetryButton { @children: {Some(Box::new(bsn_list! {Text(label) WidgetryText}) as Box<dyn SceneList>)} }
+        @AgentelierButton { @children: {Some(Box::new(bsn_list! {Text(label) WidgetryText}) as Box<dyn SceneList>)} }
         template(move |_| Ok(action)) Name(name) Node { display: Display::None } on(activate)
     }
 }

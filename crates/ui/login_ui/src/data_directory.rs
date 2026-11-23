@@ -1,7 +1,7 @@
+use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
 use agentelier_login::DataEnvironment;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::button::WidgetryButton;
 use bevy_widgetry::file_dialog::{
     WidgetryFileDialog, WidgetryFileDialogMode, WidgetryFileDialogPlugin, WidgetryFileDialogResult,
     WidgetryFileDialogResultEvent,
@@ -329,8 +329,13 @@ enum RecoveryChoice {
 }
 
 fn recovery_button(label: &'static str, name: &'static str, choice: RecoveryChoice) -> impl Scene {
+    let style = match choice {
+        RecoveryChoice::Retry => AgentelierButtonStyle::Primary,
+        RecoveryChoice::Select | RecoveryChoice::Cancel => AgentelierButtonStyle::Secondary,
+    };
     bsn! {
-        @WidgetryButton {
+        @AgentelierButton {
+            @style: style,
             @children: {Some(Box::new(bsn_list! {Text(label) WidgetryText}) as Box<dyn SceneList>)}
         }
         Name(name) Node { min_width: px(128), height: px(40) }
