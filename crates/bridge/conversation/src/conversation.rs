@@ -563,7 +563,7 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
     }
 }
 
-fn view(session: agentelier_conversation::SessionView) -> SessionView {
+pub fn view(session: agentelier_conversation::SessionView) -> SessionView {
     SessionView {
         project_publications: Arc::new(
             session

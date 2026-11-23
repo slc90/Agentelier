@@ -452,6 +452,21 @@ impl ToolCatalog {
                 }),
             );
         }
+        Self::add_extensions(contract, tools, extensions)
+    }
+
+    pub fn extensions_only<'a>(
+        contract: ToolContract,
+        extensions: impl IntoIterator<Item = &'a ToolRegistration>,
+    ) -> Result<Self, ToolFailure> {
+        Self::add_extensions(contract, Vec::new(), extensions)
+    }
+
+    fn add_extensions<'a>(
+        contract: ToolContract,
+        mut tools: Vec<ToolRegistration>,
+        extensions: impl IntoIterator<Item = &'a ToolRegistration>,
+    ) -> Result<Self, ToolFailure> {
         for tool in extensions {
             if matches!(tool.definition.source, ToolSource::Builtin) {
                 return Err(ToolFailure::new(

@@ -23,6 +23,7 @@ mod loading;
 mod mailbox;
 mod memory;
 pub use memory::{MemoryReply, MemoryRequest};
+mod memory_dialogue;
 mod model_task;
 mod recording;
 mod renaming;
@@ -65,6 +66,7 @@ pub enum AgentEventKind {
     McpStatus(Vec<agentelier_mcp::ConnectionStatus>),
     McpMaterial(Result<agentelier_mcp::MaterialReply, String>),
     Memory(Result<MemoryReply, String>),
+    MemoryProgress(Box<agentelier_conversation::SessionView>),
     ImageAttachment(Result<ImageAttachmentReply, String>),
 }
 #[derive(Debug)]
@@ -129,6 +131,7 @@ enum Command {
     McpMaterial(u64, agentelier_mcp::MaterialRequest),
     CancelMcpMaterial(u64),
     Memory(u64, MemoryRequest),
+    MemoryDialogue(memory_dialogue::Signal),
     ImageAttachment(u64, SessionId, String, ImageAttachmentAction),
     ImageAttachmentFinished(u64, io::Result<ImageAttachmentReply>),
     AudioDraft(u64, SessionId, Option<PathBuf>),
@@ -209,6 +212,7 @@ pub struct AgentRuntime {
     shutdown: CancellationToken,
     model: SharedModel,
     session_commands: mpsc::Sender<SessionCommand>,
+    memory_commands: mpsc::Sender<(u64, MemoryRequest)>,
 }
 
 type SharedModel = Arc<Mutex<Option<ModelControl>>>;
@@ -309,6 +313,7 @@ impl AgentRuntime {
         let shared_model: SharedModel = Arc::new(Mutex::new(None));
         let owner_model = shared_model.clone();
         let (session_commands, mut session_incoming) = mpsc::channel(SESSION_COMMAND_CAPACITY);
+        let (memory_commands, mut memory_incoming) = mpsc::channel(COMMAND_CAPACITY);
         let thread = std::thread::Builder::new()
             .name("agentelier-auth".into())
             .spawn(move || {
@@ -399,6 +404,9 @@ impl AgentRuntime {
                         extensions.extend(skill_creation::registrations(user_skills.clone()));
                         let mut skill_jobs = tokio::task::JoinSet::new();
                         let mut conversation = Conversation::with_extensions(extensions);
+                        let mut memory_dialogue = memory_dialogue::Dialogue::new(
+                            owner_credentials.clone(), memory.as_ref().ok().map(Memory::client),
+                        );
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
                             if let AccountEffect::Event(event) = account.restore().await? {
@@ -453,6 +461,7 @@ impl AgentRuntime {
                                     .map(|task| task.control.cancel.clone());
                                 let command = tokio::select! { biased;
                                     _ = runtime_shutdown.cancelled() => break,
+                                    signal = memory_dialogue.next() => Command::MemoryDialogue(signal),
                                     result = async {
                                         if let Some((_, reply)) = project_saves.front_mut() {
                                             reply.await.map_err(|_| io::Error::other("项目存储未返回保存结果")).and_then(|result| result)
@@ -583,6 +592,7 @@ impl AgentRuntime {
                                         Some(receiver) => receiver.recv().await,
                                         None => std::future::pending().await,
                                     }} => Command::Stream(event),
+                                    Some((id, request)) = memory_incoming.recv() => Command::Memory(id, request),
                                     command = incoming.recv() => match command {
                                         Some(command) => command,
                                         None => break,
@@ -707,6 +717,40 @@ impl AgentRuntime {
                                             error!(operation_id = id, error = %failure, "处理生成图片附件失败");
                                         }
                                         emit(&publish, id, AgentEventKind::ImageAttachment(result.map_err(|failure| failure.to_string())))?;
+                                    }
+                                    Command::Memory(id, MemoryRequest::OpenChat { slug, effort }) => {
+                                        let result = async {
+                                            let source = model_source(&account)?.clone();
+                                            if let Some(view) = memory_dialogue.current() {
+                                                memory_dialogue.validate_source(&source)?;
+                                                return Ok(view);
+                                            }
+                                            let models = model_catalog.as_ref()
+                                                .filter(|(owner, _)| owner == &source)
+                                                .map(|(_, models)| models.as_slice())
+                                                .ok_or_else(|| ConversationFailure::new("记忆会话需要当前账号的模型目录"))?;
+                                            memory_dialogue.open(id, source, models, (slug, effort), &data_root, &store).await
+                                        }.await;
+                                        if let Err(failure) = &result {
+                                            error!(operation_id = id, %failure, "打开记忆管理会话失败");
+                                        }
+                                        emit(&publish, id, AgentEventKind::Memory(result.map(|view| MemoryReply::Chat(Box::new(view))).map_err(|failure| failure.to_string())))?;
+                                    }
+                                    Command::Memory(id, MemoryRequest::SendChat { session, input }) => {
+                                        if owner_credentials.source_settling()? {
+                                            emit(&publish, id, AgentEventKind::Memory(Err("账号正在切换，稍后再发送记忆消息".into())))?;
+                                            continue;
+                                        }
+                                        let result = model_source(&account).map_err(RuntimeFailure::from)
+                                            .and_then(|source| memory_dialogue.send(id, ConversationRequest::Send { session, input, audio: None, transcript: None }, source, &store, &publish));
+                                        match result {
+                                            Ok(()) => {}
+                                            Err(RuntimeFailure::Conversation(failure)) => emit(&publish, id, AgentEventKind::Memory(Err(failure.to_string())))?,
+                                            Err(failure) => return Err(failure),
+                                        }
+                                    }
+                                    Command::MemoryDialogue(signal) => {
+                                        memory_dialogue.apply(signal, &store, &publish).await?;
                                     }
                                     Command::Memory(id, MemoryRequest::Reset) => {
                                         tracing::info!(operation_id = id, "已确认长期记忆重置，等待后台收敛");
@@ -1342,6 +1386,7 @@ impl AgentRuntime {
                                             }
                                             requesting_catalog = None;
                                             model_catalog = None;
+                                            memory_dialogue.stop("account_changed", &store, &publish).await?;
                                             if let Some(task) = &model {
                                                 task.control.cancel.cancel();
                                             }
@@ -1391,6 +1436,8 @@ impl AgentRuntime {
                             Ok::<(), RuntimeFailure>(())
                         }
                         .await;
+                        capture_delivery(memory_dialogue.stop("application_shutdown", &store, &publish).await, &mut delivery_failure);
+                        drop(memory_dialogue);
                         if let Some(task) = quota_task {
                             task.abort();
                             drop(task.await);
@@ -1542,11 +1589,20 @@ impl AgentRuntime {
             shutdown,
             model: shared_model,
             session_commands,
+            memory_commands,
         })
     }
 
     pub fn request_memory(&self, id: u64, request: MemoryRequest) -> Result<(), RuntimeFailure> {
-        self.send(Command::Memory(id, request))
+        if self.shutdown.is_cancelled() {
+            return Err(AccountFailure::Closed.into());
+        }
+        self.memory_commands
+            .try_send((id, request))
+            .map_err(|failure| match failure {
+                mpsc::error::TrySendError::Full(_) => AccountFailure::Busy.into(),
+                mpsc::error::TrySendError::Closed(_) => AccountFailure::Closed.into(),
+            })
     }
 
     pub fn manage_skills(

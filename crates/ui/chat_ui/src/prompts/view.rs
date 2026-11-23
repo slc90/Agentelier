@@ -127,9 +127,7 @@ pub(crate) fn render(world: &mut World) -> Result {
             Text(status) WidgetryText Name("PromptManagerStatus") TextLayout::linebreak(LineBreak::AnyCharacter)
         });
         let body: Box<dyn Scene> = match page {
-            Page::Memory => Box::new(crate::memory::panel(
-                world.resource::<crate::memory::MemoryPane>(),
-            )),
+            Page::Memory => Box::new(crate::memory::panel(world)),
             Page::Library => Box::new(bsn! {
                 Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(GAP), flex_shrink: 0.0 }
                 Children [

@@ -30,6 +30,8 @@ pub enum MemoryRequest {
     Inspect,
     Reset,
     Detail { publication: String, record: String },
+    OpenChat { slug: String, effort: String },
+    SendChat { session: SessionId, input: String },
 }
 
 #[derive(Clone)]
@@ -37,6 +39,7 @@ pub enum MemoryReply {
     Reset,
     Inspection(MemoryInspection),
     Detail(MemoryDetail),
+    Chat(Box<agentelier_conversation::SessionView>),
 }
 
 pub(super) async fn inspect(
@@ -49,6 +52,9 @@ pub(super) async fn inspect(
         .client();
     match request {
         MemoryRequest::Reset => Err(io::Error::other("重置需要暂停记忆后台")),
+        MemoryRequest::OpenChat { .. } | MemoryRequest::SendChat { .. } => {
+            Err(io::Error::other("记忆对话请求需要会话所有者"))
+        }
         MemoryRequest::Inspect => client
             .inspect(processing)
             .await

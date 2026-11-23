@@ -120,8 +120,12 @@ impl MemoryClient {
         if !turn.statements.iter().any(|statement| {
             statement.trim() == user_request
                 || statement.lines().any(|line| line.trim() == user_request)
-        }) || !authorizes(&user_request, arguments.action, &arguments.scope)?
-        {
+        }) || !authorizes(
+            &user_request,
+            arguments.action,
+            &arguments.scope,
+            turn.memory_management,
+        )? {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "修订需要当前用户明确提出的记住、纠正或忘记请求",
@@ -222,7 +226,12 @@ impl MemoryClient {
     }
 }
 
-fn authorizes(request: &str, action: Action, scope: &ScopeArgument) -> io::Result<bool> {
+fn authorizes(
+    request: &str,
+    action: Action,
+    scope: &ScopeArgument,
+    management: bool,
+) -> io::Result<bool> {
     let refers_to_memory =
         Regex::new(r"(?i)\b(?:memory|memories|memorize)\b|长期记忆|从记忆|记忆中")
             .map_err(io::Error::other)?
@@ -242,6 +251,9 @@ fn authorizes(request: &str, action: Action, scope: &ScopeArgument) -> io::Resul
     )).map_err(io::Error::other)?;
     if !directive.is_match(request) {
         return Ok(false);
+    }
+    if management {
+        return Ok(matches!(scope, ScopeArgument::Global));
     }
     if matches!(scope, ScopeArgument::Global) {
         let explicit_global = Regex::new(r"(?i)\b(?:globally|cross.project|across (?:all )?projects|(?:all|every) (?:project|repo|workspace)s?)\b|全局|跨项目|所有项目|每个项目").map_err(io::Error::other)?;

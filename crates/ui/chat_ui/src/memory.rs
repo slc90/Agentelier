@@ -1,6 +1,6 @@
 use agentelier_agent_host::{
-    AgentHost, ConversationEvent, HostFailed, MemoryDetail, MemoryEvent, MemoryInspection,
-    MemoryReply, MemoryRequest, MemorySource, ReceiveAgentEvents,
+    AgentHost, HostFailed, MemoryDetail, MemoryEvent, MemoryInspection, MemoryReply, MemoryRequest,
+    MemorySource, ReceiveAgentEvents,
 };
 use agentelier_controls::AgentelierButton;
 use bevy::prelude::*;
@@ -36,11 +36,13 @@ enum Action {
 }
 
 pub(super) fn install(app: &mut App) {
+    crate::memory_chat::install(app);
     app.init_resource::<MemoryPane>()
         .add_systems(Update, receive.after(ReceiveAgentEvents));
 }
 
 pub(super) fn open(world: &mut World) {
+    crate::memory_chat::open(world);
     request(world, Action::Refresh);
 }
 
@@ -109,27 +111,16 @@ fn request(world: &mut World, action: Action) {
 
 fn receive(
     mut events: MessageReader<MemoryEvent>,
-    mut sessions: MessageReader<ConversationEvent>,
     mut failures: MessageReader<HostFailed>,
     mut commands: Commands,
 ) {
-    let switched = sessions
-        .read()
-        .filter(|event| {
-            matches!(
-                event.kind,
-                agentelier_conversation_bridge::ConversationEvent::Opened(_)
-                    | agentelier_conversation_bridge::ConversationEvent::Created(_)
-            )
-        })
-        .count()
-        > 0;
     let failure = failures.read().last().map(|event| event.reason.clone());
     let results: Vec<_> = events
         .read()
+        .filter(|event| !event.progress && !matches!(event.result, Ok(MemoryReply::Chat(_))))
         .map(|event| (event.operation_id, event.result.clone()))
         .collect();
-    if results.is_empty() && !switched && failure.is_none() {
+    if results.is_empty() && failure.is_none() {
         return;
     }
     commands.queue(move |world: &mut World| -> Result {
@@ -137,10 +128,7 @@ fn receive(
         if !visible && !world.resource::<MemoryPane>().resetting {
             return Ok(());
         }
-        if switched && visible {
-            open(world);
-        }
-        let mut changed = switched;
+        let mut changed = false;
         let mut state = world.resource_mut::<MemoryPane>();
         for (id, result) in results {
             if state.pending != Some(id) {
@@ -164,6 +152,7 @@ fn receive(
                     state.detail = None;
                 }
                 Ok(MemoryReply::Detail(detail)) => state.detail = Some(detail),
+                Ok(MemoryReply::Chat(_)) => continue,
                 Err(failure) if resetting => state.reset_notice = Some(failure),
                 Err(failure) => state.status = failure,
             }
@@ -249,7 +238,8 @@ fn source_label(source: &MemorySource) -> String {
     )
 }
 
-pub(super) fn panel(state: &MemoryPane) -> impl Scene + use<> {
+pub(super) fn panel(world: &World) -> impl Scene + use<> {
+    let state = world.resource::<MemoryPane>();
     let mut status = state.reset_notice.as_ref().map_or_else(
         || state.status.clone(),
         |notice| {
@@ -326,7 +316,8 @@ pub(super) fn panel(state: &MemoryPane) -> impl Scene + use<> {
             {summary}--
             {detail}--
             {(!sources.is_empty()).then_some(bsn! { Text("已发布来源") WidgetryText })}--
-            {sources}
+            {sources}--
+            @crate::memory_chat::panel(world) Node { flex_grow: 0.0, height: px(340), flex_shrink: 0.0 }
         ]
     }
 }

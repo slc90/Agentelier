@@ -261,6 +261,13 @@ pub(super) fn scan(root: &Path, include_task_history: bool) -> io::Result<crate:
             .and_then(|directory| read(&directory, session).map(|parsed| (directory, parsed)));
         match result {
             Ok((directory, mut parsed)) => {
+                if parsed
+                    .initial
+                    .as_ref()
+                    .is_some_and(|initial| !initial.settings.kind.is_user())
+                {
+                    continue;
+                }
                 let mut error = parsed.issue.as_ref().map(ToString::to_string);
                 if parsed.issue.is_none() {
                     let cached = cached_summary(&directory);
@@ -355,7 +362,12 @@ pub(super) fn memory_cutoffs(root: &Path) -> io::Result<Vec<MemoryCutoff>> {
                 "无法确认会话 {session} 的提交边界：{issue}"
             )));
         }
-        if !parsed.summary.deleted && parsed.initial.is_some() {
+        if !parsed.summary.deleted
+            && parsed
+                .initial
+                .as_ref()
+                .is_some_and(|initial| initial.settings.kind.is_user())
+        {
             let last_turn = parsed
                 .records
                 .iter()
@@ -460,6 +472,9 @@ pub(super) fn memory_source(
     let initial = parsed
         .initial
         .ok_or_else(|| io::Error::other("记忆来源缺少会话初始记录"))?;
+    if !initial.settings.kind.is_user() {
+        return Ok(None);
+    }
     let turns =
         agentelier_conversation::memory_evidence(parsed.records).map_err(io::Error::other)?;
     if turns.is_empty() {
@@ -627,6 +642,9 @@ pub(super) fn load(
         .initial
         .take()
         .ok_or_else(|| io::Error::other("存档没有可恢复的初始记录"))?;
+    if !initial.settings.kind.is_user() {
+        return Err(io::Error::other("此内部会话不能通过普通聊天打开"));
+    }
     for record in &parsed.records {
         let event = match &record.event {
             RecordEvent::AgentTurn { event, .. } => event.as_ref(),

@@ -14,6 +14,7 @@ const ERROR_MESSAGE_BYTES: usize = 8192;
 #[derive(Clone)]
 pub struct ToolUserTurn {
     pub memory_epoch: Option<i64>,
+    pub memory_management: bool,
     pub session: uuid::Uuid,
     pub turn: u64,
     pub input: u64,

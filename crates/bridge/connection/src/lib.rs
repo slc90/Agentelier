@@ -4,8 +4,8 @@ compile_error!("This application supports Windows x64 only");
 mod connection;
 
 pub use agentelier_agent_runtime::{
-    ImageAttachmentAction, ImageAttachmentReply, MemoryDetail, MemoryInspection, MemoryReply,
-    MemoryRequest, MemorySource,
+    ImageAttachmentAction, ImageAttachmentReply, MemoryDetail, MemoryInspection, MemoryRequest,
+    MemorySource,
 };
 
 pub use agentelier_agent_runtime::DataEnvironment;
@@ -13,7 +13,7 @@ pub use agentelier_agent_runtime::{
     ConfigChange, ConfigSnapshot, Server, ServerId, ServerSettings, Transport,
 };
 pub use agentelier_agent_runtime::{SkillEntry, SkillRequest, SkillSnapshot, UserSkillId};
-pub use connection::{BridgeEvent, BridgeEventKind, BridgeFailure, Connection};
+pub use connection::{BridgeEvent, BridgeEventKind, BridgeFailure, Connection, MemoryReply};
 
 pub use agentelier_agent_runtime::{ConnectionState, ConnectionStatus};
 

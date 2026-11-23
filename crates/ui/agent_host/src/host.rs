@@ -55,6 +55,7 @@ pub struct GlobalTaskNotificationEvent(pub agentelier_conversation_bridge::TaskN
 #[derive(Message)]
 pub struct MemoryEvent {
     pub operation_id: u64,
+    pub progress: bool,
     pub result: std::result::Result<agentelier_bridge_connection::MemoryReply, String>,
 }
 
@@ -387,7 +388,15 @@ fn receive(world: &mut World) -> Result {
             BridgeEventKind::Memory(result) => {
                 world.write_message(MemoryEvent {
                     operation_id: event.operation_id,
+                    progress: false,
                     result,
+                });
+            }
+            BridgeEventKind::MemoryProgress(view) => {
+                world.write_message(MemoryEvent {
+                    operation_id: event.operation_id,
+                    progress: true,
+                    result: Ok(agentelier_bridge_connection::MemoryReply::Chat(view)),
                 });
             }
             BridgeEventKind::ImageAttachment(result) => {

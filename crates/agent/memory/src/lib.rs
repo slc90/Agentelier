@@ -15,4 +15,4 @@ pub use consolidation::Consolidation;
 pub use extraction::{SourceClaim, SourceCompletion, extraction_prompt, parse_extraction};
 pub use retrieval::{MemoryDetail, MemoryInspection, MemorySource, PublishedSummary};
 pub use store::{Memory, MemoryClient};
-pub use tools::registrations;
+pub use tools::{management_registrations, registrations};

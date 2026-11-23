@@ -68,7 +68,7 @@ pub use conversation::PreparedSession;
 
 pub use conversation::{
     CompactionContinuation, Conversation, ConversationEvent, ConversationFailure,
-    ConversationRequest, MAX_TURN_REQUESTS, SessionCreate, SessionId, SessionLocation,
+    ConversationRequest, MAX_TURN_REQUESTS, SessionCreate, SessionId, SessionKind, SessionLocation,
     SessionSettings, SessionView, TaskPhase, ToolImage, ToolView, TurnId, TurnStatus, TurnView,
 };
 

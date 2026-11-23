@@ -14,6 +14,29 @@ pub struct BridgeEvent {
     pub operation_id: u64,
     pub kind: BridgeEventKind,
 }
+
+#[derive(Clone)]
+pub enum MemoryReply {
+    Reset,
+    Inspection(crate::MemoryInspection),
+    Detail(crate::MemoryDetail),
+    Chat(Box<agentelier_conversation_bridge::SessionView>),
+}
+
+impl From<agentelier_agent_runtime::MemoryReply> for MemoryReply {
+    fn from(reply: agentelier_agent_runtime::MemoryReply) -> Self {
+        use agentelier_agent_runtime::MemoryReply as Agent;
+        match reply {
+            Agent::Reset => Self::Reset,
+            Agent::Inspection(inspection) => Self::Inspection(inspection),
+            Agent::Detail(detail) => Self::Detail(detail),
+            Agent::Chat(view) => Self::Chat(Box::new(
+                agentelier_conversation_bridge::session_view(*view),
+            )),
+        }
+    }
+}
+
 pub enum BridgeEventKind {
     Account(AccountEventKind),
     Model(ModelEventKind),
@@ -22,6 +45,7 @@ pub enum BridgeEventKind {
     Skills(Result<crate::SkillSnapshot, String>),
     McpStatus(Vec<crate::ConnectionStatus>),
     Memory(Result<crate::MemoryReply, String>),
+    MemoryProgress(Box<agentelier_conversation_bridge::SessionView>),
     ImageAttachment(Result<crate::ImageAttachmentReply, String>),
     McpMaterial(Result<crate::MaterialReply, String>),
 }
@@ -63,6 +87,7 @@ pub struct Connection {
     progress: Arc<Mutex<Option<BridgeEvent>>>,
     mcp_status: Arc<Mutex<Option<BridgeEvent>>>,
     global_tasks: Arc<Mutex<Option<BridgeEvent>>>,
+    memory_progress: Arc<Mutex<Option<BridgeEvent>>>,
     deferred: Option<BridgeEvent>,
     wake: Arc<WakeGate>,
     operations: agentelier_agent_runtime::OperationSequence,
@@ -96,6 +121,8 @@ impl Connection {
         let delivery_mcp_status = mcp_status.clone();
         let global_tasks = Arc::new(Mutex::new(None));
         let delivery_global_tasks = global_tasks.clone();
+        let memory_progress = Arc::new(Mutex::new(None));
+        let delivery_memory_progress = memory_progress.clone();
         let wake = Arc::new(WakeGate(Mutex::new(Some(Box::new(notify)))));
         let delivery_wake = wake.clone();
         let finished_wake = wake.clone();
@@ -116,7 +143,8 @@ impl Connection {
                         AgentEventKind::ModelCancelled => {
                             BridgeEventKind::Model(agentelier_llm_model_bridge::convert(None))
                         }
-                        AgentEventKind::Memory(reply) => BridgeEventKind::Memory(reply),
+                        AgentEventKind::Memory(reply) => BridgeEventKind::Memory(reply.map(Into::into)),
+                        AgentEventKind::MemoryProgress(view) => BridgeEventKind::MemoryProgress(Box::new(agentelier_conversation_bridge::session_view(*view))),
                         AgentEventKind::ImageAttachment(reply) => BridgeEventKind::ImageAttachment(reply),
                         AgentEventKind::McpMaterial(reply) => BridgeEventKind::McpMaterial(reply),
                         AgentEventKind::McpStatus(status) => BridgeEventKind::McpStatus(status),
@@ -131,7 +159,9 @@ impl Connection {
                         )),
                     },
                 };
-                if matches!(event.kind, BridgeEventKind::McpStatus(_)) {
+                if matches!(event.kind, BridgeEventKind::MemoryProgress(_)) {
+                    *delivery_memory_progress.lock().map_err(|_| DeliveryFailure::Closed)? = Some(event);
+                } else if matches!(event.kind, BridgeEventKind::McpStatus(_)) {
                     *delivery_mcp_status.lock().map_err(|_| DeliveryFailure::Closed)? = Some(event);
                 } else if matches!(&event.kind, BridgeEventKind::Conversation(kind)
                     if matches!(kind.as_ref(), agentelier_conversation_bridge::ConversationEvent::GlobalTasks(_)))
@@ -159,6 +189,7 @@ impl Connection {
             progress,
             mcp_status,
             global_tasks,
+            memory_progress,
             deferred: None,
             wake,
             operations,
@@ -599,6 +630,16 @@ impl Connection {
                 .ok_or(mpsc::TryRecvError::Empty),
             other => other,
         };
+        let received = match received {
+            Err(mpsc::TryRecvError::Empty) => self
+                .memory_progress
+                .lock()
+                .map_err(|_| BridgeFailure("记忆会话进度锁已损坏".into()))?
+                .take()
+                .filter(|event| self.pending_memory.contains(&event.operation_id))
+                .ok_or(mpsc::TryRecvError::Empty),
+            other => other,
+        };
         match received {
             Ok(event) => {
                 if let BridgeEventKind::Conversation(kind) = &event.kind {
@@ -704,6 +745,9 @@ impl Connection {
                     }
                     return Ok(Some(event));
                 }
+                if matches!(event.kind, BridgeEventKind::MemoryProgress(_)) {
+                    return Ok(Some(event));
+                }
                 if matches!(event.kind, BridgeEventKind::ImageAttachment(_)) {
                     if !self.pending_images.remove(&event.operation_id) {
                         return self.protocol_failure();
@@ -731,6 +775,7 @@ impl Connection {
                 let kind = match &event.kind {
                     BridgeEventKind::McpStatus(_)
                     | BridgeEventKind::Memory(_)
+                    | BridgeEventKind::MemoryProgress(_)
                     | BridgeEventKind::ImageAttachment(_)
                     | BridgeEventKind::Skills(_)
                     | BridgeEventKind::McpConfig(_)

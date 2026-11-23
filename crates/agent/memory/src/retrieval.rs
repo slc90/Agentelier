@@ -130,7 +130,7 @@ impl MemoryClient {
     pub(crate) async fn search(
         &self,
         epoch: Option<i64>,
-        directory: PathBuf,
+        directory: Option<PathBuf>,
         query: String,
         cancel: CancellationToken,
     ) -> io::Result<Vec<MemoryMatch>> {
@@ -147,7 +147,10 @@ impl MemoryClient {
             let mut matches = Vec::new();
             for indexed in sources(connection, None)? {
                 check_cancel(&cancel)?;
-                if indexed.scope.as_deref() != Some(directory.as_path()) {
+                if directory
+                    .as_ref()
+                    .is_some_and(|directory| indexed.scope.as_deref() != Some(directory.as_path()))
+                {
                     continue;
                 }
                 let body = indexed
@@ -182,14 +185,14 @@ impl MemoryClient {
     pub(crate) async fn read_for_task(
         &self,
         epoch: Option<i64>,
-        directory: PathBuf,
+        directory: Option<PathBuf>,
         record: String,
         cancel: CancellationToken,
     ) -> io::Result<MemoryDetail> {
         self.with_epoch(epoch, move |connection, workspace| {
             check_cancel(&cancel)?;
             let indexed = source(connection, &record)?;
-            if indexed.scope.as_deref() != Some(directory.as_path()) {
+            if directory.as_ref().is_some_and(|directory| indexed.scope.as_deref() != Some(directory.as_path())) {
                 return Err(io::Error::new(io::ErrorKind::NotFound, "当前目录没有这份已发布记录"));
             }
             let detail = detail(workspace, indexed)?;
@@ -202,6 +205,19 @@ impl MemoryClient {
             ).map_err(io::Error::other)?;
             Ok(detail)
         }).await
+    }
+
+    pub(crate) async fn management_summary(
+        &self,
+        epoch: Option<i64>,
+        cancel: CancellationToken,
+    ) -> io::Result<Option<String>> {
+        self.with_epoch(epoch, move |connection, workspace| {
+            check_cancel(&cancel)?;
+            Ok(crate::publication::snapshot(connection, workspace)?
+                .map(|published| published.summary))
+        })
+        .await
     }
 }
 

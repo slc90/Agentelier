@@ -22,8 +22,23 @@ pub struct CompactionContinuation {
     pub input_retained: bool,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionKind {
+    #[default]
+    User,
+    MemoryManagement,
+}
+
+impl SessionKind {
+    pub fn is_user(self) -> bool {
+        self == Self::User
+    }
+}
+
 #[derive(Clone)]
 pub struct SessionSettings {
+    pub kind: SessionKind,
     pub codex: Option<agentelier_llm_model::CodexIdentity>,
     pub slug: String,
     pub display_name: String,
@@ -79,6 +94,7 @@ impl SessionCreate {
         let model = agentelier_llm_model::select_session_model(catalog, &self.slug, &self.effort)
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
         Ok(SessionSettings {
+            kind: SessionKind::User,
             codex: Some(source),
             slug: self.slug,
             display_name: model.display_name.clone(),
@@ -571,15 +587,19 @@ impl Conversation {
                 })?
                 .path()
                 .to_path_buf();
-        let tools = Arc::new(
+        let contract = agentelier_llm_model::codex_tool_contract(&settings.slug);
+        let tools = if settings.kind.is_user() {
             ToolCatalog::with_extensions(
                 settings.image_input,
-                agentelier_llm_model::codex_tool_contract(&settings.slug),
+                contract,
                 settings.codex.is_some(),
                 self.extensions.iter().chain(discovered),
             )
-            .map_err(|failure| ConversationFailure::new(failure.to_string()))?,
-        );
+        } else {
+            ToolCatalog::extensions_only(contract, self.extensions.iter())
+        };
+        let tools =
+            Arc::new(tools.map_err(|failure| ConversationFailure::new(failure.to_string()))?);
         let mut session = SessionView {
             project_publications: Arc::default(),
             project_context: Default::default(),
@@ -688,6 +708,7 @@ impl Conversation {
             notice: None,
             id: thread,
             settings: Box::new(SessionSettings {
+                kind: settings.kind,
                 codex: settings.codex,
                 slug: settings.slug,
                 display_name: settings.display_name,

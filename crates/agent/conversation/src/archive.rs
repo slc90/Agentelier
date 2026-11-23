@@ -348,6 +348,8 @@ impl GeneratedImage {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct StoredSettings {
+    #[serde(default, skip_serializing_if = "user_session")]
+    pub kind: crate::SessionKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex: Option<agentelier_llm_model::CodexIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -366,6 +368,10 @@ pub struct StoredSettings {
     )]
     pub tool_contract: agentelier_tools::ToolContract,
     pub tools: Vec<StoredTool>,
+}
+
+fn user_session(kind: &crate::SessionKind) -> bool {
+    kind.is_user()
 }
 
 pub use agentelier_tools::ToolDefinition as StoredTool;
@@ -405,6 +411,7 @@ impl InitialSession {
             title: "新会话".into(),
             created_at_ms,
             settings: StoredSettings {
+                kind: view.settings.kind,
                 codex: view.settings.codex.clone(),
                 memory,
                 context_limits: view.settings.context_limits.clone(),

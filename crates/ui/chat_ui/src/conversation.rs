@@ -1216,7 +1216,7 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
             .collect(),
     })
 }
-fn project(session: SessionView) -> Result<ChatSession> {
+pub(super) fn project(session: SessionView) -> Result<ChatSession> {
     let limits = &session.context.limits;
     let basis = if session.context.server_anchor {
         if session.context.estimated_tokens == 0 {
@@ -1728,190 +1728,207 @@ fn reconcile(world: &mut World) -> Result {
     let mut lists = world.query_filtered::<Entity, With<MessageList>>();
     let lists: Vec<_> = lists.iter(world).collect();
     for list in lists {
-        let mut rows = world.query::<(Entity, &ChatRow, &ChildOf)>();
-        let mut existing: HashMap<_, _> = rows
-            .iter(world)
-            .filter(|(_, _, parent)| parent.parent() == list)
-            .map(|(entity, row, _)| (row.clone(), entity))
-            .collect();
-        let mut desired: Vec<(ChatRow, RowContent)> = Vec::new();
-        if let Some(session) = &state.session {
-            let mut inputs = HashSet::new();
-            for turn in session.previous_turns.iter().chain(session.turn.iter()) {
-                let user_key = ChatRow {
-                    session: session.id,
-                    turn: turn.input_id,
-                    request_index: 0,
-                    output_index: None,
-                    item_id: None,
-                };
-                if !turn.result_continuation && inputs.insert(turn.input_id) {
-                    desired.push((user_key.clone(), RowContent::User(turn.input.clone())));
-                    if let Some(audio) = &turn.audio {
-                        let key = ChatRow {
-                            item_id: Some(format!("audio-{}", audio.id)),
-                            ..user_key.clone()
-                        };
-                        desired.push((key, RowContent::Audio(audio.clone())));
-                    }
-                    if let Some(source) = &turn.transcript {
-                        let key = ChatRow {
-                            item_id: Some(format!("transcript-{}", source.transcript)),
-                            ..user_key
-                        };
-                        desired.push((
-                            key,
-                            RowContent::Plain(format!("引用文稿 · {}", source.label())),
-                        ));
-                    }
+        reconcile_list(
+            world,
+            list,
+            state.session.as_ref(),
+            Some(&state.expanded_tools),
+        )?;
+    }
+    Ok(())
+}
+
+pub(super) fn reconcile_list(
+    world: &mut World,
+    list: Entity,
+    session: Option<&ChatSession>,
+    expanded_tools: Option<&[String]>,
+) -> Result {
+    let mut rows = world.query::<(Entity, &ChatRow, &ChildOf)>();
+    let mut existing: HashMap<_, _> = rows
+        .iter(world)
+        .filter(|(_, _, parent)| parent.parent() == list)
+        .map(|(entity, row, _)| (row.clone(), entity))
+        .collect();
+    let mut desired: Vec<(ChatRow, RowContent)> = Vec::new();
+    if let Some(session) = session {
+        let mut inputs = HashSet::new();
+        for turn in session.previous_turns.iter().chain(session.turn.iter()) {
+            let user_key = ChatRow {
+                session: session.id,
+                turn: turn.input_id,
+                request_index: 0,
+                output_index: None,
+                item_id: None,
+            };
+            if !turn.result_continuation && inputs.insert(turn.input_id) {
+                desired.push((user_key.clone(), RowContent::User(turn.input.clone())));
+                if let Some(audio) = &turn.audio {
+                    let key = ChatRow {
+                        item_id: Some(format!("audio-{}", audio.id)),
+                        ..user_key.clone()
+                    };
+                    desired.push((key, RowContent::Audio(audio.clone())));
                 }
-                if turn.messages.is_empty() && turn.tools.iter().all(|tool| tool.collaboration) {
+                if let Some(source) = &turn.transcript {
+                    let key = ChatRow {
+                        item_id: Some(format!("transcript-{}", source.transcript)),
+                        ..user_key
+                    };
                     desired.push((
-                        ChatRow {
-                            session: session.id,
-                            turn: turn.id,
-                            request_index: 0,
-                            output_index: None,
-                            item_id: Some("attempt".into()),
-                        },
-                        RowContent::Plain(format!(
-                            "助手 · 尝试 {}{}",
-                            turn.id,
-                            if turn.is_retry { " · 重试" } else { "" }
-                        )),
+                        key,
+                        RowContent::Plain(format!("引用文稿 · {}", source.label())),
                     ));
                 }
-                let mut output = Vec::new();
-                for message in &turn.messages {
-                    let accepted = turn
-                        .requests
-                        .iter()
-                        .find(|fact| fact.request == message.request_index)
-                        .and_then(|fact| fact.response_accepted)
-                        .unwrap_or(message.request_index <= turn.committed_steps);
-                    let retained = if accepted {
-                        "已保留"
-                    } else if matches!(turn.status, ChatTurnStatus::Running) {
-                        "接收中"
-                    } else {
-                        "未纳入后续上下文"
-                    };
-                    output.push((
-                        ChatRow {
-                            session: session.id,
-                            turn: turn.id,
-                            request_index: message.request_index,
-                            output_index: Some(message.output_index),
-                            item_id: Some(message.id.clone()),
-                        },
-                        RowContent::Assistant {
-                            label: format!(
-                                "助手 · {} · 请求 {} · {retained}",
-                                message.phase.as_deref().unwrap_or("回答"),
-                                message.request_index
-                            ),
-                            source: message.text.clone(),
-                        },
-                    ));
-                }
-                for tool in turn.tools.iter().filter(|tool| !tool.collaboration) {
-                    output.push((
-                        ChatRow {
-                            session: session.id,
-                            turn: turn.id,
-                            request_index: tool.request_index,
-                            output_index: Some(tool.output_index),
-                            item_id: Some(tool.id.clone()),
-                        },
-                        RowContent::Tool(tool.clone()),
-                    ));
-                }
-                for input in &turn.steers {
-                    let label = match input.state {
-                        ChatSteerState::Accepted => "已接纳，等待生效",
-                        ChatSteerState::Applied => "已用于模型请求",
-                        ChatSteerState::NotApplied => "未生效",
-                    };
-                    output.push((
-                        ChatRow {
-                            session: session.id,
-                            turn: turn.id,
-                            request_index: input.applied_request.unwrap_or(u32::MAX),
-                            output_index: None,
-                            item_id: Some(format!("steer-{}", input.id)),
-                        },
-                        RowContent::User(format!(
-                            "你 · 补充 {} · {label}\n{}",
-                            input.id, input.text
-                        )),
-                    ));
-                }
-                output.sort_by_key(|(key, _)| (key.request_index, key.output_index));
-                desired.extend(output);
             }
+            if turn.messages.is_empty() && turn.tools.iter().all(|tool| tool.collaboration) {
+                desired.push((
+                    ChatRow {
+                        session: session.id,
+                        turn: turn.id,
+                        request_index: 0,
+                        output_index: None,
+                        item_id: Some("attempt".into()),
+                    },
+                    RowContent::Plain(format!(
+                        "助手 · 尝试 {}{}",
+                        turn.id,
+                        if turn.is_retry { " · 重试" } else { "" }
+                    )),
+                ));
+            }
+            let mut output = Vec::new();
+            for message in &turn.messages {
+                let accepted = turn
+                    .requests
+                    .iter()
+                    .find(|fact| fact.request == message.request_index)
+                    .and_then(|fact| fact.response_accepted)
+                    .unwrap_or(message.request_index <= turn.committed_steps);
+                let retained = if accepted {
+                    "已保留"
+                } else if matches!(turn.status, ChatTurnStatus::Running) {
+                    "接收中"
+                } else {
+                    "未纳入后续上下文"
+                };
+                output.push((
+                    ChatRow {
+                        session: session.id,
+                        turn: turn.id,
+                        request_index: message.request_index,
+                        output_index: Some(message.output_index),
+                        item_id: Some(message.id.clone()),
+                    },
+                    RowContent::Assistant {
+                        label: format!(
+                            "助手 · {} · 请求 {} · {retained}",
+                            message.phase.as_deref().unwrap_or("回答"),
+                            message.request_index
+                        ),
+                        source: message.text.clone(),
+                    },
+                ));
+            }
+            for tool in turn
+                .tools
+                .iter()
+                .filter(|tool| expanded_tools.is_some() && !tool.collaboration)
+            {
+                output.push((
+                    ChatRow {
+                        session: session.id,
+                        turn: turn.id,
+                        request_index: tool.request_index,
+                        output_index: Some(tool.output_index),
+                        item_id: Some(tool.id.clone()),
+                    },
+                    RowContent::Tool(tool.clone()),
+                ));
+            }
+            for input in &turn.steers {
+                let label = match input.state {
+                    ChatSteerState::Accepted => "已接纳，等待生效",
+                    ChatSteerState::Applied => "已用于模型请求",
+                    ChatSteerState::NotApplied => "未生效",
+                };
+                output.push((
+                    ChatRow {
+                        session: session.id,
+                        turn: turn.id,
+                        request_index: input.applied_request.unwrap_or(u32::MAX),
+                        output_index: None,
+                        item_id: Some(format!("steer-{}", input.id)),
+                    },
+                    RowContent::User(format!("你 · 补充 {} · {label}\n{}", input.id, input.text)),
+                ));
+            }
+            output.sort_by_key(|(key, _)| (key.request_index, key.output_index));
+            desired.extend(output);
         }
-        let mut ordered = Vec::with_capacity(desired.len());
-        for (key, content) in desired {
-            if let Some(entity) = existing.remove(&key) {
-                ordered.push(entity);
-                match content {
-                    RowContent::Audio(_) => {}
-                    RowContent::Tool(tool) => crate::tool_timeline::set_tool(world, entity, tool)?,
-                    RowContent::Plain(text) => {
-                        world
-                            .get_mut::<Text>(entity)
-                            .ok_or_else(|| io::Error::other("聊天消息缺少正文"))?
-                            .set_if_neq(Text(text));
-                    }
-                    RowContent::User(text) => {
-                        let body = world
-                            .get::<Children>(entity)
-                            .and_then(|children| {
-                                children
-                                    .iter()
-                                    .find(|child| world.get::<Text>(*child).is_some())
-                            })
-                            .ok_or_else(|| io::Error::other("用户消息缺少正文"))?;
-                        world
-                            .get_mut::<Text>(body)
-                            .ok_or_else(|| io::Error::other("用户消息正文不可用"))?
-                            .set_if_neq(Text(text));
-                    }
-                    RowContent::Assistant { label, source } => {
-                        let children = world
-                            .get::<Children>(entity)
-                            .ok_or_else(|| io::Error::other("助手消息缺少内容区域"))?
-                            .to_vec();
-                        for child in children {
-                            if let Some(mut markdown) = world.get_mut::<MarkdownSource>(child) {
-                                markdown.set_if_neq(MarkdownSource(source.clone()));
-                            }
-                            if world.get::<MessageLabel>(child).is_some() {
-                                world
-                                    .get_mut::<Text>(child)
-                                    .ok_or_else(|| io::Error::other("助手消息缺少标题"))?
-                                    .set_if_neq(Text(label.clone()));
-                            }
+    }
+    let mut ordered = Vec::with_capacity(desired.len());
+    for (key, content) in desired {
+        if let Some(entity) = existing.remove(&key) {
+            ordered.push(entity);
+            match content {
+                RowContent::Audio(_) => {}
+                RowContent::Tool(tool) => crate::tool_timeline::set_tool(world, entity, tool)?,
+                RowContent::Plain(text) => {
+                    world
+                        .get_mut::<Text>(entity)
+                        .ok_or_else(|| io::Error::other("聊天消息缺少正文"))?
+                        .set_if_neq(Text(text));
+                }
+                RowContent::User(text) => {
+                    let body = world
+                        .get::<Children>(entity)
+                        .and_then(|children| {
+                            children
+                                .iter()
+                                .find(|child| world.get::<Text>(*child).is_some())
+                        })
+                        .ok_or_else(|| io::Error::other("用户消息缺少正文"))?;
+                    world
+                        .get_mut::<Text>(body)
+                        .ok_or_else(|| io::Error::other("用户消息正文不可用"))?
+                        .set_if_neq(Text(text));
+                }
+                RowContent::Assistant { label, source } => {
+                    let children = world
+                        .get::<Children>(entity)
+                        .ok_or_else(|| io::Error::other("助手消息缺少内容区域"))?
+                        .to_vec();
+                    for child in children {
+                        if let Some(mut markdown) = world.get_mut::<MarkdownSource>(child) {
+                            markdown.set_if_neq(MarkdownSource(source.clone()));
+                        }
+                        if world.get::<MessageLabel>(child).is_some() {
+                            world
+                                .get_mut::<Text>(child)
+                                .ok_or_else(|| io::Error::other("助手消息缺少标题"))?
+                                .set_if_neq(Text(label.clone()));
                         }
                     }
                 }
-            } else {
-                let name = format!(
-                    "ChatMessage-{}-{}-{}-{}",
-                    key.session,
-                    key.turn,
-                    key.request_index,
-                    key.output_index
-                        .map(|index| index.to_string())
-                        .unwrap_or_else(|| key.item_id.clone().unwrap_or_else(|| "user".into()))
-                );
-                let entity = match content {
+            }
+        } else {
+            let name = format!(
+                "ChatMessage-{}-{}-{}-{}",
+                key.session,
+                key.turn,
+                key.request_index,
+                key.output_index
+                    .map(|index| index.to_string())
+                    .unwrap_or_else(|| key.item_id.clone().unwrap_or_else(|| "user".into()))
+            );
+            let entity = match content {
                     RowContent::Audio(audio) => world.commands().spawn_scene_with_error_handler(bsn! {
                         @crate::audio_attachment::card(audio)
                         Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
                     }).id(),
                     RowContent::Tool(tool) => {
-                        let expanded = state.expanded_tools.contains(&name);
+                        let expanded = expanded_tools.is_some_and(|tools| tools.contains(&name));
                         let card_key = name.clone();
                         let session = key.session;
                         world.commands().spawn_scene_with_error_handler(bsn! {
@@ -1944,18 +1961,17 @@ fn reconcile(world: &mut World) -> Result {
                         Node {width:percent(100),min_width:px(0),flex_shrink:0.0}
                     }).id(),
                 };
-                ordered.push(entity);
-            }
+            ordered.push(entity);
         }
-        for entity in existing.into_values() {
-            world.entity_mut(entity).despawn();
-        }
-        let unchanged = world
-            .get::<Children>(list)
-            .is_some_and(|children| children.iter().eq(ordered.iter().copied()));
-        if !unchanged {
-            world.commands().entity(list).replace_children(&ordered);
-        }
+    }
+    for entity in existing.into_values() {
+        world.entity_mut(entity).despawn();
+    }
+    let unchanged = world
+        .get::<Children>(list)
+        .is_some_and(|children| children.iter().eq(ordered.iter().copied()));
+    if !unchanged {
+        world.commands().entity(list).replace_children(&ordered);
     }
     Ok(())
 }

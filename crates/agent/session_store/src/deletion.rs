@@ -146,6 +146,13 @@ pub(super) fn delete(
     match crate::attachments::session_directory(root, session) {
         Ok(directory) => {
             let parsed = crate::reader::read(&directory, session)?;
+            if parsed
+                .initial
+                .as_ref()
+                .is_some_and(|initial| !initial.settings.kind.is_user())
+            {
+                return Err(io::Error::other("此内部会话不能通过普通聊天删除"));
+            }
             if let Some(issue) = parsed.issue {
                 return Err(io::Error::other(issue.to_string()));
             }

@@ -369,9 +369,10 @@ async fn run_task(
     let (settings, input, child) = active
         .call(|turn| Ok((turn.settings(), turn.input()?, turn.child_materials())))
         .await?;
-    if !active
-        .call(|turn| Ok(turn.continuation().is_some()))
-        .await?
+    if settings.kind.is_user()
+        && !active
+            .call(|turn| Ok(turn.continuation().is_some()))
+            .await?
     {
         let loading_cancel = cancel.clone();
         let include_builtin = active
@@ -458,7 +459,8 @@ async fn run_task(
                 "工具资源回收未确认，当前会话已暂停执行",
             ));
         }
-        if child.is_none()
+        if settings.kind.is_user()
+            && child.is_none()
             && let Some(status) = collect_project(active, cancel, progress).await?
         {
             return Ok(status);

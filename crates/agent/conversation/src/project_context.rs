@@ -54,6 +54,9 @@ impl crate::ActiveTurn<'_> {
     pub fn project_candidate(
         &self,
     ) -> Result<Option<ProjectCandidate>, crate::ConversationFailure> {
+        if !self.view.settings.kind.is_user() {
+            return Ok(None);
+        }
         let ProjectContextState::Loaded(snapshot) = self.view.project_context.as_ref() else {
             return Err(crate::ConversationFailure::new("请求缺少成功的项目采集"));
         };

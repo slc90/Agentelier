@@ -18,7 +18,7 @@ pub use conversation::{
 pub use conversation::{
     ConversationEvent, ConversationRequest, HistoryItem, MessageView, RequestMemory, RequestView,
     SessionCreate, SessionSettings, SessionView, ToolImageView, ToolView, TurnStatus, TurnView,
-    convert, request,
+    convert, request, view as session_view,
 };
 
 pub use conversation::{InputDecision, InputReceipt, SteerState, SteerView};

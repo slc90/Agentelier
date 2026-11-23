@@ -1889,6 +1889,7 @@ impl Conversation {
             id: restored.state.session,
             notice: restored.notice,
             settings: Box::new(SessionSettings {
+                kind: settings.kind,
                 codex: settings.codex,
                 context_limits: Box::new(restored.model.context_limits),
                 slug: restored.model.slug,

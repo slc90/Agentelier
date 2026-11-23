@@ -154,7 +154,12 @@ pub(super) fn apply(root: &Path, change: ProjectChange) -> io::Result<()> {
             }
             let directory = crate::attachments::session_directory(root, session)?;
             let archive = crate::reader::read(&directory, session)?;
-            if archive.summary.deleted || archive.initial.is_none() {
+            if archive.summary.deleted
+                || archive
+                    .initial
+                    .as_ref()
+                    .is_none_or(|initial| !initial.settings.kind.is_user())
+            {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     "会话已删除或缺少初始记录",

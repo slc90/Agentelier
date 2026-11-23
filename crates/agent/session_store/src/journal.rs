@@ -17,6 +17,7 @@ struct Cursor {
     summary: SessionSummary,
     titled: bool,
     poisoned: bool,
+    kind: agentelier_conversation::SessionKind,
 }
 
 #[derive(Default)]
@@ -59,6 +60,7 @@ pub(super) fn summarize(
         summary: initial.summary(sequence),
         titled: false,
         poisoned: false,
+        kind: initial.settings.kind,
     };
     for record in records {
         update(&mut cursor, record);
@@ -82,6 +84,7 @@ fn load_cursor(directory: &Path, session: SessionId) -> io::Result<Cursor> {
         summary: parsed.summary,
         titled: titled || parsed.manual_title.is_some(),
         poisoned: false,
+        kind: initial.settings.kind,
     })
 }
 
@@ -147,6 +150,14 @@ impl Writer {
             .0
             .get_mut(&session)
             .ok_or_else(|| io::Error::other("会话写入位置未初始化"))?;
+        if !cursor.kind.is_user()
+            && matches!(
+                kind,
+                RecordKind::Renamed { .. } | RecordKind::Deleted { .. }
+            )
+        {
+            return Err(io::Error::other("普通聊天操作不能更改内部会话"));
+        }
         if cursor.poisoned {
             return Err(io::Error::other("会话已有未确认的写入，须恢复后才能继续"));
         }

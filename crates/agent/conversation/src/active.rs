@@ -213,6 +213,7 @@ impl ActiveTurn<'_> {
             .collect();
         Ok(agentelier_tools::ToolUserTurn {
             memory_epoch,
+            memory_management: !self.view.settings.kind.is_user(),
             session: self.view.id,
             turn: turn.id.0,
             input: turn.input_id.0,

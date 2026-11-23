@@ -11,6 +11,7 @@ mod image_preview;
 mod mcp;
 mod mcp_materials;
 mod memory;
+mod memory_chat;
 mod preparation;
 mod project_context;
 mod projects;

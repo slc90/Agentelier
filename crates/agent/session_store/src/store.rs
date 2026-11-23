@@ -599,6 +599,12 @@ fn create(
     project: Option<ProjectId>,
 ) -> io::Result<Commit> {
     initial.settings.instructions.validate()?;
+    if project.is_some() && !initial.settings.kind.is_user() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "内部会话不能属于项目",
+        ));
+    }
     if initial.session.is_nil() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,

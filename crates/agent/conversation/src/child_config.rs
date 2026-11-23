@@ -249,6 +249,7 @@ impl ActiveTurn<'_> {
                 parent_request_hash: request.projection.payload_hash.clone(),
             },
             settings: StoredSettings {
+                kind: crate::SessionKind::User,
                 codex: Some(identity.clone()),
                 memory: None,
                 context_limits: Box::new(limits.clone()),
