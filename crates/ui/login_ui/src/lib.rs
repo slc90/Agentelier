@@ -6,6 +6,6 @@ mod authentication;
 mod data_directory;
 mod directory_settings;
 
-pub use account::AccountState;
+pub use account::{AccountState, open_account_window};
 pub use data_directory::{DataDirectoryReady, LoginUiHost, LoginUiPlugin};
-pub use directory_settings::HomeContent;
+pub use directory_settings::{HomeContent, open_directory_settings};

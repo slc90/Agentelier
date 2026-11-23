@@ -13,8 +13,6 @@ use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::tooltip::{TooltipContentFactory, WidgetryTooltip, WidgetryTooltipPlugin};
 use std::io;
 
-const SIDEBAR_WIDTH: f32 = 240.0;
-const SIDEBAR_MIN_WIDTH: f32 = 168.0;
 const ROW_HEIGHT: f32 = 44.0;
 const TITLE_PREVIEW_CHARACTERS: usize = 18;
 const CONTROL_HEIGHT: f32 = 40.0;
@@ -86,12 +84,11 @@ fn initialize(mut commands: Commands) {
     commands.insert_resource(ArchiveSource(source));
 }
 
-pub(crate) fn panel(world: &World) -> impl Scene {
+pub(crate) fn panel(world: &World) -> impl Scene + use<> {
     let source = world.resource::<ArchiveSource>().0;
     bsn! {
-        Name("LocalSessionArchives") Node { width: px(SIDEBAR_WIDTH), min_width: px(SIDEBAR_MIN_WIDTH), max_width: percent(30), height: percent(100), flex_direction: FlexDirection::Column, row_gap: px(CONTROL_GAP), flex_shrink: 0.0 }
+        Name("LocalSessionArchives") Node { width: percent(100), min_width: px(0), height: percent(100), flex_direction: FlexDirection::Column, row_gap: px(CONTROL_GAP), flex_shrink: 0.0 }
         Children [
-            Text("Agentelier") WidgetryText--
             @crate::conversation::create_button()--
             @WidgetryListView::<ArchiveChoice> {
                 @source: source,

@@ -105,6 +105,8 @@ struct ModelSelector;
 struct ModelStatus;
 #[derive(Component, Clone, Default)]
 struct ModelText;
+#[derive(Component, Clone, Default)]
+struct ModelTextPreview;
 
 pub fn install(
     app: &mut App,
@@ -122,6 +124,7 @@ pub fn install(
     crate::prompts::install(app)?;
     crate::mcp::install(app);
     crate::memory::install(app);
+    crate::workspace::install(app);
     app.register_widgetry_combo_box::<ModelChoice>()
         .map_err(|failure| failure.into_bevy_error())?;
     app.init_resource::<ModelState>()
@@ -150,15 +153,13 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
         let reasoning_source = world.resource::<ReasoningSource>().0;
         let summary = status(&state, account);
         let raw_text = state.text.clone().unwrap_or_default();
+        let preview_display = if raw_text.is_empty() { Display::None } else { Display::Flex };
         let chat = world.resource::<crate::conversation::ChatState>().clone();
-        let scene: Box<dyn Scene> = Box::new(bsn! {
-            Name("ModelPreparation") ChildOf(host)
-            Node { width: percent(100), height: percent(100), min_height: px(0), column_gap: px(PANEL_GAP) }
+        let content = bsn_list! {
+            Name("ModelPreparation")
+            Node { width: percent(100), height: percent(100), min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(PANEL_GAP) }
             Children [
-                @crate::archives::panel(world)--
-                Node { flex_grow: 1.0, min_width: px(0), height: percent(100), flex_direction: FlexDirection::Column, row_gap: px(PANEL_GAP) }
-                Children [
-                Node { column_gap: px(PANEL_GAP), flex_wrap: FlexWrap::Wrap, row_gap: px(PANEL_GAP) }
+                Node { column_gap: px(PANEL_GAP), flex_wrap: FlexWrap::Wrap, row_gap: px(PANEL_GAP), flex_shrink: 0.0 }
                 Children [
                     @action_button("刷新模型目录", "RefreshModelCatalog", ModelAction::Refresh)--
                     @WidgetryComboBox::<ModelChoice> {
@@ -174,9 +175,7 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
                     on(select_model)--
                     @reasoning::selector(reasoning_source)--
                     @action_button("验证模型连接", "VerifyModelConnection", ModelAction::Verify)--
-                    @crate::prompts::entry()--
-                    @crate::prompts::mcp_entry()--
-                    @crate::prompts::memory_entry()
+                    @crate::prompts::entry()
                 ]--
                 crate::prompts::NormalContent
                 Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(PANEL_GAP) }
@@ -190,16 +189,20 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
                         Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }
                     }) as Box<dyn SceneList>)}
                 }
-                Node { width: percent(100), height: px(64), flex_shrink: 0.0 }--
+                ModelTextPreview
+                Node { width: percent(100), height: px(64), flex_shrink: 0.0, display: preview_display }--
                 @crate::working_directory::panel(world.resource::<crate::working_directory::DirectoryState>())--
                 @crate::conversation::panel(&chat, account)
                 ]--
                 crate::prompts::PromptWorkspace Name("PromptWorkspace")
                 Node { display: Display::None, width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column }
-                ]
             ]
+        };
+        let archives = bsn_list! { @crate::archives::panel(world) };
+        world.commands().spawn_scene_with_error_handler(bsn! {
+            @crate::workspace::scene(content, archives)
+            ChildOf(host)
         });
-        world.commands().spawn_scene_with_error_handler(scene);
     });
 }
 
@@ -499,6 +502,7 @@ fn update(
     mut buttons: Query<(Entity, &ModelAction)>,
     selectors: Query<Entity, With<ModelSelector>>,
     mut texts: Query<(&mut Text, Has<ModelStatus>, Has<ModelText>)>,
+    mut preview: Query<&mut Node, With<ModelTextPreview>>,
     mut commands: Commands,
 ) {
     if !state.is_changed() && !account.is_changed() && !activity.is_changed() && mounted.is_empty()
@@ -534,5 +538,12 @@ fn update(
         } else if is_text {
             text.0 = state.text.clone().unwrap_or_default();
         }
+    }
+    for mut node in &mut preview {
+        node.display = if state.text.as_deref().is_some_and(|text| !text.is_empty()) {
+            Display::Flex
+        } else {
+            Display::None
+        };
     }
 }

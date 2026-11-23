@@ -5,7 +5,12 @@ use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::{InteractionDisabled, UiSystems};
 use bevy::ui_widgets::Activate;
+use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
+use bevy_widgetry::window::{
+    WidgetryWindowBackground, WidgetryWindowControlsConfig, WidgetryWindowTitle,
+    owned_widgetry_window,
+};
 
 const ACCOUNT_GAP: f32 = 12.0;
 const BUTTON_HEIGHT: f32 = 40.0;
@@ -251,6 +256,39 @@ pub(crate) fn account_panel(state: &AccountState, model_busy: bool) -> impl Scen
             ]
         ]
     }
+}
+
+#[derive(Component, Clone, Default)]
+struct AccountWindow;
+
+pub fn open_account_window(world: &mut World) -> Result {
+    if world
+        .query_filtered::<Entity, With<AccountWindow>>()
+        .iter(world)
+        .next()
+        .is_some()
+    {
+        return Ok(());
+    }
+    let account = world.resource::<AccountState>().clone();
+    let model_busy = world
+        .resource::<agentelier_agent_host::HostActivity>()
+        .model_busy;
+    world.commands().spawn_scene_with_error_handler(bsn! {
+        AccountWindow Name("AccountWindow")
+        @owned_widgetry_window(
+            Window { title: "账号".into(), resolution: (560, 300).into(), ..default() },
+            WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
+            WidgetryWindowBackground::Theme,
+            Default::default(),
+            bsn_list! { WidgetryWindowTitle WidgetryText Pickable::IGNORE },
+            bsn_list! {
+                Node { padding: UiRect::all(px(16)), width: percent(100) }
+                Children [@account_panel(&account, model_busy)]
+            },
+        )
+    });
+    Ok(())
 }
 
 fn activate(

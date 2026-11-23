@@ -24,6 +24,7 @@ bevy_widgetry = { workspace = true, features = [
   "scroll_area",
   "text_field",
   "file_dialog",
+  "splitter",
   "job",
 ] }
 tracing.workspace = true

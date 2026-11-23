@@ -19,14 +19,6 @@ pub(crate) fn entry() -> impl Scene {
     button("提示词管理", "OpenPromptManager", Action::Open, false)
 }
 
-pub(crate) fn memory_entry() -> impl Scene {
-    button("长期记忆", "OpenMemoryInspection", Action::Memory, false)
-}
-
-pub(crate) fn mcp_entry() -> impl Scene {
-    button("MCP 服务器", "OpenMcpSettings", Action::Mcp, false)
-}
-
 fn button(label: &str, name: &'static str, action: Action, disabled: bool) -> impl Scene {
     let label = label.to_owned();
     (

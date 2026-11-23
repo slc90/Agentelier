@@ -380,7 +380,6 @@ pub(crate) fn panel(state: &ChatState, account: &AccountState) -> impl Scene {
                 }) as Box<dyn SceneList>)}
             }
             Name("ChatMessageScroll") crate::reading::ChatReadingScroll Node { width: percent(100), height: px(0), flex_basis: px(0), flex_grow: 1.0, flex_shrink: 1.0, min_height: px(0) }--
-            @crate::task_panel::panel()--
             @crate::queue::panel()--
             @crate::audio_attachment::panel()--
             @crate::transcription::panel(crate::transcription::Target::Draft)--

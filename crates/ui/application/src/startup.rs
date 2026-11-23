@@ -1,10 +1,13 @@
 use crate::{config, diagnostics, shutdown};
 use agentelier_agent_host::AgentHostPlugin;
+use agentelier_chat_ui::{MAIN_WINDOW_WIDTH, MIN_MAIN_WINDOW_WIDTH, workspace_title};
 use agentelier_controls::{AGENTELIER_THEME, AgentelierControlsPlugin};
 use agentelier_login::DataEnvironment;
 use agentelier_login_ui::{DataDirectoryReady, HomeContent, LoginUiHost, LoginUiPlugin};
 use bevy::log::LogPlugin;
-use bevy::window::{MonitorSelection, PrimaryWindow, WindowPosition, WindowResolution};
+use bevy::window::{
+    ExitCondition, MonitorSelection, PrimaryWindow, WindowPosition, WindowResolution,
+};
 use bevy::winit::WinitSettings;
 use bevy::{prelude::*, render::RenderPlugin, tasks::block_on};
 use bevy_app_assets::AppAssetPlugin;
@@ -20,6 +23,8 @@ use bevy_widgetry::window::{
 use bevy_widgetry_path_display::display_path;
 use std::sync::{Arc, OnceLock};
 use tracing::debug;
+
+const MAIN_WINDOW_HEIGHT: f32 = 1080.0;
 
 pub fn run() -> std::process::ExitCode {
     let mut logging_ready = false;
@@ -92,6 +97,7 @@ fn run_application(
             .disable::<LogPlugin>()
             .set(WindowPlugin {
                 primary_window: Some(initial_window()),
+                exit_condition: ExitCondition::OnPrimaryClosed,
                 ..default()
             })
             .set(RenderPlugin {
@@ -138,18 +144,22 @@ fn enter_main(
 ) -> Result {
     let mut window = primary.single_mut().map_err(diagnostics::operation)?;
     window.title = "agentelier".into();
-    window.resolution.set(1920.0, 1080.0);
+    window.resize_constraints.min_width = MIN_MAIN_WINDOW_WIDTH;
+    window.resolution.set(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT);
+    window.position = WindowPosition::Centered(MonitorSelection::Primary);
     debug!("数据目录准备完成，进入主界面");
     Ok(())
 }
 
 fn initial_window() -> Window {
-    prepare_native_window(Window {
+    let mut window = Window {
         title: "选择应用数据目录".into(),
         resolution: WindowResolution::new(1100, 760),
         position: WindowPosition::Centered(MonitorSelection::Primary),
         ..default()
-    })
+    };
+    window.enabled_buttons.maximize = false;
+    prepare_native_window(window)
 }
 
 fn setup(mut commands: Commands, primary_window: Query<Entity, With<PrimaryWindow>>) -> Result {
@@ -159,14 +169,10 @@ fn setup(mut commands: Commands, primary_window: Query<Entity, With<PrimaryWindo
         @widgetry_window(
             target,
             camera,
-            WidgetryWindowControlsConfig::default(),
+            WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
             WidgetryWindowBackground::Theme,
             Default::default(),
-            bsn_list! {
-                bevy_widgetry::window::WidgetryWindowTitle
-                bevy_widgetry::text::WidgetryText
-                template(|_| Ok(Pickable::IGNORE))
-            },
+            bsn_list! { @workspace_title() },
             bsn_list! {
                 LoginUiHost
                 Node { width: percent(100), height: percent(100) }

@@ -1,5 +1,5 @@
 mod view;
-pub(crate) use view::{entry, mcp_entry, memory_entry, render};
+pub(crate) use view::{entry, render};
 
 use agentelier_login_ui::DataDirectoryReady;
 use agentelier_prompts::{
@@ -399,21 +399,31 @@ fn capture(world: &mut World) -> Result {
 
 fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands) -> Result {
     let action = *actions.get(event.entity)?;
-    commands.queue(move |world: &mut World| -> Result {
-        capture(world)?;
-        crate::mcp::capture(world)?;
-        if let Err(failure) = apply(world, action) {
-            error!(error = %failure, "提示词操作失败");
-            world.resource_mut::<PromptState>().status = failure
-                .to_string()
-                .lines()
-                .next()
-                .unwrap_or("提示词操作失败，请查看应用日志")
-                .to_owned();
-        }
-        refresh(world)
-    });
+    commands.queue(move |world: &mut World| activate_action(world, action));
     Ok(())
+}
+
+pub(crate) fn open_mcp(world: &mut World) -> Result {
+    activate_action(world, Action::Mcp)
+}
+
+pub(crate) fn open_memory(world: &mut World) -> Result {
+    activate_action(world, Action::Memory)
+}
+
+fn activate_action(world: &mut World, action: Action) -> Result {
+    capture(world)?;
+    crate::mcp::capture(world)?;
+    if let Err(failure) = apply(world, action) {
+        error!(error = %failure, "提示词操作失败");
+        world.resource_mut::<PromptState>().status = failure
+            .to_string()
+            .lines()
+            .next()
+            .unwrap_or("提示词操作失败，请查看应用日志")
+            .to_owned();
+    }
+    refresh(world)
 }
 
 fn apply(world: &mut World, action: Action) -> Result {

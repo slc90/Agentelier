@@ -52,7 +52,6 @@ enum View {
 
 #[derive(Component, Clone, Copy)]
 enum Action {
-    Settings,
     Home,
     Change,
     Open,
@@ -156,19 +155,10 @@ fn render(world: &mut World) -> Result {
     {
         entity.despawn();
     }
-    let account = world.resource::<crate::AccountState>().clone();
-    let model_busy = world
-        .resource::<agentelier_agent_host::AgentHost>()
-        .model_busy()?;
     let screen = match view {
         View::Home => world.commands().spawn_scene_with_error_handler(bsn! {
-            Name("DirectorySettingsHome") ChildOf(host)
-            Node { width: percent(100), height: percent(100), flex_direction: FlexDirection::Column, align_items: AlignItems::Start, padding: UiRect::all(px(PANEL_PADDING)), row_gap: px(FIELD_GAP) }
-            Children [
-                @button("设置", "DirectorySettingsEntry", Action::Settings, false)--
-                @crate::account::account_panel(&account, model_busy)--
-                HomeContent Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }
-            ]
+            HomeContent Name("DirectorySettingsHome") ChildOf(host)
+            Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }
         }).id(),
         View::Settings => {
             let next_section = (next != current).then(|| bsn! {
@@ -245,10 +235,6 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
                 state.view = View::Home;
                 render(world)
             }
-            Action::Settings => {
-                world.resource_mut::<DirectorySettings>().view = View::Settings;
-                render(world)
-            }
             Action::Change | Action::Open => {
                 let state = world.resource::<DirectorySettings>();
                 if state.pending.is_some() || !matches!(state.view, View::Settings) {
@@ -267,6 +253,11 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
         }
     });
     Ok(())
+}
+
+pub fn open_directory_settings(world: &mut World) -> Result {
+    world.resource_mut::<DirectorySettings>().view = View::Settings;
+    render(world)
 }
 
 fn selected(
