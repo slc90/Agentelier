@@ -6,7 +6,8 @@ use bevy::picking::events::PointerCancel;
 use bevy::prelude::*;
 use bevy::ui::{Pressed, UiSystems};
 use bevy::ui_widgets::ValueChange;
-use bevy_widgetry::splitter::WidgetrySplitter;
+use bevy::window::RequestRedraw;
+use bevy_widgetry::splitter::{SplitterError, SplitterLayoutError, WidgetrySplitter};
 use serde::{Deserialize, Serialize};
 
 const MIN_CONTENT_WIDTH: f32 = SESSION_MIN + CHAT_MIN + RIGHT_MIN;
@@ -235,7 +236,7 @@ fn finish_gesture(
     }
 }
 
-fn sync(world: &mut World) -> Result {
+fn sync(world: &mut World, mut prepared: Local<Option<(Entity, u8)>>) -> Result {
     let nodes = world
         .query::<(Entity, &Split, &ComputedNode)>()
         .iter(world)
@@ -247,10 +248,22 @@ fn sync(world: &mut World) -> Result {
             )
         })
         .collect::<Vec<_>>();
-    let Some(&(_, _, outer)) = nodes.iter().find(|(_, split, _)| *split == Split::Session) else {
+    let Some(&(root, _, outer)) = nodes.iter().find(|(_, split, _)| *split == Split::Session)
+    else {
+        *prepared = None;
         return Ok(());
     };
     if outer + 0.5 < MIN_CONTENT_WIDTH + 2.0 * HANDLE_WIDTH {
+        return Ok(());
+    }
+    let frames = prepared.get_or_insert((root, 0));
+    if frames.0 != root {
+        *frames = (root, 0);
+    }
+    // Widgetry reads the previous geometry, establishes pane bounds, then initializes the ratio.
+    if frames.1 < 2 {
+        frames.1 += 1;
+        world.write_message(RequestRedraw);
         return Ok(());
     }
     let total = (outer - 2.0 * HANDLE_WIDTH).max(MIN_CONTENT_WIDTH);
@@ -268,9 +281,16 @@ fn sync(world: &mut World) -> Result {
         let desired = widths.widget_ratio(split);
         let current = WidgetrySplitter::split_ratio(world, entity)
             .map_err(|failure| failure.into_bevy_error())?;
-        if (current - desired).abs() > 0.0001 {
-            WidgetrySplitter::set_split_ratio_in_world(world, entity, desired)
-                .map_err(|failure| failure.into_bevy_error())?;
+        if (current - desired).abs() > 0.0001
+            && let Err(failure) = WidgetrySplitter::set_split_ratio_in_world(world, entity, desired)
+        {
+            if matches!(failure.kind(), SplitterError::Layout { source, .. }
+                if matches!(source.as_ref(), SplitterLayoutError::LayoutUnavailable))
+            {
+                world.write_message(RequestRedraw);
+            } else {
+                return Err(failure.into_bevy_error());
+            }
         }
     }
     Ok(())
