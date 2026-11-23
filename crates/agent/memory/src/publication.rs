@@ -48,10 +48,36 @@ pub(crate) fn snapshot(
     Ok(Some(snapshot))
 }
 
+pub(crate) fn committed_snapshot(connection: &Connection) -> io::Result<MemorySnapshot> {
+    let record: Option<(String, String, i64, String)> = connection
+        .query_row(
+            "SELECT publication_id, summary_hash, epoch, content FROM publication
+         CROSS JOIN memory_state JOIN published_artifacts ON file_name = ?1",
+            [SUMMARY],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(io::Error::other)?;
+    let Some((publication_id, hash, epoch, summary)) = record else {
+        return Err(io::Error::other("记忆库缺少已提交的摘要副本"));
+    };
+    let snapshot = MemorySnapshot {
+        publication_id: Uuid::parse_str(&publication_id).map_err(io::Error::other)?,
+        hash,
+        epoch,
+        summary,
+    };
+    snapshot.validate().map_err(io::Error::other)?;
+    Ok(snapshot)
+}
+
 pub(crate) fn read_checked(path: &Path, limit: usize, hash: &str) -> io::Result<String> {
     let text = read_bounded(path, limit)?;
     if sha256(&text) != hash {
-        return Err(io::Error::other("已发布记忆文件校验值无效"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "已发布记忆文件校验值无效",
+        ));
     }
     Ok(text)
 }

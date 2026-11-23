@@ -22,7 +22,7 @@ mod list_agents;
 mod loading;
 mod mailbox;
 mod memory;
-pub use memory::{MemoryReply, MemoryRequest};
+pub use memory::{MemoryReply, MemoryRequest, MemoryWorkState};
 mod memory_dialogue;
 mod model_task;
 mod recording;
@@ -67,6 +67,7 @@ pub enum AgentEventKind {
     McpMaterial(Result<agentelier_mcp::MaterialReply, String>),
     Memory(Result<MemoryReply, String>),
     MemoryProgress(Box<agentelier_conversation::SessionView>),
+    MemoryWork(MemoryWorkState),
     ImageAttachment(Result<ImageAttachmentReply, String>),
 }
 #[derive(Debug)]
@@ -132,6 +133,7 @@ enum Command {
     CancelMcpMaterial(u64),
     Memory(u64, MemoryRequest),
     MemoryDialogue(memory_dialogue::Signal),
+    MemoryWork(MemoryWorkState),
     ImageAttachment(u64, SessionId, String, ImageAttachmentAction),
     ImageAttachmentFinished(u64, io::Result<ImageAttachmentReply>),
     AudioDraft(u64, SessionId, Option<PathBuf>),
@@ -343,9 +345,9 @@ impl AgentRuntime {
                             Ok(_) => debug!(path = %data_root.display(), "记忆存储已打开"),
                             Err(failure) => error!(path = %data_root.display(), error = %failure, "记忆存储不可用"),
                         }
-                        let memory_processing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                        let (memory_work, mut memory_status) = tokio::sync::watch::channel(MemoryWorkState::Idle);
                         let mut memory_worker = memory.as_ref().ok().and_then(|memory| memory::Background::start(
-                            memory.client(), store.client(), owner_credentials.clone(), &runtime_shutdown, memory_processing.clone(),
+                            memory.client(), store.client(), owner_credentials.clone(), &runtime_shutdown, memory_work.clone(),
                         ));
                         let mut mcp_settings = agentelier_mcp::ConfigStore::open(&data_root);
                         let mut material: Option<PendingMaterial> = None;
@@ -462,6 +464,7 @@ impl AgentRuntime {
                                 let command = tokio::select! { biased;
                                     _ = runtime_shutdown.cancelled() => break,
                                     signal = memory_dialogue.next() => Command::MemoryDialogue(signal),
+                                    Ok(()) = memory_status.changed() => Command::MemoryWork(*memory_status.borrow_and_update()),
                                     result = async {
                                         if let Some((_, reply)) = project_saves.front_mut() {
                                             reply.await.map_err(|_| io::Error::other("项目存储未返回保存结果")).and_then(|result| result)
@@ -752,12 +755,15 @@ impl AgentRuntime {
                                     Command::MemoryDialogue(signal) => {
                                         memory_dialogue.apply(signal, &store, &publish).await?;
                                     }
+                                    Command::MemoryWork(status) => {
+                                        emit(&publish, 0, AgentEventKind::MemoryWork(status))?;
+                                    }
                                     Command::Memory(id, MemoryRequest::Reset) => {
                                         tracing::info!(operation_id = id, "已确认长期记忆重置，等待后台收敛");
                                         let result = memory::reset(memory.as_ref().ok(), &mut memory_worker, &store.client()).await;
-                                        memory_processing.store(false, std::sync::atomic::Ordering::Relaxed);
+                                        memory_work.send_replace(MemoryWorkState::Idle);
                                         memory_worker = memory.as_ref().ok().and_then(|memory| memory::Background::start(
-                                            memory.client(), store.client(), owner_credentials.clone(), &runtime_shutdown, memory_processing.clone(),
+                                            memory.client(), store.client(), owner_credentials.clone(), &runtime_shutdown, memory_work.clone(),
                                         ));
                                         match &result {
                                             Ok(_) => tracing::info!(operation_id = id, "长期记忆重置已持久提交"),
@@ -767,7 +773,8 @@ impl AgentRuntime {
                                         emit(&publish, id, AgentEventKind::Memory(reply))?;
                                     }
                                     Command::Memory(id, request) => {
-                                        let result = memory::inspect(memory.as_ref().ok(), memory_processing.load(std::sync::atomic::Ordering::Relaxed), request).await;
+                                        let working = *memory_status.borrow() == MemoryWorkState::Working;
+                                        let result = memory::inspect(memory.as_ref().ok(), working, request).await;
                                         match &result {
                                             Ok(_) => tracing::info!(operation_id = id, "已读取长期记忆展示材料"),
                                             Err(failure) => error!(operation_id = id, error = %failure, "读取长期记忆展示材料失败"),
@@ -775,6 +782,7 @@ impl AgentRuntime {
                                         let reply = result.map_err(|failure| match failure.kind() {
                                             io::ErrorKind::WouldBlock => failure.to_string(),
                                             io::ErrorKind::InvalidInput | io::ErrorKind::NotFound => "找不到所选长期记忆材料，请刷新后重试".into(),
+                                            io::ErrorKind::InvalidData => "已发布的记忆材料未通过完整性校验".into(),
                                             _ => "读取长期记忆失败，详见应用日志".into(),
                                         });
                                         emit(&publish, id, AgentEventKind::Memory(reply))?;

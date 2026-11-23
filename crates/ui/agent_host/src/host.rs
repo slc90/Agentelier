@@ -60,6 +60,9 @@ pub struct MemoryEvent {
 }
 
 #[derive(Message)]
+pub struct MemoryWorkEvent(pub agentelier_bridge_connection::MemoryWorkState);
+
+#[derive(Message)]
 pub struct ImageAttachmentEvent {
     pub operation_id: u64,
     pub result: std::result::Result<agentelier_bridge_connection::ImageAttachmentReply, String>,
@@ -118,6 +121,7 @@ impl Plugin for AgentHostPlugin {
             .add_message::<McpConfigEvent>()
             .add_message::<SkillsEvent>()
             .add_message::<MemoryEvent>()
+            .add_message::<MemoryWorkEvent>()
             .add_message::<ImageAttachmentEvent>()
             .add_message::<McpStatusEvent>()
             .add_message::<McpMaterialEvent>()
@@ -398,6 +402,9 @@ fn receive(world: &mut World) -> Result {
                     progress: true,
                     result: Ok(agentelier_bridge_connection::MemoryReply::Chat(view)),
                 });
+            }
+            BridgeEventKind::MemoryWork(status) => {
+                world.write_message(MemoryWorkEvent(status));
             }
             BridgeEventKind::ImageAttachment(result) => {
                 world.write_message(ImageAttachmentEvent {

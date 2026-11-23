@@ -5,6 +5,7 @@ use crate::{
 use agentelier_tools::ToolUserTurn;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -327,6 +328,17 @@ pub(crate) fn revisions(workspace: &Path, epoch: i64) -> io::Result<Vec<Revision
     }
     notes.sort_by(|left, right| (left.at_ms, &left.id).cmp(&(right.at_ms, &right.id)));
     Ok(notes)
+}
+
+pub(crate) fn published_ids(connection: &rusqlite::Connection) -> io::Result<BTreeSet<String>> {
+    let mut statement = connection
+        .prepare("SELECT revision_id FROM revisions WHERE published = 1")
+        .map_err(io::Error::other)?;
+    statement
+        .query_map([], |row| row.get(0))
+        .map_err(io::Error::other)?
+        .collect::<rusqlite::Result<_>>()
+        .map_err(io::Error::other)
 }
 
 fn read_note(path: &Path, id: &str) -> io::Result<Option<Revision>> {

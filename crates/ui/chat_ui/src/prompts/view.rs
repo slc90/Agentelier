@@ -114,20 +114,13 @@ pub(crate) fn render(world: &mut World) -> Result {
                 reference.version
             ),
         };
-        let prompt_page = !matches!(page, Page::Memory);
-        let prompt_navigation = prompt_page.then(|| {
-            bsn_list! {
+        let prompt_navigation = bsn_list! {
                 @button("提示词库", "PromptLibraryTab", Action::Library, busy)--
                 @button("组合与预览", "PromptConfigTab", Action::Config, busy)--
                 @button("会话与请求核对", "PromptSessionTab", Action::Session, busy)--
                 @button("重新加载库", "ReloadPromptLibrary", Action::Reload, busy)
-            }
-        });
-        let prompt_status = prompt_page.then(|| bsn! {
-            Text(status) WidgetryText Name("PromptManagerStatus") TextLayout::linebreak(LineBreak::AnyCharacter)
-        });
+        };
         let body: Box<dyn Scene> = match page {
-            Page::Memory => Box::new(crate::memory::panel(world)),
             Page::Library => Box::new(bsn! {
                 Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(GAP), flex_shrink: 0.0 }
                 Children [
@@ -198,7 +191,7 @@ pub(crate) fn render(world: &mut World) -> Result {
                     @button("返回聊天", "ClosePromptManager", Action::Close, false)--
                     {prompt_navigation}
                 ]--
-                @prompt_status--
+                Text(status) WidgetryText Name("PromptManagerStatus") TextLayout::linebreak(LineBreak::AnyCharacter)--
                 @WidgetryScrollArea { @children: {Some(Box::new(bsn_list! { @body }) as Box<dyn SceneList>)} }
                 Name("PromptManagerScroll") Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }
             ]

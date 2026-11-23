@@ -5,7 +5,7 @@ mod connection;
 
 pub use agentelier_agent_runtime::{
     ImageAttachmentAction, ImageAttachmentReply, MemoryDetail, MemoryInspection, MemoryRequest,
-    MemorySource,
+    MemorySource, MemoryWorkState,
 };
 
 pub use agentelier_agent_runtime::DataEnvironment;

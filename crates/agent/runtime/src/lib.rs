@@ -13,7 +13,7 @@ pub use operations::OperationSequence;
 
 pub use runtime::{
     AgentEvent, AgentEventKind, AgentRuntime, DeliveryFailure, ImageAttachmentAction,
-    ImageAttachmentReply, MemoryReply, MemoryRequest, RuntimeFailure,
+    ImageAttachmentReply, MemoryReply, MemoryRequest, MemoryWorkState, RuntimeFailure,
 };
 
 pub use agentelier_mcp::{ConnectionState, ConnectionStatus};

@@ -407,7 +407,7 @@ pub(super) fn memory_sessions(root: &Path) -> io::Result<Vec<SessionId>> {
             && !session.is_nil()
             && session.to_string() == name
         {
-            if memory_tombstone(&entry, session).is_ok_and(|deleted| deleted) {
+            if memory_excluded(&entry, session).is_ok_and(|excluded| excluded) {
                 continue;
             }
             sessions.push(session);
@@ -417,7 +417,7 @@ pub(super) fn memory_sessions(root: &Path) -> io::Result<Vec<SessionId>> {
     Ok(sessions)
 }
 
-fn memory_tombstone(entry: &fs::DirEntry, session: SessionId) -> io::Result<bool> {
+fn memory_excluded(entry: &fs::DirEntry, session: SessionId) -> io::Result<bool> {
     let metadata = entry.metadata()?;
     if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Ok(false);
@@ -429,6 +429,15 @@ fn memory_tombstone(entry: &fs::DirEntry, session: SessionId) -> io::Result<bool
     let metadata = journal.metadata()?;
     if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Ok(false);
+    }
+    let mut first = Vec::new();
+    BufReader::new((&mut journal).take(1024 * 1024)).read_until(b'\n', &mut first)?;
+    if first.ends_with(b"\n") && serde_json::from_slice::<Record>(&first).is_ok_and(|record| {
+        record.format == FORMAT && record.version == FORMAT_VERSION
+            && record.sequence == crate::store::INITIAL_SEQUENCE
+            && matches!(record.kind, RecordKind::Created(initial) if initial.session == session && !initial.settings.kind.is_user())
+    }) {
+        return Ok(true);
     }
     // A committed deletion is the final record even when directory cleanup has failed.
     let start = metadata.len().saturating_sub(DELETION_TAIL_BYTES);

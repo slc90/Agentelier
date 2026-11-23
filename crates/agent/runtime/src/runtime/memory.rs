@@ -7,11 +7,8 @@ use agentelier_memory::{
 };
 use agentelier_session_store::{MemorySourceSnapshot, SessionStoreClient};
 use std::io;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
 
@@ -40,6 +37,16 @@ pub enum MemoryReply {
     Inspection(MemoryInspection),
     Detail(MemoryDetail),
     Chat(Box<agentelier_conversation::SessionView>),
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub enum MemoryWorkState {
+    #[default]
+    Idle,
+    Working,
+    SourceScanFailed,
+    PublicationFailed,
+    WaitingForModel,
 }
 
 pub(super) async fn inspect(
@@ -79,12 +86,12 @@ impl Background {
         store: SessionStoreClient,
         credentials: CredentialClient,
         shutdown: &CancellationToken,
-        processing: Arc<AtomicBool>,
+        status: watch::Sender<MemoryWorkState>,
     ) -> Option<Self> {
         memory.epoch()?;
         let cancel = shutdown.child_token();
         let handle =
-            tokio::spawn(Worker::new(memory, store, credentials, cancel.clone(), processing).run());
+            tokio::spawn(Worker::new(memory, store, credentials, cancel.clone(), status).run());
         Some(Self { cancel, handle })
     }
     pub(super) async fn stop(self) -> io::Result<()> {
@@ -116,7 +123,7 @@ pub(super) async fn reset(
 }
 
 struct Worker {
-    processing: Arc<AtomicBool>,
+    status: watch::Sender<MemoryWorkState>,
     memory: MemoryClient,
     store: SessionStoreClient,
     credentials: CredentialClient,
@@ -135,7 +142,7 @@ impl Worker {
         store: SessionStoreClient,
         credentials: CredentialClient,
         cancel: CancellationToken,
-        processing: Arc<AtomicBool>,
+        status: watch::Sender<MemoryWorkState>,
     ) -> Self {
         Self {
             memory,
@@ -143,7 +150,7 @@ impl Worker {
             credentials,
             cancel,
             cursor: None,
-            processing,
+            status,
         }
     }
 
@@ -159,17 +166,25 @@ impl Worker {
                 _ = self.memory.revision_requested() => false,
                 _ = scans.tick() => true,
             };
-            self.processing.store(true, Ordering::Relaxed);
+            self.status.send_replace(MemoryWorkState::Working);
             let mut models = None;
-            if scan_sources && let Err(failure) = self.extract(&mut models).await {
+            let mut status = if scan_sources && let Err(failure) = self.extract(&mut models).await {
                 error!(error = %failure, "扫描长期记忆来源失败");
+                MemoryWorkState::SourceScanFailed
+            } else {
+                MemoryWorkState::Idle
+            };
+            if !self.cancel.is_cancelled() {
+                match self.consolidate(&mut models).await {
+                    Ok(true) => {}
+                    Ok(false) => status = MemoryWorkState::WaitingForModel,
+                    Err(failure) => {
+                        error!(error = %failure, "全局记忆整合未成功发布");
+                        status = MemoryWorkState::PublicationFailed;
+                    }
+                }
             }
-            if !self.cancel.is_cancelled()
-                && let Err(failure) = self.consolidate(&mut models).await
-            {
-                error!(error = %failure, "全局记忆整合未成功发布");
-            }
-            self.processing.store(false, Ordering::Relaxed);
+            self.status.send_replace(status);
         }
         debug!("长期记忆后台已结束");
     }
@@ -251,10 +266,10 @@ impl Worker {
         Ok(())
     }
 
-    async fn consolidate(&self, models: &mut Option<AvailableModels>) -> io::Result<()> {
+    async fn consolidate(&self, models: &mut Option<AvailableModels>) -> io::Result<bool> {
         let sessions = self.store.memory_sessions().await?;
         let Some(work) = self.memory.prepare_consolidation(&sessions).await? else {
-            return Ok(());
+            return Ok(true);
         };
         let source_count = work.source_count();
         let output = if !work.needs_model() {
@@ -264,10 +279,10 @@ impl Worker {
                 *models = self.available_models().await;
             }
             let Some(available) = models else {
-                return Ok(());
+                return Ok(false);
             };
             let Some(model) = available.models.first() else {
-                return Ok(());
+                return Ok(false);
             };
             let input = work.model_input();
             let format = serde_json::json!({
@@ -281,8 +296,8 @@ impl Worker {
                 "开始后台全局记忆整合"
             );
             let output = tokio::select! { biased;
-                _ = self.cancel.cancelled() => return Ok(()),
-                _ = available.identity.invalidated() => return Ok(()),
+                _ = self.cancel.cancelled() => return Ok(true),
+                _ = available.identity.invalidated() => return Ok(false),
                 result = background_text(&self.credentials, &available.identity, model, CONSOLIDATE, &input, format) => result,
             }.map_err(|failure| io::Error::other(format!("后台模型失败：{:?}，HTTP {:?}，请求 {:?}", failure.kind, failure.status, failure.request_id)))?;
             debug!(
@@ -294,7 +309,7 @@ impl Worker {
             Some(output.text)
         };
         if self.cancel.is_cancelled() || self.store.memory_sessions().await? != sessions {
-            return Ok(());
+            return Ok(true);
         }
         if self
             .memory
@@ -303,7 +318,7 @@ impl Worker {
         {
             debug!(source_count, "全局记忆发布结果已提交");
         }
-        Ok(())
+        Ok(true)
     }
 
     async fn process(

@@ -240,7 +240,7 @@ fn open(event: On<Activate>, entries: Query<&Entry>, mut commands: Commands) -> 
         Entry::Settings => commands.trigger(OpenSettings),
         Entry::Skills => commands.queue(crate::skills::open),
         Entry::Mcp => commands.queue(crate::mcp::open),
-        Entry::Memory => commands.queue(crate::prompts::open_memory),
+        Entry::Memory => commands.queue(crate::memory::open),
     }
     Ok(())
 }

@@ -74,14 +74,7 @@ impl MemoryClient {
                 )
                 .map_err(io::Error::other)?;
             let revisions = revision::revisions(workspace, epoch)?;
-            let mut statement = connection
-                .prepare("SELECT revision_id FROM revisions WHERE published = 1")
-                .map_err(io::Error::other)?;
-            let published = statement
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(io::Error::other)?
-                .collect::<rusqlite::Result<BTreeSet<_>>>()
-                .map_err(io::Error::other)?;
+            let published = revision::published_ids(connection)?;
             let all_revisions_published = revisions.len() == published.len()
                 && revisions.iter().all(|note| published.contains(&note.id));
             let mut changes = Changes::default();

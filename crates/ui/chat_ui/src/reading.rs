@@ -8,6 +8,10 @@ use bevy_widgetry::text::WidgetryText;
 const BOTTOM_TOLERANCE: f32 = 3.0;
 #[derive(Component, Clone, Default)]
 pub(crate) struct ChatReadingScroll;
+#[derive(Component, Clone, Default)]
+pub(super) struct MemoryReadingScroll;
+#[derive(Resource, Default)]
+struct MemoryReading(ChatReading);
 #[derive(Resource, Reflect, Clone)]
 #[reflect(Resource)]
 struct ChatReading {
@@ -31,11 +35,15 @@ impl Default for ChatReading {
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<ReadingStates>()
         .init_resource::<ChatReading>()
+        .init_resource::<MemoryReading>()
         .register_type::<ChatReading>()
-        .add_systems(PostUpdate, observe.before(UiSystems::Content))
         .add_systems(
             PostUpdate,
-            follow
+            (observe, observe_memory).before(UiSystems::Content),
+        )
+        .add_systems(
+            PostUpdate,
+            (follow, follow_memory)
                 .after(UiSystems::Layout)
                 .before(UiSystems::PostLayout),
         );
@@ -74,7 +82,23 @@ fn observe(
     roots: Query<&Children, With<ChatReadingScroll>>,
     viewports: Query<(Entity, &ScrollPosition), With<WidgetryScrollAreaViewport>>,
 ) {
-    for children in &roots {
+    observe_viewports(&mut reading, roots.iter(), &viewports);
+}
+
+fn observe_memory(
+    mut reading: ResMut<MemoryReading>,
+    roots: Query<&Children, With<MemoryReadingScroll>>,
+    viewports: Query<(Entity, &ScrollPosition), With<WidgetryScrollAreaViewport>>,
+) {
+    observe_viewports(&mut reading.0, roots.iter(), &viewports);
+}
+
+fn observe_viewports<'a>(
+    reading: &mut ChatReading,
+    roots: impl Iterator<Item = &'a Children>,
+    viewports: &Query<(Entity, &ScrollPosition), With<WidgetryScrollAreaViewport>>,
+) {
+    for children in roots {
         for child in children {
             let Ok((entity, position)) = viewports.get(*child) else {
                 continue;
@@ -97,6 +121,22 @@ fn follow(
     mut reading: ResMut<ChatReading>,
     mut viewports: Query<(&ComputedNode, &mut ScrollPosition), With<WidgetryScrollAreaViewport>>,
     mut redraw: MessageWriter<RequestRedraw>,
+) {
+    follow_viewport(&mut reading, &mut viewports, &mut redraw);
+}
+
+fn follow_memory(
+    mut reading: ResMut<MemoryReading>,
+    mut viewports: Query<(&ComputedNode, &mut ScrollPosition), With<WidgetryScrollAreaViewport>>,
+    mut redraw: MessageWriter<RequestRedraw>,
+) {
+    follow_viewport(&mut reading.0, &mut viewports, &mut redraw);
+}
+
+fn follow_viewport(
+    reading: &mut ChatReading,
+    viewports: &mut Query<(&ComputedNode, &mut ScrollPosition), With<WidgetryScrollAreaViewport>>,
+    redraw: &mut MessageWriter<RequestRedraw>,
 ) {
     let Some(entity) = reading.viewport else {
         return;

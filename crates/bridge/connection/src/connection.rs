@@ -46,6 +46,7 @@ pub enum BridgeEventKind {
     McpStatus(Vec<crate::ConnectionStatus>),
     Memory(Result<crate::MemoryReply, String>),
     MemoryProgress(Box<agentelier_conversation_bridge::SessionView>),
+    MemoryWork(crate::MemoryWorkState),
     ImageAttachment(Result<crate::ImageAttachmentReply, String>),
     McpMaterial(Result<crate::MaterialReply, String>),
 }
@@ -145,6 +146,7 @@ impl Connection {
                         }
                         AgentEventKind::Memory(reply) => BridgeEventKind::Memory(reply.map(Into::into)),
                         AgentEventKind::MemoryProgress(view) => BridgeEventKind::MemoryProgress(Box::new(agentelier_conversation_bridge::session_view(*view))),
+                        AgentEventKind::MemoryWork(status) => BridgeEventKind::MemoryWork(status),
                         AgentEventKind::ImageAttachment(reply) => BridgeEventKind::ImageAttachment(reply),
                         AgentEventKind::McpMaterial(reply) => BridgeEventKind::McpMaterial(reply),
                         AgentEventKind::McpStatus(status) => BridgeEventKind::McpStatus(status),
@@ -748,6 +750,9 @@ impl Connection {
                 if matches!(event.kind, BridgeEventKind::MemoryProgress(_)) {
                     return Ok(Some(event));
                 }
+                if matches!(event.kind, BridgeEventKind::MemoryWork(_)) && event.operation_id == 0 {
+                    return Ok(Some(event));
+                }
                 if matches!(event.kind, BridgeEventKind::ImageAttachment(_)) {
                     if !self.pending_images.remove(&event.operation_id) {
                         return self.protocol_failure();
@@ -776,6 +781,7 @@ impl Connection {
                     BridgeEventKind::McpStatus(_)
                     | BridgeEventKind::Memory(_)
                     | BridgeEventKind::MemoryProgress(_)
+                    | BridgeEventKind::MemoryWork(_)
                     | BridgeEventKind::ImageAttachment(_)
                     | BridgeEventKind::Skills(_)
                     | BridgeEventKind::McpConfig(_)

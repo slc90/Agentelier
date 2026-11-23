@@ -63,6 +63,8 @@ pub struct MemoryInspection {
     pub summary: Option<PublishedSummary>,
     pub sources: Vec<MemorySource>,
     pub processing: bool,
+    pub pending_revisions: usize,
+    pub notice: Option<&'static str>,
 }
 
 struct IndexedSource {
@@ -75,7 +77,26 @@ struct IndexedSource {
 impl MemoryClient {
     pub async fn inspect(&self, processing: bool) -> io::Result<MemoryInspection> {
         self.with_active_store(move |connection, workspace| {
-            let snapshot = crate::publication::snapshot(connection, workspace)?;
+            let (snapshot, mut notice) = match crate::publication::snapshot(connection, workspace) {
+                Ok(snapshot) => (snapshot, None),
+                Err(failure) => {
+                    tracing::warn!(error = %failure, "读取摘要文件失败，尝试已提交的摘要副本");
+                    (Some(crate::publication::committed_snapshot(connection)?),
+                     Some("读取已发布摘要文件失败，当前显示记忆库中已提交的副本。"))
+                }
+            };
+            let epoch: i64 = connection.query_row("SELECT epoch FROM memory_state WHERE singleton = 1", [], |row| row.get(0)).map_err(io::Error::other)?;
+            let pending_revisions = match crate::revision::revisions(workspace, epoch).and_then(|revisions| {
+                let published = crate::revision::published_ids(connection)?;
+                Ok(revisions.iter().filter(|revision| !published.contains(&revision.id)).count())
+            }) {
+                Ok(count) => count,
+                Err(failure) => {
+                    tracing::warn!(error = %failure, "记忆修订待发布状态不可用");
+                    notice.get_or_insert("无法核对待整合的记忆修订。");
+                    0
+                }
+            };
             let processing = processing || (snapshot.is_none() && connection.query_row(
                 "SELECT EXISTS(SELECT 1 FROM sources WHERE status = 'summary'
                     AND NOT EXISTS (SELECT 1 FROM consolidation_inputs WHERE session_id = sources.session_id))",
@@ -83,7 +104,7 @@ impl MemoryClient {
                 |row| row.get(0),
             ).map_err(io::Error::other)?);
             let Some(snapshot) = snapshot else {
-                return Ok(MemoryInspection { summary: None, sources: Vec::new(), processing });
+                return Ok(MemoryInspection { summary: None, sources: Vec::new(), processing, pending_revisions, notice });
             };
             let published_at_ms = connection.query_row("SELECT published_at_ms FROM publication", [], |row| row.get(0)).map_err(io::Error::other)?;
             let sources = sources(connection, None)?.into_iter().map(|source| source.source).collect();
@@ -91,6 +112,8 @@ impl MemoryClient {
                 summary: Some(PublishedSummary { id: snapshot.publication_id.to_string(), text: snapshot.summary, published_at_ms }),
                 sources,
                 processing,
+                pending_revisions,
+                notice,
             })
         }).await
     }

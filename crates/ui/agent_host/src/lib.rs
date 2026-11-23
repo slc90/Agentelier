@@ -5,14 +5,15 @@ mod host;
 
 pub use agentelier_bridge_connection::{
     ImageAttachmentAction, ImageAttachmentReply, MemoryDetail, MemoryInspection, MemoryReply,
-    MemoryRequest, MemorySource,
+    MemoryRequest, MemorySource, MemoryWorkState,
 };
 pub use agentelier_bridge_connection::{SkillEntry, SkillRequest, SkillSnapshot, UserSkillId};
 
 pub use host::{
     AccountEvent, AgentHost, AgentHostPlugin, ConversationEvent, GlobalTaskNotificationEvent,
     GlobalTasksEvent, HostActivity, HostFailed, ImageAttachmentEvent, McpConfigEvent,
-    McpMaterialEvent, McpStatusEvent, MemoryEvent, ModelEvent, ReceiveAgentEvents, SkillsEvent,
+    McpMaterialEvent, McpStatusEvent, MemoryEvent, MemoryWorkEvent, ModelEvent, ReceiveAgentEvents,
+    SkillsEvent,
 };
 
 pub use agentelier_bridge_connection::{ConfigChange, Server, ServerId, ServerSettings, Transport};

@@ -261,7 +261,8 @@ pub(super) fn panel(world: &World) -> impl Scene + use<> {
                     Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(8) }
                 }
             }
-            Name("MemoryChatScroll") Node { width: percent(100), min_height: px(0), flex_grow: 1.0 }--
+            Name("MemoryChatScroll") crate::reading::MemoryReadingScroll
+            Node { width: percent(100), min_height: px(0), flex_grow: 1.0 }--
             Status Name("MemoryChatStatus") Text("") WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter)--
             @WidgetryTextField {
                 @value: draft, @multiline: true,
