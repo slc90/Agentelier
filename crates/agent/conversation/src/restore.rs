@@ -46,6 +46,15 @@ pub struct RestoredSession {
 }
 
 impl RestoredSession {
+    pub fn archived_tasks(&self) -> crate::SessionTasks {
+        self.tasks.view(
+            self.state.session,
+            &self.state.task_policy,
+            self.state.queue_paused,
+            None,
+        )
+    }
+
     pub fn tool_definitions(&self) -> &[crate::StoredTool] {
         &self.initial.settings.tools
     }

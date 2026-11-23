@@ -27,6 +27,7 @@ pub use mailbox::{
     AgentMessage, AgentMessageId, ClaimedMessage, DeliveryMode, MAX_AGENT_MESSAGE_CHARS,
     MailboxEntry, MailboxEvent, Mailboxes, MessageClaim, MessageStatus, TaskCompletion,
 };
+mod global_tasks;
 mod memory_evidence;
 mod processes;
 mod queue;
@@ -41,6 +42,10 @@ pub use audio::{
     AudioAttachment, AudioFormat, AudioId, AudioTranscription, MAX_AUDIO_BYTES,
     MAX_AUDIO_NAME_CHARS, MAX_SESSION_AUDIO_BYTES, TranscriptId, TranscriptionEngine,
     TranscriptionOutcome, TranscriptionSource,
+};
+pub use global_tasks::{
+    GlobalTask, GlobalTaskGroup, GlobalTaskProcess, GlobalTaskStatus, GlobalTasks,
+    TaskNotification, TaskNotificationKind,
 };
 pub use memory_evidence::{MemorySourceTurn, memory_evidence};
 pub use processes::ProcessLedger;

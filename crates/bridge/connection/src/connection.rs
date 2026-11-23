@@ -61,6 +61,7 @@ pub struct Connection {
     events: mpsc::Receiver<BridgeEvent>,
     progress: Arc<Mutex<Option<BridgeEvent>>>,
     mcp_status: Arc<Mutex<Option<BridgeEvent>>>,
+    global_tasks: Arc<Mutex<Option<BridgeEvent>>>,
     deferred: Option<BridgeEvent>,
     wake: Arc<WakeGate>,
     operations: agentelier_agent_runtime::OperationSequence,
@@ -91,6 +92,8 @@ impl Connection {
         let delivery_progress = progress.clone();
         let mcp_status = Arc::new(Mutex::new(None));
         let delivery_mcp_status = mcp_status.clone();
+        let global_tasks = Arc::new(Mutex::new(None));
+        let delivery_global_tasks = global_tasks.clone();
         let wake = Arc::new(WakeGate(Mutex::new(Some(Box::new(notify)))));
         let delivery_wake = wake.clone();
         let finished_wake = wake.clone();
@@ -125,6 +128,10 @@ impl Connection {
                 };
                 if matches!(event.kind, BridgeEventKind::McpStatus(_)) {
                     *delivery_mcp_status.lock().map_err(|_| DeliveryFailure::Closed)? = Some(event);
+                } else if matches!(&event.kind, BridgeEventKind::Conversation(kind)
+                    if matches!(kind.as_ref(), agentelier_conversation_bridge::ConversationEvent::GlobalTasks(_)))
+                {
+                    *delivery_global_tasks.lock().map_err(|_| DeliveryFailure::Closed)? = Some(event);
                 } else if matches!(&event.kind, BridgeEventKind::Conversation(kind) if kind.is_progress())
                 {
                     *delivery_progress
@@ -146,6 +153,7 @@ impl Connection {
             events,
             progress,
             mcp_status,
+            global_tasks,
             deferred: None,
             wake,
             operations,
@@ -561,6 +569,15 @@ impl Connection {
                 .ok_or(mpsc::TryRecvError::Empty),
             other => other,
         };
+        let received = match received {
+            Err(mpsc::TryRecvError::Empty) => self
+                .global_tasks
+                .lock()
+                .map_err(|_| BridgeFailure("全局任务状态锁已损坏".into()))?
+                .take()
+                .ok_or(mpsc::TryRecvError::Empty),
+            other => other,
+        };
         match received {
             Ok(event) => {
                 if let BridgeEventKind::Conversation(kind) = &event.kind {
@@ -579,6 +596,18 @@ impl Connection {
                         return Ok(Some(event));
                     }
                     let kind = kind.as_ref();
+                    if matches!(
+                        kind,
+                        agentelier_conversation_bridge::ConversationEvent::GlobalTasks(_)
+                            | agentelier_conversation_bridge::ConversationEvent::TaskNotification(
+                                _
+                            )
+                    ) {
+                        if event.operation_id != 0 {
+                            return self.protocol_failure();
+                        }
+                        return Ok(Some(event));
+                    }
                     if matches!(
                         kind,
                         agentelier_conversation_bridge::ConversationEvent::ProjectSaved(_)

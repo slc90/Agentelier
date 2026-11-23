@@ -126,15 +126,7 @@ struct Task {
 impl Task {
     fn report(&self, tools: &agentelier_tools::ToolCatalog) -> TaskReport {
         let registration = &self.registration;
-        let source = match tools
-            .definition(&registration.tool)
-            .map(|tool| &tool.source)
-        {
-            Some(agentelier_tools::ToolSource::Builtin) => "built_in",
-            Some(agentelier_tools::ToolSource::Mcp { .. }) => "mcp",
-            Some(agentelier_tools::ToolSource::Extension { .. }) => "extension",
-            None => "unavailable",
-        };
+        let source = self.source(Some(tools));
         TaskReport {
             task_id: registration.execution.task,
             turn: registration.turn,
@@ -143,15 +135,31 @@ impl Task {
             source,
             argument_bytes: registration.argument_bytes,
             status: self.status,
-            delivery: match self.delivery {
-                Delivery::AwaitingResult => TaskDelivery::AwaitingResult,
-                Delivery::Saved(_) => TaskDelivery::Saved,
-                Delivery::Appended => TaskDelivery::Appended,
-                Delivery::Delivered(_) => TaskDelivery::Delivered,
-            },
+            delivery: self.delivery(),
             blocked_by: (self.status == ToolStatus::Pending).then_some("admission"),
             cancelling: self.cancellation_requested && self.in_progress(),
             process: None,
+        }
+    }
+
+    fn source(&self, tools: Option<&agentelier_tools::ToolCatalog>) -> &'static str {
+        match tools
+            .and_then(|tools| tools.definition(&self.registration.tool))
+            .map(|tool| &tool.source)
+        {
+            Some(agentelier_tools::ToolSource::Builtin) => "built_in",
+            Some(agentelier_tools::ToolSource::Mcp { .. }) => "mcp",
+            Some(agentelier_tools::ToolSource::Extension { .. }) => "extension",
+            None => "unavailable",
+        }
+    }
+
+    fn delivery(&self) -> TaskDelivery {
+        match self.delivery {
+            Delivery::AwaitingResult => TaskDelivery::AwaitingResult,
+            Delivery::Saved(_) => TaskDelivery::Saved,
+            Delivery::Appended => TaskDelivery::Appended,
+            Delivery::Delivered(_) => TaskDelivery::Delivered,
         }
     }
 
@@ -183,9 +191,10 @@ pub struct SessionTaskView {
     pub source: &'static str,
     pub argument_bytes: Option<usize>,
     pub delivery: TaskDelivery,
+    pub access: agentelier_tools::ToolAccess,
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskDelivery {
     AwaitingResult,
@@ -717,15 +726,16 @@ impl TaskLedger {
 
     pub(crate) fn view(
         &self,
-        session: &crate::SessionView,
-        tools: &agentelier_tools::ToolCatalog,
+        session: SessionId,
+        task_policy: &crate::TaskPolicy,
+        queue_paused: bool,
+        tools: Option<&agentelier_tools::ToolCatalog>,
     ) -> SessionTasks {
         let tasks = self
             .tasks
             .iter()
             .map(|task| {
                 let registration = &task.registration;
-                let report = task.report(tools);
                 SessionTaskView {
                     cancelling: task.cancellation_requested && task.in_progress(),
                     task: registration.execution.task,
@@ -735,24 +745,20 @@ impl TaskLedger {
                     call_id: registration.call_id.clone(),
                     tool: registration.tool.clone(),
                     status: task.status,
-                    source: report.source,
-                    argument_bytes: report.argument_bytes,
-                    delivery: report.delivery,
+                    source: task.source(tools),
+                    argument_bytes: registration.argument_bytes,
+                    delivery: task.delivery(),
+                    access: tools.map_or_default(|tools| tools.access(&registration.tool)),
                 }
             })
             .collect();
         SessionTasks {
-            session: session.id,
+            session,
             revision: self.revision.max(self.delivery_revision),
             tasks,
-            background_paused: session.task_policy.background_paused,
-            queue_paused: session.queue_paused,
-            external_unconfirmed: session
-                .task_policy
-                .external_unconfirmed
-                .iter()
-                .cloned()
-                .collect(),
+            background_paused: task_policy.background_paused,
+            queue_paused,
+            external_unconfirmed: task_policy.external_unconfirmed.iter().cloned().collect(),
         }
     }
 }

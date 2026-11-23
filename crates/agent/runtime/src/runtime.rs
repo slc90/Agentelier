@@ -11,6 +11,7 @@ use agentelier_memory::Memory;
 use agentelier_turn_runner::RunnerEvent;
 mod account_login;
 mod audio_task;
+mod background_sessions;
 mod child_runtime;
 mod creation;
 mod deleting;
@@ -28,6 +29,7 @@ mod renaming;
 mod session_model;
 mod spawn_agent;
 mod task_control;
+mod task_projection;
 mod tool_jobs;
 mod wait_agent;
 use model_task::{
@@ -182,6 +184,7 @@ enum Command {
     TaskActionFinished(u64, agentelier_conversation::TaskActionReceipt),
     ProcessesChanged,
     IdleTool(agentelier_turn_runner::ToolEvent),
+    BackgroundSession(SessionId, background_sessions::Signal),
     Conversation {
         id: u64,
         control: ModelControl,
@@ -304,6 +307,20 @@ impl AgentRuntime {
                 debug!("认证运行线程已启动");
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     runtime.block_on(async move {
+                        let projection = Mutex::new(task_projection::Projection::default());
+                        let deliver = publish;
+                        let publish = |event: AgentEvent| {
+                            let updates = match &event.kind {
+                                AgentEventKind::Conversation(event) => projection.lock()
+                                    .map_err(|_| DeliveryFailure::Closed)?.observe(event),
+                                _ => Vec::new(),
+                            };
+                            deliver(event)?;
+                            for event in updates {
+                                deliver(AgentEvent { operation_id: 0, kind: AgentEventKind::Conversation(event) })?;
+                            }
+                            Ok(())
+                        };
                         let data_root = environment.root().to_path_buf();
                         let store = agentelier_session_store::SessionStore::start(data_root.clone()).map_err(RuntimeFailure::Store)?;
                         let memory_root = data_root.clone();
@@ -328,7 +345,7 @@ impl AgentRuntime {
                         }
                         let mut creating: Option<creation::Creation> = None;
                         let mut loading: Option<loading::Loading> = None;
-                        let mut catalog = Some(store.client().scan().map_err(RuntimeFailure::Store)?);
+                        let mut catalog = Some(store.client().scan_startup().map_err(RuntimeFailure::Store)?);
                         let mut startup_catalog = true;
                         let mut catalog_dirty = false;
                         let mut project_saves = std::collections::VecDeque::<(
@@ -357,6 +374,7 @@ impl AgentRuntime {
                         let mut model: Option<ModelTask> = None;
                         let mut stopping_root = None;
                         let mut session_tools: Option<(SessionId, tool_jobs::SessionTools)> = None;
+                        let mut background = background_sessions::BackgroundSessions::default();
                         let mut task_receipts = task_control::Receipts::new();
                         let (spawn_sender, mut spawn_requests) = mpsc::channel(COMMAND_CAPACITY);
                         let (mailbox_sender, mut mailbox_requests) = mpsc::channel(SESSION_COMMAND_CAPACITY);
@@ -525,6 +543,9 @@ impl AgentRuntime {
                                         }
                                     }, if model.is_none() && !finalizing && !pending_queue && creating.is_none() && loading.is_none() && deleting.is_none() => {
                                         Command::IdleTool(event.ok_or(RuntimeFailure::ModelState)?)
+                                    },
+                                    (session, signal) = background.next(), if !background.is_empty() => {
+                                        Command::BackgroundSession(session, signal)
                                     },
                                     result = async { match &mut creating {
                                         Some(pending) => pending.wait().await,
@@ -806,6 +827,13 @@ impl AgentRuntime {
                                                 let entries = catalog.entries;
                                                 let first = entries.first().map(|entry| entry.summary.session);
                                                 emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Archives(entries)))?;
+                                                if !catalog.task_history.is_empty() {
+                                                    let history = projection.lock().map_err(|_| AccountFailure::Delivery(DeliveryFailure::Closed))?
+                                                        .seed_history(catalog.task_history);
+                                                    if let Some(history) = history {
+                                                        emit(&publish, 0, AgentEventKind::Conversation(history))?;
+                                                    }
+                                                }
                                                 if startup_catalog && conversation.current().is_none() && model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && !finalizing && !pending_queue && let Some(session) = first {
                                                         match loading::Loading::start(0, None, session, &store) {
                                                             Ok(pending) => loading = Some(pending),
@@ -821,13 +849,15 @@ impl AgentRuntime {
                                     Command::Loaded(result) => {
                                         let pending = loading.take().ok_or(RuntimeFailure::ModelState)?;
                                         let id = pending.id;
-                                        let event = pending.complete(*result, &operations, &mut conversation, &mcp_connections);
+                                        let mut next = conversation.empty_session_owner();
+                                        let event = pending.complete(*result, &operations, &mut next, &mcp_connections);
                                         let opened = matches!(&event, ConversationEvent::Opened(_));
+                                        if opened {
+                                            let previous = std::mem::replace(&mut conversation, next);
+                                            background.detach(previous, session_tools.take()).await?;
+                                        }
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
                                         if opened {
-                                            if let Some((_, tools)) = session_tools.take() {
-                                                tools.join("session_replaced").await?;
-                                            }
                                             model_task::publish_tasks(&conversation, &publish)?;
                                             if let Some(view) = conversation.current() {
                                                 let processes = conversation.restored_processes().projection(view.id);
@@ -863,9 +893,11 @@ impl AgentRuntime {
                                     Command::Created(result) => {
                                         let pending = creating.take().ok_or(RuntimeFailure::ModelState)?;
                                         let id = pending.id;
-                                        let event = pending.complete(result, &mut conversation);
-                                        if matches!(&event, ConversationEvent::Created(_)) && let Some((_, tools)) = session_tools.take() {
-                                            tools.join("session_replaced").await?;
+                                        let mut next = conversation.empty_session_owner();
+                                        let event = pending.complete(result, &mut next);
+                                        if matches!(&event, ConversationEvent::Created(_)) {
+                                            let previous = std::mem::replace(&mut conversation, next);
+                                            background.detach(previous, session_tools.take()).await?;
                                         }
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
                                     }
@@ -973,6 +1005,9 @@ impl AgentRuntime {
                                             }
                                         }
                                     }
+                                    Command::BackgroundSession(session, signal) => {
+                                        background.handle(session, signal, &store.client(), &publish).await?;
+                                    }
                                     Command::TaskActionFinished(id, receipt) => {
                                         model_task::publish_tasks(&conversation, &publish)?;
                                         emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::TaskAction(receipt)))?;
@@ -1019,6 +1054,14 @@ impl AgentRuntime {
                                             ConversationRequest::Create(_) | ConversationRequest::Open { .. } | ConversationRequest::Reset { .. } | ConversationRequest::SetWorkingDirectory { .. } => true,
                                             _ => false,
                                         };
+                                        let can_park = matches!(&request, ConversationRequest::Open { .. } | ConversationRequest::Create(_));
+                                        if let ConversationRequest::Delete { session } = &request
+                                            && background.contains(*session)
+                                        {
+                                            control.finished.cancel();
+                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("该会话仍有后台任务或进程，结束后可删除".into())))?;
+                                            continue;
+                                        }
                                         if replacing && children.has_active() {
                                             control.finished.cancel();
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("当前会话仍有子 Agent 正在执行".into())))?;
@@ -1029,12 +1072,12 @@ impl AgentRuntime {
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
                                             continue;
                                         }
-                                        if replacing && session_tools.as_ref().is_some_and(|(_, tools)| tools.process_views.borrow().has_active()) {
+                                        if replacing && !can_park && session_tools.as_ref().is_some_and(|(_, tools)| tools.process_views.borrow().has_active()) {
                                             control.finished.cancel();
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("当前会话仍有进程活跃或回收未确认".into())))?;
                                             continue;
                                         }
-                                        if replacing && session_tools.as_ref().is_some_and(|(_, tools)| tools.busy()) {
+                                        if replacing && !can_park && session_tools.as_ref().is_some_and(|(_, tools)| tools.busy()) {
                                             control.finished.cancel();
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("当前会话仍有后台任务或结果正在保存".into())))?;
                                             continue;
@@ -1068,6 +1111,26 @@ impl AgentRuntime {
                                                 }
                                             }
                                             ConversationRequest::Open { session } => {
+                                                if let Some(view) = conversation.current().filter(|view| view.id == session) {
+                                                    control.finished.cancel();
+                                                    emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Opened(view)))?;
+                                                    continue;
+                                                }
+                                                if let Some(resident) = background.take(session) {
+                                                    let previous = std::mem::replace(&mut conversation, resident.conversation);
+                                                    let previous_tools = session_tools.replace((session, resident.tools));
+                                                    background.detach(previous, previous_tools).await?;
+                                                    let view = conversation.current().ok_or(RuntimeFailure::ModelState)?;
+                                                    control.finished.cancel();
+                                                    debug!(%session, "重新选中已保留后台资源的会话");
+                                                    emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Opened(view)))?;
+                                                    model_task::publish_tasks(&conversation, &publish)?;
+                                                    if let Some((_, tools)) = &session_tools {
+                                                        let processes = tools.process_views.borrow().projection(session);
+                                                        emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Processes(processes)))?;
+                                                    }
+                                                    continue;
+                                                }
                                                 match loading::Loading::start(id, Some(control.clone()), session, &store) {
                                                     Ok(pending) => {
                                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control);
@@ -1265,6 +1328,7 @@ impl AgentRuntime {
                                                 let update = conversation.retain_closed_processes(session, processes.borrow().clone())?;
                                                 emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Processes(update)))?;
                                             }
+                                            background.finish("account_changed", &store.client(), &publish).await?;
                                             if let Some(event) = conversation.suspend_queue()? {
                                                 let session = event.session();
                                                 recording::submit(recording::Pending::Suspended { session }, event, &store, &mut records);
@@ -1339,6 +1403,7 @@ impl AgentRuntime {
                         if let Some((_, tools)) = session_tools.take() {
                             capture_delivery(model_task::finish_tools(tools, "application_shutdown", &mut conversation, &store.client(), &publish).await, &mut delivery_failure);
                         }
+                        capture_delivery(background.finish("application_shutdown", &store.client(), &publish).await, &mut delivery_failure);
                         if let Some(job) = material {
                             job.cancel.cancel();
                             if job.task.await.is_err() {

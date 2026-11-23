@@ -454,6 +454,8 @@ pub enum ConversationEvent {
     Processes(SessionProcesses),
     TaskAction(TaskActionReceipt),
     Tasks(SessionTasks),
+    GlobalTasks(crate::GlobalTasks),
+    TaskNotification(crate::TaskNotification),
     ArchiveCleanup(Vec<String>),
     Deleted {
         session: SessionId,
@@ -893,6 +895,12 @@ pub fn convert(event: agentelier_conversation::ConversationEvent) -> Conversatio
                     })
                     .collect(),
             })
+        }
+        agentelier_conversation::ConversationEvent::GlobalTasks(snapshot) => {
+            ConversationEvent::GlobalTasks(snapshot)
+        }
+        agentelier_conversation::ConversationEvent::TaskNotification(notice) => {
+            ConversationEvent::TaskNotification(notice)
         }
         agentelier_conversation::ConversationEvent::Tasks(update) => {
             ConversationEvent::Tasks(SessionTasks {

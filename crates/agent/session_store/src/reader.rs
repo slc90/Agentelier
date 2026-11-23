@@ -222,16 +222,18 @@ fn sessions_directory(root: &Path) -> io::Result<Option<(PathBuf, PathBuf)>> {
     Ok(Some((root, path)))
 }
 
-pub(super) fn scan(root: &Path) -> io::Result<crate::ArchiveCatalog> {
+pub(super) fn scan(root: &Path, include_task_history: bool) -> io::Result<crate::ArchiveCatalog> {
     let Some((root, path)) = sessions_directory(root)? else {
         return Ok(crate::ArchiveCatalog {
             entries: Vec::new(),
             cleanup_errors: Vec::new(),
             projects: crate::projects::catalog(root, &[]).map_err(|failure| failure.to_string()),
+            task_history: Vec::new(),
         });
     };
     let mut entries = Vec::new();
     let mut cleanup_errors = Vec::new();
+    let mut task_history = Vec::new();
     for entry in fs::read_dir(&path)? {
         let entry = entry?;
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
@@ -258,7 +260,7 @@ pub(super) fn scan(root: &Path) -> io::Result<crate::ArchiveCatalog> {
         let result = crate::attachments::session_directory(&root, session)
             .and_then(|directory| read(&directory, session).map(|parsed| (directory, parsed)));
         match result {
-            Ok((directory, parsed)) => {
+            Ok((directory, mut parsed)) => {
                 let mut error = parsed.issue.as_ref().map(ToString::to_string);
                 if parsed.issue.is_none() {
                     let cached = cached_summary(&directory);
@@ -287,6 +289,23 @@ pub(super) fn scan(root: &Path) -> io::Result<crate::ArchiveCatalog> {
                         ));
                     }
                 } else {
+                    if include_task_history && !matches!(parsed.issue, Some(Issue::Corrupt { .. }))
+                        && parsed.records.iter().any(|record| matches!(&record.event,
+                            RecordEvent::Response { registrations: Some(agentelier_conversation::ResponseTasks::Registered(tasks)), .. }
+                                if !tasks.is_empty()))
+                        && let Some(initial) = parsed.initial.take()
+                    {
+                        match restore_archive(&root, initial, parsed.records) {
+                            Ok(restored) => task_history.push(crate::ArchivedTasks {
+                                tasks: restored.archived_tasks(),
+                                processes: restored.processes.projection(session),
+                            }),
+                            Err(failure) => {
+                                tracing::error!(session_id = %session, error = %failure, "无法恢复历史任务投影");
+                                error.get_or_insert_with(|| format!("无法恢复历史任务：{failure}"));
+                            }
+                        }
+                    }
                     entries.push(ArchiveEntry {
                         summary: parsed.summary,
                         error,
@@ -316,6 +335,7 @@ pub(super) fn scan(root: &Path) -> io::Result<crate::ArchiveCatalog> {
         entries,
         cleanup_errors,
         projects,
+        task_history,
     })
 }
 
@@ -577,6 +597,19 @@ pub(super) fn load_child(
     .map_err(io::Error::other)
 }
 
+fn restore_archive(
+    root: &Path,
+    initial: InitialSession,
+    records: Vec<SessionRecord>,
+) -> io::Result<RestoredSession> {
+    agentelier_conversation::restore(initial, records, |reference| {
+        crate::attachments::read(root, reference).map_err(|failure| {
+            agentelier_conversation::ConversationFailure::new(failure.to_string())
+        })
+    })
+    .map_err(io::Error::other)
+}
+
 pub(super) fn load(
     root: &Path,
     session: SessionId,
@@ -614,16 +647,7 @@ pub(super) fn load(
             crate::attachments::validate_generated(root, session, &generated.image)?;
         }
     }
-    let mut restored = agentelier_conversation::restore(
-        initial,
-        std::mem::take(&mut parsed.records),
-        |reference| {
-            crate::attachments::read(root, reference).map_err(|failure| {
-                agentelier_conversation::ConversationFailure::new(failure.to_string())
-            })
-        },
-    )
-    .map_err(io::Error::other)?;
+    let mut restored = restore_archive(root, initial, std::mem::take(&mut parsed.records))?;
     if matches!(parsed.issue, Some(Issue::Tail(_))) {
         restored.add_recovery_notice("日志尾部残缺，已保留原件并恢复有效记录");
         let commit = repair(root, session, &parsed, restored.recovery_event())?;

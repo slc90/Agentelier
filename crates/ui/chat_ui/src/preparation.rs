@@ -126,6 +126,7 @@ pub fn install(
         model_defaults,
     )));
     crate::conversation::install(app);
+    crate::global_tasks::install(app);
     crate::working_directory::install(app);
     crate::prompts::install(app)?;
     crate::mcp::install(app);

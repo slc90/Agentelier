@@ -137,6 +137,7 @@ dependencies = [
  "agentelier_session_store",
  "agentelier_tools",
  "agentelier_turn_runner",
+ "futures-util",
  "image",
  "serde",
  "serde_json",

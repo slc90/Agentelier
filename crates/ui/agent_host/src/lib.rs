@@ -9,9 +9,9 @@ pub use agentelier_bridge_connection::{
 };
 
 pub use host::{
-    AccountEvent, AgentHost, AgentHostPlugin, ConversationEvent, HostActivity, HostFailed,
-    ImageAttachmentEvent, McpConfigEvent, McpMaterialEvent, McpStatusEvent, MemoryEvent,
-    ModelEvent, ReceiveAgentEvents,
+    AccountEvent, AgentHost, AgentHostPlugin, ConversationEvent, GlobalTaskNotificationEvent,
+    GlobalTasksEvent, HostActivity, HostFailed, ImageAttachmentEvent, McpConfigEvent,
+    McpMaterialEvent, McpStatusEvent, MemoryEvent, ModelEvent, ReceiveAgentEvents,
 };
 
 pub use agentelier_bridge_connection::{ConfigChange, Server, ServerId, ServerSettings, Transport};

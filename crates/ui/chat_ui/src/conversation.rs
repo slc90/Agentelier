@@ -1663,6 +1663,8 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 "聊天操作未被接纳"
             ),
             ConversationEvent::Tasks(_)
+            | ConversationEvent::GlobalTasks(_)
+            | ConversationEvent::TaskNotification(_)
             | ConversationEvent::AudioDraft { .. }
             | ConversationEvent::AudioTranscription { .. }
             | ConversationEvent::IdleUpdated(_)
@@ -1717,6 +1719,8 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 world.resource_mut::<ChatState>().session = Some(project(view)?);
             }
             ConversationEvent::Tasks(_)
+            | ConversationEvent::GlobalTasks(_)
+            | ConversationEvent::TaskNotification(_)
             | ConversationEvent::AudioDraft { .. }
             | ConversationEvent::AudioTranscription { .. }
             | ConversationEvent::IdleUpdated(_)

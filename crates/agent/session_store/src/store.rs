@@ -45,6 +45,12 @@ pub struct ArchiveCatalog {
     pub entries: Vec<agentelier_conversation::ArchiveEntry>,
     pub cleanup_errors: Vec<String>,
     pub projects: Result<agentelier_conversation::ProjectCatalog, String>,
+    pub task_history: Vec<ArchivedTasks>,
+}
+
+pub struct ArchivedTasks {
+    pub tasks: agentelier_conversation::SessionTasks,
+    pub processes: agentelier_conversation::SessionProcesses,
 }
 pub struct DeleteCommit {
     pub session: SessionId,
@@ -74,7 +80,10 @@ enum Command {
         oneshot::Sender<io::Result<()>>,
     ),
     ProjectDirectory(ProjectId, oneshot::Sender<io::Result<PathBuf>>),
-    Scan(oneshot::Sender<io::Result<ArchiveCatalog>>),
+    Scan {
+        task_history: bool,
+        reply: oneshot::Sender<io::Result<ArchiveCatalog>>,
+    },
     MemorySessions(oneshot::Sender<io::Result<Vec<SessionId>>>),
     MemoryCutoffs(oneshot::Sender<io::Result<Vec<crate::MemoryCutoff>>>),
     MemorySource(
@@ -204,9 +213,23 @@ impl SessionStoreClient {
         Ok(result)
     }
     pub fn scan(&self) -> io::Result<oneshot::Receiver<io::Result<ArchiveCatalog>>> {
+        self.scan_catalog(false)
+    }
+
+    pub fn scan_startup(&self) -> io::Result<oneshot::Receiver<io::Result<ArchiveCatalog>>> {
+        self.scan_catalog(true)
+    }
+
+    fn scan_catalog(
+        &self,
+        task_history: bool,
+    ) -> io::Result<oneshot::Receiver<io::Result<ArchiveCatalog>>> {
         let (reply, result) = oneshot::channel();
         self.0
-            .try_send(Command::Scan(reply))
+            .try_send(Command::Scan {
+                task_history,
+                reply,
+            })
             .map_err(|failure| io::Error::other(format!("无法接纳会话目录读取：{failure}")))?;
         Ok(result)
     }
@@ -428,8 +451,8 @@ impl SessionStore {
                         Command::ProjectDirectory(project, reply) => {
                             drop(reply.send(crate::projects::project_directory(&root, project)));
                         }
-                        Command::Scan(reply) => {
-                            let result = crate::reader::scan(&root);
+                        Command::Scan { task_history, reply } => {
+                            let result = crate::reader::scan(&root, task_history);
                             if let Err(failure) = &result { error!(error = %failure, "本地会话目录读取失败"); }
                             if reply.send(result).is_err() { debug!("会话目录读取已结束，等待者已离开"); }
                         }

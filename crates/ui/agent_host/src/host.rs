@@ -47,6 +47,12 @@ pub struct ConversationEvent {
 }
 
 #[derive(Message)]
+pub struct GlobalTasksEvent(pub agentelier_conversation_bridge::GlobalTasks);
+
+#[derive(Message)]
+pub struct GlobalTaskNotificationEvent(pub agentelier_conversation_bridge::TaskNotification);
+
+#[derive(Message)]
 pub struct MemoryEvent {
     pub operation_id: u64,
     pub result: std::result::Result<agentelier_bridge_connection::MemoryReply, String>,
@@ -99,6 +105,8 @@ impl Plugin for AgentHostPlugin {
             .add_message::<AccountEvent>()
             .add_message::<ModelEvent>()
             .add_message::<ConversationEvent>()
+            .add_message::<GlobalTasksEvent>()
+            .add_message::<GlobalTaskNotificationEvent>()
             .add_message::<HostFailed>()
             .add_message::<McpConfigEvent>()
             .add_message::<MemoryEvent>()
@@ -339,10 +347,22 @@ fn receive(world: &mut World) -> Result {
             BridgeEventKind::Conversation(kind) => {
                 let busy = host.submit(|connection| Ok(connection.model_busy()))?;
                 host.state()?.model_busy = busy;
-                world.write_message(ConversationEvent {
-                    operation_id: event.operation_id,
-                    kind: *kind,
-                });
+                match *kind {
+                    agentelier_conversation_bridge::ConversationEvent::GlobalTasks(snapshot) => {
+                        world.write_message(GlobalTasksEvent(snapshot));
+                    }
+                    agentelier_conversation_bridge::ConversationEvent::TaskNotification(
+                        notification,
+                    ) => {
+                        world.write_message(GlobalTaskNotificationEvent(notification));
+                    }
+                    kind => {
+                        world.write_message(ConversationEvent {
+                            operation_id: event.operation_id,
+                            kind,
+                        });
+                    }
+                }
             }
             BridgeEventKind::McpMaterial(result) => {
                 world.write_message(McpMaterialEvent {

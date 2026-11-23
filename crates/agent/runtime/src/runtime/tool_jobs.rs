@@ -93,6 +93,13 @@ impl SessionTools {
         self.work.try_lock().map_or(true, |work| work.has_calls())
     }
 
+    pub(super) fn retained_work(&self) -> bool {
+        self.busy() || {
+            let processes = self.process_views.borrow();
+            processes.has_active() || processes.views().any(|process| process.readable)
+        }
+    }
+
     pub(super) async fn join(
         &self,
         reason: &'static str,

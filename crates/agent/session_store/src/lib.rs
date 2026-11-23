@@ -15,4 +15,4 @@ pub use store::{
 };
 
 pub use reader::{MemoryCutoff, MemorySourceSnapshot};
-pub use store::{ArchiveCatalog, DeleteCommit};
+pub use store::{ArchiveCatalog, ArchivedTasks, DeleteCommit};

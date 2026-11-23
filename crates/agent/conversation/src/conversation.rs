@@ -260,6 +260,8 @@ pub enum ConversationEvent {
     Opened(SessionView),
     ArchiveFailed(String),
     Tasks(crate::SessionTasks),
+    GlobalTasks(crate::GlobalTasks),
+    TaskNotification(crate::TaskNotification),
     Created(SessionView),
     WorkingDirectorySaved(SessionView),
     SessionModelSaved {
@@ -385,6 +387,17 @@ impl Conversation {
         self.session.as_ref().map(|session| session.view.clone())
     }
 
+    pub fn session_id(&self) -> Option<SessionId> {
+        self.session.as_ref().map(|session| session.view.id)
+    }
+
+    pub fn empty_session_owner(&self) -> Self {
+        Self {
+            extensions: self.extensions.clone(),
+            ..Self::default()
+        }
+    }
+
     pub fn tool_image(&self, session: SessionId, call_id: &str) -> Option<ToolImage> {
         let view = &self
             .session
@@ -402,9 +415,14 @@ impl Conversation {
     }
 
     pub fn tasks(&self) -> Option<crate::SessionTasks> {
-        self.session
-            .as_ref()
-            .map(|session| session.tasks.view(&session.view, &session.tools))
+        self.session.as_ref().map(|session| {
+            session.tasks.view(
+                session.view.id,
+                &session.view.task_policy,
+                session.view.queue_paused,
+                Some(&session.tools),
+            )
+        })
     }
 
     pub fn settle_tasks(&mut self, sequence: u64) -> bool {
