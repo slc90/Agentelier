@@ -41,13 +41,14 @@ pub struct GlobalTasks {
     pub groups: Vec<GlobalTaskGroup>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TaskNotificationKind {
     Succeeded,
     Failed,
     NeedsConfirmation,
 }
 
+#[derive(Clone)]
 pub struct TaskNotification {
     pub task: TaskId,
     pub session: SessionId,

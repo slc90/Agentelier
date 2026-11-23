@@ -20,6 +20,7 @@ mod reading;
 mod reasoning;
 mod request_inspection;
 mod task_panel;
+mod task_toast;
 mod tool_timeline;
 mod transcription;
 mod working_directory;

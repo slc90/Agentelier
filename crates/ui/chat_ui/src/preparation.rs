@@ -128,6 +128,7 @@ pub fn install(
     crate::conversation::install(app);
     crate::global_tasks::install(app);
     crate::task_panel::install(app)?;
+    crate::task_toast::install(app);
     crate::working_directory::install(app);
     crate::prompts::install(app)?;
     crate::mcp::install(app);
