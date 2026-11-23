@@ -373,17 +373,16 @@ async fn run_task(
         .call(|turn| Ok(turn.continuation().is_some()))
         .await?
     {
-        let directory = settings.working_directory.clone();
         let loading_cancel = cancel.clone();
         let frozen_skills = child.as_ref().map(|materials| materials.skills.clone());
         let discovered = tokio::task::spawn_blocking(move || {
             let catalog = match frozen_skills {
-                Some(catalog) => catalog.as_ref().clone(),
-                None => agentelier_skills::discover_standard(
-                    &directory,
-                    &user_skills_root,
-                    &loading_cancel,
-                )?,
+                Some(catalog) => {
+                    let mut catalog = catalog.as_ref().clone();
+                    catalog.exclude_archived();
+                    catalog
+                }
+                None => agentelier_skills::discover_standard(&user_skills_root, &loading_cancel)?,
             };
             let selected = agentelier_skills::select(&catalog, &input, &loading_cancel)?;
             Ok::<_, agentelier_skills::Failure>((catalog, selected))

@@ -104,14 +104,16 @@ fn verify(path: &Path, bytes: &[u8]) -> Result<(), Failure> {
     Ok(())
 }
 
-fn install(root: &Path, cancel: &CancellationToken) -> Result<(), Failure> {
+fn install(skill: &Path, cancel: &CancellationToken) -> Result<(), Failure> {
+    let root = skill
+        .parent()
+        .ok_or_else(|| Failure("内置 Skill 缓存没有版本目录".into()))?;
     let system = root
         .parent()
         .ok_or_else(|| Failure("内置 Skills 缓存没有父目录".into()))?;
     directory(system)?;
     directory(root)?;
-    let skill = root.join("skill-creator");
-    directory(&skill)?;
+    directory(skill)?;
     for (relative, bytes) in FILES {
         check(cancel)?;
         let path = skill.join(relative);
@@ -145,11 +147,10 @@ fn install(root: &Path, cancel: &CancellationToken) -> Result<(), Failure> {
 }
 
 pub fn discover_standard(
-    directory: &Path,
     user_skills_root: &Path,
     cancel: &CancellationToken,
 ) -> Result<Catalog, Failure> {
-    let roots = crate::standard_roots(directory, user_skills_root, cancel)?;
+    let roots = crate::discovery::standard_roots(user_skills_root, cancel)?;
     let mut active = Vec::new();
     let mut diagnostics = Vec::new();
     for root in &roots {
@@ -165,7 +166,7 @@ pub fn discover_standard(
         }
         active.push(root.clone());
     }
-    let mut catalog = crate::discover(active, cancel)?;
+    let mut catalog = crate::discovery::discover(active, cancel)?;
     catalog.roots = roots;
     catalog.diagnostics.extend(diagnostics);
     Ok(catalog)

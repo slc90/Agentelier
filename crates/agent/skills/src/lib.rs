@@ -9,7 +9,7 @@ mod selection;
 pub use selection::{SelectedSkill, mentions, select};
 
 pub use builtin::discover_standard;
-pub use discovery::{discover, standard_roots};
+
 pub use parser::parse;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -22,9 +22,18 @@ pub const MAX_SCAN_DEPTH: usize = 6;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Source {
-    Project { scope: PathBuf },
+    #[serde(rename = "Project")]
+    Archived {
+        scope: PathBuf,
+    },
     User,
     Builtin,
+}
+
+impl Source {
+    pub fn is_current(&self) -> bool {
+        matches!(self, Self::User | Self::Builtin)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -62,6 +71,24 @@ pub struct Catalog {
     pub roots: Vec<Root>,
     pub skills: Vec<Skill>,
     pub diagnostics: Vec<Diagnostic>,
+}
+
+impl Catalog {
+    pub fn exclude_archived(&mut self) {
+        let archived: Vec<_> = self
+            .roots
+            .iter()
+            .filter(|root| !root.source.is_current())
+            .map(|root| root.path.clone())
+            .collect();
+        self.roots.retain(|root| root.source.is_current());
+        self.skills.retain(|skill| skill.source.is_current());
+        self.diagnostics.retain(|diagnostic| {
+            !archived
+                .iter()
+                .any(|root| diagnostic.path.starts_with(root))
+        });
+    }
 }
 
 #[derive(Debug)]

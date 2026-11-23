@@ -80,7 +80,7 @@ pub fn select(
         let matches: Vec<_> = catalog
             .skills
             .iter()
-            .filter(|skill| skill.metadata.name == name)
+            .filter(|skill| skill.source.is_current() && skill.metadata.name == name)
             .collect();
         let skill = match matches.as_slice() {
             [] => {

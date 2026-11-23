@@ -1,81 +1,31 @@
 use crate::{Catalog, Diagnostic, Failure, Root, Skill, Source, check, parse};
 use serde::Deserialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use tokio_util::sync::CancellationToken;
 
-pub fn standard_roots(
-    directory: &Path,
+pub(crate) fn standard_roots(
     user_skills_root: &Path,
     cancel: &CancellationToken,
 ) -> Result<Vec<Root>, Failure> {
     check(cancel)?;
-    if !directory.is_absolute() {
-        return Err(Failure("Skills 会话工作目录必须是绝对路径".into()));
-    }
     if !user_skills_root.is_absolute() {
         return Err(Failure(
             "用户 Skills 根必须是应用数据目录下的绝对路径".into(),
         ));
     }
-    let directory = directory
-        .canonicalize()
-        .map_err(|e| Failure(e.to_string()))?;
-    if !directory.is_dir() {
-        return Err(Failure("Skills 工作目录不是目录".into()));
-    }
-    let mut chain = Vec::new();
-    let mut found_boundary = false;
-    for scope in directory.ancestors() {
-        check(cancel)?;
-        chain.push(scope.to_owned());
-        let marker_path = scope.join(".git");
-        let marker = fs::symlink_metadata(&marker_path).and_then(|metadata| {
-            if metadata.is_symlink() {
-                fs::metadata(&marker_path)
-            } else {
-                Ok(metadata)
-            }
-        });
-        match marker {
-            Ok(marker) if marker.is_dir() || marker.is_file() => {
-                found_boundary = true;
-                break;
-            }
-            Ok(_) => return Err(Failure("Skills 项目 Git 边界无效".into())),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                if fs::symlink_metadata(&marker_path).is_ok() {
-                    return Err(Failure(format!(
-                        "Skills 项目边界链接失效：{}",
-                        marker_path.display()
-                    )));
-                }
-            }
-            Err(e) => return Err(Failure(format!("Skills 项目边界读取失败：{e}"))),
-        }
-    }
-    if !found_boundary {
-        chain.truncate(1);
-    }
-    chain.reverse();
-    let mut roots: Vec<_> = chain
-        .into_iter()
-        .map(|scope| Root {
-            path: scope.join(".agents/skills"),
-            source: Source::Project { scope },
-        })
-        .collect();
-    roots.push(Root {
-        path: user_skills_root.to_owned(),
-        source: Source::User,
-    });
-    roots.push(Root {
-        path: crate::builtin::root()?,
-        source: Source::Builtin,
-    });
-    Ok(roots)
+    Ok(vec![
+        Root {
+            path: user_skills_root.to_owned(),
+            source: Source::User,
+        },
+        Root {
+            path: crate::builtin::root()?.join("skill-creator"),
+            source: Source::Builtin,
+        },
+    ])
 }
 
 pub(crate) fn read_file(path: &Path, limit: usize) -> Result<String, Failure> {
@@ -218,7 +168,7 @@ fn skill(
     ))
 }
 
-pub fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<Catalog, Failure> {
+pub(crate) fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<Catalog, Failure> {
     let mut catalog = Catalog {
         roots,
         ..Catalog::default()
@@ -340,5 +290,27 @@ pub fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<Catalog,
         }
     }
     check(cancel)?;
+    let mut names = BTreeMap::<&str, Vec<&Path>>::new();
+    for skill in &catalog.skills {
+        names
+            .entry(&skill.metadata.name)
+            .or_default()
+            .push(&skill.path);
+    }
+    for (name, paths) in names {
+        if paths.len() > 1 {
+            catalog.diagnostics.push(Diagnostic {
+                path: paths[0].to_owned(),
+                message: format!(
+                    "Skill ${name} 名称重复：{}",
+                    paths
+                        .iter()
+                        .map(|path| path.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join("；")
+                ),
+            });
+        }
+    }
     Ok(catalog)
 }

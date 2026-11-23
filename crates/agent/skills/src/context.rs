@@ -14,7 +14,9 @@ impl Catalog {
         let entries = self
             .skills
             .iter()
-            .filter(|skill| skill.enabled && skill.allow_implicit_invocation)
+            .filter(|skill| {
+                skill.source.is_current() && skill.enabled && skill.allow_implicit_invocation
+            })
             .map(|skill| {
                 serde_json::json!({
                     "name": skill.metadata.name,
