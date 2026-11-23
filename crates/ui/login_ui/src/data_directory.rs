@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use tracing::{debug, error, info};
 
-pub(crate) type RememberDirectory = Arc<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
+type RememberDirectory = Arc<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
 
 pub struct LoginUiPlugin {
     options: StartupOptions,
@@ -51,7 +51,6 @@ impl Plugin for LoginUiPlugin {
         if !app.is_plugin_added::<WidgetryFileDialogPlugin>() {
             app.add_plugins(WidgetryFileDialogPlugin);
         }
-        crate::directory_settings::install(app);
         crate::account::install(app);
         crate::authentication::install(app);
         app.insert_resource(StartupUi {
@@ -67,6 +66,9 @@ impl Plugin for LoginUiPlugin {
 
 #[derive(Component, Clone, Default)]
 pub struct LoginUiHost;
+
+#[derive(Component, Clone, Default)]
+pub struct HomeContent;
 
 #[derive(Event)]
 pub struct DataDirectoryReady {
@@ -302,12 +304,12 @@ fn receive_check(world: &mut World) -> Result {
         CheckResult::Ready(environment) => {
             clear_screen(world);
             world.resource_mut::<StartupUi>().phase = Phase::Ready;
-            crate::directory_settings::start(
-                world,
-                host(world)?,
-                environment.clone(),
-                world.resource::<StartupUi>().options.remember.clone(),
-            )?;
+            let host = host(world)?;
+            world.commands().spawn_scene_with_error_handler(bsn! {
+                HomeContent Name("HomeContent") ChildOf(host)
+                Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }
+            });
+            world.flush();
             world.trigger(DataDirectoryReady {
                 environment: environment.clone(),
             });

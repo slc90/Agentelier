@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod config;
 mod diagnostics;
+mod settings;
 mod shutdown;
 mod startup;
 

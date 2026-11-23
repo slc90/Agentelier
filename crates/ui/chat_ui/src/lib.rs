@@ -32,6 +32,6 @@ pub use conversation::{
 };
 pub use preparation::{ChatUiHost, ModelChoice, ModelPhase, ModelState, install};
 pub use reasoning::ReasoningSetting;
-pub use workspace::{MAIN_WINDOW_WIDTH, MIN_MAIN_WINDOW_WIDTH, workspace_title};
+pub use workspace::{MAIN_WINDOW_WIDTH, MIN_MAIN_WINDOW_WIDTH, OpenSettings, workspace_title};
 
 mod session_actions;

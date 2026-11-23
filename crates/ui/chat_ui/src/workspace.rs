@@ -48,6 +48,9 @@ struct InitialSplit {
     width: f32,
 }
 
+#[derive(Event)]
+pub struct OpenSettings;
+
 #[derive(Component, Clone, Copy)]
 enum Entry {
     Settings,
@@ -259,7 +262,7 @@ fn entry(entry: Entry, children: impl SceneList + 'static) -> impl Scene {
 
 fn open(event: On<Activate>, entries: Query<&Entry>, mut commands: Commands) -> Result {
     match entries.get(event.entity)? {
-        Entry::Settings => commands.queue(agentelier_login_ui::open_directory_settings),
+        Entry::Settings => commands.trigger(OpenSettings),
         Entry::Skills => {}
         Entry::Mcp => commands.queue(crate::prompts::open_mcp),
         Entry::Memory => commands.queue(crate::prompts::open_memory),

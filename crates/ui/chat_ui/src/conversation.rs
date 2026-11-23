@@ -197,6 +197,7 @@ pub enum ChatReplacement {
     Reset(SessionId),
 }
 
+#[derive(Clone)]
 pub struct SessionModelDefaults {
     pub slug: String,
     pub effort: String,

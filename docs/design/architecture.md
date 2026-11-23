@@ -116,9 +116,9 @@ C 区使用 Widgetry Tree 同时显示项目与单独聊天。项目定义与会
 
 启动界面复用 Widgetry 目录选择器，通过辅助 Job 调用 Login 检查并占用目录。配置由 application 的 ConfigStore 串行合并并完整替换提交；成功后复用同一窗口进入主界面，通过共享 AgentHost 发起账号恢复。数据环境保持到后台执行及日志收尾完成。
 
-目录设置显示本次固定路径、打开当前目录、检查并保存下次启动位置。候选检查不持有第二份长期占用，保存成功才更新配置投影；更改下次位置不搬运文件、不切换当前数据环境或账号。关系见[数据目录与启动](mechanisms/application-data.md)。
+Application 装配独立的设置窗口，提供当前数据目录、下次启动目录、UI Scale 和新会话默认模型设置。目录检查使用辅助 Job，成功提交后更新下次启动位置。缩放配置提交后立即更新窗口，新默认设置在创建会话时读取。关系见[数据目录与启动](mechanisms/application-data.md)。
 
-UI 使用 `bevy_widgetry_path_display::display_path` 显示路径，application 在序列化配置时使用同库的 `simplify_path`，Login 在调用 Windows Shell 打开数据目录时使用该函数。数据环境对外仍返回原始规范路径，目录比较与文件操作不使用显示字符串。账号凭据位于本次取得占用的数据环境，目录检查只验证目录自身的读写能力。
+UI 使用 `bevy_widgetry_path_display::display_path` 显示路径，Application 在序列化配置和核对路径拼写时使用同库的 `simplify_path`。数据环境对外仍返回原始规范路径，目录比较与文件操作不使用显示字符串。账号凭据位于本次取得占用的数据环境，目录检查只验证目录自身的读写能力。
 
 ## Agent 的账号、模型与执行所有者
 

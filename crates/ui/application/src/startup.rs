@@ -1,4 +1,4 @@
-use crate::{config, diagnostics, shutdown};
+use crate::{config, diagnostics, settings, shutdown};
 use agentelier_agent_host::AgentHostPlugin;
 use agentelier_chat_ui::{MAIN_WINDOW_WIDTH, MIN_MAIN_WINDOW_WIDTH, workspace_title};
 use agentelier_controls::{AGENTELIER_THEME, AgentelierControlsPlugin};
@@ -127,6 +127,7 @@ fn run_application(
         .add_observer(enter_main)
         .add_observer(mount_chat);
     agentelier_chat_ui::install(&mut app, move || config_store.session_model_defaults())?;
+    settings::install(&mut app)?;
     let manager = app.world().resource::<JobManager>().clone();
     shutdown::install(&mut app);
     debug!("应用装配完成，进入主循环");

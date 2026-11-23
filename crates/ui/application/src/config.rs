@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use tempfile::NamedTempFile;
 
 const DEFAULT_SCALE_FACTOR: f32 = 1.25;
-const ALLOWED_SCALE_FACTORS: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
+pub(crate) const ALLOWED_SCALE_FACTORS: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
 const DEFAULT_BRP_PORT: u16 = 15702;
 const DEFAULT_BRP_RENDER_PORT: u16 = 15703;
 const BRP_PORT_RANGE: std::ops::RangeInclusive<u16> = 1024..=65534;
@@ -168,6 +168,24 @@ impl ConfigStore {
         Ok(agentelier_chat_ui::SessionModelDefaults {
             slug: current.config.default_model_slug.clone(),
             effort: current.config.default_reasoning_effort.clone(),
+        })
+    }
+
+    pub(crate) fn snapshot(&self) -> io::Result<AppConfig> {
+        self.0
+            .lock()
+            .map(|current| current.config.clone())
+            .map_err(|_| io::Error::other("应用配置状态不可用"))
+    }
+
+    pub(crate) fn save_scale(&self, scale: f32) -> io::Result<()> {
+        self.update(|config| config.scale_factor = scale)
+    }
+
+    pub(crate) fn save_session_defaults(&self, slug: String, effort: String) -> io::Result<()> {
+        self.update(move |config| {
+            config.default_model_slug = slug;
+            config.default_reasoning_effort = effort;
         })
     }
 
