@@ -29,7 +29,7 @@ pub(super) fn window([scale, model, effort]: [Selector; 3]) -> impl Scene {
     bsn! {
         SettingsWindow Name("SettingsWindow")
         @owned_widgetry_window(
-            Window { title: "设置".into(), resolution: (690, 540).into(), ..default() },
+            Window { title: "设置".into(), resolution: (690, 700).into(), ..default() },
             WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
             WidgetryWindowBackground::Theme,
             Default::default(),
@@ -72,7 +72,8 @@ fn content(scale: Selector, model: Selector, effort: Selector) -> impl SceneList
             Text::default() WidgetryText DefaultsSummary Name("SettingsSavedDefaults")
         ]--
         Text::default() WidgetryText SettingsMessage Name("SettingsFeedback")
-        TextLayout::linebreak(LineBreak::AnyCharacter)
+        TextLayout::linebreak(LineBreak::AnyCharacter)--
+        @super::avatar::section()
     ]
     }
 }

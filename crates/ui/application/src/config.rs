@@ -1,4 +1,6 @@
+use agentelier_controls::AvatarCrop;
 use bevy::prelude::Resource;
+use bevy_app_assets::user_avatar::AvatarFile;
 use bevy_widgetry_path_display::{display_path, simplify_path};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fs;
@@ -27,6 +29,8 @@ pub(crate) struct AppConfig {
     pub(crate) default_model_slug: String,
     #[serde(default = "default_reasoning_effort")]
     pub(crate) default_reasoning_effort: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) user_avatar: Option<AvatarSettings>,
     #[serde(
         default,
         rename = "codex_auth_file",
@@ -34,6 +38,33 @@ pub(crate) struct AppConfig {
         deserialize_with = "ignore_legacy_codex_file"
     )]
     _legacy_codex_auth_file: (),
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AvatarSettings {
+    pub(crate) original: AvatarFile,
+    offset: [f32; 2],
+    zoom: f32,
+}
+
+impl AvatarSettings {
+    pub(crate) fn new(original: AvatarFile, crop: AvatarCrop) -> Self {
+        let crop = crop.constrained();
+        Self {
+            original,
+            offset: (crop.center - bevy::math::Vec2::splat(0.5)).to_array(),
+            zoom: crop.zoom,
+        }
+    }
+
+    pub(crate) fn crop(self) -> AvatarCrop {
+        AvatarCrop {
+            center: bevy::math::Vec2::from_array(self.offset) + bevy::math::Vec2::splat(0.5),
+            zoom: self.zoom,
+        }
+        .constrained()
+    }
 }
 
 const fn default_brp_render_port() -> u16 {
@@ -72,6 +103,7 @@ impl Default for AppConfig {
             data_directory: None,
             default_model_slug: default_model_slug(),
             default_reasoning_effort: default_reasoning_effort(),
+            user_avatar: None,
             _legacy_codex_auth_file: (),
         }
     }
@@ -187,6 +219,10 @@ impl ConfigStore {
             config.default_model_slug = slug;
             config.default_reasoning_effort = effort;
         })
+    }
+
+    pub(crate) fn save_avatar(&self, avatar: Option<AvatarSettings>) -> io::Result<()> {
+        self.update(|config| config.user_avatar = avatar)
     }
 
     fn update(&self, change: impl FnOnce(&mut AppConfig)) -> io::Result<()> {

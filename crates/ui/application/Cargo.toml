@@ -17,6 +17,7 @@ bevy_widgetry = { workspace = true, features = [
   "file_dialog",
   "job",
   "scroll_area",
+  "slider",
   "text_field",
 ] }
 bevy_widgetry_path_display.workspace = true

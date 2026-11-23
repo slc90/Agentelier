@@ -6,6 +6,10 @@ edition.workspace = true
 
 [dependencies]
 bevy.workspace = true
+image.workspace = true
+serde.workspace = true
+tempfile.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

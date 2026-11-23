@@ -108,7 +108,7 @@ flowchart TD
 
 `application` 建立可执行文件旁的日志，读取 `config/config.ron`，装配窗口、Asset、缩放与可选 BRP。BRP 的 Main World 和 Render World 端口独立配置。`agent_host` 是唯一 Connection 所有者和接收者，按业务将账号、模型与聊天事件分发到独立 ECS 消息通道，运行错误另行广播；`login_ui` 在宿主接收后消费自己的业务消息，通过 BSN 组合界面，持有面向交互的账号与目录状态；Widgetry 控件自身的状态遵循其公开契约。
 
-`application` 安装由 controls 提供的应用主题与共享控件插件。登录、目录设置和聊天界面的普通按钮由 `AgentelierButton` 组合，业务内容和事件处理留在调用方。样式与焦点环由 controls 更新，Widgetry 持有输入、禁用及 Loading 状态。账号和对话使用 `AgentelierAvatar`，通过 Assets 提供的图像句柄显示内嵌头像。详见[控件体系](ui/components.md)。
+`application` 安装由 controls 提供的应用主题与共享控件插件。登录、目录设置和聊天界面的普通按钮由 `AgentelierButton` 组合，业务内容和事件处理留在调用方。样式与焦点环由 controls 更新，Widgetry 持有输入、禁用及 Loading 状态。账号和对话使用 `AgentelierAvatar`，通过 Assets 提供的图像句柄显示头像。设置窗口使用 `AvatarCropper` 编辑方形原图的归一化裁剪，保存后将同一渲染投影交给已登录头像与用户消息。详见[控件体系](ui/components.md)。
 
 主窗口以 Widgetry Window 提供原生边缘缩放和标题栏拖动。chat_ui 装配固定导航栏与两层 Widgetry Splitter。会话导航、聊天和任务区域分别嵌入 C、D、E，右栏的下半区保持空白。标题栏投影当前会话的上下文占用和账号额度，B 区账号入口按登录状态提供手动授权窗口或右键登出菜单。关闭主窗口触发应用收尾。
 

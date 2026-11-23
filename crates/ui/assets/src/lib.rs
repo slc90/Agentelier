@@ -4,6 +4,8 @@ compile_error!("This application supports Windows x64 only");
 use bevy::asset::{AssetPath, embedded_asset, embedded_path, load_embedded_asset};
 use bevy::prelude::*;
 
+pub mod user_avatar;
+
 pub const PROMPT_LIBRARY_JSON: &str = include_str!("assets/prompts/library.json");
 
 #[derive(Resource)]

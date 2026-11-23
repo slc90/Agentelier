@@ -25,6 +25,20 @@ impl Default for AvatarCrop {
 }
 
 impl AvatarCrop {
+    pub const MAX_ZOOM: f32 = 6.0;
+
+    pub fn constrained(self) -> Self {
+        if !self.center.is_finite() || !self.zoom.is_finite() {
+            return Self::default();
+        }
+        let zoom = self.zoom.clamp(1.0, Self::MAX_ZOOM);
+        let margin = Vec2::splat(0.5 / zoom);
+        Self {
+            center: self.center.clamp(margin, Vec2::ONE - margin),
+            zoom,
+        }
+    }
+
     fn area(self, image: &Image) -> Option<Rect> {
         let size = image.size().as_vec2();
         if size.min_element() < 1.0 || !self.center.is_finite() || !self.zoom.is_finite() {
@@ -44,12 +58,19 @@ impl AvatarCrop {
 pub enum AvatarSource {
     #[default]
     User,
+    DefaultUser,
     Assistant,
     Custom {
         image: Handle<Image>,
         crop: AvatarCrop,
     },
 }
+
+#[derive(Resource, Default)]
+pub struct UserAvatar(pub Option<(Handle<Image>, AvatarCrop)>);
+
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SyncAvatars;
 
 #[derive(SceneComponent, Clone, Default)]
 #[scene(AgentelierAvatarProps)]
@@ -95,8 +116,15 @@ impl AgentelierAvatar {
 }
 
 pub(crate) fn install(app: &mut App) {
-    app.register_type::<AvatarPresentation>()
-        .add_systems(PostUpdate, sync.before(UiSystems::Content));
+    app.init_resource::<UserAvatar>()
+        .register_type::<AvatarPresentation>()
+        .register_type::<super::avatar_cropper::AvatarCropperState>()
+        .add_systems(
+            PostUpdate,
+            (super::avatar_cropper::sync, sync.in_set(SyncAvatars))
+                .chain()
+                .before(UiSystems::Content),
+        );
 }
 
 fn extent(size: f32) -> Val {
@@ -109,6 +137,7 @@ fn extent(size: f32) -> Val {
 
 fn sync(
     defaults: Res<AvatarAssets>,
+    user: Res<UserAvatar>,
     images: Res<Assets<Image>>,
     theme: Res<WidgetryTheme>,
     mut avatars: Query<(
@@ -128,11 +157,16 @@ fn sync(
         if changed || theme.is_changed() {
             background.set_if_neq(BackgroundColor(theme.text_field.editable.normal.background));
         }
-        if !changed && !images.is_changed() && !defaults.is_changed() {
+        let user_changed = user.is_changed() && matches!(avatar.source, AvatarSource::User);
+        if !changed && !user_changed && !images.is_changed() && !defaults.is_changed() {
             continue;
         }
         let (preferred, crop) = match &avatar.source {
-            AvatarSource::User => (&defaults.default_user, AvatarCrop::default()),
+            AvatarSource::User => user.0.as_ref().map_or(
+                (&defaults.default_user, AvatarCrop::default()),
+                |(image, crop)| (image, *crop),
+            ),
+            AvatarSource::DefaultUser => (&defaults.default_user, AvatarCrop::default()),
             AvatarSource::Assistant => (&defaults.assistant, ASSISTANT_CROP),
             AvatarSource::Custom { image, crop } => (image, *crop),
         };

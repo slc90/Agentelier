@@ -1,6 +1,9 @@
 use agentelier_account_bridge::QuotaStatus;
 use agentelier_agent_host::HostActivity;
-use agentelier_controls::{AgentelierAvatar, AgentelierButton, AgentelierButtonStyle};
+use agentelier_controls::{
+    AgentelierAvatar, AgentelierButton, AgentelierButtonStyle, AvatarPresentation, AvatarSource,
+    SyncAvatars,
+};
 use bevy::picking::{
     events::{PointerClick, PointerPress},
     pointer::PointerButton,
@@ -166,11 +169,28 @@ struct CopyLink;
 #[derive(Component, Clone, Default)]
 struct LogoutMenu;
 
+#[derive(Component, Clone, Default)]
+struct LoginAvatar;
+
+fn sync_login_avatar(
+    account: Res<AccountState>,
+    mut avatars: Query<&mut AvatarPresentation, With<LoginAvatar>>,
+) {
+    for mut avatar in &mut avatars {
+        if account.signed_in() && matches!(avatar.source, AvatarSource::DefaultUser) {
+            avatar.source = AvatarSource::User;
+        } else if !account.signed_in() && matches!(avatar.source, AvatarSource::User) {
+            avatar.source = AvatarSource::DefaultUser;
+        }
+    }
+}
+
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<AccountState>()
         .register_type::<AccountState>()
         .add_observer(close_authorization)
         .add_systems(Update, dismiss_menu)
+        .add_systems(PostUpdate, sync_login_avatar.before(SyncAvatars))
         .add_systems(
             PostUpdate,
             (update_authorization, update_link).before(UiSystems::Content),
@@ -182,7 +202,7 @@ pub fn login_entry(avatar_size: f32) -> impl Scene {
         @AgentelierButton {
             @style: AgentelierButtonStyle::Icon,
             @children: {Some(Box::new(bsn_list! {
-                @AgentelierAvatar { @size: avatar_size }
+                @AgentelierAvatar { @size: avatar_size, @source: AvatarSource::DefaultUser } LoginAvatar Name("WorkspaceLoginAvatar")
             }) as Box<dyn SceneList>)}
         }
         Name("WorkspaceLogin")
