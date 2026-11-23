@@ -1,32 +1,10 @@
-use crate::{Catalog, Diagnostic, Failure, Root, Skill, Source, check, parse};
+use crate::{Catalog, Diagnostic, Failure, Root, Skill, SkillResource, Source, check, parse};
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use tokio_util::sync::CancellationToken;
-
-pub(crate) fn standard_roots(
-    user_skills_root: &Path,
-    cancel: &CancellationToken,
-) -> Result<Vec<Root>, Failure> {
-    check(cancel)?;
-    if !user_skills_root.is_absolute() {
-        return Err(Failure(
-            "用户 Skills 根必须是应用数据目录下的绝对路径".into(),
-        ));
-    }
-    Ok(vec![
-        Root {
-            path: user_skills_root.to_owned(),
-            source: Source::User,
-        },
-        Root {
-            path: crate::builtin::root()?.join("skill-creator"),
-            source: Source::Builtin,
-        },
-    ])
-}
 
 pub(crate) fn read_file(path: &Path, limit: usize) -> Result<String, Failure> {
     let file = File::open(path).map_err(|e| Failure(format!("{}：{e}", path.display())))?;
@@ -85,17 +63,21 @@ fn read_frontmatter(path: &Path, bytes_used: &mut usize) -> Result<String, Failu
 }
 
 #[derive(Default, Deserialize)]
-struct Extension {
-    interface: Option<serde_json::Value>,
-    dependencies: Option<serde_json::Value>,
+pub(crate) struct Extension {
+    pub(crate) interface: Option<serde_json::Value>,
+    pub(crate) dependencies: Option<serde_json::Value>,
     #[serde(default)]
-    policy: Policy,
+    pub(crate) policy: Policy,
 }
 #[derive(Deserialize)]
-struct Policy {
+pub(crate) struct Policy {
     #[serde(default = "implicit_default")]
-    allow_implicit_invocation: bool,
+    pub(crate) allow_implicit_invocation: bool,
 }
+pub(crate) fn extension(text: &str) -> Result<Extension, Failure> {
+    serde_yaml::from_str(text).map_err(|error| Failure(error.to_string()))
+}
+
 fn implicit_default() -> bool {
     true
 }
@@ -128,11 +110,8 @@ fn skill(
         .ok_or_else(|| Failure("Skill 缺少父目录".into()))?
         .join("agents/openai.yaml");
     let extension = match fs::symlink_metadata(&extra_path) {
-        Ok(_) => read_file(&extra_path, crate::MAX_METADATA_BYTES).and_then(|text| {
-            serde_yaml::from_str::<Extension>(&text)
-                .map(|extra| (extra, text.len()))
-                .map_err(|e| Failure(e.to_string()))
-        }),
+        Ok(_) => read_file(&extra_path, crate::MAX_METADATA_BYTES)
+            .and_then(|text| extension(&text).map(|extra| (extra, text.len()))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((Extension::default(), 0)),
         Err(e) => Err(Failure(e.to_string())),
     };
@@ -155,8 +134,10 @@ fn skill(
     *bytes_used += extension_bytes;
     Ok((
         Skill {
-            path: canonical,
-            discovered_path: path.to_owned(),
+            resource: SkillResource::File {
+                path: canonical,
+                discovered_path: path.to_owned(),
+            },
             source: source.clone(),
             metadata,
             enabled: true,
@@ -218,7 +199,11 @@ pub(crate) fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<C
                             if let Some(warning) = warning {
                                 catalog.diagnostics.push(warning);
                             }
-                            if skills.insert(skill.path.clone()) {
+                            if skill
+                                .resource
+                                .path()
+                                .is_some_and(|path| skills.insert(path.to_owned()))
+                            {
                                 catalog.skills.push(skill);
                             }
                         }
@@ -290,27 +275,5 @@ pub(crate) fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<C
         }
     }
     check(cancel)?;
-    let mut names = BTreeMap::<&str, Vec<&Path>>::new();
-    for skill in &catalog.skills {
-        names
-            .entry(&skill.metadata.name)
-            .or_default()
-            .push(&skill.path);
-    }
-    for (name, paths) in names {
-        if paths.len() > 1 {
-            catalog.diagnostics.push(Diagnostic {
-                path: paths[0].to_owned(),
-                message: format!(
-                    "Skill ${name} 名称重复：{}",
-                    paths
-                        .iter()
-                        .map(|path| path.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join("；")
-                ),
-            });
-        }
-    }
     Ok(catalog)
 }

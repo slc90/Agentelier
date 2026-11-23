@@ -116,10 +116,18 @@ pub struct GenerationConnection(Option<codex_socket::Continuation>);
 pub struct SkillMaterial {
     #[serde(default)]
     pub path: Option<std::path::PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedded: Option<agentelier_skills::EmbeddedSkill>,
     pub role: String,
     pub input_index: usize,
     pub text: String,
     pub hash: String,
+}
+
+impl SkillMaterial {
+    pub fn is_selected(&self) -> bool {
+        self.path.is_some() || self.embedded.is_some()
+    }
 }
 
 impl RequestProjection {
@@ -202,7 +210,8 @@ impl RequestProjection {
             };
             if material.input_index != expected_index
                 || material.role != if index == 0 { "developer" } else { "user" }
-                || (index == 0) != material.path.is_none()
+                || (index != 0) != material.is_selected()
+                || material.path.is_some() && material.embedded.is_some()
                 || material.hash != format!("{:x}", Sha256::digest(material.text.as_bytes()))
             {
                 return Err(crate::model::protocol(
@@ -294,6 +303,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         use sha2::{Digest, Sha256};
         skill_materials.push(SkillMaterial {
             path: None,
+            embedded: None,
             role: "developer".into(),
             input_index: input.len(),
             hash: format!("{:x}", Sha256::digest(catalog.as_bytes())),
@@ -310,7 +320,8 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         let text = skill.render();
         use sha2::{Digest, Sha256};
         skill_materials.push(SkillMaterial {
-            path: Some(skill.skill.path),
+            path: skill.skill.resource.path().map(std::path::Path::to_owned),
+            embedded: skill.skill.resource.embedded(),
             role: "user".into(),
             input_index: input.len(),
             hash: format!("{:x}", Sha256::digest(text.as_bytes())),

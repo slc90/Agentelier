@@ -1,173 +1,121 @@
-use crate::{Catalog, Diagnostic, Failure, Source, check};
-use sha2::{Digest, Sha256};
-use std::fs::{self, File};
-use std::io::{Read, Write};
-use std::os::windows::fs::MetadataExt;
-use std::path::{Path, PathBuf};
-use tempfile::NamedTempFile;
+use crate::{Catalog, EmbeddedSkill, Failure, Root, Skill, SkillResource, Source, check, parse};
+use std::path::Path;
 use tokio_util::sync::CancellationToken;
 
-const REPARSE_POINT: u32 = 0x0000_0400;
-const FILES: &[(&str, &[u8])] = &[
+pub const READ_RESOURCE_TOOL: &str = "read_skill_resource";
+pub const BUILTIN_NAME: &str = "skill-creator";
+
+const FILES: &[(&str, &str, &[u8])] = &[
     (
         "SKILL.md",
+        "text/markdown",
         include_bytes!("../assets/skill-creator/SKILL.md"),
     ),
     (
         "agents/openai.yaml",
+        "text/yaml",
         include_bytes!("../assets/skill-creator/agents/openai.yaml"),
     ),
     (
         "assets/skill-creator-small.svg",
+        "image/svg+xml",
         include_bytes!("../assets/skill-creator/assets/skill-creator-small.svg"),
     ),
     (
         "assets/skill-creator.png",
+        "image/png",
         include_bytes!("../assets/skill-creator/assets/skill-creator.png"),
     ),
     (
         "references/openai_yaml.md",
+        "text/markdown",
         include_bytes!("../assets/skill-creator/references/openai_yaml.md"),
     ),
     (
-        "scripts/init_skill.py",
-        include_bytes!("../assets/skill-creator/scripts/init_skill.py"),
-    ),
-    (
-        "scripts/generate_openai_yaml.py",
-        include_bytes!("../assets/skill-creator/scripts/generate_openai_yaml.py"),
-    ),
-    (
-        "scripts/quick_validate.py",
-        include_bytes!("../assets/skill-creator/scripts/quick_validate.py"),
-    ),
-    (
         "license.txt",
+        "text/plain",
         include_bytes!("../assets/skill-creator/license.txt"),
     ),
     (
         "source.md",
+        "text/markdown",
         include_bytes!("../assets/skill-creator/source.md"),
     ),
 ];
 
-pub(crate) fn root() -> Result<PathBuf, Failure> {
-    let local = std::env::var_os("LOCALAPPDATA")
-        .ok_or_else(|| Failure("缺少系统技能缓存目录 LOCALAPPDATA".into()))?;
-    let mut hash = Sha256::new();
-    for (path, bytes) in FILES {
-        hash.update(path.as_bytes());
-        hash.update(bytes);
-    }
-    Ok(PathBuf::from(local)
-        .join("Agentelier/skills/.system")
-        .join(format!("{:x}", hash.finalize())))
+pub struct EmbeddedResource {
+    pub bytes: &'static [u8],
+    pub media_type: &'static str,
 }
 
-fn directory(path: &Path) -> Result<(), Failure> {
-    fs::create_dir_all(path).map_err(|e| Failure(format!("{}：{e}", path.display())))?;
-    let metadata = fs::symlink_metadata(path).map_err(|e| Failure(e.to_string()))?;
-    if !metadata.is_dir() || metadata.file_attributes() & REPARSE_POINT != 0 {
-        return Err(Failure(format!(
-            "内置 Skills 缓存目录不是普通目录：{}",
-            path.display()
-        )));
+pub fn read_resource(
+    skill: EmbeddedSkill,
+    path: &str,
+    cancel: &CancellationToken,
+) -> Result<EmbeddedResource, Failure> {
+    check(cancel)?;
+    if path.len() > 256
+        || path.contains(['\\', ':', '\0'])
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || matches!(part, "." | ".."))
+    {
+        return Err(Failure(
+            "内置 Skill 资源必须使用其根目录下的相对路径".into(),
+        ));
     }
-    Ok(())
+    let files = match skill {
+        EmbeddedSkill::SkillCreator => FILES,
+    };
+    files
+        .iter()
+        .find(|(name, _, _)| *name == path)
+        .map(|(_, media_type, bytes)| EmbeddedResource { bytes, media_type })
+        .ok_or_else(|| Failure(format!("内置 Skill 资源不存在：{path}")))
 }
 
-fn verify(path: &Path, bytes: &[u8]) -> Result<(), Failure> {
-    let metadata = fs::symlink_metadata(path).map_err(|e| Failure(e.to_string()))?;
-    if !metadata.is_file() || metadata.file_attributes() & REPARSE_POINT != 0 {
-        return Err(Failure(format!(
-            "内置 Skill 材料不是普通文件：{}",
-            path.display()
-        )));
-    }
-    let mut actual = Vec::new();
-    File::open(path)
-        .map_err(|e| Failure(e.to_string()))?
-        .take((bytes.len() + 1) as u64)
-        .read_to_end(&mut actual)
-        .map_err(|e| Failure(e.to_string()))?;
-    if actual != bytes {
-        return Err(Failure(format!(
-            "内置 Skill 缓存内容已变化，原件未覆盖：{}",
-            path.display()
-        )));
-    }
-    let mut permissions = metadata.permissions();
-    if !permissions.readonly() {
-        permissions.set_readonly(true);
-        fs::set_permissions(path, permissions).map_err(|e| Failure(e.to_string()))?;
-    }
-    Ok(())
-}
-
-fn install(skill: &Path, cancel: &CancellationToken) -> Result<(), Failure> {
-    let root = skill
-        .parent()
-        .ok_or_else(|| Failure("内置 Skill 缓存没有版本目录".into()))?;
-    let system = root
-        .parent()
-        .ok_or_else(|| Failure("内置 Skills 缓存没有父目录".into()))?;
-    directory(system)?;
-    directory(root)?;
-    directory(skill)?;
-    for (relative, bytes) in FILES {
-        check(cancel)?;
-        let path = skill.join(relative);
-        let parent = path
-            .parent()
-            .ok_or_else(|| Failure("内置 Skill 材料没有父目录".into()))?;
-        directory(parent)?;
-        match fs::symlink_metadata(&path) {
-            Ok(_) => verify(&path, bytes)?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                let mut temporary =
-                    NamedTempFile::new_in(parent).map_err(|e| Failure(e.to_string()))?;
-                temporary
-                    .write_all(bytes)
-                    .map_err(|e| Failure(e.to_string()))?;
-                temporary
-                    .as_file()
-                    .sync_all()
-                    .map_err(|e| Failure(e.to_string()))?;
-                match temporary.persist_noclobber(&path) {
-                    Ok(_) => (),
-                    Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => (),
-                    Err(e) => return Err(Failure(e.to_string())),
-                }
-                verify(&path, bytes)?;
-            }
-            Err(e) => return Err(Failure(e.to_string())),
-        }
-    }
-    check(cancel)
+pub(crate) fn text(
+    skill: EmbeddedSkill,
+    path: &str,
+    cancel: &CancellationToken,
+) -> Result<&'static str, Failure> {
+    let resource = read_resource(skill, path, cancel)?;
+    std::str::from_utf8(resource.bytes)
+        .map_err(|_| Failure("内置 Skill 资源不是 UTF-8 文本".into()))
 }
 
 pub fn discover_standard(
     user_skills_root: &Path,
+    include_builtin: bool,
     cancel: &CancellationToken,
 ) -> Result<Catalog, Failure> {
-    let roots = crate::discovery::standard_roots(user_skills_root, cancel)?;
-    let mut active = Vec::new();
-    let mut diagnostics = Vec::new();
-    for root in &roots {
-        if matches!(root.source, Source::Builtin)
-            && let Err(failure) = install(&root.path, cancel)
-        {
-            check(cancel)?;
-            diagnostics.push(Diagnostic {
-                path: root.path.clone(),
-                message: format!("内置 Skills 部署失败：{failure}"),
-            });
-            continue;
-        }
-        active.push(root.clone());
+    check(cancel)?;
+    if !user_skills_root.is_absolute() {
+        return Err(Failure(
+            "用户 Skills 根必须是应用数据目录下的绝对路径".into(),
+        ));
     }
-    let mut catalog = crate::discovery::discover(active, cancel)?;
-    catalog.roots = roots;
-    catalog.diagnostics.extend(diagnostics);
+    let mut catalog = crate::discovery::discover(
+        vec![Root {
+            path: user_skills_root.to_owned(),
+            source: Source::User,
+        }],
+        cancel,
+    )?;
+    if include_builtin {
+        let embedded = EmbeddedSkill::SkillCreator;
+        let metadata = parse(text(embedded, "SKILL.md", cancel)?)?;
+        let extension = crate::discovery::extension(text(embedded, "agents/openai.yaml", cancel)?)?;
+        catalog.skills.push(Skill {
+            resource: SkillResource::Embedded { embedded },
+            source: Source::Builtin,
+            metadata,
+            enabled: true,
+            allow_implicit_invocation: extension.policy.allow_implicit_invocation,
+            interface: extension.interface,
+            dependencies: extension.dependencies,
+        });
+    }
+    catalog.diagnose_duplicates();
     Ok(catalog)
 }

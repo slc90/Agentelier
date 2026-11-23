@@ -23,7 +23,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/memory/` | `agentelier_memory` | 数据目录级 SQLite、会话提取证据及状态、全局记忆候选选择、Markdown 发布与恢复、历史记忆检索、详情读取与显式修订工具，已发布材料的安全展示数据 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
 | `crates/agent/project_context/` | `agentelier_project_context` | 会话适用的项目规则发现、有界 UTF-8 读取、来源快照与确定性表示 |
-| `crates/agent/skills/` | `agentelier_skills` | 本地 Skills 来源发现、有界元数据解析、任务目录快照与来源诊断 |
+| `crates/agent/skills/` | `agentelier_skills` | 用户 Skills 发现、嵌入资源读取、有界元数据和任务目录快照 |
 | `crates/agent/mcp/` | `agentelier_mcp` | MCP 配置、stdio 与 Streamable HTTP 连接、工具和材料协议 |
 | `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示，以及 Windows 桌面 Driver、Rhai 脚本会话和会话级 UI Automation Runtime |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、封闭边界自动压缩与检查点提交、正文增量和受控取消 |
@@ -81,6 +81,7 @@ flowchart TD
     Runtime --> Runner["Agent · turn_runner"]
     Runner --> Conversation
     Runner --> Skills["Agent · skills"]
+    Runtime --> Skills
     Conversation --> Skills
     Runner --> ProjectContext["Agent · project_context"]
     Runner --> Model
@@ -267,6 +268,6 @@ Runtime 持有会话许可、进程表和独立工具句柄。Tools 的 sessions
 
 用户技能根为当前应用数据目录的 `skills/`。Runtime 从本次运行固定的数据根派生绝对路径，经聊天任务参数传入 Runner 与 Skills；普通发送、Retry、Queue 使用同一路径。请求中的技能目录明确提供该可写根，内置创建器据此定位跨项目技能，不读取或回退用户 HOME。技能发现只使用用户根与内置 skill-creator。Project 工作目录继续独立确定 AGENTS.md 的来源。
 
-Runner 在每个实际启动的任务（含 Queue 与 Retry）开始时，通过可取消并等待回收的阻塞工作调用 Skills，取得本次数据环境的用户与内置目录快照。Conversation 的 TurnView 保存目录与来源诊断，并随既有任务状态写入存档；固定 Prompt、项目规则和工具执行均不因此改变。目录筛选允许隐式调用的条目后，在每个模型请求中以独立 developer 材料提供一次，模型通过原工具按需读取正文与引用。目录不写入协议历史，实际角色、位置、文本和摘要随冻结请求事实保存；它参与上下文估算。任务启动前解析 `$name`，唯一有效的选中技能保存完整正文与摘要，并以独立 user 材料在每次请求中重用。Steer 不能更换任务技能，Queue 和 Retry 在各自启动时重新发现与选择。详见 [Skills 当前实现与目标机制](skills/README.md)。
+Runner 在每个实际启动的任务（含 Queue 与 Retry）开始时，通过可取消并等待回收的阻塞工作调用 Skills，取得本次数据环境的用户与内置目录快照。Conversation 的 TurnView 保存目录与来源诊断，并随既有任务状态写入存档；固定 Prompt、项目规则和工具执行均不因此改变。目录筛选允许隐式调用的条目后，在每个模型请求中以独立 developer 材料提供一次，模型按来源使用文件工具或 Runtime 注册的只读嵌入资源工具读取正文与引用。目录不写入协议历史，实际角色、位置、文本和摘要随冻结请求事实保存；它参与上下文估算。任务启动前解析 `$name`，唯一有效的选中技能保存完整正文与摘要，并以独立 user 材料在每次请求中重用。Steer 不能更换任务技能，Queue 和 Retry 在各自启动时重新发现与选择。详见 [Skills 当前实现与目标机制](skills/README.md)。
 
-Skills 自有资源随业务库嵌入，包括固定上游版本的完整 skill-creator 目录、许可和来源说明。任务启动的可回收文件工作将当前内容摘要对应的系统版本部署到 `%LOCALAPPDATA%/Agentelier/skills/.system/<hash>/`，逐文件核对并设置只读；不覆盖用户技能或改变认证数据环境。部署失败只产生该系统来源诊断，用户目录仍可用。创建器本身仍由模型通过普通工具读取与执行，生成文件写入标准可写根，下一任务重新发现。
+内置 skill-creator 以类型化身份提供编译期资源，包含说明、引用、图标、许可与上游来源。Runtime 注册 `read_skill_resource`，只接受根目录下的已嵌入相对路径。冻结 Skill 选择和请求事实分别保存文件路径或嵌入身份，历史文件引用仍按原格式回放。已有会话继续使用创建时冻结的工具目录，含嵌入读取工具的新会话可发现内置资源。

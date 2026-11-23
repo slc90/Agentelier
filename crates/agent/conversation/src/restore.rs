@@ -909,12 +909,13 @@ fn replay(
                     .projection
                     .skill_materials
                     .iter()
-                    .filter(|material| material.path.is_some())
+                    .filter(|material| material.is_selected())
                     .collect();
                 if selected_materials.len() != turn.selected_skills.len()
                     || selected_materials.iter().zip(&turn.selected_skills).any(
                         |(material, selected)| {
-                            material.path.as_ref() != Some(&selected.skill.path)
+                            material.path.as_deref() != selected.skill.resource.path()
+                                || material.embedded != selected.skill.resource.embedded()
                                 || material.text != selected.render()
                         },
                     )

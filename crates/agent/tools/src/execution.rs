@@ -18,7 +18,6 @@ pub struct ToolUserTurn {
     pub turn: u64,
     pub input: u64,
     pub statements: Vec<String>,
-    pub selected_skills: Vec<(PathBuf, String)>,
 }
 
 pub struct ExecutionContext {

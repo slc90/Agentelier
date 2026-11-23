@@ -11,7 +11,7 @@ Create skills that give Codex useful, non-obvious guidance without constraining 
 
 ## Agentelier Windows Host
 
-This host runs on Windows x64 with PowerShell 7. Use the existing exec_command and apply_patch tools according to their actual schemas; a Skill grants no new tools, permissions, dependency installer, or MCP connection. Resolve helper paths against this SKILL.md directory, using absolute paths or an explicit helper working directory. Keep generated output paths absolute and scoped to the user's chosen writable project or application user Skills root. The task catalog supplies the concrete application user Skills root under the selected data directory; never derive it from HOME, USERPROFILE, the temporary tool working directory, or the builtin cache. Builtin files are application-maintained and must not be used as an output directory.
+This host runs on Windows x64 with PowerShell 7. Read this embedded Skill's supporting material with `read_skill_resource` using `skill-creator` and its relative resource path. Use the existing file tools to create or update user Skill files within the requested scope. The task catalog supplies the application user Skills root under the selected data directory. Use that root for skills discoverable by this application.
 
 Python and PyYAML are optional. Before running Python helpers, check `Get-Command python -ErrorAction SilentlyContinue`, then check whether that interpreter can import yaml. If either is missing, do not install software automatically or claim the helper ran: author the necessary UTF-8 YAML/Markdown files with the ordinary file tools, check names and descriptions against the Agent Skills specification, check relative references on disk, and use the next task's real Skills discovery and invocation to confirm availability. Pure workflow skills need only SKILL.md; the initializer is optional. Do not create placeholder scripts, example programs, tests, or benchmarks in an application repository. Preserve existing resource files and policy/dependency fields when making a narrow update.
 
@@ -108,13 +108,7 @@ policy:
 
 This keeps the skill available when explicitly invoked as `$skill-name` without adding it to the model context automatically. Preserve unrelated existing UI, policy, and dependency fields when updating `agents/openai.yaml`.
 
-The initializer creates this file automatically. For new or interface-only metadata, generate it with:
-
-```powershell
-python scripts/generate_openai_yaml.py <path/to/skill-folder> --interface key=value
-```
-
-The generator replaces the entire file. If an existing file contains `policy` or `dependencies`, update only the intended fields in place instead of regenerating it.
+For a new file, write only the fields required by the user's request. When editing an existing file, update the intended fields in place and preserve the rest.
 
 Include optional interface fields only when the user provides or requests them.
 
@@ -156,7 +150,7 @@ These examples illustrate options, not a required structure. Choose the organiza
 
 Adapt the work to the request. Creating a complex new skill may involve understanding realistic use cases, choosing supporting resources, initializing files, writing instructions, and validating the result. A narrow update to an existing skill may require only a focused edit and validation.
 
-Ask clarifying questions only when the missing information matters and cannot be reasonably inferred. Respect a user-specified location; otherwise create project skills in the fixed session working directory at `.agents/skills`, or cross-project skills in the application user Skills root reported in the task catalog (`<application-data-directory>/skills`). Do not write to Codex configuration or the application-maintained builtin root.
+Ask for details only when they materially affect the requested Skill. Respect an explicit writable output path. Use the application user Skills root for automatic discovery.
 
 Keep automatic skill selection enabled unless the user explicitly requests an explicit-only skill. When the intended invocation mode is genuinely unclear and matters to the requested workflow, ask whether the user wants normal automatic discovery or explicit-only invocation; otherwise preserve the default. Do not infer explicit-only invocation from sensitive operations or required approvals: keep the skill discoverable and require authorization immediately before the actual mutation. Preserve an existing skill's invocation policy unless the user asks to change it.
 
@@ -177,22 +171,7 @@ Create those resources only when their concrete benefit justifies them. If the u
 
 ### Initialize a New Skill
 
-For a new skill, use the bundled initializer when it helps create the required files consistently:
-
-```powershell
-python scripts/init_skill.py <skill-name> --path <output-directory> [--resources scripts,references,assets] [--examples]
-```
-
-For example:
-
-```powershell
-python scripts/init_skill.py my-skill --path "<application-user-skills-root-from-task-catalog>"
-python scripts/init_skill.py my-skill --path "<application-user-skills-root-from-task-catalog>" --resources references
-```
-
-Request only the resource directories the skill needs. Use `--examples` only when concrete placeholders would help, and replace or remove them before finishing. Do not initialize an existing skill again.
-
-The initializer creates the skill directory, a concise `SKILL.md` starter, and `agents/openai.yaml`. It creates resource directories and example files only when requested. Pass generated UI values as `--interface key=value` when needed.
+Create a new folder with the Skill name in the chosen writable location. Check for an existing folder first. Add a `SKILL.md` with the required frontmatter and task-specific instructions. Create only the supporting directories the Skill uses. Write `agents/openai.yaml` when the requested interface or invocation policy calls for it.
 
 ### Write the Instructions
 
@@ -210,13 +189,7 @@ Write only the instructions needed for another agent instance to perform the tas
 
 ### Validate and Iterate
 
-Validate the completed skill with:
-
-```powershell
-python scripts/quick_validate.py <path/to/skill-folder>
-```
-
-The validator checks frontmatter, naming, and unfinished scaffold placeholders; it does not prove that the skill makes good decisions. Also check that descriptions remain discriminating, instructions preserve user intent, references are discoverable, and any added scripts actually work.
+Validate the frontmatter, folder name, any unfinished scaffold markers, and the relative paths of resources actually referenced. Check that the description helps route work, the instructions preserve user intent, and any added scripts work within the requested scope.
 
 When testing is warranted, verify observable behavior or meaningful invariants. Avoid tests that merely match generated wording, headings, or regex patterns.
 

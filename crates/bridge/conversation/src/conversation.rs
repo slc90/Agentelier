@@ -715,7 +715,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
                     .map(|material| {
                         (
                             material.input_index,
-                            if material.path.is_some() {
+                            if material.is_selected() {
                                 "user · 显式 Skill"
                             } else {
                                 "developer · Skills 目录"

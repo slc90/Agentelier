@@ -374,6 +374,14 @@ async fn run_task(
         .await?
     {
         let loading_cancel = cancel.clone();
+        let include_builtin = active
+            .call(|turn| {
+                Ok(turn
+                    .catalog()
+                    .definitions()
+                    .any(|tool| tool.name == agentelier_skills::READ_RESOURCE_TOOL))
+            })
+            .await?;
         let frozen_skills = child.as_ref().map(|materials| materials.skills.clone());
         let discovered = tokio::task::spawn_blocking(move || {
             let catalog = match frozen_skills {
@@ -382,7 +390,11 @@ async fn run_task(
                     catalog.exclude_archived();
                     catalog
                 }
-                None => agentelier_skills::discover_standard(&user_skills_root, &loading_cancel)?,
+                None => agentelier_skills::discover_standard(
+                    &user_skills_root,
+                    include_builtin,
+                    &loading_cancel,
+                )?,
             };
             let selected = agentelier_skills::select(&catalog, &input, &loading_cancel)?;
             Ok::<_, agentelier_skills::Failure>((catalog, selected))

@@ -135,8 +135,10 @@ dependencies = [
  "agentelier_memory",
  "agentelier_prompts",
  "agentelier_session_store",
+ "agentelier_skills",
  "agentelier_tools",
  "agentelier_turn_runner",
+ "base64",
  "futures-util",
  "image",
  "serde",
@@ -393,7 +395,6 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2 0.10.9",
- "tempfile",
  "tokio-util",
 ]
 

@@ -217,11 +217,6 @@ impl ActiveTurn<'_> {
             turn: turn.id.0,
             input: turn.input_id.0,
             statements,
-            selected_skills: turn
-                .selected_skills
-                .iter()
-                .map(|selected| (selected.skill.path.clone(), selected.hash.clone()))
-                .collect(),
         })
     }
 

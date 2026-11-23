@@ -27,6 +27,7 @@ mod model_task;
 mod recording;
 mod renaming;
 mod session_model;
+mod skill_resource;
 mod spawn_agent;
 mod task_control;
 mod task_projection;
@@ -386,6 +387,7 @@ impl AgentRuntime {
                         extensions.push(wait_agent::registration(mailbox_sender.clone()));
                         extensions.push(interrupt_agent::registration(mailbox_sender.clone()));
                         extensions.push(list_agents::registration(mailbox_sender.clone()));
+                        extensions.push(skill_resource::registration());
                         let mut conversation = Conversation::with_extensions(extensions);
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
