@@ -130,6 +130,10 @@ pub enum RecordEvent {
     Process {
         fact: agentelier_tools::ProcessFact,
     },
+    WorkingDirectoryChanged {
+        session: SessionId,
+        directory: PathBuf,
+    },
     ProjectPublished {
         state: StoredState,
         publication: Box<agentelier_llm_model::ProjectPublication>,
@@ -243,6 +247,7 @@ impl RecordEvent {
             | Self::AgentTurn { session, .. }
             | Self::Mailbox { session, .. }
             | Self::AudioDraft { session, .. }
+            | Self::WorkingDirectoryChanged { session, .. }
             | Self::TranscriptionStarted { session, .. }
             | Self::TranscriptionFinished { session, .. } => *session,
             _ => self.state().map_or(SessionId::nil(), |state| state.session),
@@ -258,6 +263,7 @@ impl RecordEvent {
             | Self::AgentTurn { .. }
             | Self::Mailbox { .. }
             | Self::Process { .. }
+            | Self::WorkingDirectoryChanged { .. }
             | Self::AudioDraft { .. }
             | Self::TranscriptionStarted { .. }
             | Self::TranscriptionFinished { .. } => None,

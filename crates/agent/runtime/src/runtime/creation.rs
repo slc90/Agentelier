@@ -1,9 +1,11 @@
 use super::ModelControl;
 use agentelier_conversation::{
-    AgentId, Conversation, ConversationEvent, ConversationFailure, PreparedSession,
+    AgentId, Conversation, ConversationEvent, ConversationFailure, PreparedSession, ProjectId,
+    RecordEvent, SessionId, SessionView,
 };
 use agentelier_session_store::{Commit, SessionStore};
 use std::io;
+use std::path::Path;
 use tokio::sync::oneshot;
 use tracing::{error, info};
 
@@ -14,15 +16,49 @@ pub(super) struct Creation {
     reply: oneshot::Receiver<io::Result<Commit>>,
 }
 
+pub(super) async fn save_working_directory(
+    id: u64,
+    session: SessionId,
+    directory: &Path,
+    conversation: &mut Conversation,
+    store: &SessionStore,
+) -> Result<SessionView, ConversationFailure> {
+    let directory = conversation.prepare_working_directory(session, directory)?;
+    if let Some(current) = conversation.current()
+        && current.settings.working_directory == directory
+    {
+        info!(operation_id = id, session_id = %session, "会话工作目录未变化");
+        return Ok(current);
+    }
+    let commit = store
+        .client()
+        .append(RecordEvent::WorkingDirectoryChanged {
+            session,
+            directory: directory.clone(),
+        })
+        .await
+        .map_err(|failure| ConversationFailure::new(format!("会话工作目录保存失败：{failure}")))?;
+    if commit.session != session {
+        return Err(ConversationFailure::new("工作目录保存回执的会话不一致"));
+    }
+    if let Some(failure) = commit.summary_failure {
+        error!(session_id = %session, error = %failure, "工作目录已保存，摘要更新失败，可从记录重建");
+    }
+    let view = conversation.install_working_directory(session, directory)?;
+    info!(operation_id = id, session_id = %session, sequence = commit.sequence, "会话工作目录已持久保存");
+    Ok(view)
+}
+
 impl Creation {
     pub(super) fn start(
         id: u64,
         control: ModelControl,
         prepared: PreparedSession,
+        project: Option<ProjectId>,
         store: &SessionStore,
     ) -> Result<Self, ConversationFailure> {
         let reply = store
-            .create(prepared.initial.clone())
+            .create(prepared.initial.clone(), project)
             .map_err(|failure| ConversationFailure::new(format!("无法创建会话存档：{failure}")))?;
         info!(operation_id = id, session_id = %prepared.initial.session, "开始创建会话存档");
         Ok(Self {

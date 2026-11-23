@@ -170,7 +170,7 @@ impl Conversation {
         let tools = session
             .tools
             .inherited(&allowed, saved.tool_contract, saved.image_input)
-            .rebind(&saved.tools)
+            .rebind(&saved.tools, &saved.working_directory)
             .map_err(failure)?;
         config.projects = thread
             .publications

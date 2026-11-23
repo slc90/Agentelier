@@ -342,10 +342,11 @@ impl Connection {
             request,
             agentelier_conversation_bridge::ConversationRequest::Open { .. }
                 | agentelier_conversation_bridge::ConversationRequest::Delete { .. }
+                | agentelier_conversation_bridge::ConversationRequest::SetWorkingDirectory { .. }
         ) {
             if self.stopping || self.failure.is_some() || self.model.is_some() {
                 return Err(BridgeFailure(
-                    "当前任务结束并回收后才能切换或删除会话".into(),
+                    "当前任务结束并回收后才能切换、删除会话或变更目录".into(),
                 ));
             }
             self.operations
@@ -742,6 +743,7 @@ impl Connection {
                             kind,
                             agentelier_conversation_bridge::ConversationEvent::Accepted(_)
                                 | agentelier_conversation_bridge::ConversationEvent::Created(_)
+                                | agentelier_conversation_bridge::ConversationEvent::WorkingDirectorySaved(_)
                                 | agentelier_conversation_bridge::ConversationEvent::Opened(_)
                                 | agentelier_conversation_bridge::ConversationEvent::ArchiveFailed(
                                     _

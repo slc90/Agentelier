@@ -29,6 +29,7 @@ pub struct RestoredSession {
     transcriptions: Vec<crate::AudioTranscription>,
     pub state: StoredState,
     initial: InitialSession,
+    working_directory: std::path::PathBuf,
     history: ProtocolHistory,
     tasks: crate::tasks::TaskLedger,
     pub processes: crate::ProcessLedger,
@@ -496,6 +497,7 @@ fn replay(
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
     }
     let mut pending = PendingResponses::default();
+    let mut working_directory = initial.settings.working_directory.clone();
     let mut seen_calls = HashSet::new();
     let mut seen_items = HashSet::new();
     let mut completed_requests = HashSet::new();
@@ -679,6 +681,7 @@ fn replay(
                             | RecordEvent::AgentEviction { .. }
                             | RecordEvent::AgentTurn { .. }
                             | RecordEvent::Mailbox { .. }
+                            | RecordEvent::WorkingDirectoryChanged { .. }
                     )
                 {
                     return Err(ConversationFailure::new(
@@ -783,6 +786,21 @@ fn replay(
                 }
                 processes.apply(&fact, record.sequence)?;
             }
+            RecordEvent::WorkingDirectoryChanged { directory, .. } => {
+                if !directory.is_absolute()
+                    || child_mail.is_some()
+                    || state
+                        .turn
+                        .as_ref()
+                        .is_some_and(|turn| matches!(turn.status, TurnStatus::Running))
+                {
+                    return Err(ConversationFailure::new("工作目录记录不符合会话状态"));
+                }
+                if directory != working_directory {
+                    working_directory = directory;
+                    state.project_error = None;
+                }
+            }
             RecordEvent::ProjectPublished {
                 state: incoming,
                 publication,
@@ -794,7 +812,7 @@ fn replay(
                 if pending.has_barrier()
                     || publication.id != publications.len() as u64 + 1
                     || publication.window != state.context.window
-                    || publication.snapshot.working_directory != initial.settings.working_directory
+                    || publication.snapshot.working_directory != working_directory
                     || published.is_some() != publication.item.is_some()
                 {
                     return Err(ConversationFailure::new("项目发布身份或历史边界不一致"));
@@ -1703,6 +1721,7 @@ fn replay(
         transcriptions,
         state,
         initial,
+        working_directory,
         history,
         tasks,
         processes,
@@ -1772,13 +1791,12 @@ impl Conversation {
             ToolCatalog::default()
         } else {
             let tools = ToolCatalog::with_extensions(
-                &settings.working_directory,
                 settings.image_input,
                 settings.tool_contract,
                 true,
                 self.extensions.iter().chain(tools),
             )
-            .and_then(|available| available.rebind(&settings.tools));
+            .and_then(|available| available.rebind(&settings.tools, &settings.working_directory));
             match tools {
                 _ if settings.tool_contract == ToolContract::ExperimentalNamespace => {
                     restored.state.execution_blocked = true;
@@ -1787,12 +1805,12 @@ impl Conversation {
                     );
                     ToolCatalog::default()
                 }
-                Ok(tools) if settings.working_directory.is_absolute() => {
+                Ok(tools) if restored.working_directory.is_absolute() => {
                     if let Err(failure) =
-                        agentelier_tools::WorkingDirectory::validate(&settings.working_directory)
+                        agentelier_tools::WorkingDirectory::validate(&restored.working_directory)
                     {
                         restored.add_recovery_notice(&format!(
-                            "原工作目录不可用，工具执行会拒绝该路径：{failure}"
+                            "打开存档时工作目录不可用，工具执行会拒绝该路径：{failure}"
                         ));
                     }
                     tools
@@ -1810,21 +1828,21 @@ impl Conversation {
         };
 
         let settings = restored.initial.settings;
+        let latest_project = restored.publications.last().filter(|publication| {
+            publication.snapshot.working_directory == restored.working_directory
+        });
         let view = SessionView {
             project_context: Box::new(match restored.state.project_error {
                 Some(message) => crate::ProjectContextState::Failed {
                     message,
-                    last_success: restored
-                        .publications
-                        .last()
+                    last_success: latest_project
                         .map(|publication| Arc::new(publication.snapshot.clone())),
                 },
-                None => restored.publications.last().map_or(
-                    crate::ProjectContextState::NotCollected,
-                    |publication| {
+                None => {
+                    latest_project.map_or(crate::ProjectContextState::NotCollected, |publication| {
                         crate::ProjectContextState::Loaded(Arc::new(publication.snapshot.clone()))
-                    },
-                ),
+                    })
+                }
             }),
             project_publications: Arc::new(restored.publications),
             context: restored.state.context,
@@ -1838,7 +1856,7 @@ impl Conversation {
                 effort: settings.effort,
                 image_input: settings.image_input,
                 instructions: Arc::new(settings.instructions),
-                working_directory: settings.working_directory,
+                working_directory: restored.working_directory,
             }),
             turn: restored.state.turn,
             previous_turns: restored.state.previous_turns,

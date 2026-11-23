@@ -53,11 +53,20 @@ impl SessionSettings {
     }
 }
 #[derive(Clone)]
+pub enum SessionLocation {
+    Standalone(std::path::PathBuf),
+    InProject {
+        project: crate::ProjectId,
+        directory_override: Option<std::path::PathBuf>,
+    },
+}
+
+#[derive(Clone)]
 pub struct SessionCreate {
     pub slug: String,
     pub effort: String,
     pub instructions: Arc<InstructionSnapshot>,
-    pub working_directory: std::path::PathBuf,
+    pub location: SessionLocation,
 }
 
 impl SessionCreate {
@@ -65,6 +74,7 @@ impl SessionCreate {
         self,
         source: agentelier_llm_model::CodexIdentity,
         catalog: &[agentelier_llm_model::ModelInfo],
+        working_directory: std::path::PathBuf,
     ) -> Result<SessionSettings, ConversationFailure> {
         let model = agentelier_llm_model::select_session_model(catalog, &self.slug, &self.effort)
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
@@ -76,7 +86,7 @@ impl SessionCreate {
             image_input: model.image_input,
             context_limits: Box::new(model.context_limits.clone()),
             instructions: self.instructions,
-            working_directory: self.working_directory,
+            working_directory,
         })
     }
 }
@@ -94,6 +104,10 @@ pub enum ConversationRequest {
     Create(SessionCreate),
     Reset {
         session: SessionId,
+    },
+    SetWorkingDirectory {
+        session: SessionId,
+        directory: std::path::PathBuf,
     },
     Send {
         session: SessionId,
@@ -232,6 +246,7 @@ pub enum ConversationEvent {
     ArchiveFailed(String),
     Tasks(crate::SessionTasks),
     Created(SessionView),
+    WorkingDirectorySaved(SessionView),
     Accepted(SessionView),
     Updated(SessionView),
     Finished(SessionView),
@@ -433,6 +448,40 @@ impl Conversation {
         Ok(())
     }
 
+    pub fn prepare_working_directory(
+        &self,
+        session: SessionId,
+        directory: &std::path::Path,
+    ) -> Result<std::path::PathBuf, ConversationFailure> {
+        let current = self
+            .current()
+            .filter(|current| current.id == session)
+            .ok_or_else(|| ConversationFailure::new("当前会话已变化"))?;
+        if current.execution_blocked {
+            return Err(ConversationFailure::new("当前会话处于只读状态"));
+        }
+        let directory = agentelier_tools::WorkingDirectory::validate(directory)
+            .map_err(|failure| ConversationFailure::new(format!("本地工作目录无效：{failure}")))?;
+        Ok(directory.path().to_path_buf())
+    }
+
+    pub fn install_working_directory(
+        &mut self,
+        session: SessionId,
+        directory: std::path::PathBuf,
+    ) -> Result<SessionView, ConversationFailure> {
+        let current = self
+            .session
+            .as_mut()
+            .filter(|current| current.view.id == session)
+            .ok_or_else(|| ConversationFailure::new("目录保存后无法找到原会话"))?;
+        if current.view.settings.working_directory != directory {
+            current.view.settings.working_directory = directory;
+            *current.view.project_context = crate::ProjectContextState::NotCollected;
+        }
+        Ok(current.view.clone())
+    }
+
     pub fn suspend_queue(&mut self) -> Result<Option<crate::RecordEvent>, ConversationFailure> {
         let Some(session) = &mut self.session else {
             return Ok(None);
@@ -491,7 +540,6 @@ impl Conversation {
                 .to_path_buf();
         let tools = Arc::new(
             ToolCatalog::with_extensions(
-                &settings.working_directory,
                 settings.image_input,
                 agentelier_llm_model::codex_tool_contract(&settings.slug),
                 settings.codex.is_some(),
@@ -920,6 +968,7 @@ impl Conversation {
             }
             ConversationRequest::Create(_)
             | ConversationRequest::Reset { .. }
+            | ConversationRequest::SetWorkingDirectory { .. }
             | ConversationRequest::Delete { .. }
             | ConversationRequest::Open { .. } => {
                 Err(ConversationFailure::new("创建会话不是生成操作"))

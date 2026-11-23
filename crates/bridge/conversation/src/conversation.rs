@@ -29,6 +29,10 @@ pub enum ConversationRequest {
     Reset {
         session: SessionId,
     },
+    SetWorkingDirectory {
+        session: SessionId,
+        directory: std::path::PathBuf,
+    },
     Send {
         session: SessionId,
         input: String,
@@ -465,6 +469,7 @@ pub enum ConversationEvent {
     Opened(SessionView),
     ArchiveFailed(String),
     Created(SessionView),
+    WorkingDirectorySaved(SessionView),
     Accepted(SessionView),
     Updated(SessionView),
     Finished(SessionView),
@@ -490,6 +495,7 @@ impl ConversationEvent {
             self,
             Self::Deleted { .. }
                 | Self::Created(_)
+                | Self::WorkingDirectorySaved(_)
                 | Self::Finished(_)
                 | Self::Rejected(_)
                 | Self::Opened(_)
@@ -517,6 +523,9 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
         }
         ConversationRequest::Reset { session } => {
             agentelier_conversation::ConversationRequest::Reset { session }
+        }
+        ConversationRequest::SetWorkingDirectory { session, directory } => {
+            agentelier_conversation::ConversationRequest::SetWorkingDirectory { session, directory }
         }
         ConversationRequest::Retry { session, turn } => {
             agentelier_conversation::ConversationRequest::Retry {
@@ -995,6 +1004,9 @@ pub fn convert(event: agentelier_conversation::ConversationEvent) -> Conversatio
         }
         agentelier_conversation::ConversationEvent::Created(session) => {
             ConversationEvent::Created(view(session))
+        }
+        agentelier_conversation::ConversationEvent::WorkingDirectorySaved(session) => {
+            ConversationEvent::WorkingDirectorySaved(view(session))
         }
         agentelier_conversation::ConversationEvent::Accepted(session) => {
             ConversationEvent::Accepted(view(session))

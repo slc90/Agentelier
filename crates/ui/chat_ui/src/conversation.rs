@@ -187,7 +187,7 @@ pub enum ChatReplacement {
     Create {
         slug: String,
         effort: String,
-        working_directory: String,
+        project: Option<agentelier_conversation_bridge::ProjectId>,
         #[reflect(ignore)]
         instructions: Arc<InstructionSnapshot>,
     },
@@ -307,6 +307,7 @@ enum ChatAction {
     Stop,
     Retry,
     Reset,
+    SetWorkingDirectory,
     ConfirmReplacement,
     KeepSession,
 }
@@ -364,6 +365,7 @@ pub(crate) fn panel(state: &ChatState, account: &AccountState) -> impl Scene {
             Node { column_gap: px(CONTENT_GAP), align_items: AlignItems::Center, flex_shrink: 0.0 }
             Children [
                 @button("重置当前会话", "ResetChatSession", ChatAction::Reset)--
+                @button("更改会话目录", "SetSessionWorkingDirectory", ChatAction::SetWorkingDirectory)--
                 Text(summary) WidgetryText SessionSummary Name("ChatSessionSummary")
             ]--
             Node { column_gap: px(CONTENT_GAP), flex_shrink: 0.0, display: Display::None } ReplacementPrompt
@@ -523,9 +525,10 @@ fn button(label: &'static str, name: &'static str, action: ChatAction) -> impl S
             AgentelierButtonStyle::Primary
         }
         ChatAction::Stop | ChatAction::Reset => AgentelierButtonStyle::Danger,
-        ChatAction::Queue | ChatAction::Retry | ChatAction::KeepSession => {
-            AgentelierButtonStyle::Secondary
-        }
+        ChatAction::Queue
+        | ChatAction::Retry
+        | ChatAction::KeepSession
+        | ChatAction::SetWorkingDirectory => AgentelierButtonStyle::Secondary,
     };
     let children: Box<dyn SceneList> = if matches!(action, ChatAction::Send) {
         Box::new(bsn_list! {Text(label) WidgetryText SendLabel})
@@ -553,6 +556,12 @@ fn activate(
         ChatAction::Stop => commands.queue(stop),
         ChatAction::Retry => commands.queue(retry),
         ChatAction::Reset => commands.queue(prepare_reset),
+        ChatAction::SetWorkingDirectory => commands.queue(|world: &mut World| -> Result {
+            if let Some(session) = world.resource::<ChatState>().session.as_ref() {
+                crate::working_directory::choose_for_session(world, session.id)?;
+            }
+            Ok(())
+        }),
         ChatAction::ConfirmReplacement => commands.queue(confirm_replacement),
         ChatAction::KeepSession => commands.queue(|world: &mut World| {
             world.resource_mut::<ChatState>().replacement = None;
@@ -577,16 +586,13 @@ fn create_session(world: &mut World) -> Result {
     }
     let SessionModelDefaults { slug, effort } = (world.resource::<SessionDefaultsSource>().0)()?;
     let instructions = Arc::new(crate::prompts::snapshot(world)?);
-    let working_directory = world
-        .resource::<crate::working_directory::DirectoryState>()
-        .input
-        .clone();
+    let project = crate::projects::selected_project(world).map(|project| project.id);
     if state.session.is_some() {
         world.resource_mut::<ChatState>().replacement = Some(ChatReplacement::Create {
             slug,
             effort,
             instructions,
-            working_directory,
+            project,
         });
         return Ok(());
     }
@@ -596,7 +602,9 @@ fn create_session(world: &mut World) -> Result {
             slug,
             effort,
             instructions,
-            working_directory: working_directory.into(),
+            location: world
+                .resource::<crate::working_directory::DirectoryState>()
+                .location(),
         }));
     let mut state = world.resource_mut::<ChatState>();
     match result {
@@ -604,6 +612,7 @@ fn create_session(world: &mut World) -> Result {
             state.operation = Some(id);
             state.error = None;
             info!(operation_id = id, "开始创建聊天会话");
+            crate::working_directory::submitted(world);
         }
         Err(failure) => {
             error!(error = %failure, "无法创建聊天会话");
@@ -634,6 +643,35 @@ fn prepare_reset(world: &mut World) -> Result {
     world.resource_mut::<ChatState>().replacement = Some(pending);
     Ok(())
 }
+
+pub(crate) fn set_working_directory(
+    world: &mut World,
+    session: SessionId,
+    directory: std::path::PathBuf,
+) -> Result {
+    let state = world.resource::<ChatState>();
+    if state.operation.is_some()
+        || state.replacement.is_some()
+        || state
+            .session
+            .as_ref()
+            .is_none_or(|current| current.id != session)
+    {
+        return Ok(());
+    }
+    let reply = world
+        .resource::<AgentHost>()
+        .request_conversation(ConversationRequest::SetWorkingDirectory { session, directory });
+    let mut state = world.resource_mut::<ChatState>();
+    match reply {
+        Ok(operation) => {
+            state.operation = Some(operation);
+            state.error = None;
+        }
+        Err(failure) => state.error = Some(failure.to_string()),
+    }
+    Ok(())
+}
 fn confirm_replacement(world: &mut World) -> Result {
     let state = world.resource::<ChatState>();
     if state.operation.is_some() || world.resource::<AgentHost>().model_busy()? {
@@ -659,20 +697,34 @@ fn confirm_replacement(world: &mut World) -> Result {
             slug,
             effort,
             instructions,
-            working_directory,
-        } => ConversationRequest::Create(SessionCreate {
-            slug,
-            effort,
-            instructions,
-            working_directory: working_directory.into(),
-        }),
+            project,
+        } => {
+            if project != crate::projects::selected_project(world).map(|project| project.id) {
+                let mut state = world.resource_mut::<ChatState>();
+                state.replacement = None;
+                state.error = Some("目标项目已变化，请重新发起创建".into());
+                return Ok(());
+            }
+            ConversationRequest::Create(SessionCreate {
+                slug,
+                effort,
+                instructions,
+                location: world
+                    .resource::<crate::working_directory::DirectoryState>()
+                    .location(),
+            })
+        }
     };
+    let creating = matches!(&request, ConversationRequest::Create(_));
     let result = world.resource::<AgentHost>().request_conversation(request);
     let mut state = world.resource_mut::<ChatState>();
     match result {
         Ok(id) => {
             state.operation = Some(id);
             state.error = None;
+            if creating {
+                crate::working_directory::submitted(world);
+            }
         }
         Err(failure) => {
             error!(error=%failure, "替换聊天会话失败");
@@ -1474,6 +1526,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         }
         changed = true;
         let terminal = event.kind.is_terminal();
+        let created = matches!(&event.kind, ConversationEvent::Created(_));
         match &event.kind {
             ConversationEvent::Created(view) => info!(
                 operation_id = event.operation_id,
@@ -1533,6 +1586,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             | ConversationEvent::Projects(_)
             | ConversationEvent::ProjectSaved(_)
             | ConversationEvent::Opened(_)
+            | ConversationEvent::WorkingDirectorySaved(_)
             | ConversationEvent::ArchiveFailed(_)
             | ConversationEvent::InputReceipt(_)
             | ConversationEvent::Queue(_)
@@ -1557,7 +1611,9 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 archives.selected = Some(selected);
                 archives.loading = false;
             }
-            ConversationEvent::Updated(view) | ConversationEvent::Finished(view) => {
+            ConversationEvent::Updated(view)
+            | ConversationEvent::Finished(view)
+            | ConversationEvent::WorkingDirectorySaved(view) => {
                 world.resource_mut::<ChatState>().session = Some(project(view)?);
             }
             ConversationEvent::Accepted(view) => {
@@ -1591,6 +1647,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             | ConversationEvent::Started(_) => {}
         }
         if terminal {
+            crate::working_directory::completed(world, created)?;
             world.resource_mut::<ChatState>().cancelling = false;
             world.resource_mut::<ChatState>().operation = None;
             world.resource_mut::<crate::ArchiveState>().loading = false;
@@ -2039,6 +2096,16 @@ fn update(
                     .is_some_and(|session| session.matches_account(&account))
                     && state.replacement.is_none()
                     && state.operation.is_none()
+                    && !activity.model_busy
+                    && !account.runtime_failed
+            }
+            ChatAction::SetWorkingDirectory => {
+                state
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| !session.execution_blocked)
+                    && state.operation.is_none()
+                    && state.replacement.is_none()
                     && !activity.model_busy
                     && !account.runtime_failed
             }

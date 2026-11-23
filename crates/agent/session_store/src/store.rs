@@ -1,5 +1,5 @@
 use agentelier_conversation::{
-    AudioAttachment, InitialSession, RecordEvent, SessionId, SessionRecord, StoredImage,
+    AudioAttachment, InitialSession, ProjectId, RecordEvent, SessionId, SessionRecord, StoredImage,
 };
 use agentelier_tools::ImagePayload;
 use serde::{Deserialize, Serialize};
@@ -73,6 +73,7 @@ enum Command {
         agentelier_conversation::ProjectChange,
         oneshot::Sender<io::Result<()>>,
     ),
+    ProjectDirectory(ProjectId, oneshot::Sender<io::Result<PathBuf>>),
     Scan(oneshot::Sender<io::Result<ArchiveCatalog>>),
     MemorySessions(oneshot::Sender<io::Result<Vec<SessionId>>>),
     MemoryCutoffs(oneshot::Sender<io::Result<Vec<crate::MemoryCutoff>>>),
@@ -89,7 +90,11 @@ enum Command {
         agentelier_conversation::AgentId,
         oneshot::Sender<io::Result<agentelier_conversation::RestoredChild>>,
     ),
-    Create(Box<InitialSession>, oneshot::Sender<io::Result<Commit>>),
+    Create(
+        Box<InitialSession>,
+        Option<ProjectId>,
+        oneshot::Sender<io::Result<Commit>>,
+    ),
     SaveImage(
         StoredImage,
         Arc<ImagePayload>,
@@ -420,6 +425,9 @@ impl SessionStore {
                         Command::Project(change, reply) => {
                             drop(reply.send(crate::projects::apply(&root, change)));
                         }
+                        Command::ProjectDirectory(project, reply) => {
+                            drop(reply.send(crate::projects::project_directory(&root, project)));
+                        }
                         Command::Scan(reply) => {
                             let result = crate::reader::scan(&root);
                             if let Err(failure) = &result { error!(error = %failure, "本地会话目录读取失败"); }
@@ -498,8 +506,8 @@ impl SessionStore {
                         Command::ReadAudio(session, audio, reply) => {
                             let _closed = reply.send(crate::attachments::read_audio(&root, session, &audio));
                         }
-                        Command::Create(initial, reply) => {
-                            let result = create(&root, *initial);
+                        Command::Create(initial, project, reply) => {
+                            let result = create(&root, *initial, project);
                             if let Err(failure) = &result {
                                 error!(error = %failure, "会话初始存档提交失败");
                             }
@@ -520,13 +528,25 @@ impl SessionStore {
         SessionStoreClient(self.sender.clone(), None)
     }
 
+    pub async fn project_directory(&self, project: ProjectId) -> io::Result<PathBuf> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(Command::ProjectDirectory(project, reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("项目存储未返回目录"))?
+    }
+
     pub fn create(
         &self,
         initial: InitialSession,
+        project: Option<ProjectId>,
     ) -> io::Result<oneshot::Receiver<io::Result<Commit>>> {
         let (sender, receiver) = oneshot::channel();
         self.sender
-            .try_send(Command::Create(Box::new(initial), sender))
+            .try_send(Command::Create(Box::new(initial), project, sender))
             .map_err(|failure| match failure {
                 mpsc::error::TrySendError::Full(_) => {
                     io::Error::new(io::ErrorKind::WouldBlock, "会话存储命令队列已满")
@@ -550,7 +570,11 @@ impl SessionStore {
     }
 }
 
-fn create(root: &std::path::Path, initial: InitialSession) -> io::Result<Commit> {
+fn create(
+    root: &std::path::Path,
+    initial: InitialSession,
+    project: Option<ProjectId>,
+) -> io::Result<Commit> {
     initial.settings.instructions.validate()?;
     if initial.session.is_nil() {
         return Err(io::Error::new(
@@ -570,7 +594,12 @@ fn create(root: &std::path::Path, initial: InitialSession) -> io::Result<Commit>
         kind: RecordKind::Created(initial),
     };
     let journal = directory.join("session.jsonl");
+    let mut membership_saved = false;
     let saved = (|| {
+        if let Some(project) = project {
+            crate::projects::save_membership(&directory, project)?;
+            membership_saved = true;
+        }
         let mut temporary = NamedTempFile::new_in(&directory)?;
         serde_json::to_writer(temporary.as_file_mut(), &record)?;
         temporary.write_all(b"\n")?;
@@ -582,7 +611,13 @@ fn create(root: &std::path::Path, initial: InitialSession) -> io::Result<Commit>
         Ok::<(), io::Error>(())
     })();
     if let Err(failure) = saved {
-        if let Err(cleanup) = fs::remove_dir(&directory) {
+        let cleanup = (|| {
+            if membership_saved {
+                fs::remove_file(directory.join(crate::projects::MEMBERSHIP_FILE))?;
+            }
+            fs::remove_dir(&directory)
+        })();
+        if let Err(cleanup) = cleanup {
             return Err(io::Error::other(format!(
                 "初始记录未提交：{failure}；本次半成品目录清理失败：{cleanup}"
             )));

@@ -253,7 +253,7 @@ Runtime 在启动数据根下打开独立的 `mcp_servers.json`；配置 Crate �
 
 ## 本地工具的工作环境
 
-chat_ui 在模型准备区保留内存目录候选并复用 Widgetry 目录选择器；Conversation 在创建时校验并固定本地工作目录，Bridge 传递 PathBuf 与安全展示。Tools 提供 WorkingDirectory 的校验和相对路径解析，已接入会话范围的持续 PowerShell 进程与标准输入；已接入 JSON 文件补丁及静态 PNG/JPEG 图片结果。目录选择与账号数据目录相互独立，不改变登录环境或进程全局 cwd。
+Chat UI 通过 Widgetry 目录选择器准备项目会话的覆盖目录或单独聊天的工作目录。Runtime 读取项目的权威默认值，Conversation 和 Session Store 校验并保存独立的会话目录。会话空闲后可单独修改，恢复按会话日志确定有效路径。Bridge 传递 PathBuf，UI 格式化路径展示。Tools 使用会话路径校验与解析 PowerShell、文件补丁和静态图片操作的相对路径。目录选择与账号数据目录、登录环境及进程全局 cwd 相互独立。
 
 Tools 的 process 模块拥有 PowerShell、Windows Job 与输出读取任务，output 模块负责 UTF-8 增量解码及有界开头/尾部缓冲。Runner 为每批保存固定来源，Runtime 以独立执行句柄可靠收集结果及清理状态。process-wrap 负责挂起后入 Job、恢复及进程树终止；win32job 在恢复前登记外层观察 Job，以 active_processes 确认整个进程组结束，再调用一次 wait。这样不以根 Shell 退出或 process-wrap 的缓存状态作为子进程回收证据。两层 Job 均只服务生命周期，不设置访问隔离；源码保持 unsafe 禁令。Tokio 增加 process feature，依赖由 Workspace 统一管理。
 

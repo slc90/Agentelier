@@ -59,7 +59,9 @@ impl crate::ActiveTurn<'_> {
         };
         let previous = self.view.project_publications.last();
         if previous.is_some_and(|previous| {
-            previous.snapshot.hash == snapshot.hash && previous.window == self.view.context.window
+            previous.snapshot.hash == snapshot.hash
+                && previous.snapshot.working_directory == snapshot.working_directory
+                && previous.window == self.view.context.window
         }) {
             return Ok(None);
         }
@@ -67,7 +69,11 @@ impl crate::ActiveTurn<'_> {
             .map_or(Some(1), |previous| previous.id.checked_add(1))
             .ok_or_else(|| crate::ConversationFailure::new("项目发布身份已耗尽"))?;
         let kind = if !snapshot.has_rules() {
-            agentelier_llm_model::PublicationKind::Removal
+            if previous.is_some_and(|publication| publication.snapshot.has_rules()) {
+                agentelier_llm_model::PublicationKind::Removal
+            } else {
+                agentelier_llm_model::PublicationKind::Initial
+            }
         } else if self
             .view
             .project_publications

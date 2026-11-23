@@ -33,6 +33,10 @@ pub enum ProjectChange {
         project: ProjectId,
         name: String,
     },
+    SetDirectory {
+        project: ProjectId,
+        directory: PathBuf,
+    },
     Delete {
         project: ProjectId,
     },

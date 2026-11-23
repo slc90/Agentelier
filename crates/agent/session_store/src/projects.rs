@@ -54,6 +54,18 @@ fn load(root: &Path) -> io::Result<Vec<Project>> {
     Ok(projects)
 }
 
+pub(super) fn project_directory(root: &Path, project: ProjectId) -> io::Result<std::path::PathBuf> {
+    load(root)?
+        .into_iter()
+        .find(|candidate| candidate.id == project)
+        .map(|candidate| candidate.directory)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "项目不存在"))
+}
+
+pub(super) fn save_membership(directory: &Path, project: ProjectId) -> io::Result<()> {
+    save(&directory.join(MEMBERSHIP_FILE), &project)
+}
+
 pub(super) fn catalog(root: &Path, entries: &[ArchiveEntry]) -> io::Result<ProjectCatalog> {
     let projects = load(root)?;
     let mut catalog = ProjectCatalog::default();
@@ -119,6 +131,16 @@ pub(super) fn apply(root: &Path, change: ProjectChange) -> io::Result<()> {
             target.name =
                 agentelier_conversation::session_title(&name).map_err(io::Error::other)?;
         }
+        ProjectChange::SetDirectory { project, directory } => {
+            let target = projects
+                .iter_mut()
+                .find(|candidate| candidate.id == project)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "项目不存在"))?;
+            target.directory = WorkingDirectory::validate(&directory)
+                .map_err(io::Error::other)?
+                .path()
+                .to_path_buf();
+        }
         ProjectChange::Delete { project } => {
             let count = projects.len();
             projects.retain(|candidate| candidate.id != project);
@@ -140,7 +162,7 @@ pub(super) fn apply(root: &Path, change: ProjectChange) -> io::Result<()> {
             }
             let path = directory.join(MEMBERSHIP_FILE);
             return match project {
-                Some(project) => save(&path, &project),
+                Some(project) => save_membership(&directory, project),
                 None => match fs::remove_file(path) {
                     Err(failure) if failure.kind() == io::ErrorKind::NotFound => Ok(()),
                     result => result,

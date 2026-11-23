@@ -1,6 +1,8 @@
 use agentelier_agent_host::AgentHost;
 use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
-use agentelier_conversation_bridge::{ProjectCatalog, ProjectChange, ProjectId, SessionId};
+use agentelier_conversation_bridge::{
+    Project, ProjectCatalog, ProjectChange, ProjectId, SessionId,
+};
 use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::{InteractionDisabled, UiSystems};
@@ -44,6 +46,11 @@ struct Source(Entity);
 
 #[derive(Component, Clone, Default)]
 struct ProjectPickerWindow;
+#[derive(Component, Clone, Copy)]
+enum DirectoryAction {
+    Create,
+    Set(ProjectId),
+}
 #[derive(Component, Clone, Default)]
 struct ProjectEditor;
 #[derive(Component, Clone, Default)]
@@ -61,6 +68,7 @@ struct ProjectFilter;
 enum Action {
     Create,
     Rename,
+    SetDirectory,
     AskDelete,
     CancelDelete,
     Delete,
@@ -86,6 +94,16 @@ fn initialize(mut commands: Commands) {
 
 pub(crate) fn source(world: &World) -> Entity {
     world.resource::<Source>().0
+}
+
+pub(crate) fn selected_project(world: &World) -> Option<&Project> {
+    let state = world.resource::<ProjectState>();
+    state
+        .catalog
+        .projects
+        .iter()
+        .find(|view| Some(view.project.id) == state.selected)
+        .map(|view| &view.project)
 }
 
 pub(crate) fn visible(world: &World, session: SessionId) -> bool {
@@ -133,6 +151,7 @@ pub(crate) fn panel(world: &World) -> impl Scene + use<> {
                 Node { column_gap: px(GAP), row_gap: px(GAP), flex_wrap: FlexWrap::Wrap }
                 Children [
                     @button("保存名称", "RenameProject", Action::Rename)--
+                    @button("更改目录", "ChangeProjectDirectory", Action::SetDirectory)--
                     @button("删除项目", "DeleteProject", Action::AskDelete)
                 ]--
                 ProjectConfirmation
@@ -162,7 +181,7 @@ fn button(label: &'static str, name: &'static str, action: Action) -> impl Scene
     let style = match action {
         Action::Create | Action::Rename => AgentelierButtonStyle::Primary,
         Action::AskDelete | Action::Delete => AgentelierButtonStyle::Danger,
-        Action::CancelDelete => AgentelierButtonStyle::Secondary,
+        Action::CancelDelete | Action::SetDirectory => AgentelierButtonStyle::Secondary,
     };
     bsn! {
         @AgentelierButton {
@@ -195,6 +214,7 @@ fn select(
         state.selected = project;
         state.confirm_delete = false;
         sync_name(world)?;
+        crate::working_directory::sync_project(world)?;
         crate::archives::rebuild_model(world)
     });
     Ok(())
@@ -233,7 +253,12 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
         }
         let selected = state.selected;
         match action {
-            Action::Create => pick_directory(world),
+            Action::Create => pick_directory(world, DirectoryAction::Create),
+            Action::SetDirectory => {
+                if let Some(project) = selected {
+                    pick_directory(world, DirectoryAction::Set(project));
+                }
+            }
             Action::AskDelete => world.resource_mut::<ProjectState>().confirm_delete = true,
             Action::CancelDelete => world.resource_mut::<ProjectState>().confirm_delete = false,
             Action::Delete => {
@@ -259,7 +284,7 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
     Ok(())
 }
 
-fn pick_directory(world: &mut World) {
+fn pick_directory(world: &mut World, action: DirectoryAction) {
     if world
         .query_filtered::<Entity, With<ProjectPickerWindow>>()
         .iter(world)
@@ -269,7 +294,7 @@ fn pick_directory(world: &mut World) {
         return;
     }
     world.commands().spawn_scene_with_error_handler(bsn! {
-        ProjectPickerWindow Name("ProjectPickerWindow")
+        ProjectPickerWindow Name("ProjectPickerWindow") template(move |_| Ok(action))
         @owned_widgetry_window(
             Window { title: "选择项目目录".into(), resolution: (840, 580).into(), ..default() },
             WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
@@ -295,13 +320,17 @@ fn chosen(event: On<WidgetryFileDialogResultEvent>, mut commands: Commands) {
             .ok_or_else(|| io::Error::other("项目目录选择窗口未绑定"))?;
         world.write_message(bevy::window::WindowCloseRequested { window });
         if let WidgetryFileDialogResult::Directory(directory) = result {
-            submit(
-                world,
-                ProjectChange::Create {
+            let action = *world
+                .get::<DirectoryAction>(root)
+                .ok_or_else(|| io::Error::other("项目目录选择窗口缺少操作"))?;
+            let change = match action {
+                DirectoryAction::Create => ProjectChange::Create {
                     directory,
                     name: None,
                 },
-            );
+                DirectoryAction::Set(project) => ProjectChange::SetDirectory { project, directory },
+            };
+            submit(world, change);
         }
         Ok(())
     });
@@ -395,6 +424,7 @@ pub(crate) fn catalog(world: &mut World, result: Result<ProjectCatalog, String>)
     if name_changed {
         sync_name(world)?;
     }
+    crate::working_directory::sync_project(world)?;
     crate::archives::rebuild_model(world)
 }
 

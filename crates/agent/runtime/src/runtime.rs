@@ -975,7 +975,7 @@ impl AgentRuntime {
                                     } => {
                                         let replacing = match &request {
                                             ConversationRequest::Delete { session } => conversation.current().is_some_and(|current| current.id == *session),
-                                            ConversationRequest::Create(_) | ConversationRequest::Open { .. } | ConversationRequest::Reset { .. } => true,
+                                            ConversationRequest::Create(_) | ConversationRequest::Open { .. } | ConversationRequest::Reset { .. } | ConversationRequest::SetWorkingDirectory { .. } => true,
                                             _ => false,
                                         };
                                         if replacing && children.has_active() {
@@ -1016,7 +1016,7 @@ impl AgentRuntime {
                                             emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Rejected(reason.into())))?;
                                             continue;
                                         }
-                                        if replacing {
+                                        if replacing && !matches!(&request, ConversationRequest::SetWorkingDirectory { .. }) {
                                             children.release_idle(&mut conversation)?;
                                         }
                                         match request {
@@ -1037,6 +1037,15 @@ impl AgentRuntime {
                                                         emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(failure.to_string())))?;
                                                     }
                                                 }
+                                            }
+                                            ConversationRequest::SetWorkingDirectory { session, directory } => {
+                                                let result = creation::save_working_directory(id, session, &directory, &mut conversation, &store).await;
+                                                control.finished.cancel();
+                                                let event = match result {
+                                                    Ok(view) => ConversationEvent::WorkingDirectorySaved(view),
+                                                    Err(failure) => ConversationEvent::Rejected(failure.to_string()),
+                                                };
+                                                emit(&publish, id, AgentEventKind::Conversation(event))?;
                                             }
                                             request @ (ConversationRequest::Create(_) | ConversationRequest::Reset { .. }) => {
                                                 let source = match model_source(&account) {
@@ -1065,15 +1074,26 @@ impl AgentRuntime {
                                                 } else { None };
                                                 let tools = mcp_connections.registrations();
                                                 let prepared = match request {
-                                                    ConversationRequest::Create(create) => model_catalog.as_ref()
-                                                        .filter(|(owner, _)| owner == &source)
-                                                        .ok_or_else(|| ConversationFailure::new("请先刷新当前账号的模型目录"))
-                                                        .and_then(|(_, models)| create.resolve(source, models))
-                                                        .and_then(|settings| conversation.prepare(settings, &tools, snapshot)),
-                                                    ConversationRequest::Reset { session } => conversation.prepare_reset(session, &tools, snapshot),
+                                                    ConversationRequest::Create(create) => async {
+                                                        use agentelier_conversation::SessionLocation;
+                                                        let (_, models) = model_catalog.as_ref()
+                                                            .filter(|(owner, _)| owner == &source)
+                                                            .ok_or_else(|| ConversationFailure::new("请先刷新当前账号的模型目录"))?;
+                                                        let (project, directory) = match &create.location {
+                                                            SessionLocation::Standalone(directory) => (None, directory.clone()),
+                                                            SessionLocation::InProject { project, directory_override } => {
+                                                                let directory = store.project_directory(*project).await
+                                                                    .map_err(|failure| ConversationFailure::new(format!("无法读取目标项目：{failure}")))?;
+                                                                (Some(*project), directory_override.clone().unwrap_or(directory))
+                                                            }
+                                                        };
+                                                        let settings = create.resolve(source, models, directory)?;
+                                                        conversation.prepare(settings, &tools, snapshot).map(|prepared| (prepared, project))
+                                                    }.await,
+                                                    ConversationRequest::Reset { session } => conversation.prepare_reset(session, &tools, snapshot).map(|prepared| (prepared, None)),
                                                     _ => return Err(RuntimeFailure::ModelState),
                                                 };
-                                                match prepared.and_then(|prepared| creation::Creation::start(id, control.clone(), prepared, &store)) {
+                                                match prepared.and_then(|(prepared, project)| creation::Creation::start(id, control.clone(), prepared, project, &store)) {
                                                     Ok(pending) => {
                                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control);
                                                         creating = Some(pending);
@@ -1485,6 +1505,7 @@ impl AgentRuntime {
             ConversationRequest::Create(_)
                 | ConversationRequest::Open { .. }
                 | ConversationRequest::Reset { .. }
+                | ConversationRequest::SetWorkingDirectory { .. }
                 | ConversationRequest::Delete { .. }
         );
         let command = Command::Conversation {

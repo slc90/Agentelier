@@ -176,6 +176,38 @@ impl ToolRegistration {
         };
         legacy.can_bind(saved)
     }
+
+    fn restore_definition(
+        &self,
+        saved: &ToolDefinition,
+        original_directory: &std::path::Path,
+    ) -> Option<ToolDefinition> {
+        if self.can_rebind(saved) {
+            return Some(saved.clone());
+        }
+        if !matches!(saved.source, ToolSource::Builtin) {
+            return None;
+        }
+        let path = original_directory.display();
+        let (old, current) = match saved.name.as_str() {
+            "view_image" => (
+                format!("Relative paths resolve in fixed session directory {path};"),
+                "Relative paths resolve in the session working directory;",
+            ),
+            "apply_patch" => (
+                format!("Null workdir uses {path};"),
+                "Null workdir uses the session working directory;",
+            ),
+            "exec_command" => (
+                format!("workdir null uses fixed session directory {path};"),
+                "workdir null uses the session working directory;",
+            ),
+            _ => return None,
+        };
+        let mut normalized = saved.clone();
+        normalized.description = normalized.description.replacen(&old, current, 1);
+        self.can_rebind(&normalized).then_some(normalized)
+    }
     pub fn new(
         definition: ToolDefinition,
         executor: impl for<'a> Fn(
@@ -321,7 +353,7 @@ pub struct ToolCatalog {
 }
 
 impl ToolCatalog {
-    fn builtins(directory: &std::path::Path, image_input: Option<bool>) -> Vec<ToolRegistration> {
+    fn builtins(image_input: Option<bool>) -> Vec<ToolRegistration> {
         vec![
             ToolRegistration {
                 definition: crate::script::tool_definition(),
@@ -336,7 +368,7 @@ impl ToolCatalog {
                 strict: true,
                 display_source: None,
                 output_schema: None,
-                description: format!("Read one existing local static PNG or JPEG and return its actual image content to the model, with safe metadata. Required JSON: {{\"path\":\"image.png\"}}. Relative paths resolve in fixed session directory {}; absolute paths use local Windows rules. Detects format from bytes, not extension. Does not capture screenshots, click, edit, generate or OCR images. At most 10 MiB input, 25 million pixels, longest sent edge 2048 px (proportional resize), 4 MiB encoded result, 16 MiB retained images per session and 32 MiB serialized model request. Immutable image bytes remain in history even if the original file changes or is deleted; use a new call to read new content. Model image capability from catalog: {}. Errors preserve existing history, without changing model or account.", directory.display(), match image_input { Some(true)=>"supported", Some(false)=>"unsupported", None=>"unknown; actual request determines support" }),
+                description: format!("Read one existing local static PNG or JPEG and return its actual image content to the model, with safe metadata. Required JSON: {{\"path\":\"image.png\"}}. Relative paths resolve in the session working directory; absolute paths use local Windows rules. Detects format from bytes, not extension. Does not capture screenshots, click, edit, generate or OCR images. At most 10 MiB input, 25 million pixels, longest sent edge 2048 px (proportional resize), 4 MiB encoded result, 16 MiB retained images per session and 32 MiB serialized model request. Immutable image bytes remain in history even if the original file changes or is deleted; use a new call to read new content. Model image capability from catalog: {}. Errors preserve existing history, without changing model or account.", match image_input { Some(true)=>"supported", Some(false)=>"unsupported", None=>"unknown; actual request determines support" }),
                 parameters: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
             }, move |context, arguments, cancel| Box::pin(execution::image(context, arguments, cancel, image_input))).shared_read(),
             ToolRegistration::new(ToolDefinition {
@@ -346,7 +378,7 @@ impl ToolCatalog {
                 strict: true,
                 display_source: None,
                 output_schema: None,
-                description: format!("Modify UTF-8 text using a JSON object with required patch and workdir (string or null). Null workdir uses {}; relative workdir resolves there. Paths may be absolute or relative to workdir. Example: {{\"patch\":\"*** Begin Patch\\n*** Add File: hello.txt\\n+hello\\n*** End Patch\\n\",\"workdir\":null}}. Supports *** Add File:, *** Delete File:, *** Update File:, optional *** Move to: immediately after Update, @@ or @@ exact-anchor, context lines prefixed by space, - removals, + additions, and *** End of File after a chunk. Context must match exactly and uniquely. Read changed files before retrying. At most 64 actions, 8 MiB per file, 32 MiB prepared text. Preserves existing UTF-8 BOM and uniform LF/CRLF; new files use LF without BOM. Validates the whole patch before writing. Commits files separately, with actual action and temporary-file reports; errors or Stop preserve completed changes and never roll back. Does not overwrite existing add/move destinations.", directory.display()),
+                description: "Modify UTF-8 text using a JSON object with required patch and workdir (string or null). Null workdir uses the session working directory; relative workdir resolves there. Paths may be absolute or relative to workdir. Example: {\"patch\":\"*** Begin Patch\\n*** Add File: hello.txt\\n+hello\\n*** End Patch\\n\",\"workdir\":null}. Supports *** Add File:, *** Delete File:, *** Update File:, optional *** Move to: immediately after Update, @@ or @@ exact-anchor, context lines prefixed by space, - removals, + additions, and *** End of File after a chunk. Context must match exactly and uniquely. Read changed files before retrying. At most 64 actions, 8 MiB per file, 32 MiB prepared text. Preserves existing UTF-8 BOM and uniform LF/CRLF; new files use LF without BOM. Validates the whole patch before writing. Commits files separately, with actual action and temporary-file reports; errors or Stop preserve completed changes and never roll back. Does not overwrite existing add/move destinations.".into(),
                 parameters: json!({"type":"object","properties":{"patch":{"type":"string"},"workdir":{"type":["string","null"]}},"required":["patch","workdir"],"additionalProperties":false}),
             }, patch).text_result(),
             ToolRegistration::process(ToolDefinition {
@@ -356,7 +388,7 @@ impl ToolCatalog {
                 strict: true,
                 display_source: None,
                 output_schema: None,
-                description: format!("Execute PowerShell 7 using UTF-8 pipes and no profile. workdir null uses fixed session directory {}; relative values resolve there. yield_time_ms null waits 10000 ms; 0..30000 is allowed. {SHELL_LIFETIME} Runs with current-user access, without a sandbox or PTY.", directory.display()),
+                description: format!("Execute PowerShell 7 using UTF-8 pipes and no profile. workdir null uses the session working directory; relative values resolve there. yield_time_ms null waits 10000 ms; 0..30000 is allowed. {SHELL_LIFETIME} Runs with current-user access, without a sandbox or PTY."),
                 parameters: json!({"type":"object","properties":{
                     "cmd":{"type":"string"},"workdir":{"type":["string","null"]},
                     "yield_time_ms":{"type":["integer","null"],"minimum":0,"maximum":30000}
@@ -380,13 +412,12 @@ impl ToolCatalog {
     }
 
     pub fn with_extensions<'a>(
-        directory: &std::path::Path,
         image_input: Option<bool>,
         contract: ToolContract,
         codex_images: bool,
         extensions: impl IntoIterator<Item = &'a ToolRegistration>,
     ) -> Result<Self, ToolFailure> {
-        let mut tools = Self::builtins(directory, image_input);
+        let mut tools = Self::builtins(image_input);
         if codex_images {
             let mut registration = ToolRegistration::process(
                 ToolDefinition {
@@ -501,7 +532,11 @@ impl ToolCatalog {
         Self { contract, tools }
     }
 
-    pub fn rebind(&self, saved: &[ToolDefinition]) -> Result<Self, ToolFailure> {
+    pub fn rebind(
+        &self,
+        saved: &[ToolDefinition],
+        original_directory: &std::path::Path,
+    ) -> Result<Self, ToolFailure> {
         let mut seen = HashSet::new();
         let mut tools = Vec::with_capacity(saved.len());
         for definition in saved {
@@ -513,15 +548,19 @@ impl ToolCatalog {
             }
             let registration = self
                 .find(&definition.name)
-                .filter(|tool| tool.can_rebind(definition))
+                .and_then(|tool| {
+                    tool.restore_definition(definition, original_directory)
+                        .map(|definition| (tool, definition))
+                })
                 .ok_or_else(|| {
                     ToolFailure::new(
                         "tool_contract",
                         format!("工具来源或声明与存档不匹配：{}", definition.name),
                     )
                 })?;
+            let (registration, definition) = registration;
             tools.push(ToolRegistration {
-                definition: definition.clone(),
+                definition,
                 executor: registration.executor.clone(),
                 access: registration.access,
                 image_result: registration.image_result,
