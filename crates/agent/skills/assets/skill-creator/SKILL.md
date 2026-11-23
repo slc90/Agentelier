@@ -13,7 +13,7 @@ Create skills that give Codex useful, non-obvious guidance without constraining 
 
 This host runs on Windows x64 with PowerShell 7. Read this embedded Skill's supporting material with `read_skill_resource` using `skill-creator` and its relative resource path. Use the existing file tools to create or update user Skill files within the requested scope. The task catalog supplies the application user Skills root under the selected data directory. Use that root for skills discoverable by this application.
 
-Python and PyYAML are optional. Before running Python helpers, check `Get-Command python -ErrorAction SilentlyContinue`, then check whether that interpreter can import yaml. If either is missing, do not install software automatically or claim the helper ran: author the necessary UTF-8 YAML/Markdown files with the ordinary file tools, check names and descriptions against the Agent Skills specification, check relative references on disk, and use the next task's real Skills discovery and invocation to confirm availability. Pure workflow skills need only SKILL.md; the initializer is optional. Do not create placeholder scripts, example programs, tests, or benchmarks in an application repository. Preserve existing resource files and policy/dependency fields when making a narrow update.
+A workflow Skill can consist of a single `SKILL.md`. Add supporting resources when they are needed for the requested workflow. Preserve existing resources, policy, and dependencies during a focused update.
 
 A newly written Skill becomes discoverable on the next task. Creating files does not update the current task's frozen catalog or selected body. If the current task must use the new workflow immediately, explicitly read its file through the normal tools. Report only actual writes, checks, helper execution, and subsequent invocation results. Do not reset authentication or change the application's data directory to validate a Skill.
 
@@ -108,7 +108,7 @@ policy:
 
 This keeps the skill available when explicitly invoked as `$skill-name` without adding it to the model context automatically. Preserve unrelated existing UI, policy, and dependency fields when updating `agents/openai.yaml`.
 
-For a new file, write only the fields required by the user's request. When editing an existing file, update the intended fields in place and preserve the rest.
+Use `write_skill_metadata` for supported interface and invocation fields. For an existing file, use the current SHA-256 from `validate_user_skill`. For a new file, send null for the expected SHA-256. Supply null for unrequested interface fields. Existing dependencies and other supported fields remain in place.
 
 Include optional interface fields only when the user provides or requests them.
 
@@ -171,7 +171,7 @@ Create those resources only when their concrete benefit justifies them. If the u
 
 ### Initialize a New Skill
 
-Create a new folder with the Skill name in the chosen writable location. Check for an existing folder first. Add a `SKILL.md` with the required frontmatter and task-specific instructions. Create only the supporting directories the Skill uses. Write `agents/openai.yaml` when the requested interface or invocation policy calls for it.
+Call `initialize_user_skill` with the name, description, and the specific resource directories needed. It returns the new directory and normalized name. Replace the starter marker in `SKILL.md` with the authored workflow. Use `write_skill_metadata` when the requested interface or invocation policy calls for it. The native authoring tools are available in newly created sessions. For narrowly scoped edits to existing user instructions or supporting files, edit those files directly.
 
 ### Write the Instructions
 
@@ -189,7 +189,7 @@ Write only the instructions needed for another agent instance to perform the tas
 
 ### Validate and Iterate
 
-Validate the frontmatter, folder name, any unfinished scaffold markers, and the relative paths of resources actually referenced. Check that the description helps route work, the instructions preserve user intent, and any added scripts work within the requested scope.
+Run `validate_user_skill` after writing the requested content. It checks the frontmatter, folder name, scaffold markers, referenced relative resources, and optional interface metadata. Also check that the description helps route work, the instructions preserve user intent, and any added resources work within the requested scope.
 
 When testing is warranted, verify observable behavior or meaningful invariants. Avoid tests that merely match generated wording, headings, or regex patterns.
 

@@ -10,26 +10,29 @@ struct Frontmatter {
     description: String,
 }
 
-pub fn parse(text: &str) -> Result<Metadata, Failure> {
-    let mut lines = text.trim_start_matches('\u{feff}').lines();
-    if lines.next() != Some("---") {
+pub(crate) fn frontmatter(text: &str) -> Result<(&str, &str), Failure> {
+    let text = text.trim_start_matches('\u{feff}');
+    let mut lines = text.split_inclusive('\n');
+    let Some(opening) = lines
+        .next()
+        .filter(|line| line.trim_end_matches(['\r', '\n']) == "---")
+    else {
         return Err(Failure("SKILL.md 缺少 YAML frontmatter".into()));
-    }
-    let mut yaml = String::new();
-    let mut closed = false;
+    };
+    let mut bytes = opening.len();
     for line in lines {
-        if line == "---" {
-            closed = true;
-            break;
+        if line.trim_end_matches(['\r', '\n']) == "---" {
+            return Ok((&text[opening.len()..bytes], &text[bytes + line.len()..]));
         }
-        yaml.push_str(line);
-        yaml.push('\n');
+        bytes += line.len();
     }
-    if !closed {
-        return Err(Failure("SKILL.md frontmatter 未封闭".into()));
-    }
-    let parsed: Frontmatter = serde_yaml::from_str(&yaml)
-        .map_err(|error| Failure(format!("Skill YAML 无效：{error}")))?;
+    Err(Failure("SKILL.md frontmatter 未封闭".into()))
+}
+
+pub fn parse(text: &str) -> Result<Metadata, Failure> {
+    let (yaml, _) = frontmatter(text)?;
+    let parsed: Frontmatter =
+        serde_yaml::from_str(yaml).map_err(|error| Failure(format!("Skill YAML 无效：{error}")))?;
     let name = parsed.name.trim().to_owned();
     let description = parsed
         .description

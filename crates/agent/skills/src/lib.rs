@@ -4,6 +4,7 @@ compile_error!("This application supports Windows x64 only");
 mod builtin;
 mod context;
 mod discovery;
+mod native;
 mod parser;
 mod selection;
 pub use selection::{SelectedSkill, mentions, select};
@@ -12,6 +13,10 @@ pub use builtin::{
     BUILTIN_NAME, EmbeddedResource, READ_RESOURCE_TOOL, discover_standard, read_resource,
 };
 
+pub use native::{
+    Initialized, InterfacePatch, MetadataUpdate, ResourceDirectory, UserSkills, Validation,
+    normalize_name,
+};
 pub use parser::parse;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

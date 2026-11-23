@@ -27,6 +27,7 @@ mod model_task;
 mod recording;
 mod renaming;
 mod session_model;
+mod skill_creation;
 mod skill_resource;
 mod spawn_agent;
 mod task_control;
@@ -388,6 +389,8 @@ impl AgentRuntime {
                         extensions.push(interrupt_agent::registration(mailbox_sender.clone()));
                         extensions.push(list_agents::registration(mailbox_sender.clone()));
                         extensions.push(skill_resource::registration());
+                        let user_skills = agentelier_skills::UserSkills::new(data_root.join("skills"));
+                        extensions.extend(skill_creation::registrations(user_skills));
                         let mut conversation = Conversation::with_extensions(extensions);
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
