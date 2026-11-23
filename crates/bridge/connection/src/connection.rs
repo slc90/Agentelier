@@ -76,6 +76,7 @@ pub struct Connection {
     pending_requests: HashSet<u64>,
     pending_mcp: HashSet<u64>,
     pending_memory: HashSet<u64>,
+    pending_projects: HashSet<u64>,
     pending_images: HashSet<u64>,
     pending_audio: HashMap<u64, SessionId>,
 }
@@ -159,6 +160,7 @@ impl Connection {
             pending_requests: HashSet::new(),
             pending_mcp: HashSet::new(),
             pending_memory: HashSet::new(),
+            pending_projects: HashSet::new(),
             pending_images: HashSet::new(),
             pending_audio: HashMap::new(),
         })
@@ -417,6 +419,23 @@ impl Connection {
         self.renaming.insert(id, session);
         Ok(id)
     }
+    pub fn change_project(
+        &mut self,
+        change: agentelier_conversation_bridge::ProjectChange,
+    ) -> Result<u64, BridgeFailure> {
+        if self.stopping || self.failure.is_some() {
+            return Err(BridgeFailure("当前执行连接不能接纳项目操作".into()));
+        }
+        let id = self
+            .operations
+            .allocate()
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.runtime
+            .change_project(id, change)
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.pending_projects.insert(id);
+        Ok(id)
+    }
     pub fn request_session(
         &mut self,
         action: agentelier_conversation_bridge::SessionAction,
@@ -539,6 +558,24 @@ impl Connection {
                         return Ok(Some(event));
                     }
                     let kind = kind.as_ref();
+                    if matches!(
+                        kind,
+                        agentelier_conversation_bridge::ConversationEvent::ProjectSaved(_)
+                    ) {
+                        if !self.pending_projects.remove(&event.operation_id) {
+                            return self.protocol_failure();
+                        }
+                        return Ok(Some(event));
+                    }
+                    if matches!(
+                        kind,
+                        agentelier_conversation_bridge::ConversationEvent::Projects(_)
+                    ) {
+                        if event.operation_id != 0 {
+                            return self.protocol_failure();
+                        }
+                        return Ok(Some(event));
+                    }
                     if let agentelier_conversation_bridge::ConversationEvent::Renamed {
                         session,
                         ..

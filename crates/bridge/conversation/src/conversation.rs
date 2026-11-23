@@ -460,6 +460,8 @@ pub enum ConversationEvent {
         result: Result<ArchiveEntry, String>,
     },
     Archives(Vec<ArchiveEntry>),
+    Projects(Result<crate::ProjectCatalog, String>),
+    ProjectSaved(Result<(), String>),
     Opened(SessionView),
     ArchiveFailed(String),
     Created(SessionView),
@@ -929,6 +931,12 @@ pub fn convert(event: agentelier_conversation::ConversationEvent) -> Conversatio
                     }
                 }),
             }
+        }
+        agentelier_conversation::ConversationEvent::Projects(catalog) => {
+            ConversationEvent::Projects(catalog)
+        }
+        agentelier_conversation::ConversationEvent::ProjectSaved(result) => {
+            ConversationEvent::ProjectSaved(result)
         }
         agentelier_conversation::ConversationEvent::Archives(entries) => {
             ConversationEvent::Archives(

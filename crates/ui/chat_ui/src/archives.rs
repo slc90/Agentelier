@@ -86,9 +86,11 @@ fn initialize(mut commands: Commands) {
 
 pub(crate) fn panel(world: &World) -> impl Scene + use<> {
     let source = world.resource::<ArchiveSource>().0;
+    let projects = crate::projects::source(world);
     bsn! {
         Name("LocalSessionArchives") Node { width: percent(100), min_width: px(0), height: percent(100), flex_direction: FlexDirection::Column, row_gap: px(CONTROL_GAP), flex_shrink: 0.0 }
         Children [
+            @crate::projects::panel(world)--
             @crate::conversation::create_button()--
             @WidgetryListView::<ArchiveChoice> {
                 @source: source,
@@ -112,7 +114,7 @@ pub(crate) fn panel(world: &World) -> impl Scene + use<> {
             Name("LocalSessionSelector") ArchiveSelector Node { width: percent(100), height: px(0), flex_basis: px(0), min_height: px(0), flex_grow: 1.0 } on(select)--
             @AgentelierButton { @children: {Some(Box::new(bsn_list! { Text("刷新本地会话") WidgetryText }) as Box<dyn SceneList>)} }
             Name("RefreshSessionArchives") Node { height: px(CONTROL_HEIGHT) } on(refresh)--
-            @crate::session_actions::panel()--
+            @crate::session_actions::panel(projects)--
             Text("") WidgetryText ArchiveStatus Name("SessionArchiveStatus")
             TextLayout::linebreak(bevy::text::LineBreak::AnyCharacter)
         ]
@@ -211,6 +213,24 @@ pub(crate) fn catalog(world: &mut World, entries: Vec<ArchiveEntry>) -> Result {
             .cmp(&left.last_activity_ms)
             .then_with(|| left.id.as_bytes().cmp(right.id.as_bytes()))
     });
+    let mut state = world.resource_mut::<ArchiveState>();
+    if choices.is_empty() {
+        state.loading = false;
+    }
+    state.entries = choices;
+    state.refreshing = false;
+    state.error = None;
+    rebuild_model(world)
+}
+
+pub(crate) fn rebuild_model(world: &mut World) -> Result {
+    let choices = world
+        .resource::<ArchiveState>()
+        .entries
+        .iter()
+        .filter(|entry| crate::projects::visible(world, entry.id))
+        .cloned()
+        .collect::<Vec<_>>();
     let source = world.resource::<ArchiveSource>().0;
     let mut model = world
         .get_mut::<WidgetryListModel<ArchiveChoice>>(source)
@@ -241,21 +261,18 @@ pub(crate) fn catalog(world: &mut World, entries: Vec<ArchiveEntry>) -> Result {
                 .map_err(|failure| failure.into_bevy_error())?;
         }
     }
-    let mut state = world.resource_mut::<ArchiveState>();
-    if choices.is_empty() {
-        state.loading = false;
-    }
-    state.entries = choices;
-    state.refreshing = false;
-    state.error = None;
     sync_selection(world)
 }
 
 pub(crate) fn sync_selection(world: &mut World) -> Result {
     let state = world.resource::<ArchiveState>();
-    let index = state
-        .selected
-        .and_then(|selected| state.entries.iter().position(|entry| entry.id == selected));
+    let source = world.resource::<ArchiveSource>().0;
+    let model = world
+        .get::<WidgetryListModel<ArchiveChoice>>(source)
+        .ok_or_else(|| io::Error::other("会话选择数据源不存在"))?;
+    let index = state.selected.and_then(|selected| {
+        (0..model.len()).find(|&index| model.get(index).is_some_and(|entry| entry.id == selected))
+    });
     if let Some(index) = index {
         let mut query = world.query_filtered::<Entity, With<ArchiveSelector>>();
         let entities = query.iter(world).collect::<Vec<_>>();
@@ -370,5 +387,6 @@ pub(crate) fn remove_entry(
             "会话已删除，但本地清理尚未完成；刷新列表可继续清理：{failure}"
         ));
     }
+    crate::projects::forget_session(world, session);
     sync_selection(world)
 }

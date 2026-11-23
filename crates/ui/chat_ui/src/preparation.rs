@@ -113,6 +113,7 @@ pub fn install(
     model_defaults: impl Fn() -> io::Result<crate::SessionModelDefaults> + Send + Sync + 'static,
 ) -> Result {
     crate::archives::install(app)?;
+    crate::projects::install(app)?;
     app.add_plugins(agentelier_markdown::MarkdownPlugin);
     crate::reading::install(app);
     reasoning::install(app)?;

@@ -57,7 +57,11 @@ fn block_row_click(mut event: On<bevy::picking::events::PointerClick>) {
     event.propagate(false);
 }
 
-pub(crate) fn panel() -> impl Scene {
+pub(crate) fn target(world: &World) -> Option<SessionId> {
+    world.resource::<SessionActions>().target
+}
+
+pub(crate) fn panel(projects: Entity) -> impl Scene {
     bsn! {
         RenamePanel Name("SessionRenamePanel") Node { display: Display::None, width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(8), flex_shrink: 0.0 }
         Children [
@@ -67,6 +71,7 @@ pub(crate) fn panel() -> impl Scene {
                 @WidgetryTextField { @value: {String::new()}, @multiline: false }
                 RenameInput Name("SessionRenameInput") Node { width: percent(100) }--
                 @action("保存名称", "SaveSessionName", Action::Save)--
+                @crate::projects::move_selector(projects)--
                 @action("删除会话", "DeleteSession", Action::Delete)
             ]--
             DeleteControls Node { display: Display::None, width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(8) }

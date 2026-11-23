@@ -219,6 +219,12 @@ impl AgentHost {
     pub fn refresh_archives(&self) -> Result {
         self.submit(|connection| connection.refresh_archives())
     }
+    pub fn change_project(
+        &self,
+        change: agentelier_conversation_bridge::ProjectChange,
+    ) -> Result<u64> {
+        self.submit(|connection| connection.change_project(change))
+    }
     pub fn cancel_conversation(
         &self,
         session: SessionId,

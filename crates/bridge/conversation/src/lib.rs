@@ -2,6 +2,7 @@
 compile_error!("This application supports Windows x64 only");
 
 mod conversation;
+pub use agentelier_conversation::{Project, ProjectCatalog, ProjectChange, ProjectId, ProjectView};
 pub use conversation::{
     AudioAttachmentView, ProjectCollectionStatus, ProjectContextView, ProjectPublicationView,
     ProjectRuleSource, ProjectSnapshotView, TranscriptReferenceView, TranscriptionOutcomeView,

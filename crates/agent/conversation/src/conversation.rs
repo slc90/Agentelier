@@ -226,6 +226,8 @@ pub enum ConversationEvent {
         result: Result<crate::ArchiveEntry, String>,
     },
     Archives(Vec<crate::ArchiveEntry>),
+    Projects(Result<crate::ProjectCatalog, String>),
+    ProjectSaved(Result<(), String>),
     Opened(SessionView),
     ArchiveFailed(String),
     Tasks(crate::SessionTasks),

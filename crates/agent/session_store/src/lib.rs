@@ -5,6 +5,7 @@ mod attachments;
 mod audio;
 mod deletion;
 mod journal;
+mod projects;
 mod reader;
 mod store;
 

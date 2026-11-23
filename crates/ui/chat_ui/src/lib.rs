@@ -12,6 +12,7 @@ mod mcp_materials;
 mod memory;
 mod preparation;
 mod project_context;
+mod projects;
 mod prompts;
 mod queue;
 mod reading;

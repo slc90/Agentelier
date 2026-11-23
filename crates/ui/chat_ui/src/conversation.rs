@@ -1336,6 +1336,14 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             changed = true;
             continue;
         }
+        if let ConversationEvent::Projects(projects) = event.kind {
+            crate::projects::catalog(world, projects)?;
+            continue;
+        }
+        if let ConversationEvent::ProjectSaved(result) = event.kind {
+            crate::projects::saved(world, event.operation_id, result);
+            continue;
+        }
         if let ConversationEvent::Opened(view) = event.kind {
             let id = view.id;
             let different = world
@@ -1522,6 +1530,8 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             | ConversationEvent::TaskAction(_)
             | ConversationEvent::Updated(_)
             | ConversationEvent::Archives(_)
+            | ConversationEvent::Projects(_)
+            | ConversationEvent::ProjectSaved(_)
             | ConversationEvent::Opened(_)
             | ConversationEvent::ArchiveFailed(_)
             | ConversationEvent::InputReceipt(_)
@@ -1570,6 +1580,8 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             | ConversationEvent::TaskAction(_)
             | ConversationEvent::InputReceipt(_)
             | ConversationEvent::Archives(_)
+            | ConversationEvent::Projects(_)
+            | ConversationEvent::ProjectSaved(_)
             | ConversationEvent::Opened(_)
             | ConversationEvent::ArchiveFailed(_)
             | ConversationEvent::Queue(_)
@@ -1605,6 +1617,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         world.resource_mut::<crate::ArchiveState>().loading = false;
         world.resource_mut::<crate::ArchiveState>().refreshing = false;
         crate::session_actions::failed(world, &reason);
+        crate::projects::failed(world, &reason);
         let mut state = world.resource_mut::<ChatState>();
         state.operation = None;
         state.pending_inputs.clear();

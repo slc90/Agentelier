@@ -227,6 +227,7 @@ pub(super) fn scan(root: &Path) -> io::Result<crate::ArchiveCatalog> {
         return Ok(crate::ArchiveCatalog {
             entries: Vec::new(),
             cleanup_errors: Vec::new(),
+            projects: crate::projects::catalog(root, &[]).map_err(|failure| failure.to_string()),
         });
     };
     let mut entries = Vec::new();
@@ -310,9 +311,11 @@ pub(super) fn scan(root: &Path) -> io::Result<crate::ArchiveCatalog> {
                     .cmp(right.summary.session.as_bytes())
             })
     });
+    let projects = crate::projects::catalog(&root, &entries).map_err(|failure| failure.to_string());
     Ok(crate::ArchiveCatalog {
         entries,
         cleanup_errors,
+        projects,
     })
 }
 

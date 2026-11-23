@@ -44,6 +44,7 @@ pub struct Commit {
 pub struct ArchiveCatalog {
     pub entries: Vec<agentelier_conversation::ArchiveEntry>,
     pub cleanup_errors: Vec<String>,
+    pub projects: Result<agentelier_conversation::ProjectCatalog, String>,
 }
 pub struct DeleteCommit {
     pub session: SessionId,
@@ -68,6 +69,10 @@ enum Command {
     ),
     Delete(SessionId, oneshot::Sender<io::Result<DeleteCommit>>),
     Rename(SessionId, String, oneshot::Sender<io::Result<RenameCommit>>),
+    Project(
+        agentelier_conversation::ProjectChange,
+        oneshot::Sender<io::Result<()>>,
+    ),
     Scan(oneshot::Sender<io::Result<ArchiveCatalog>>),
     MemorySessions(oneshot::Sender<io::Result<Vec<SessionId>>>),
     MemoryCutoffs(oneshot::Sender<io::Result<Vec<crate::MemoryCutoff>>>),
@@ -198,6 +203,17 @@ impl SessionStoreClient {
         self.0
             .try_send(Command::Scan(reply))
             .map_err(|failure| io::Error::other(format!("无法接纳会话目录读取：{failure}")))?;
+        Ok(result)
+    }
+
+    pub fn change_project(
+        &self,
+        change: agentelier_conversation::ProjectChange,
+    ) -> io::Result<oneshot::Receiver<io::Result<()>>> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .try_send(Command::Project(change, reply))
+            .map_err(|failure| io::Error::other(format!("无法接纳项目操作：{failure}")))?;
         Ok(result)
     }
 
@@ -401,6 +417,9 @@ impl SessionStore {
                     match command {
                         Command::Delete(session, reply) => { let _closed = reply.send(crate::deletion::delete(&root, session, &mut writer)); }
                         Command::Rename(session, title, reply) => { let _closed = reply.send(writer.rename(&root, session, title)); }
+                        Command::Project(change, reply) => {
+                            drop(reply.send(crate::projects::apply(&root, change)));
+                        }
                         Command::Scan(reply) => {
                             let result = crate::reader::scan(&root);
                             if let Err(failure) = &result { error!(error = %failure, "本地会话目录读取失败"); }

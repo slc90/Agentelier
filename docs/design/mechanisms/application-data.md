@@ -54,6 +54,7 @@ flowchart TD
 | 用户技能 | 所选目录的 `skills/<skill-name>/SKILL.md` 及其关联资源 | 当前数据环境内跨项目复用；任务目录明确给出该根，下一任务重新发现，缺失目录按空来源处理 |
 | 目录占用 | 所选目录的 `.agentelier.lock` | 仅用于句柄生命周期内的独占锁 |
 | 会话存档 | 所选目录的 `sessions/<uuid>/session.jsonl`、`summary.json` 与 `attachments/` | Session Store 单写入者提交初始设置、执行记录、完整压缩检查点、摘要与图片附件；检查点不删除旧时间线或附件，不含账号所有权或凭据 |
+| 项目组织 | 所选目录的 `projects.json` 与 `sessions/<uuid>/project.json` | Session Store 串行保存项目定义和会话归属，所选项目目录只用于校验 |
 | 长期记忆 | 所选目录的 `memory.sqlite` 和 `memory/` | Runtime 在取得目录占用后打开 Memory 存储，启动失败时记录不可用原因，启动时恢复有持久标记的记忆重置，正常关闭时等待数据库连接释放。详见[长期记忆](long-term-memory.md)。 |
 
 `brp_enabled` 控制是否启用 BRP。`brp_port` 配置 Main World 端口，默认 `15702`。`brp_render_port` 配置 Render World 端口，默认 `15703`，旧配置缺少此字段时也使用该默认值。配置中的两个端口均须在 `1024..=65534` 内且互异。有效的环境变量 `BRP_EXTRAS_PORT` 和 `BRP_EXTRAS_RENDER_PORT` 可分别覆盖对应的监听端口。多实例启用 BRP 时，每个实例使用一对未被占用的端口，例如 `15702` / `15703` 和 `15712` / `15713`。

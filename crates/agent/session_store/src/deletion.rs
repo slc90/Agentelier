@@ -71,8 +71,10 @@ fn files(path: &Path) -> io::Result<(Vec<PathBuf>, Option<PathBuf>)> {
             attachments = Some(folder);
         } else {
             let backup = name.starts_with("session-before-recovery-") && name.ends_with(".jsonl");
-            if !matches!(name.as_str(), "session.jsonl" | "summary.json")
-                && !backup
+            if !matches!(
+                name.as_str(),
+                "session.jsonl" | "summary.json" | crate::projects::MEMBERSHIP_FILE
+            ) && !backup
                 && !temporary(&name)
             {
                 return Err(io::Error::other(format!("会话中存在未识别文件：{name}")));

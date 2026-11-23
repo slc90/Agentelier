@@ -140,6 +140,8 @@ enum Command {
     Renamed(io::Result<agentelier_session_store::RenameCommit>),
     Scan,
     Scanned(io::Result<agentelier_session_store::ArchiveCatalog>),
+    ChangeProject(u64, agentelier_conversation::ProjectChange),
+    ProjectSaved(u64, io::Result<()>),
     Deleted(io::Result<agentelier_session_store::DeleteCommit>),
     Loaded(Box<io::Result<agentelier_conversation::RestoredSession>>),
     Recorded(
@@ -326,6 +328,10 @@ impl AgentRuntime {
                         let mut loading: Option<loading::Loading> = None;
                         let mut catalog = Some(store.client().scan().map_err(RuntimeFailure::Store)?);
                         let mut startup_catalog = true;
+                        let mut catalog_dirty = false;
+                        let mut project_saves = std::collections::VecDeque::<(
+                            u64, tokio::sync::oneshot::Receiver<io::Result<()>>,
+                        )>::new();
                         let mut records = recording::Records::new();
                         let mut pending_queue = false;
                         let mut deleting: Option<deleting::Deleting> = None;
@@ -367,6 +373,13 @@ impl AgentRuntime {
                                 emit(&publish, event.operation_id, AgentEventKind::Account(event.kind))?;
                             }
                             loop {
+                                if catalog_dirty && catalog.is_none() {
+                                    catalog_dirty = false;
+                                    match store.client().scan() {
+                                        Ok(reply) => catalog = Some(reply),
+                                        Err(failure) => emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(failure.to_string())))?,
+                                    }
+                                }
                                 if quota_due && quota_task.is_none() && !owner_credentials.source_settling()? {
                                     quota_due = false;
                                     if let Some(attempt) = account.quota_attempt() {
@@ -379,6 +392,16 @@ impl AgentRuntime {
                                     .map(|task| task.control.cancel.clone());
                                 let command = tokio::select! { biased;
                                     _ = runtime_shutdown.cancelled() => break,
+                                    result = async {
+                                        if let Some((_, reply)) = project_saves.front_mut() {
+                                            reply.await.map_err(|_| io::Error::other("项目存储未返回保存结果")).and_then(|result| result)
+                                        } else {
+                                            std::future::pending().await
+                                        }
+                                    }, if !project_saves.is_empty() => {
+                                        let (id, _) = project_saves.pop_front().ok_or(RuntimeFailure::ModelState)?;
+                                        Command::ProjectSaved(id, result)
+                                    },
                                     _ = quota_tick.tick() => Command::RefreshQuota,
                                     result = async {
                                         match &mut quota_task {
@@ -718,10 +741,27 @@ impl AgentRuntime {
                                             }
                                         }
                                     }
+                                    Command::ChangeProject(id, change) => {
+                                        match store.client().change_project(change) {
+                                            Ok(reply) => project_saves.push_back((id, reply)),
+                                            Err(failure) => emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::ProjectSaved(Err(failure.to_string()))))?,
+                                        }
+                                    }
+                                    Command::ProjectSaved(id, result) => {
+                                        match &result {
+                                            Ok(()) => {
+                                                catalog_dirty = true;
+                                                tracing::info!(operation_id = id, "项目操作已持久保存");
+                                            }
+                                            Err(failure) => error!(operation_id = id, error = %failure, "项目保存失败"),
+                                        }
+                                        emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::ProjectSaved(result.map_err(|failure| failure.to_string()))))?;
+                                    }
                                     Command::Scanned(result) => {
                                         catalog = None;
                                         match result {
                                             Ok(catalog) => {
+                                                emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Projects(catalog.projects)))?;
                                                 let entries = catalog.entries;
                                                 let first = entries.first().map(|entry| entry.summary.session);
                                                 emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Archives(entries)))?;
@@ -1506,6 +1546,14 @@ impl AgentRuntime {
             })?;
         Ok(())
     }
+    pub fn change_project(
+        &self,
+        id: u64,
+        change: agentelier_conversation::ProjectChange,
+    ) -> Result<(), RuntimeFailure> {
+        self.send(Command::ChangeProject(id, change))
+    }
+
     fn active_model(&self) -> Result<Option<ModelControl>, RuntimeFailure> {
         self.model
             .lock()
