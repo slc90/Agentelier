@@ -127,6 +127,7 @@ pub fn install(
     )));
     crate::conversation::install(app);
     crate::global_tasks::install(app);
+    crate::task_panel::install(app)?;
     crate::working_directory::install(app);
     crate::prompts::install(app)?;
     crate::mcp::install(app);
@@ -210,8 +211,9 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
             ]
         };
         let archives = bsn_list! { @crate::archives::panel(world) };
+        let tasks = crate::task_panel::panel(world);
         world.commands().spawn_scene_with_error_handler(bsn! {
-            @crate::workspace::scene(content, archives)
+            @crate::workspace::scene(content, archives, tasks)
             ChildOf(host)
         });
     });

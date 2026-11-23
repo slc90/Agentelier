@@ -215,7 +215,6 @@ pub struct ChatState {
     pub project_rules_expanded: bool,
     pub session: Option<ChatSession>,
     pub task_revision: Option<u64>,
-    pub tasks: Vec<ChatTask>,
     pub operation: Option<u64>,
     pub model_change: Option<(u64, SessionId)>,
     pub model_error: Option<String>,
@@ -229,20 +228,6 @@ pub struct ChatState {
     pub input_feedback: Option<String>,
 }
 
-#[derive(Clone, Reflect)]
-pub struct ChatTask {
-    pub id: String,
-    pub instance: Option<String>,
-    pub turn: u64,
-    pub request: u32,
-    pub call_id: String,
-    pub tool: String,
-    pub status: String,
-    pub source: String,
-    pub argument_bytes: Option<usize>,
-    pub delivery: String,
-    pub cancelling: bool,
-}
 impl ChatState {
     fn can_send(
         &self,
@@ -332,7 +317,6 @@ pub(crate) fn install(app: &mut App) {
     crate::audio_attachment::install(app);
     crate::transcription::install(app);
     crate::queue::install(app);
-    crate::task_panel::install(app);
     app.init_resource::<SessionUiStates>()
         .init_resource::<ChatState>()
         .init_resource::<InputIntents>()
@@ -464,7 +448,6 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
         .as_ref()
         .map(|session| session.id);
     if previous != Some(next.id) {
-        crate::task_panel::bind(world, Some(next.id));
         let saved = {
             let mut state = world.resource_mut::<ChatState>();
             let saved = SessionUiState {
@@ -479,7 +462,6 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
             state.input_feedback = None;
             state.model_error = None;
             state.task_revision = None;
-            state.tasks.clear();
             saved
         };
         let restored = {
@@ -510,29 +492,6 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
     Ok(())
 }
 
-pub(crate) fn process_results(world: &mut World, session: SessionId) {
-    let state = world.resource::<ChatState>();
-    let account = world.resource::<AccountState>();
-    if state.operation.is_some()
-        || state.replacement.is_some()
-        || account.model_unavailable_reason().is_some()
-        || !state.session.as_ref().is_some_and(|current| {
-            current.id == session && !current.execution_blocked && current.matches_account(account)
-        })
-        || !state.tasks.iter().any(|task| task.delivery == "pending")
-    {
-        return;
-    }
-    let result = world
-        .resource::<AgentHost>()
-        .request_conversation(ConversationRequest::ProcessResults { session });
-    let mut state = world.resource_mut::<ChatState>();
-    match result {
-        Ok(id) => state.operation = Some(id),
-        Err(failure) => state.input_feedback = Some(failure.to_string()),
-    }
-}
-
 fn forget_session(world: &mut World, session: SessionId) -> Result {
     world.resource_mut::<SessionUiStates>().0.remove(&session);
     let current = world
@@ -551,7 +510,6 @@ fn forget_session(world: &mut World, session: SessionId) -> Result {
                 .map_err(|failure| failure.into_bevy_error())?;
         }
         *world.resource_mut::<ChatState>() = default();
-        crate::task_panel::bind(world, None);
     }
     Ok(())
 }
@@ -1373,14 +1331,6 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             }
             continue;
         }
-        if let ConversationEvent::Processes(update) = event.kind {
-            crate::task_panel::processes(world, update);
-            continue;
-        }
-        if let ConversationEvent::TaskAction(receipt) = event.kind {
-            crate::task_panel::receipt(world, event.operation_id, receipt);
-            continue;
-        }
         if let ConversationEvent::Tasks(update) = event.kind {
             let mut state = world.resource_mut::<ChatState>();
             if state
@@ -1391,32 +1341,10 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                     .task_revision
                     .is_none_or(|revision| update.revision >= revision)
             {
-                state.tasks = update
-                    .tasks
-                    .into_iter()
-                    .map(|task| ChatTask {
-                        id: task.id,
-                        instance: task.instance,
-                        turn: task.turn,
-                        request: task.request,
-                        call_id: task.call_id,
-                        tool: task.tool,
-                        status: task.status,
-                        source: task.source.to_owned(),
-                        argument_bytes: task.argument_bytes,
-                        delivery: task.delivery.to_owned(),
-                        cancelling: task.cancelling,
-                    })
-                    .collect();
                 state.task_revision = Some(update.revision);
                 if let Some(session) = &mut state.session {
                     session.queue_paused = update.queue_paused;
                 }
-                crate::task_panel::policy(
-                    world,
-                    update.background_paused,
-                    update.external_unconfirmed,
-                );
                 crate::queue::reconcile(world)?;
             }
             continue;
@@ -1508,7 +1436,6 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             if event.operation_id != 0 {
                 let mut state = world.resource_mut::<ChatState>();
                 state.task_revision = None;
-                state.tasks.clear();
                 state.operation = None;
                 state.replacement = None;
                 state.error = None;

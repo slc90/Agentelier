@@ -1,522 +1,172 @@
-use crate::conversation::ChatState;
-use agentelier_agent_host::AgentHost;
-use agentelier_controls::AgentelierButton;
-use agentelier_conversation_bridge::{
-    SessionId, SessionProcess, SessionProcesses, TaskAction, TaskActionOutcome, TaskActionReceipt,
-    TaskId,
+use crate::{conversation::ChatState, global_tasks::GlobalTaskState};
+use agentelier_conversation_bridge::SessionId;
+use bevy::{prelude::*, ui::UiSystems};
+use bevy_widgetry::list_view::{
+    WidgetryListModel, WidgetryListView, WidgetryListViewAppExt, WidgetryListViewColorOverrides,
+    WidgetryListViewItemColorOverrides, WidgetryListViewItemStateColorOverrides,
+    WidgetryListViewRenderer,
 };
-use bevy::{prelude::*, text::LineBreak, ui_widgets::Activate};
-use bevy_widgetry::{
-    scene::WidgetrySceneCommandsExt, scroll_area::WidgetryScrollArea, text::WidgetryText,
-};
-use std::collections::BTreeMap;
+use bevy_widgetry::text::WidgetryText;
+use std::collections::HashSet;
 
-const TASK_VIEWPORT_HEIGHT: f32 = 116.0;
-const ROW_GAP: f32 = 5.0;
-const MAX_PREVIEW_CHARACTERS: usize = 1024;
+#[derive(Resource)]
+struct TaskSource(Entity);
 
-#[derive(Resource, Default)]
-struct PanelState {
-    session: Option<SessionId>,
-    revision: Option<u64>,
-    processes: Vec<SessionProcess>,
-    paused: bool,
-    external: Vec<String>,
-    history: bool,
-    feedback: String,
-    pending: BTreeMap<u64, TaskAction>,
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum RowId {
+    Session(SessionId),
+    Task(SessionId),
 }
 
-#[derive(Component, Clone, Default)]
-struct Panel;
-#[derive(Component, Clone, Default)]
-struct Summary;
-#[derive(Component, Clone, Default)]
-struct List;
-#[derive(Component, Clone, Default)]
-struct Viewport;
-#[derive(Component, Clone, Default)]
-struct Feedback;
-#[derive(Component, Clone, Default)]
-struct RowLabel;
-
-#[derive(Clone, PartialEq, Eq)]
-enum Intent {
-    History,
-    Results,
-    Control(TaskAction),
-    ConfirmExternal,
+#[derive(PartialEq, Eq)]
+enum Row {
+    Session {
+        id: SessionId,
+        title: String,
+        current: bool,
+    },
+    Task {
+        id: SessionId,
+        name: String,
+        status: &'static str,
+    },
 }
 
-#[derive(Component, Clone)]
-struct Button {
-    session: Option<SessionId>,
-    intent: Intent,
-}
-
-#[derive(Component, Clone, PartialEq, Eq)]
-struct Row {
-    session: SessionId,
-    id: String,
-    actions: Vec<(&'static str, TaskAction)>,
-}
-
-pub(crate) fn install(app: &mut App) {
-    app.init_resource::<PanelState>().add_systems(
-        PostUpdate,
-        reconcile
-            .run_if(|state: Res<PanelState>, chat: Res<ChatState>| {
-                state.is_changed() || chat.is_changed()
-            })
-            .before(bevy::ui::UiSystems::Content),
-    );
-}
-
-pub(crate) fn bind(world: &mut World, session: Option<SessionId>) {
-    *world.resource_mut::<PanelState>() = PanelState {
-        session,
-        ..default()
-    };
-}
-
-pub(crate) fn policy(world: &mut World, paused: bool, external: Vec<String>) {
-    let mut state = world.resource_mut::<PanelState>();
-    state.paused = paused;
-    state.external = external;
-}
-
-pub(crate) fn processes(world: &mut World, update: SessionProcesses) {
-    let mut state = world.resource_mut::<PanelState>();
-    if state.session == Some(update.session)
-        && state
-            .revision
-            .is_none_or(|current| update.revision > current)
-    {
-        state.revision = Some(update.revision);
-        state.processes = update.processes;
-    }
-}
-
-pub(crate) fn receipt(world: &mut World, id: u64, receipt: TaskActionReceipt) {
-    let mut state = world.resource_mut::<PanelState>();
-    if state.session != Some(receipt.session) || state.pending.remove(&id).is_none() {
-        return;
-    }
-    state.feedback = match receipt.result {
-        Ok(TaskActionOutcome::Status(status)) => status,
-        Ok(TaskActionOutcome::ProcessOutput(output)) => {
-            let mut text = output
-                .chars()
-                .take(MAX_PREVIEW_CHARACTERS)
-                .collect::<String>();
-            if text.len() < output.len() {
-                text.push('…');
-            }
-            text
+impl Row {
+    fn id(&self) -> RowId {
+        match self {
+            Self::Session { id, .. } => RowId::Session(*id),
+            Self::Task { id, .. } => RowId::Task(*id),
         }
-        Err(reason) => reason,
-    };
-}
-
-fn button(label: &'static str, name: String, button: Button) -> impl Scene {
-    bsn! {
-        @AgentelierButton {@children:{Some(Box::new(bsn_list! {Text(label) WidgetryText}) as Box<dyn SceneList>)}}
-        Name(name) template(move |_| Ok(button.clone())) on(activate)
     }
-}
 
-fn header(label: &'static str, name: &'static str, intent: Intent) -> impl Scene {
-    button(
-        label,
-        name.to_owned(),
-        Button {
-            session: None,
-            intent,
-        },
-    )
-}
-
-pub(crate) fn panel() -> impl Scene {
-    bsn! {
-        Panel Name("ChatTaskPanel")
-        Node {display:Display::None,width:percent(100),min_width:px(0),flex_direction:FlexDirection::Column,row_gap:px(ROW_GAP)}
-        Children [
-            Node {column_gap:px(ROW_GAP),row_gap:px(ROW_GAP),align_items:AlignItems::Center,flex_wrap:FlexWrap::Wrap}
+    fn content(&self) -> impl SceneList + use<> {
+        let (entity_name, label, status) = match self {
+            Self::Session { id, title, current } => (
+                format!("GlobalTaskGroup-{id}"),
+                if *current {
+                    format!("● {title}")
+                } else {
+                    title.clone()
+                },
+                None,
+            ),
+            Self::Task { id, name, status } => {
+                (format!("GlobalTaskRow-{id}"), name.clone(), Some(*status))
+            }
+        };
+        let indent = if status.is_some() { 12.0 } else { 0.0 };
+        let status = status.map(|status| {
+            bsn! {
+                Text(status) WidgetryText TextFont { font_size: bevy::text::FontSize::Px(17.0) } TextLayout::no_wrap()
+                Node { flex_shrink: 0.0 }
+            }
+        });
+        bsn_list! {
+            Name(entity_name)
+            Node { width: percent(100), min_width: px(0), padding: UiRect::left(px(indent)), align_items: AlignItems::Center, column_gap: px(8) }
             Children [
-                Text("") WidgetryText Summary Name("ChatTaskSummary")--
-                @header("任务历史", "ChatTaskHistory", Intent::History)--
-                @header("停止全部后台工作", "ChatTaskStopAll", Intent::Control(TaskAction::StopAll))--
-                @header("恢复后台工作", "ChatTaskResume", Intent::Control(TaskAction::Resume))--
-                @header("确认继续执行", "ChatTaskConfirmExternal", Intent::ConfirmExternal)--
-                @header("处理已完成结果", "ChatTaskProcessResults", Intent::Results)
-            ]--
-            @WidgetryScrollArea {@children:{Some(Box::new(bsn_list! {
-                List Name("ChatTaskList")
-                Node {width:percent(100),min_width:px(0),flex_direction:FlexDirection::Column,row_gap:px(ROW_GAP)}
-            }) as Box<dyn SceneList>)}}
-            Viewport Node {width:percent(100),height:px(TASK_VIEWPORT_HEIGHT),min_height:px(0),flex_shrink:1.0}--
-            Text("") WidgetryText Feedback Name("ChatTaskFeedback") TextLayout::linebreak(LineBreak::AnyCharacter)
-            Node {display:Display::None}
-        ]
+                Node { flex_grow: 1.0, min_width: px(0), overflow: Overflow::clip() }
+                Children [ Text(label) WidgetryText TextFont { font_size: bevy::text::FontSize::Px(17.0) } TextLayout::no_wrap() ]--
+                @status
+            ]
+        }
     }
 }
 
-fn activate(event: On<Activate>, actions: Query<&Button>, mut commands: Commands) -> Result {
-    let button = actions.get(event.entity)?.clone();
-    commands.queue(move |world: &mut World| {
-        let state = world.resource::<PanelState>();
-        let Some(session) = state
-            .session
-            .filter(|id| button.session.is_none_or(|owner| owner == *id))
-        else {
-            return;
-        };
-        let action = match button.intent {
-            Intent::History => {
-                let mut state = world.resource_mut::<PanelState>();
-                state.history = !state.history;
-                return;
-            }
-            Intent::Results => {
-                super::conversation::process_results(world, session);
-                return;
-            }
-            Intent::ConfirmExternal => TaskAction::ConfirmExternal {
-                call_ids: state.external.clone(),
-            },
-            Intent::Control(action) => action,
-        };
-        if state.pending.values().any(|pending| pending == &action) {
-            return;
-        }
-        let result = world
-            .resource::<AgentHost>()
-            .request_task_action(session, action.clone());
-        let mut state = world.resource_mut::<PanelState>();
-        match result {
-            Ok(id) => {
-                state.pending.insert(id, action);
-                state.feedback = "正在确认任务控制…".into();
-            }
-            Err(failure) => state.feedback = failure.to_string(),
-        }
-    });
+pub(crate) fn install(app: &mut App) -> Result {
+    app.register_widgetry_list_view::<Row>()
+        .map_err(|failure| failure.into_bevy_error())?;
+    let source = app
+        .world_mut()
+        .spawn(WidgetryListModel::<Row>::default())
+        .id();
+    app.insert_resource(TaskSource(source))
+        .add_systems(PostUpdate, reconcile.before(UiSystems::Content));
     Ok(())
 }
 
-pub(crate) fn reconcile(world: &mut World) -> Result {
-    let chat = world.resource::<ChatState>();
-    let state = world.resource::<PanelState>();
-    let account = world.resource::<agentelier_login_ui::AccountState>();
-    let can_process_results = account.model_unavailable_reason().is_none()
-        && chat
-            .session
-            .as_ref()
-            .is_some_and(|session| !session.execution_blocked && session.matches_account(account));
-    let running = chat.operation.is_some();
-    let ready = chat
-        .tasks
-        .iter()
-        .filter(|task| task.delivery == "pending")
-        .count();
-    let active = chat
-        .tasks
-        .iter()
-        .filter(|task| matches!(task.status.as_str(), "pending" | "running"))
-        .count();
-    let live_processes = state
-        .processes
-        .iter()
-        .filter(|p| p.phase == "running")
-        .count();
-    let visible = state.session.is_some()
-        && (running
-            || !chat.tasks.is_empty()
-            || !state.processes.is_empty()
-            || state.paused
-            || !state.external.is_empty()
-            || !state.feedback.is_empty());
-    let summary = format!("后台任务 {active} · 进程 {live_processes} · 已保存，待处理 {ready}");
-    let feedback = state.feedback.clone();
-    let mut desired = Vec::new();
-    if let Some(session) = state.session {
-        for task in &chat.tasks {
-            if task.delivery == "delivered"
-                && !state.history
-                && !state.processes.iter().any(|process| {
-                    process.call_id == task.call_id
-                        && (process.readable || process.phase == "running")
-                })
-            {
-                continue;
-            }
-            let mut actions = Vec::new();
-            if !task.cancelling
-                && matches!(task.status.as_str(), "pending" | "running")
-                && let Some(instance) = task
-                    .instance
-                    .as_ref()
-                    .and_then(|id| id.parse::<SessionId>().ok())
-                && let Ok(task_id) = task.id.parse::<SessionId>()
-            {
-                actions.push((
-                    "取消任务",
-                    TaskAction::Cancel {
-                        task: TaskId(task_id),
-                        instance,
+pub(crate) fn panel(world: &World) -> impl Scene + use<> {
+    let source = world.resource::<TaskSource>().0;
+    bsn! {
+        @WidgetryListView::<Row> {
+            @source: source,
+            @item_height: 30.0,
+            @colors: {WidgetryListViewColorOverrides {
+                item: WidgetryListViewItemColorOverrides {
+                    disabled: WidgetryListViewItemStateColorOverrides {
+                        foreground: Some(Color::srgb_u8(0xE5, 0xEB, 0xE8)),
+                        ..default()
                     },
-                ));
-            }
-            let label = if task.cancelling {
-                "取消中"
-            } else {
-                status(&task.status)
-            };
-            let delivery = match task.delivery.as_str() {
-                "saved" => "已保存，待归并",
-                "pending" => "已保存，待处理",
-                "delivered" => "已用于成功请求",
-                _ => "等待保存",
-            };
-            let bytes = task
-                .argument_bytes
-                .map_or_else(String::new, |count| format!(" · 参数 {count} B"));
-            let waiting = if task.status == "pending" {
-                state
-                    .processes
-                    .iter()
-                    .find(|p| p.phase == "running")
-                    .map_or_else(
-                        || " · 等待准入".to_owned(),
-                        |p| format!(" · 等待会话许可，进程 {}", p.id),
-                    )
-            } else {
-                String::new()
-            };
-            desired.push((
-                Row {
-                    session,
-                    id: task.id.clone(),
-                    actions,
+                    ..default()
                 },
-                format!(
-                    "{} · Turn {} · {} · {} · {}{bytes}{waiting}\n{}",
-                    task.tool, task.turn, task.source, label, delivery, task.id
-                ),
-            ));
+                ..default()
+            }},
+            @renderer: {WidgetryListViewRenderer::new(Row::content)},
         }
-        for process in &state.processes {
-            if process.phase == "exited" && !process.readable && !state.history {
-                continue;
-            }
-            let action = |kind: fn(String, SessionId) -> TaskAction| {
-                kind(process.id.clone(), process.instance)
-            };
-            let actions = if process.phase == "running" {
-                vec![(
-                    "终止进程",
-                    action(|process, instance| TaskAction::Terminate { process, instance }),
-                )]
-            } else if process.readable {
-                vec![
-                    (
-                        "读取尾部",
-                        action(|process, instance| TaskAction::ReadExit { process, instance }),
-                    ),
-                    (
-                        "收起尾部",
-                        action(|process, instance| TaskAction::DiscardExit { process, instance }),
-                    ),
-                ]
-            } else {
-                Vec::new()
-            };
-            let state = match process.phase {
-                "running" => "进程运行中",
-                "exited" if process.readable => "进程已退出，尾部可读取",
-                "exited" => "历史退出摘要",
-                "cleanup_unconfirmed" => "回收未确认",
-                _ => "历史退出未确认",
-            };
-            let exit = process
-                .exit_code
-                .map_or_else(String::new, |code| format!(" · 退出码 {code}"));
-            let truncated = if process.truncated {
-                " · 输出已截断"
-            } else {
-                ""
-            };
-            let replaced = if process.decoding_replaced {
-                " · 已替换无效字符"
-            } else {
-                ""
-            };
-            desired.push((
-                Row {
-                    session,
-                    id: process.id.clone(),
-                    actions,
-                },
-                format!(
-                    "{state} · Turn {}{exit}{truncated}{replaced}\n{}",
-                    process.turn, process.id
-                ),
-            ));
-        }
+        Name("GlobalTaskList")
+        Node { width: percent(100), min_height: px(0), flex_grow: 1.0 }
     }
-    let pending = state.pending.values().cloned().collect::<Vec<_>>();
-    let paused = state.paused;
-    let external = !state.external.is_empty();
-    for mut node in world
-        .query_filtered::<&mut Node, With<Panel>>()
-        .iter_mut(world)
-    {
-        node.display = if visible {
-            Display::Flex
-        } else {
-            Display::None
-        };
-    }
-    for mut node in world
-        .query_filtered::<&mut Node, With<Viewport>>()
-        .iter_mut(world)
-    {
-        node.display = if desired.is_empty() {
-            Display::None
-        } else {
-            Display::Grid
-        };
-    }
-    for mut text in world
-        .query_filtered::<&mut Text, With<Summary>>()
-        .iter_mut(world)
-    {
-        text.set_if_neq(Text(summary.clone()));
-    }
-    for (mut text, mut node) in world
-        .query_filtered::<(&mut Text, &mut Node), With<Feedback>>()
-        .iter_mut(world)
-    {
-        text.set_if_neq(Text(feedback.clone()));
-        node.display = if feedback.is_empty() {
-            Display::None
-        } else {
-            Display::Flex
-        };
-    }
-    let buttons = world
-        .query::<(Entity, &Button)>()
-        .iter(world)
-        .map(|(id, b)| (id, b.clone()))
-        .collect::<Vec<_>>();
-    for (id, b) in buttons {
-        let show = match &b.intent {
-            Intent::Results => ready != 0 && !running,
-            Intent::ConfirmExternal => external,
-            Intent::Control(TaskAction::StopAll) => {
-                !paused && (running || active != 0 || live_processes != 0)
-            }
-            Intent::Control(TaskAction::Resume) => paused,
-            _ => true,
-        };
-        if let Some(mut node) = world.get_mut::<Node>(id) {
-            node.display = if show { Display::Flex } else { Display::None };
-        }
-        let disabled = match &b.intent {
-            Intent::Results => !can_process_results,
-            Intent::ConfirmExternal => pending
-                .iter()
-                .any(|item| matches!(item, TaskAction::ConfirmExternal { .. })),
-            Intent::Control(action) => pending.contains(action),
-            _ => false,
-        };
-        if disabled {
-            world.entity_mut(id).insert(bevy::ui::InteractionDisabled);
-        } else {
-            world
-                .entity_mut(id)
-                .remove::<bevy::ui::InteractionDisabled>();
-        }
-    }
-    reconcile_rows(world, desired)
 }
 
-fn reconcile_rows(world: &mut World, desired: Vec<(Row, String)>) -> Result {
-    let lists = world
-        .query_filtered::<Entity, With<List>>()
-        .iter(world)
-        .collect::<Vec<_>>();
-    for parent in lists {
-        let existing = world
-            .get::<Children>(parent)
-            .into_iter()
-            .flatten()
-            .copied()
-            .filter_map(|id| world.get::<Row>(id).map(|row| (id, row.clone())))
-            .collect::<Vec<_>>();
-        for (entity, row) in &existing {
-            if !desired.iter().any(|(wanted, _)| wanted == row) {
-                world.entity_mut(*entity).despawn();
-            }
+fn reconcile(
+    state: Res<GlobalTaskState>,
+    chat: Res<ChatState>,
+    source: Res<TaskSource>,
+    mut active: Local<Option<SessionId>>,
+    mut models: Query<&mut WidgetryListModel<Row>>,
+) -> Result {
+    let current = chat.session.as_ref().map(|session| session.id);
+    if !state.is_changed() && *active == current {
+        return Ok(());
+    }
+    *active = current;
+    let rows: Vec<_> = state
+        .groups
+        .iter()
+        .filter(|group| !group.tasks.is_empty())
+        .flat_map(|group| {
+            std::iter::once(Row::Session {
+                id: group.session,
+                title: group.title.clone(),
+                current: current == Some(group.session),
+            })
+            .chain(group.tasks.iter().map(|task| Row::Task {
+                id: task.id,
+                name: task.name.clone(),
+                status: task.status,
+            }))
+        })
+        .collect();
+
+    let mut model = models.get_mut(source.0)?;
+    let ids: HashSet<_> = rows.iter().map(Row::id).collect();
+    for index in (0..model.len()).rev() {
+        if model.get(index).is_some_and(|row| !ids.contains(&row.id())) {
+            model.remove(index);
         }
-        let mut ordering = Vec::new();
-        for (row, text) in &desired {
-            if let Some((entity, _)) = existing.iter().find(|(_, old)| old == row) {
-                ordering.push(*entity);
-                let label = world
-                    .get::<Children>(*entity)
-                    .into_iter()
-                    .flatten()
-                    .copied()
-                    .find(|child| world.get::<RowLabel>(*child).is_some());
-                if let Some(label) = label
-                    && let Some(mut current) = world.get_mut::<Text>(label)
-                {
-                    current.set_if_neq(Text(text.clone()));
-                }
-                continue;
-            }
-            let name = format!("ChatTaskRow-{}", row.id);
-            let key = row.clone();
-            let text = text.clone();
-            let entity = world.commands().spawn_scene_with_error_handler(bsn! {
-                Name(name) ChildOf(parent) template(move |_| Ok(key.clone()))
-                Node {width:percent(100),min_width:px(0),column_gap:px(ROW_GAP),align_items:AlignItems::Center,flex_shrink:0.0,flex_wrap:FlexWrap::Wrap}
-                Children [Text(text) WidgetryText RowLabel TextLayout::linebreak(LineBreak::AnyCharacter) Node {flex_grow:1.0,min_width:px(0)}]
-            }).id();
-            for (label, action) in &row.actions {
-                let label = *label;
-                let name = format!("ChatTaskControl-{}-{}", row.id, label);
-                let descriptor = Button {
-                    session: Some(row.session),
-                    intent: Intent::Control(action.clone()),
-                };
-                world.commands().spawn_scene_with_error_handler(
-                    bsn! { @button(label, name, descriptor) ChildOf(entity) },
-                );
-            }
-            ordering.push(entity);
-        }
-        if world
-            .get::<Children>(parent)
-            .is_none_or(|children| !children.iter().eq(ordering.iter().copied()))
+    }
+    for (index, row) in rows.into_iter().enumerate() {
+        let id = row.id();
+        if let Some(old) =
+            (index..model.len()).find(|&old| model.get(old).is_some_and(|row| row.id() == id))
         {
-            world.commands().entity(parent).replace_children(&ordering);
+            if old != index {
+                model.move_item(old, index);
+            }
+            if model.get(index) != Some(&row)
+                && let Some(entry) = model
+                    .get_mut(index)
+                    .map_err(|failure| failure.into_bevy_error())?
+            {
+                *entry = row;
+            }
+        } else {
+            model
+                .insert(index, row)
+                .map_err(|failure| failure.into_bevy_error())?;
+            model.set_disabled(index, true);
         }
     }
     Ok(())
-}
-
-fn status(status: &str) -> &str {
-    match status {
-        "pending" => "待执行",
-        "running" => "运行中",
-        "succeeded" => "成功",
-        "failed" => "失败",
-        "timed_out" => "超时",
-        "cancelled" => "已取消",
-        "not_executed" => "未执行",
-        "external_unconfirmed" => "远端效果未确认",
-        _ => "结果未确认",
-    }
 }

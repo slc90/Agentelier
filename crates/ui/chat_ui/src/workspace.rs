@@ -6,7 +6,6 @@ use bevy::ui::{InteractionDisabled, UiSystems};
 use bevy::ui_widgets::{Activate, ValueChange};
 use bevy_app_assets::NavigationIcon;
 use bevy_widgetry::icon::WidgetryIcon;
-use bevy_widgetry::scroll_area::WidgetryScrollArea;
 use bevy_widgetry::splitter::{WidgetrySplitter, WidgetrySplitterPlugin};
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::tooltip::{TooltipContentFactory, WidgetryTooltip};
@@ -176,6 +175,7 @@ fn format_quota_window(window: Option<&QuotaWindow>) -> String {
 pub(crate) fn scene(
     chat: impl SceneList + 'static,
     archives: impl SceneList + 'static,
+    tasks: impl Scene + 'static,
 ) -> impl Scene {
     let session_pane = Box::new(bsn! {
         Name("WorkspaceC")
@@ -196,7 +196,7 @@ pub(crate) fn scene(
                 @handle_thickness: HANDLE_WIDTH,
                 @line_thickness: SEPARATOR_WIDTH,
                 @pane_a: {Some(conversation_pane)},
-                @pane_b: {Some(Box::new(right_column()) as Box<dyn Scene>)},
+                @pane_b: {Some(Box::new(right_column(tasks)) as Box<dyn Scene>)},
             }
             Name("WorkspaceChatSplit")
             Node { width: percent(100), height: percent(100) }
@@ -271,22 +271,14 @@ fn open(event: On<Activate>, entries: Query<&Entry>, mut commands: Commands) -> 
     Ok(())
 }
 
-fn right_column() -> impl Scene {
+fn right_column(tasks: impl Scene + 'static) -> impl Scene {
     bsn! {
         Name("WorkspaceRight")
         Node { min_width: px(RIGHT_MIN), flex_direction: FlexDirection::Column }
         Children [
-            @WidgetryScrollArea {
-                @children: {Some(Box::new(bsn_list! {
-                    Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(PANE_PADDING), padding: UiRect::all(px(PANE_PADDING)) }
-                    Children [
-                        Text("后台任务") WidgetryText--
-                        @crate::task_panel::panel()
-                    ]
-                }) as Box<dyn SceneList>)}
-            }
             Name("WorkspaceE") BackgroundColor(PANEL_BACKGROUND)
-            Node { width: percent(100), flex_basis: px(0), flex_grow: 1.0, min_height: px(0) }--
+            Node { width: percent(100), flex_basis: px(0), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, padding: UiRect::all(px(PANE_PADDING)), row_gap: px(PANE_PADDING) }
+            Children [ Text("后台任务") WidgetryText-- @tasks ]--
             Name("WorkspaceF") BackgroundColor(SIDE_BACKGROUND)
             Node { width: percent(100), flex_basis: px(0), flex_grow: 1.0, min_height: px(0) }
         ]
