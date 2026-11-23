@@ -1,17 +1,18 @@
 use crate::conversation::ChatState;
 use agentelier_agent_host::{AgentHost, HostActivity};
 use agentelier_controls::AgentelierButton;
+use agentelier_conversation_bridge::ProjectId;
 use agentelier_conversation_bridge::{ArchiveEntry, ConversationRequest, SessionId};
 use bevy::prelude::*;
 use bevy::ui::{InteractionDisabled, UiSystems};
 use bevy::ui_widgets::Activate;
-use bevy_widgetry::list_view::{
-    WidgetryListModel, WidgetryListSelectionChanged, WidgetryListSelectionMode, WidgetryListView,
-    WidgetryListViewAppExt, WidgetryListViewRenderer,
-};
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::tooltip::{TooltipContentFactory, WidgetryTooltip, WidgetryTooltipPlugin};
-use std::io;
+use bevy_widgetry::tree::{
+    WidgetryTreeAppExt, WidgetryTreeEvent, WidgetryTreeEventKind, WidgetryTreeModel,
+    WidgetryTreeNode, WidgetryTreeRenderer, WidgetryTreeView,
+};
+use std::collections::HashMap;
 
 const ROW_HEIGHT: f32 = 44.0;
 const TITLE_PREVIEW_CHARACTERS: usize = 18;
@@ -57,7 +58,28 @@ impl Default for ArchiveState {
 }
 
 #[derive(Resource)]
-struct ArchiveSource(Entity);
+struct Navigator {
+    source: Entity,
+    projects: Entity,
+    standalone: Entity,
+    project_nodes: HashMap<ProjectId, Entity>,
+    session_nodes: HashMap<SessionId, Entity>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Target {
+    Projects,
+    Standalone,
+    Project(ProjectId),
+    Session(SessionId),
+}
+
+#[derive(Component, PartialEq, Eq)]
+struct NavigatorEntry {
+    target: Target,
+    title: String,
+    error: Option<String>,
+}
 #[derive(Component, Clone, Default)]
 struct ArchiveSelector;
 #[derive(Component, Clone, Default)]
@@ -67,8 +89,10 @@ pub(crate) fn install(app: &mut App) -> Result {
     if !app.is_plugin_added::<WidgetryTooltipPlugin>() {
         app.add_plugins(WidgetryTooltipPlugin);
     }
-    app.register_widgetry_list_view::<ArchiveChoice>()
-        .map_err(|failure| failure.into_bevy_error())?;
+    app.register_renderer::<NavigatorEntry>(WidgetryTreeRenderer::new(
+        |_, entry: &NavigatorEntry| render(entry),
+    ))
+    .map_err(|failure| failure.into_bevy_error())?;
     crate::session_actions::install(app);
     app.init_resource::<ArchiveState>()
         .register_type::<ArchiveState>()
@@ -78,40 +102,83 @@ pub(crate) fn install(app: &mut App) -> Result {
 }
 
 fn initialize(mut commands: Commands) {
-    let source = commands
-        .spawn(WidgetryListModel::<ArchiveChoice>::default())
+    let root = commands.spawn_empty().id();
+    let projects = commands
+        .spawn((
+            WidgetryTreeNode,
+            NavigatorEntry {
+                target: Target::Projects,
+                title: "项目".into(),
+                error: None,
+            },
+            ChildOf(root),
+        ))
         .id();
-    commands.insert_resource(ArchiveSource(source));
+    let standalone = commands
+        .spawn((
+            WidgetryTreeNode,
+            NavigatorEntry {
+                target: Target::Standalone,
+                title: "单独聊天".into(),
+                error: None,
+            },
+            ChildOf(root),
+        ))
+        .id();
+    let source = commands.spawn(WidgetryTreeModel::new(root)).id();
+    commands.insert_resource(Navigator {
+        source,
+        projects,
+        standalone,
+        project_nodes: HashMap::new(),
+        session_nodes: HashMap::new(),
+    });
+}
+
+fn render(entry: &NavigatorEntry) -> impl SceneList + use<> {
+    let full = match &entry.error {
+        Some(error) => format!("{}\n{error}", entry.title),
+        None => entry.title.clone(),
+    };
+    let mut preview = entry
+        .title
+        .chars()
+        .take(TITLE_PREVIEW_CHARACTERS)
+        .collect::<String>();
+    if entry.title.chars().count() > TITLE_PREVIEW_CHARACTERS {
+        preview.push('…');
+    }
+    let (name, session) = match entry.target {
+        Target::Projects => ("NavigatorProjects".into(), None),
+        Target::Standalone => ("NavigatorStandalone".into(), None),
+        Target::Project(id) => (format!("NavigatorProject-{id}"), None),
+        Target::Session(id) => (format!("NavigatorSession-{id}"), Some(id)),
+    };
+    let actions = session.map(|id| bsn_list! { @crate::session_actions::more(id) });
+    bsn_list! {
+        @WidgetryTooltip { @content: {TooltipContentFactory::new(move || { let title = full.clone(); bsn_list! { Text(title) WidgetryText } })} }
+        Name(name)
+        Node { width: percent(100), min_width: px(0), overflow: Overflow::clip() }
+        Children [
+            Text(preview) WidgetryText TextLayout::no_wrap() Node { flex_grow: 1.0, min_width: px(0), overflow: Overflow::clip() }--
+            {actions}
+        ]
+    }
 }
 
 pub(crate) fn panel(world: &World) -> impl Scene + use<> {
-    let source = world.resource::<ArchiveSource>().0;
+    let source = world.resource::<Navigator>().source;
     let projects = crate::projects::source(world);
     bsn! {
         Name("LocalSessionArchives") Node { width: percent(100), min_width: px(0), height: percent(100), flex_direction: FlexDirection::Column, row_gap: px(CONTROL_GAP), flex_shrink: 0.0 }
         Children [
             @crate::projects::panel(world)--
-            @crate::conversation::create_button()--
-            @WidgetryListView::<ArchiveChoice> {
+            @crate::conversation::standalone_button()--
+            @WidgetryTreeView {
                 @source: source,
                 @item_height: ROW_HEIGHT,
-                @selection_mode: WidgetryListSelectionMode::Single,
-                @renderer: {WidgetryListViewRenderer::new(|choice: &ArchiveChoice| {
-                    let session = choice.id;
-                    let full = match &choice.error { Some(error) => format!("{}\n{}", choice.title, error), None => choice.title.clone() };
-                    let mut preview = choice.title.chars().take(TITLE_PREVIEW_CHARACTERS).collect::<String>();
-                    if choice.title.chars().count() > TITLE_PREVIEW_CHARACTERS { preview.push('…'); }
-                    bsn_list! {
-                        @WidgetryTooltip { @content: {TooltipContentFactory::new(move || { let title = full.clone(); bsn_list! { Text(title) WidgetryText } })} }
-                        Node { width: percent(100), min_width: px(0), overflow: Overflow::clip() }
-                        Children [
-                            Text(preview) WidgetryText TextLayout::no_wrap() Node { flex_grow: 1.0, min_width: px(0), overflow: Overflow::clip() }--
-                            @crate::session_actions::more(session)
-                        ]
-                    }
-                })},
             }
-            Name("LocalSessionSelector") ArchiveSelector Node { width: percent(100), height: px(0), flex_basis: px(0), min_height: px(0), flex_grow: 1.0 } on(select)--
+            Name("SessionNavigator") ArchiveSelector Node { width: percent(100), height: px(0), flex_basis: px(0), min_height: px(0), flex_grow: 1.0 } on(select)--
             @AgentelierButton { @children: {Some(Box::new(bsn_list! { Text("刷新本地会话") WidgetryText }) as Box<dyn SceneList>)} }
             Name("RefreshSessionArchives") Node { height: px(CONTROL_HEIGHT) } on(refresh)--
             @crate::session_actions::panel(projects)--
@@ -121,29 +188,29 @@ pub(crate) fn panel(world: &World) -> impl Scene + use<> {
     }
 }
 
-fn select(
-    event: On<WidgetryListSelectionChanged>,
-    selectors: Query<(), With<ArchiveSelector>>,
-    source: Res<ArchiveSource>,
-    models: Query<&WidgetryListModel<ArchiveChoice>>,
-    archives: Res<ArchiveState>,
-    mut commands: Commands,
-) -> Result {
-    if !selectors.contains(event.source) {
-        return Ok(());
-    }
-    let Some(id) = event.selected.iter().next().copied() else {
-        return Ok(());
+fn select(event: On<WidgetryTreeEvent>, entries: Query<&NavigatorEntry>, mut commands: Commands) {
+    let WidgetryTreeEventKind::SelectionChanged { selected, .. } = &event.kind else {
+        return;
     };
-    let choice = models
-        .get(source.0)?
-        .get_by_id(id)
-        .ok_or_else(|| io::Error::other("会话条目已变化"))?;
-    if archives.selected == Some(choice.id) {
-        return Ok(());
-    }
-    let session = choice.id;
+    let Some(target) = selected
+        .iter()
+        .find_map(|entity| entries.get(*entity).ok())
+        .map(|entry| entry.target)
+    else {
+        return;
+    };
     commands.queue(move |world: &mut World| -> Result {
+        let session = match target {
+            Target::Projects => return Ok(()),
+            Target::Standalone => return crate::projects::select_project(world, None),
+            Target::Project(project) => {
+                return crate::projects::select_project(world, Some(project));
+            }
+            Target::Session(session) => session,
+        };
+        if world.resource::<ArchiveState>().selected == Some(session) {
+            return Ok(());
+        }
         sync_selection(world)?;
         if world.resource::<ChatState>().operation.is_some()
             || world.resource::<ArchiveState>().loading
@@ -171,7 +238,6 @@ fn select(
         }
         Ok(())
     });
-    Ok(())
 }
 
 fn refresh(_: On<Activate>, host: Res<AgentHost>, mut state: ResMut<ArchiveState>) {
@@ -224,40 +290,146 @@ pub(crate) fn catalog(world: &mut World, entries: Vec<ArchiveEntry>) -> Result {
 }
 
 pub(crate) fn rebuild_model(world: &mut World) -> Result {
-    let choices = world
-        .resource::<ArchiveState>()
+    let catalog = crate::projects::library(world);
+    let projects = catalog
+        .projects
+        .iter()
+        .map(|view| {
+            (
+                view.project.id,
+                NavigatorEntry {
+                    target: Target::Project(view.project.id),
+                    title: view.project.name.clone(),
+                    error: view.directory_error.clone(),
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let state = world.resource::<ArchiveState>();
+    let active = state.selected;
+    let sessions = state
         .entries
         .iter()
-        .filter(|entry| crate::projects::visible(world, entry.id))
-        .cloned()
+        .map(|choice| {
+            (
+                choice.id,
+                catalog.membership.get(&choice.id).copied(),
+                NavigatorEntry {
+                    target: Target::Session(choice.id),
+                    title: choice.title.clone(),
+                    error: choice.error.clone(),
+                },
+            )
+        })
         .collect::<Vec<_>>();
-    let source = world.resource::<ArchiveSource>().0;
-    let mut model = world
-        .get_mut::<WidgetryListModel<ArchiveChoice>>(source)
-        .ok_or_else(|| io::Error::other("本地会话选择数据源不存在"))?;
-    for index in (0..model.len()).rev() {
-        if model
-            .get(index)
-            .is_some_and(|old| !choices.iter().any(|entry| entry.id == old.id))
-        {
-            model.remove(index);
+    let (active_moved, sections) = world.resource_scope(|world, mut nav: Mut<Navigator>| {
+        let mut active_moved = false;
+        let empty_sections = [nav.projects, nav.standalone]
+            .into_iter()
+            .filter(|section| world.get::<Children>(*section).is_none())
+            .collect::<Vec<_>>();
+        let mut old_projects = std::mem::take(&mut nav.project_nodes);
+        let mut old_sessions = std::mem::take(&mut nav.session_nodes);
+        let mut project_order = Vec::with_capacity(projects.len());
+        let mut sessions_by_parent = HashMap::<Entity, Vec<Entity>>::new();
+        for (id, entry) in projects {
+            let node = update_node(world, old_projects.remove(&id), entry);
+            set_parent(world, node, nav.projects);
+            project_order.push(node);
+            nav.project_nodes.insert(id, node);
+        }
+        for (id, membership, entry) in sessions {
+            let parent = membership
+                .and_then(|project| nav.project_nodes.get(&project).copied())
+                .unwrap_or(nav.standalone);
+            let node = update_node(world, old_sessions.remove(&id), entry);
+            if Some(id) == active && world.get::<ChildOf>(node).map(ChildOf::parent) != Some(parent)
+            {
+                active_moved = true;
+            }
+            set_parent(world, node, parent);
+            sessions_by_parent.entry(parent).or_default().push(node);
+            nav.session_nodes.insert(id, node);
+        }
+        // Reparent the surviving nodes before despawning their former project.
+        for node in old_sessions.into_values().chain(old_projects.into_values()) {
+            world.despawn(node);
+        }
+        order_children(world, nav.projects, &project_order);
+        for parent in project_order.iter().copied().chain([nav.standalone]) {
+            let children = sessions_by_parent.remove(&parent).unwrap_or_default();
+            order_children(world, parent, &children);
+        }
+        (active_moved, empty_sections)
+    });
+    for view in views(world) {
+        for section in &sections {
+            WidgetryTreeView::expand(world, view, *section)
+                .map_err(|failure| failure.into_bevy_error())?;
         }
     }
-    for (index, choice) in choices.iter().enumerate() {
-        if let Some(previous) =
-            (0..model.len()).find(|&old| model.get(old).is_some_and(|entry| entry.id == choice.id))
-        {
-            model.move_item(previous, index);
-            if model.get(index) != Some(choice)
-                && let Some(value) = model
-                    .get_mut(index)
-                    .map_err(|failure| failure.into_bevy_error())?
-            {
-                *value = choice.clone();
-            }
+    if active_moved {
+        reveal_selection(world)?;
+    }
+    Ok(())
+}
+
+fn update_node(world: &mut World, node: Option<Entity>, entry: NavigatorEntry) -> Entity {
+    if let Some(node) = node {
+        if let Some(mut current) = world.get_mut::<NavigatorEntry>(node) {
+            current.set_if_neq(entry);
+        }
+        node
+    } else {
+        world.spawn((WidgetryTreeNode, entry)).id()
+    }
+}
+
+fn set_parent(world: &mut World, node: Entity, parent: Entity) {
+    if world.get::<ChildOf>(node).map(ChildOf::parent) != Some(parent) {
+        world.entity_mut(node).insert(ChildOf(parent));
+    }
+}
+
+fn order_children(world: &mut World, parent: Entity, children: &[Entity]) {
+    let old = world
+        .get::<Children>(parent)
+        .map_or(&[][..], |children| &children[..]);
+    if old != children {
+        world.entity_mut(parent).replace_children(children);
+    }
+}
+
+fn views(world: &mut World) -> Vec<Entity> {
+    world
+        .query_filtered::<Entity, With<ArchiveSelector>>()
+        .iter(world)
+        .collect()
+}
+
+fn active_node(world: &World) -> Option<Entity> {
+    let session = world.resource::<ArchiveState>().selected?;
+    world
+        .resource::<Navigator>()
+        .session_nodes
+        .get(&session)
+        .copied()
+}
+
+pub(crate) fn reveal_selection(world: &mut World) -> Result {
+    if let Some(node) = active_node(world)
+        && let Some(parent) = world.get::<ChildOf>(node).map(ChildOf::parent)
+    {
+        let nav = world.resource::<Navigator>();
+        let section = if parent == nav.standalone {
+            nav.standalone
         } else {
-            model
-                .insert(index, choice.clone())
+            nav.projects
+        };
+        for view in views(world) {
+            WidgetryTreeView::expand(world, view, section)
+                .map_err(|failure| failure.into_bevy_error())?;
+            WidgetryTreeView::expand(world, view, parent)
                 .map_err(|failure| failure.into_bevy_error())?;
         }
     }
@@ -265,28 +437,20 @@ pub(crate) fn rebuild_model(world: &mut World) -> Result {
 }
 
 pub(crate) fn sync_selection(world: &mut World) -> Result {
-    let state = world.resource::<ArchiveState>();
-    let source = world.resource::<ArchiveSource>().0;
-    let model = world
-        .get::<WidgetryListModel<ArchiveChoice>>(source)
-        .ok_or_else(|| io::Error::other("会话选择数据源不存在"))?;
-    let index = state.selected.and_then(|selected| {
-        (0..model.len()).find(|&index| model.get(index).is_some_and(|entry| entry.id == selected))
-    });
-    if let Some(index) = index {
-        let mut query = world.query_filtered::<Entity, With<ArchiveSelector>>();
-        let entities = query.iter(world).collect::<Vec<_>>();
-        for entity in entities {
-            WidgetryListView::<ArchiveChoice>::select_index(&mut world.commands(), entity, index);
-        }
-    } else {
-        let entities = world
-            .query_filtered::<Entity, With<ArchiveSelector>>()
-            .iter(world)
-            .collect::<Vec<_>>();
-        for entity in entities {
-            WidgetryListView::<ArchiveChoice>::clear_selection(&mut world.commands(), entity);
-        }
+    let node = active_node(world);
+    for view in views(world) {
+        let visible = if let Some(node) = node
+            && let Some(parent) = world.get::<ChildOf>(node).map(ChildOf::parent)
+        {
+            let tree = WidgetryTreeView::state(world, view)
+                .map_err(|failure| failure.into_bevy_error())?;
+            let nav = world.resource::<Navigator>();
+            tree.is_expanded(parent) && (parent == nav.standalone || tree.is_expanded(nav.projects))
+        } else {
+            false
+        };
+        WidgetryTreeView::select(world, view, node.filter(|_| visible))
+            .map_err(|failure| failure.into_bevy_error())?;
     }
     Ok(())
 }
@@ -336,20 +500,6 @@ pub(crate) fn rename_entry(world: &mut World, entry: ArchiveEntry) -> Result {
         last_sequence: entry.last_sequence,
         error: entry.error,
     };
-    let source = world.resource::<ArchiveSource>().0;
-    let mut model = world
-        .get_mut::<WidgetryListModel<ArchiveChoice>>(source)
-        .ok_or_else(|| io::Error::other("会话数据源不存在"))?;
-    if let Some(index) = (0..model.len()).find(|&index| {
-        model.get(index).is_some_and(|entry| {
-            entry.id == choice.id && entry.last_sequence <= choice.last_sequence
-        })
-    }) && let Some(value) = model
-        .get_mut(index)
-        .map_err(|failure| failure.into_bevy_error())?
-    {
-        *value = choice.clone();
-    }
     if let Some(value) = world
         .resource_mut::<ArchiveState>()
         .entries
@@ -358,7 +508,7 @@ pub(crate) fn rename_entry(world: &mut World, entry: ArchiveEntry) -> Result {
     {
         *value = choice;
     }
-    Ok(())
+    rebuild_model(world)
 }
 
 pub(crate) fn remove_entry(
@@ -366,15 +516,6 @@ pub(crate) fn remove_entry(
     session: SessionId,
     cleanup_error: Option<String>,
 ) -> Result {
-    let source = world.resource::<ArchiveSource>().0;
-    let mut model = world
-        .get_mut::<WidgetryListModel<ArchiveChoice>>(source)
-        .ok_or_else(|| io::Error::other("会话列表数据源不存在"))?;
-    if let Some(index) =
-        (0..model.len()).find(|&index| model.get(index).is_some_and(|entry| entry.id == session))
-    {
-        model.remove(index);
-    }
     let mut state = world.resource_mut::<ArchiveState>();
     state.deleted.push(session);
     state.entries.retain(|entry| entry.id != session);
@@ -388,5 +529,5 @@ pub(crate) fn remove_entry(
         ));
     }
     crate::projects::forget_session(world, session);
-    sync_selection(world)
+    rebuild_model(world)
 }

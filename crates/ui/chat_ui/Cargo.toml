@@ -19,6 +19,7 @@ bevy.workspace = true
 bevy_widgetry = { workspace = true, features = [
   "combo_box",
   "list_view",
+  "tree",
   "tooltip",
   "button",
   "scroll_area",

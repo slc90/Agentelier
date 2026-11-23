@@ -302,6 +302,7 @@ struct ReplacementPrompt;
 #[derive(Component, Clone, Copy)]
 enum ChatAction {
     Create,
+    CreateStandalone,
     Send,
     Queue,
     Stop,
@@ -404,8 +405,20 @@ pub(crate) fn panel(state: &ChatState, account: &AccountState) -> impl Scene {
     }
 }
 
-pub(crate) fn create_button() -> impl Scene {
-    button("新建会话", "CreateChatSession", ChatAction::Create)
+pub(crate) fn project_button() -> impl Scene {
+    button(
+        "在项目中新建会话",
+        "CreateProjectSession",
+        ChatAction::Create,
+    )
+}
+
+pub(crate) fn standalone_button() -> impl Scene {
+    button(
+        "新建单独聊天",
+        "CreateStandaloneSession",
+        ChatAction::CreateStandalone,
+    )
 }
 
 #[derive(Default)]
@@ -521,9 +534,10 @@ fn forget_session(world: &mut World, session: SessionId) -> Result {
 
 fn button(label: &'static str, name: &'static str, action: ChatAction) -> impl Scene {
     let style = match action {
-        ChatAction::Create | ChatAction::Send | ChatAction::ConfirmReplacement => {
-            AgentelierButtonStyle::Primary
-        }
+        ChatAction::Create
+        | ChatAction::CreateStandalone
+        | ChatAction::Send
+        | ChatAction::ConfirmReplacement => AgentelierButtonStyle::Primary,
         ChatAction::Stop | ChatAction::Reset => AgentelierButtonStyle::Danger,
         ChatAction::Queue
         | ChatAction::Retry
@@ -551,6 +565,10 @@ fn activate(
 ) -> Result {
     match actions.get(event.entity)? {
         ChatAction::Create => commands.queue(create_session),
+        ChatAction::CreateStandalone => commands.queue(|world: &mut World| -> Result {
+            crate::projects::select_project(world, None)?;
+            create_session(world)
+        }),
         ChatAction::Send => intents.send = true,
         ChatAction::Queue => commands.queue(crate::queue::enqueue),
         ChatAction::Stop => commands.queue(stop),
@@ -1441,7 +1459,9 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                     state.loading = false;
                 }
             }
-            crate::archives::sync_selection(world)?;
+            let project = crate::projects::library(world).membership.get(&id).copied();
+            crate::projects::select_project(world, project)?;
+            crate::archives::reveal_selection(world)?;
             changed = true;
             continue;
         }
@@ -2083,7 +2103,7 @@ fn update(
     }
     for (entity, action) in &buttons {
         let enabled = match action {
-            ChatAction::Create => {
+            ChatAction::Create | ChatAction::CreateStandalone => {
                 state.replacement.is_none()
                     && state.operation.is_none()
                     && !activity.model_busy
