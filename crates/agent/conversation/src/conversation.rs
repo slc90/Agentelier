@@ -262,6 +262,10 @@ pub enum ConversationEvent {
     Tasks(crate::SessionTasks),
     Created(SessionView),
     WorkingDirectorySaved(SessionView),
+    SessionModelSaved {
+        session: SessionId,
+        result: Result<SessionView, String>,
+    },
     Accepted(SessionView),
     Updated(SessionView),
     Finished(SessionView),

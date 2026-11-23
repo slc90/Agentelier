@@ -32,6 +32,7 @@ mod processes;
 mod queue;
 mod restore;
 mod result_budget;
+mod session_model;
 mod task_actions;
 mod task_policy;
 mod tasks;
@@ -44,6 +45,7 @@ pub use audio::{
 pub use memory_evidence::{MemorySourceTurn, memory_evidence};
 pub use processes::ProcessLedger;
 pub use restore::{RestoredChild, RestoredSession, restore, restore_child};
+pub use session_model::{PreparedModelChange, StoredSessionModel};
 pub use task_actions::{SessionProcesses, TaskAction, TaskActionOutcome, TaskActionReceipt};
 pub use task_policy::{TaskPolicy, TaskPolicyChange};
 pub use tasks::{

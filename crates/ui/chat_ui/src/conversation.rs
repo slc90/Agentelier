@@ -5,7 +5,8 @@ use agentelier_agent_host::{
     ReceiveAgentEvents,
 };
 use agentelier_controls::{
-    AgentelierAvatar, AgentelierButton, AgentelierButtonStyle, AvatarSource,
+    AgentelierAvatar, AgentelierButton, AgentelierButtonLoading, AgentelierButtonStyle,
+    AvatarSource,
 };
 use agentelier_conversation_bridge::SessionId;
 use agentelier_conversation_bridge::{
@@ -216,6 +217,8 @@ pub struct ChatState {
     pub task_revision: Option<u64>,
     pub tasks: Vec<ChatTask>,
     pub operation: Option<u64>,
+    pub model_change: Option<(u64, SessionId)>,
+    pub model_error: Option<String>,
     pub cancelling: bool,
     pub replacement: Option<ChatReplacement>,
     pub draft: String,
@@ -248,6 +251,7 @@ impl ChatState {
         activity: &HostActivity,
     ) -> bool {
         self.operation.is_none()
+            && self.model_change.is_none()
             && self.replacement.is_none()
             && !activity.model_busy
             && model.can_request(account)
@@ -297,8 +301,6 @@ struct SessionSummary;
 struct MessageLabel;
 #[derive(Component, Clone, Default)]
 struct ChatStatus;
-#[derive(Component, Clone, Default)]
-struct SendLabel;
 #[derive(Component, Clone, Default)]
 struct ReplacementPrompt;
 #[derive(Component, Clone, Copy)]
@@ -357,7 +359,7 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(PostUpdate, update.before(UiSystems::Content));
 }
 
-pub(crate) fn panel(state: &ChatState, account: &AccountState) -> impl Scene {
+pub(crate) fn panel(state: &ChatState, account: &AccountState, model_source: Entity) -> impl Scene {
     let draft = state.draft.clone();
     let summary = summary(state);
     let status = status(state, account);
@@ -365,10 +367,13 @@ pub(crate) fn panel(state: &ChatState, account: &AccountState) -> impl Scene {
         Name("ChatPanel")
         Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP) }
         Children [
-            Node { column_gap: px(CONTENT_GAP), align_items: AlignItems::Center, flex_shrink: 0.0 }
+            Node { column_gap: px(CONTENT_GAP), row_gap: px(CONTENT_GAP), align_items: AlignItems::Center, flex_shrink: 0.0, flex_wrap: FlexWrap::Wrap }
             Children [
                 @button("重置当前会话", "ResetChatSession", ChatAction::Reset)--
                 @button("更改会话目录", "SetSessionWorkingDirectory", ChatAction::SetWorkingDirectory)--
+                @button("排队", "QueueChatMessage", ChatAction::Queue)--
+                @button("重试最近尝试", "RetryChatTurn", ChatAction::Retry)--
+                @crate::reading::bottom_button()--
                 Text(summary) WidgetryText SessionSummary Name("ChatSessionSummary")
             ]--
             Node { column_gap: px(CONTENT_GAP), flex_shrink: 0.0, display: Display::None } ReplacementPrompt
@@ -378,24 +383,33 @@ pub(crate) fn panel(state: &ChatState, account: &AccountState) -> impl Scene {
                 @button("保留当前会话", "KeepChatSession", ChatAction::KeepSession)
             ]--
             Text(status) WidgetryText ChatStatus Name("ChatStatus")--
-            @conversation_view()--
             @crate::queue::panel()--
             @crate::audio_attachment::panel()--
             @crate::transcription::panel(crate::transcription::Target::Draft)--
             @crate::transcription::selection_panel()--
+            @conversation_view()--
+            @chat_composer(draft, model_source)
+        ]
+    }
+}
+
+fn chat_composer(draft: String, model_source: Entity) -> impl Scene {
+    bsn! {
+        Name("ChatComposerPanel")
+        Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP), flex_shrink: 0.0 }
+        Children [
             @WidgetryTextField {
                 @value: {draft}, @multiline: true,
                 @auto_size: {Some(AutoSize { min_rows: COMPOSER_MIN_ROWS, max_rows: COMPOSER_MAX_ROWS })},
                 @hint_text: {Some("输入消息；Enter 提交，Shift+Enter 换行".into())},
             }
             Composer Name("ChatComposer") Node { width: percent(100), flex_shrink: 0.0 }--
-            Node { column_gap: px(CONTENT_GAP), flex_shrink: 0.0 }
+            Node { column_gap: px(CONTENT_GAP), align_items: AlignItems::Center }
             Children [
+                @crate::preparation::session_model_selector(model_source)--
                 @button("发送", "SendChatMessage", ChatAction::Send)--
-                @button("排队", "QueueChatMessage", ChatAction::Queue)--
-                @button("停止", "StopChatGeneration", ChatAction::Stop)--
-                @button("重试最近尝试", "RetryChatTurn", ChatAction::Retry)--
-                @crate::reading::bottom_button()
+                @button("停止", "StopChatGeneration", ChatAction::Stop)
+                Node { display: Display::None }
             ]
         ]
     }
@@ -463,6 +477,7 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
             };
             state.pending_inputs.clear();
             state.input_feedback = None;
+            state.model_error = None;
             state.task_revision = None;
             state.tasks.clear();
             saved
@@ -553,11 +568,7 @@ fn button(label: &'static str, name: &'static str, action: ChatAction) -> impl S
         | ChatAction::KeepSession
         | ChatAction::SetWorkingDirectory => AgentelierButtonStyle::Secondary,
     };
-    let children: Box<dyn SceneList> = if matches!(action, ChatAction::Send) {
-        Box::new(bsn_list! {Text(label) WidgetryText SendLabel})
-    } else {
-        Box::new(bsn_list! {Text(label) WidgetryText})
-    };
+    let children: Box<dyn SceneList> = Box::new(bsn_list! {Text(label) WidgetryText});
     bsn! {
         @AgentelierButton { @style: style, @children: {Some(children)} }
         Name(name) template(move |_| Ok(action))
@@ -593,6 +604,32 @@ fn activate(
         ChatAction::KeepSession => commands.queue(|world: &mut World| {
             world.resource_mut::<ChatState>().replacement = None;
         }),
+    }
+    Ok(())
+}
+
+pub(crate) fn choose_session_model(world: &mut World, slug: String) -> Result {
+    let state = world.resource::<ChatState>();
+    let account = world.resource::<AccountState>();
+    let Some(current) = state.session.as_ref().filter(|session| {
+        session.slug != slug && !session.execution_blocked && session.matches_account(account)
+    }) else {
+        return Ok(());
+    };
+    if state.model_change.is_some() || state.replacement.is_some() || account.runtime_failed {
+        return Ok(());
+    }
+    let session = current.id;
+    let result = world
+        .resource::<AgentHost>()
+        .change_session_model(session, slug);
+    let mut state = world.resource_mut::<ChatState>();
+    match result {
+        Ok(operation) => {
+            state.model_change = Some((operation, session));
+            state.model_error = None;
+        }
+        Err(failure) => state.model_error = Some(failure.to_string()),
     }
     Ok(())
 }
@@ -1424,6 +1461,26 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             crate::projects::saved(world, event.operation_id, result);
             continue;
         }
+        if let ConversationEvent::SessionModelSaved { session, result } = event.kind {
+            let mut state = world.resource_mut::<ChatState>();
+            if state.model_change == Some((event.operation_id, session)) {
+                state.model_change = None;
+                if state
+                    .session
+                    .as_ref()
+                    .is_some_and(|view| view.id == session)
+                {
+                    match result {
+                        Ok(view) => {
+                            state.session = Some(project(view)?);
+                            state.model_error = None;
+                        }
+                        Err(failure) => state.model_error = Some(failure),
+                    }
+                }
+            }
+            continue;
+        }
         if let ConversationEvent::Opened(view) = event.kind {
             let id = view.id;
             let different = world
@@ -1615,6 +1672,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             | ConversationEvent::Archives(_)
             | ConversationEvent::Projects(_)
             | ConversationEvent::ProjectSaved(_)
+            | ConversationEvent::SessionModelSaved { .. }
             | ConversationEvent::Opened(_)
             | ConversationEvent::WorkingDirectorySaved(_)
             | ConversationEvent::ArchiveFailed(_)
@@ -1668,6 +1726,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             | ConversationEvent::Archives(_)
             | ConversationEvent::Projects(_)
             | ConversationEvent::ProjectSaved(_)
+            | ConversationEvent::SessionModelSaved { .. }
             | ConversationEvent::Opened(_)
             | ConversationEvent::ArchiveFailed(_)
             | ConversationEvent::Queue(_)
@@ -1707,6 +1766,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         crate::projects::failed(world, &reason);
         let mut state = world.resource_mut::<ChatState>();
         state.operation = None;
+        state.model_change = None;
         state.pending_inputs.clear();
         state.cancelling = false;
         state.error = Some(reason);
@@ -1985,6 +2045,9 @@ fn summary(state: &ChatState) -> String {
 }
 fn status(state: &ChatState, account: &AccountState) -> String {
     let mut value = task_status(state);
+    if let Some(error) = &state.model_error {
+        value.push_str(&format!("\n模型变更未保存：{error}"));
+    }
     if let Some(session) = &state.session {
         value.push('\n');
         value.push_str(&session.context);
@@ -2083,14 +2146,9 @@ fn update(
     archives: Res<crate::ArchiveState>,
     activity: Res<HostActivity>,
     audio: Res<crate::audio_attachment::AudioDraftState>,
-    buttons: Query<(Entity, &ChatAction)>,
-    mut texts: Query<(
-        &mut Text,
-        Has<SessionSummary>,
-        Has<ChatStatus>,
-        Has<SendLabel>,
-    )>,
-    mut prompts: Query<&mut Node, With<ReplacementPrompt>>,
+    mut buttons: Query<(Entity, &ChatAction, &mut Node)>,
+    mut texts: Query<(&mut Text, Has<SessionSummary>, Has<ChatStatus>)>,
+    mut prompts: Query<&mut Node, (With<ReplacementPrompt>, Without<ChatAction>)>,
     mut commands: Commands,
 ) {
     if !state.is_changed()
@@ -2109,7 +2167,38 @@ fn update(
             Display::None
         };
     }
-    for (entity, action) in &buttons {
+    let running = state
+        .session
+        .as_ref()
+        .and_then(|session| session.turn.as_ref())
+        .is_some_and(|turn| {
+            state.operation == Some(turn.operation_id)
+                && matches!(turn.status, ChatTurnStatus::Running)
+        });
+    for (entity, action, mut node) in &mut buttons {
+        let visible = match action {
+            ChatAction::Send => Some(!running),
+            ChatAction::Stop => Some(running),
+            _ => None,
+        };
+        if let Some(visible) = visible {
+            let display = if visible {
+                Display::Flex
+            } else {
+                Display::None
+            };
+            if node.display != display {
+                node.display = display;
+            }
+        }
+        if matches!(action, ChatAction::Stop) {
+            AgentelierButtonLoading::set(&mut commands, entity, state.cancelling);
+        }
+        if matches!(action, ChatAction::Send) {
+            let submitting =
+                state.operation.is_some() && !running && !state.pending_inputs.is_empty();
+            AgentelierButtonLoading::set(&mut commands, entity, submitting);
+        }
         let enabled = match action {
             ChatAction::Create | ChatAction::CreateStandalone => {
                 state.replacement.is_none()
@@ -2142,21 +2231,8 @@ fn update(
             }
             ChatAction::Retry => can_retry(&state, &model, &account, &activity),
             ChatAction::Queue => !account.runtime_failed && crate::queue::can_enqueue(&state),
-            ChatAction::Send => {
-                !audio.busy()
-                    && (state.can_send(&model, &account, &activity) || state.can_steer(&account))
-            }
-            ChatAction::Stop => {
-                !state.cancelling
-                    && state
-                        .session
-                        .as_ref()
-                        .and_then(|session| session.turn.as_ref())
-                        .is_some_and(|turn| {
-                            state.operation == Some(turn.operation_id)
-                                && matches!(turn.status, ChatTurnStatus::Running)
-                        })
-            }
+            ChatAction::Send => !audio.busy() && state.can_send(&model, &account, &activity),
+            ChatAction::Stop => !state.cancelling && running,
         };
         if enabled {
             commands.entity(entity).remove::<InteractionDisabled>();
@@ -2164,14 +2240,7 @@ fn update(
             commands.entity(entity).insert(InteractionDisabled);
         }
     }
-    for (mut text, is_summary, is_status, is_send) in &mut texts {
-        if is_send {
-            text.set_if_neq(Text::new(if state.operation.is_some() {
-                "补充当前任务"
-            } else {
-                "发送"
-            }));
-        }
+    for (mut text, is_summary, is_status) in &mut texts {
         if is_summary {
             let title = state
                 .session

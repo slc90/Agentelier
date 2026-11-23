@@ -77,6 +77,7 @@ pub struct Connection {
     pending_mcp: HashSet<u64>,
     pending_memory: HashSet<u64>,
     pending_projects: HashSet<u64>,
+    pending_session_models: HashMap<u64, SessionId>,
     pending_images: HashSet<u64>,
     pending_audio: HashMap<u64, SessionId>,
 }
@@ -161,6 +162,7 @@ impl Connection {
             pending_mcp: HashSet::new(),
             pending_memory: HashSet::new(),
             pending_projects: HashSet::new(),
+            pending_session_models: HashMap::new(),
             pending_images: HashSet::new(),
             pending_audio: HashMap::new(),
         })
@@ -379,6 +381,24 @@ impl Connection {
             .refresh_archives()
             .map_err(|failure| BridgeFailure(failure.to_string()))
     }
+    pub fn change_session_model(
+        &mut self,
+        session: SessionId,
+        slug: String,
+    ) -> Result<u64, BridgeFailure> {
+        if self.stopping || self.failure.is_some() || !self.pending_session_models.is_empty() {
+            return Err(BridgeFailure("当前执行连接不能接纳模型变更".into()));
+        }
+        let id = self
+            .operations
+            .allocate()
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.runtime
+            .change_session_model(id, session, slug)
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.pending_session_models.insert(id, session);
+        Ok(id)
+    }
     pub fn steer_conversation(
         &mut self,
         session: SessionId,
@@ -583,6 +603,17 @@ impl Connection {
                     } = kind
                     {
                         if self.renaming.remove(&event.operation_id) != Some(*session) {
+                            return self.protocol_failure();
+                        }
+                        return Ok(Some(event));
+                    }
+                    if let agentelier_conversation_bridge::ConversationEvent::SessionModelSaved {
+                        session,
+                        ..
+                    } = kind
+                    {
+                        if self.pending_session_models.remove(&event.operation_id) != Some(*session)
+                        {
                             return self.protocol_failure();
                         }
                         return Ok(Some(event));

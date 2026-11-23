@@ -195,7 +195,7 @@ flowchart LR
 
 ## 内存聊天与流式投影
 
-Conversation 固定 Session 的模型与推理设置，始终持有会话历史、前台状态和任务账本。Runtime 串行处理 Runner 对当前 Turn 的操作，并持有任务句柄、取消令牌与回收信号。Runner 获取冻结材料、驱动模型和工具，并等待实际保存回执。Runner 每任务通过同一 CredentialClient 捕获当前凭据身份，模型请求核对账号与认证生命周期。账号变化保留本地记录并持久暂停队列。当前支持一个内存 Session 的连续多轮交流，空闲时可确认新建或重置为全新身份与空历史。
+Conversation 持有 Session 的模型与推理设置、历史、前台状态和任务账本。Runtime 串行处理 Runner 对当前 Turn 的操作，并持有任务句柄、取消令牌与回收信号。模型变更经会话日志持久确认，在当前 Turn 收尾后提供给后续 Turn。Runner 获取冻结材料、驱动模型和工具，并等待实际保存回执。Runner 每任务通过同一 CredentialClient 捕获当前凭据身份，模型请求核对账号与认证生命周期。账号变化保留本地记录并持久暂停队列。当前支持一个内存 Session 的连续多轮交流，空闲时可确认新建或重置为全新身份与空历史。
 
 Conversation 的内存 Agent Registry 管理 Session 内的 Root 身份及子 Agent 身份预留。Root 使用 Session UUID 映射其稳定标识与历史，Runtime 用每次打开时分配的实例标识核对执行事件。详见 [聊天会话与协议历史](modules/conversation.md#设置与生命周期)。
 

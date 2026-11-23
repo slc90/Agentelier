@@ -30,6 +30,7 @@ pub struct RestoredSession {
     pub state: StoredState,
     initial: InitialSession,
     working_directory: std::path::PathBuf,
+    model: crate::StoredSessionModel,
     history: ProtocolHistory,
     tasks: crate::tasks::TaskLedger,
     pub processes: crate::ProcessLedger,
@@ -498,6 +499,12 @@ fn replay(
     }
     let mut pending = PendingResponses::default();
     let mut working_directory = initial.settings.working_directory.clone();
+    let mut model = crate::StoredSessionModel {
+        slug: initial.settings.slug.clone(),
+        display_name: initial.settings.display_name.clone(),
+        image_input: initial.settings.image_input,
+        context_limits: initial.settings.context_limits.as_ref().clone(),
+    };
     let mut seen_calls = HashSet::new();
     let mut seen_items = HashSet::new();
     let mut completed_requests = HashSet::new();
@@ -682,6 +689,7 @@ fn replay(
                             | RecordEvent::AgentTurn { .. }
                             | RecordEvent::Mailbox { .. }
                             | RecordEvent::WorkingDirectoryChanged { .. }
+                            | RecordEvent::SessionModelChanged { .. }
                     )
                 {
                     return Err(ConversationFailure::new(
@@ -800,6 +808,25 @@ fn replay(
                     working_directory = directory;
                     state.project_error = None;
                 }
+            }
+            RecordEvent::SessionModelChanged { model: saved, .. } => {
+                if saved.slug.trim().is_empty()
+                    || saved.display_name.trim().is_empty()
+                    || !saved.context_limits.available()
+                    || child_mail.is_some()
+                    || state
+                        .turn
+                        .as_ref()
+                        .is_some_and(|turn| matches!(turn.status, TurnStatus::Running))
+                    || (initial.settings.tool_contract == ToolContract::CodexWebSocket
+                        && agentelier_llm_model::codex_tool_contract(&saved.slug)
+                            != ToolContract::CodexWebSocket)
+                {
+                    return Err(ConversationFailure::new("存档模型变更与会话状态不符"));
+                }
+                model = *saved;
+                state.context.limits = model.context_limits.clone();
+                state.context.anchor = None;
             }
             RecordEvent::ProjectPublished {
                 state: incoming,
@@ -941,7 +968,7 @@ fn replay(
                     || checkpoint.source_sequence > covered_sequence
                     || checkpoint.source_sequence >= record.sequence
                     || checkpoint.input_retained != retained_input
-                    || checkpoint.model != initial.settings.slug
+                    || checkpoint.model != model.slug
                     || state
                         .turn
                         .as_ref()
@@ -1724,6 +1751,7 @@ fn replay(
         state,
         initial,
         working_directory,
+        model,
         history,
         tasks,
         processes,
@@ -1852,11 +1880,11 @@ impl Conversation {
             notice: restored.notice,
             settings: Box::new(SessionSettings {
                 codex: settings.codex,
-                context_limits: settings.context_limits,
-                slug: settings.slug,
-                display_name: settings.display_name,
+                context_limits: Box::new(restored.model.context_limits),
+                slug: restored.model.slug,
+                display_name: restored.model.display_name,
                 effort: settings.effort,
-                image_input: settings.image_input,
+                image_input: restored.model.image_input,
                 instructions: Arc::new(settings.instructions),
                 working_directory: restored.working_directory,
             }),

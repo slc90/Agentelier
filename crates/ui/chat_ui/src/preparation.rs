@@ -1,3 +1,4 @@
+use crate::conversation::ChatState;
 use crate::reasoning::{self, ReasoningSetting, ReasoningSource};
 use agentelier_agent_host::{AgentHost, HostActivity, HostFailed, ModelEvent, ReceiveAgentEvents};
 use agentelier_controls::{AgentelierButton, AgentelierButtonLoading, AgentelierButtonStyle};
@@ -102,6 +103,10 @@ enum ModelAction {
 #[derive(Component, Clone, Default)]
 struct ModelSelector;
 #[derive(Component, Clone, Default)]
+struct SessionModelSelector;
+#[derive(Component, Clone, Default)]
+struct SessionModelLabel;
+#[derive(Component, Clone, Default)]
 struct ModelStatus;
 #[derive(Component, Clone, Default)]
 struct ModelText;
@@ -134,7 +139,11 @@ pub fn install(
         .add_observer(mount)
         .add_systems(Update, restore_selection)
         .add_systems(Update, receive.after(ReceiveAgentEvents))
-        .add_systems(PostUpdate, update.before(UiSystems::Content));
+        .add_systems(Update, auto_catalog.after(receive))
+        .add_systems(
+            PostUpdate,
+            (update, update_session_model).before(UiSystems::Content),
+        );
     Ok(())
 }
 
@@ -193,7 +202,7 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
                 ModelTextPreview
                 Node { width: percent(100), height: px(64), flex_shrink: 0.0, display: preview_display }--
                 @crate::working_directory::panel(world.resource::<crate::working_directory::DirectoryState>())--
-                @crate::conversation::panel(&chat, account)
+                @crate::conversation::panel(&chat, account, source)
                 ]--
                 crate::prompts::PromptWorkspace Name("PromptWorkspace")
                 Node { display: Display::None, width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column }
@@ -205,6 +214,81 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
             ChildOf(host)
         });
     });
+}
+
+pub(crate) fn session_model_selector(source: Entity) -> impl Scene {
+    bsn! {
+        @WidgetryComboBox::<ModelChoice> {
+            @source: source,
+            @placeholder: {WidgetryComboBoxContent::new(|| bsn_list! { Text::default() WidgetryText SessionModelLabel })},
+            @renderer: {WidgetryListViewRenderer::new(|model: &ModelChoice| {
+                let name = model.display_name.clone();
+                bsn_list! { Text(name) WidgetryText }
+            })},
+        }
+        Name("ChatSessionModel") SessionModelSelector
+        Node { width: px(MODEL_SELECTOR_WIDTH), max_width: percent(70), min_width: px(0) }
+        on(select_session_model)
+    }
+}
+
+fn select_session_model(
+    event: On<ValueChange<Option<WidgetryListItemId>>>,
+    source: Res<ModelSource>,
+    models: Query<&WidgetryListModel<ModelChoice>>,
+    mut commands: Commands,
+) -> Result {
+    let Some(id) = event.value else {
+        return Ok(());
+    };
+    let slug = models
+        .get(source.0)?
+        .get_by_id(id)
+        .ok_or_else(|| io::Error::other("所选模型条目已不存在"))?
+        .slug
+        .clone();
+    commands.queue(move |world: &mut World| crate::conversation::choose_session_model(world, slug));
+    WidgetryComboBox::<ModelChoice>::clear_selection(&mut commands, event.source);
+    Ok(())
+}
+
+fn update_session_model(
+    state: Res<ChatState>,
+    model: Res<ModelState>,
+    account: Res<AccountState>,
+    selectors: Query<(Entity, Has<InteractionDisabled>), With<SessionModelSelector>>,
+    mut labels: Query<&mut Text, With<SessionModelLabel>>,
+    mut commands: Commands,
+) {
+    let enabled = state
+        .session
+        .as_ref()
+        .is_some_and(|session| !session.execution_blocked && session.matches_account(&account))
+        && state.model_change.is_none()
+        && state.replacement.is_none()
+        && model.catalog_loaded
+        && model.operation.is_none()
+        && model.catalog_error.is_none()
+        && !account.runtime_failed;
+    let label = if let Some(session) = &state.session {
+        if state.model_change.is_some_and(|(_, id)| id == session.id) {
+            format!("{} · 等待保存模型", session.display_name)
+        } else {
+            session.display_name.clone()
+        }
+    } else {
+        "当前会话模型".to_owned()
+    };
+    for mut text in &mut labels {
+        text.set_if_neq(Text(label.clone()));
+    }
+    for (entity, disabled) in &selectors {
+        if enabled && disabled {
+            commands.entity(entity).remove::<InteractionDisabled>();
+        } else if !enabled && !disabled {
+            commands.entity(entity).insert(InteractionDisabled);
+        }
+    }
 }
 
 fn action_button(label: &'static str, name: &'static str, action: ModelAction) -> impl Scene {
@@ -272,50 +356,64 @@ fn select_model(
 
 fn activate(event: On<Activate>, actions: Query<&ModelAction>, mut commands: Commands) -> Result {
     let action = *actions.get(event.entity)?;
-    commands.queue(move |world: &mut World| -> Result {
-        let state = world.resource::<ModelState>();
-        let account = world.resource::<AccountState>();
-        if !state.can_request(account)
-            || world.resource::<AgentHost>().model_busy()?
-            || matches!(action, ModelAction::Verify) && !state.can_verify(account)
-        {
-            return Ok(());
-        }
-        let request = match action {
-            ModelAction::Refresh => ModelRequest::Catalog,
-            ModelAction::Verify => {
-                let choice = state
-                    .selected_model()
-                    .ok_or_else(|| io::Error::other("没有可验证的模型"))?;
-                ModelRequest::Verify {
-                    slug: choice.slug.clone(),
-                    display_name: choice.display_name.clone(),
-                    effort: state.reasoning.effort(),
-                }
-            }
-        };
-        let result = world.resource::<AgentHost>().request_model(request);
-        let mut state = world.resource_mut::<ModelState>();
-        match result {
-            Ok(id) => {
-                state.operation = Some(id);
-                state.phase = match action {
-                    ModelAction::Refresh => ModelPhase::Catalog,
-                    ModelAction::Verify => ModelPhase::Verify,
-                };
-                state.error = None;
-                if matches!(action, ModelAction::Refresh) {
-                    state.catalog_error = None;
-                }
-                info!(operation_id = id, "开始模型操作");
-            }
-            Err(failure) => {
-                state.error = Some(failure.to_string());
-                error!(error = %failure, "无法开始模型操作");
+    commands.queue(move |world: &mut World| submit(world, action));
+    Ok(())
+}
+
+fn auto_catalog(world: &mut World) -> Result {
+    let state = world.resource::<ModelState>();
+    if !world.resource::<crate::ArchiveState>().loading
+        && !state.catalog_loaded
+        && state.catalog_error.is_none()
+        && state.error.is_none()
+    {
+        submit(world, ModelAction::Refresh)?;
+    }
+    Ok(())
+}
+
+fn submit(world: &mut World, action: ModelAction) -> Result {
+    let state = world.resource::<ModelState>();
+    let account = world.resource::<AccountState>();
+    if !state.can_request(account)
+        || world.resource::<AgentHost>().model_busy()?
+        || matches!(action, ModelAction::Verify) && !state.can_verify(account)
+    {
+        return Ok(());
+    }
+    let request = match action {
+        ModelAction::Refresh => ModelRequest::Catalog,
+        ModelAction::Verify => {
+            let choice = state
+                .selected_model()
+                .ok_or_else(|| io::Error::other("没有可验证的模型"))?;
+            ModelRequest::Verify {
+                slug: choice.slug.clone(),
+                display_name: choice.display_name.clone(),
+                effort: state.reasoning.effort(),
             }
         }
-        Ok(())
-    });
+    };
+    let result = world.resource::<AgentHost>().request_model(request);
+    let mut state = world.resource_mut::<ModelState>();
+    match result {
+        Ok(id) => {
+            state.operation = Some(id);
+            state.phase = match action {
+                ModelAction::Refresh => ModelPhase::Catalog,
+                ModelAction::Verify => ModelPhase::Verify,
+            };
+            state.error = None;
+            if matches!(action, ModelAction::Refresh) {
+                state.catalog_error = None;
+            }
+            info!(operation_id = id, "开始模型操作");
+        }
+        Err(failure) => {
+            state.error = Some(failure.to_string());
+            error!(error = %failure, "无法开始模型操作");
+        }
+    }
     Ok(())
 }
 

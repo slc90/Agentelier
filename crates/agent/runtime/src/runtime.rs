@@ -25,6 +25,7 @@ pub use memory::{MemoryReply, MemoryRequest};
 mod model_task;
 mod recording;
 mod renaming;
+mod session_model;
 mod spawn_agent;
 mod task_control;
 mod tool_jobs;
@@ -141,6 +142,7 @@ enum Command {
     Scan,
     Scanned(io::Result<agentelier_session_store::ArchiveCatalog>),
     ChangeProject(u64, agentelier_conversation::ProjectChange),
+    ChangeSessionModel(session_model::Change),
     ProjectSaved(u64, io::Result<()>),
     Deleted(io::Result<agentelier_session_store::DeleteCommit>),
     Loaded(Box<io::Result<agentelier_conversation::RestoredSession>>),
@@ -338,6 +340,7 @@ impl AgentRuntime {
                         let mut renaming: Option<renaming::Renaming> = None;
                         let mut suspending = 0usize;
                         let mut finalizing = false;
+                        let mut pending_session_model: Option<session_model::Change> = None;
                         let mut account = Account::new(owner_credentials.clone(), environment);
                         let quota_interval = std::time::Duration::from_secs(120);
                         let mut quota_tick = tokio::time::interval(quota_interval);
@@ -349,7 +352,7 @@ impl AgentRuntime {
                         let mut logout: Option<(u64, tokio::task::JoinHandle<LogoutCompletion>)> = None;
                         let mut pending_source: Option<SourceSettlement> = None;
                         let mut requesting_catalog = None;
-                        let mut model_catalog = None;
+                        let mut model_catalog: Option<(agentelier_llm_model::CodexIdentity, Vec<agentelier_llm_model::ModelInfo>)> = None;
                         let mut delivery_failure = None;
                         let mut model: Option<ModelTask> = None;
                         let mut stopping_root = None;
@@ -373,6 +376,34 @@ impl AgentRuntime {
                                 emit(&publish, event.operation_id, AgentEventKind::Account(event.kind))?;
                             }
                             loop {
+                                if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none()
+                                    && suspending == 0 && !pending_queue && !finalizing && pending_source.is_none()
+                                    && !runtime_shutdown.is_cancelled()
+                                    && let Some(change) = pending_session_model.take()
+                                {
+                                    let available = model_source(&account)
+                                        .and_then(|source| {
+                                            conversation.validate_model_source(source)?;
+                                            model_catalog.as_ref()
+                                                .filter(|(owner, _)| owner == source)
+                                                .map(|(_, models)| models.as_slice())
+                                                .ok_or_else(|| ConversationFailure::new("请先刷新当前账号的模型目录"))
+                                        });
+                                    let result = match available {
+                                        Ok(models) => change.save(&mut conversation, models, &store).await,
+                                        Err(failure) => Err(failure),
+                                    };
+                                    if let Err(failure) = &result {
+                                        error!(operation_id = change.id, session_id = %change.session, %failure, "会话模型保存失败");
+                                    }
+                                    emit(&publish, change.id, AgentEventKind::Conversation(ConversationEvent::SessionModelSaved {
+                                        session: change.session,
+                                        result: result.map_err(|failure| failure.to_string()),
+                                    }))?;
+                                    if model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
+                                        model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store)?;
+                                    }
+                                }
                                 if catalog_dirty && catalog.is_none() {
                                     catalog_dirty = false;
                                     match store.client().scan() {
@@ -747,6 +778,16 @@ impl AgentRuntime {
                                             Err(failure) => emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::ProjectSaved(Err(failure.to_string()))))?,
                                         }
                                     }
+                                    Command::ChangeSessionModel(change) => {
+                                        if pending_session_model.is_some() || conversation.current().is_none_or(|view| view.id != change.session) {
+                                            emit(&publish, change.id, AgentEventKind::Conversation(ConversationEvent::SessionModelSaved {
+                                                session: change.session,
+                                                result: Err("当前已有模型变更等待保存，或目标会话已变化".into()),
+                                            }))?;
+                                        } else {
+                                            pending_session_model = Some(change);
+                                        }
+                                    }
                                     Command::ProjectSaved(id, result) => {
                                         match &result {
                                             Ok(()) => {
@@ -814,7 +855,7 @@ impl AgentRuntime {
                                         if applied.failed && pending_source.is_some() {
                                             return Err(RuntimeFailure::Store(io::Error::other("凭据来源切换前的会话收尾保存未确认")));
                                         }
-                                        if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && !pending_queue && !finalizing && pending_source.is_none() && !runtime_shutdown.is_cancelled()
+                                        if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && !pending_queue && !finalizing && pending_source.is_none() && pending_session_model.is_none() && !runtime_shutdown.is_cancelled()
                                             && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
                                             model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store)?;
                                         }
@@ -887,7 +928,7 @@ impl AgentRuntime {
                                             task.control.finished.cancel();
                                             capture_delivery(emit(&publish, task.id, event), &mut delivery_failure);
                                         }
-                                        if !finalizing && !pending_queue && suspending == 0 && pending_source.is_none() && delivery_failure.is_none() && !runtime_shutdown.is_cancelled()
+                                        if !finalizing && !pending_queue && suspending == 0 && pending_source.is_none() && pending_session_model.is_none() && delivery_failure.is_none() && !runtime_shutdown.is_cancelled()
                                             && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
                                             model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store)?;
                                         }
@@ -1499,6 +1540,18 @@ impl AgentRuntime {
             control: control.clone(),
         })?;
         Ok(())
+    }
+    pub fn change_session_model(
+        &self,
+        id: u64,
+        session: SessionId,
+        slug: String,
+    ) -> Result<(), RuntimeFailure> {
+        self.submit(Command::ChangeSessionModel(session_model::Change {
+            id,
+            session,
+            slug,
+        }))
     }
     pub fn request_conversation(
         &mut self,

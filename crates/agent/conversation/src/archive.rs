@@ -134,6 +134,10 @@ pub enum RecordEvent {
         session: SessionId,
         directory: PathBuf,
     },
+    SessionModelChanged {
+        session: SessionId,
+        model: Box<crate::StoredSessionModel>,
+    },
     ProjectPublished {
         state: StoredState,
         publication: Box<agentelier_llm_model::ProjectPublication>,
@@ -248,6 +252,7 @@ impl RecordEvent {
             | Self::Mailbox { session, .. }
             | Self::AudioDraft { session, .. }
             | Self::WorkingDirectoryChanged { session, .. }
+            | Self::SessionModelChanged { session, .. }
             | Self::TranscriptionStarted { session, .. }
             | Self::TranscriptionFinished { session, .. } => *session,
             _ => self.state().map_or(SessionId::nil(), |state| state.session),
@@ -264,6 +269,7 @@ impl RecordEvent {
             | Self::Mailbox { .. }
             | Self::Process { .. }
             | Self::WorkingDirectoryChanged { .. }
+            | Self::SessionModelChanged { .. }
             | Self::AudioDraft { .. }
             | Self::TranscriptionStarted { .. }
             | Self::TranscriptionFinished { .. } => None,

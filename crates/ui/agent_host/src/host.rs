@@ -216,6 +216,9 @@ impl AgentHost {
     pub fn rename_session(&self, session: SessionId, title: String) -> Result<u64> {
         self.submit(|connection| connection.rename_session(session, title))
     }
+    pub fn change_session_model(&self, session: SessionId, slug: String) -> Result<u64> {
+        self.submit(|connection| connection.change_session_model(session, slug))
+    }
     pub fn refresh_archives(&self) -> Result {
         self.submit(|connection| connection.refresh_archives())
     }

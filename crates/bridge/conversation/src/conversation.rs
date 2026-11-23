@@ -471,6 +471,10 @@ pub enum ConversationEvent {
     ArchiveFailed(String),
     Created(SessionView),
     WorkingDirectorySaved(SessionView),
+    SessionModelSaved {
+        session: SessionId,
+        result: Result<SessionView, String>,
+    },
     Accepted(SessionView),
     Updated(SessionView),
     Finished(SessionView),
@@ -1015,6 +1019,12 @@ pub fn convert(event: agentelier_conversation::ConversationEvent) -> Conversatio
         }
         agentelier_conversation::ConversationEvent::WorkingDirectorySaved(session) => {
             ConversationEvent::WorkingDirectorySaved(view(session))
+        }
+        agentelier_conversation::ConversationEvent::SessionModelSaved { session, result } => {
+            ConversationEvent::SessionModelSaved {
+                session,
+                result: result.map(view),
+            }
         }
         agentelier_conversation::ConversationEvent::Accepted(session) => {
             ConversationEvent::Accepted(view(session))
