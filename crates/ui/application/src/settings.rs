@@ -18,6 +18,7 @@ use bevy_widgetry_path_display::{display_path, simplify_path};
 use std::path::PathBuf;
 
 mod avatar;
+mod layout;
 mod view;
 
 #[derive(Resource, Default)]
@@ -83,6 +84,7 @@ impl Choice {
 
 pub(crate) fn install(app: &mut App) -> Result {
     avatar::install(app);
+    layout::install(app);
     app.register_widgetry_combo_box::<Choice>()
         .map_err(|failure| failure.into_bevy_error())?;
     app.init_resource::<Settings>()

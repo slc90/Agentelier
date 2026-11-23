@@ -195,6 +195,7 @@ dependencies = [
  "bevy_widgetry",
  "bevy_widgetry_path_display",
  "futures-timer",
+ "serde",
  "serde_json",
  "time",
  "tracing",

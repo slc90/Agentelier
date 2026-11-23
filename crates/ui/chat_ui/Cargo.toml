@@ -14,6 +14,7 @@ agentelier_conversation_bridge = { path = "../../bridge/conversation" }
 agentelier_prompts = { path = "../../agent/prompts" }
 bevy_app_assets = { path = "../assets" }
 bevy_widgetry_path_display.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 futures-timer.workspace = true
 bevy.workspace = true

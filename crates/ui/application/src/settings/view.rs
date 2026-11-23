@@ -73,6 +73,7 @@ fn content(scale: Selector, model: Selector, effort: Selector) -> impl SceneList
         ]--
         Text::default() WidgetryText SettingsMessage Name("SettingsFeedback")
         TextLayout::linebreak(LineBreak::AnyCharacter)--
+        @super::layout::section()--
         @super::avatar::section()
     ]
     }

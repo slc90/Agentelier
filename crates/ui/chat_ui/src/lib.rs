@@ -25,6 +25,7 @@ mod tool_timeline;
 mod transcription;
 mod working_directory;
 mod workspace;
+mod workspace_layout;
 
 pub use conversation::{
     ChatHistoryItem, ChatMessage, ChatReplacement, ChatSession, ChatState, ChatTurn,
@@ -33,5 +34,6 @@ pub use conversation::{
 pub use preparation::{ChatUiHost, ModelChoice, ModelPhase, ModelState, install};
 pub use reasoning::ReasoningSetting;
 pub use workspace::{MAIN_WINDOW_WIDTH, MIN_MAIN_WINDOW_WIDTH, OpenSettings, workspace_title};
+pub use workspace_layout::{CommitWorkspaceLayout, LayoutSide, WorkspaceLayout, WorkspaceRatios};
 
 mod session_actions;

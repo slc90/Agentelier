@@ -213,8 +213,9 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
         };
         let archives = bsn_list! { @crate::archives::panel(world) };
         let tasks = crate::task_panel::panel(world);
+        let layout = world.resource::<crate::WorkspaceLayout>().ratios;
         world.commands().spawn_scene_with_error_handler(bsn! {
-            @crate::workspace::scene(content, archives, tasks)
+            @crate::workspace::scene(content, archives, tasks, layout)
             ChildOf(host)
         });
     });

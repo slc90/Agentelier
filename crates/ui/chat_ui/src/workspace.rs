@@ -1,9 +1,10 @@
 use crate::conversation::ChatState;
+use crate::workspace_layout::{self, Split, WorkspaceRatios};
 use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
 use agentelier_login_ui::{AccountState, QuotaWindow};
 use bevy::prelude::*;
 use bevy::ui::{InteractionDisabled, UiSystems};
-use bevy::ui_widgets::{Activate, ValueChange};
+use bevy::ui_widgets::Activate;
 use bevy_app_assets::NavigationIcon;
 use bevy_widgetry::icon::WidgetryIcon;
 use bevy_widgetry::splitter::{WidgetrySplitter, WidgetrySplitterPlugin};
@@ -21,18 +22,16 @@ const NAV_WIDTH: f32 = 64.0;
 const NAV_GAP: f32 = 12.0;
 const NAV_ICON_SIZE: u32 = 20;
 const NAV_AVATAR_SIZE: f32 = 24.0;
-const SESSION_INITIAL: f32 = 280.0;
-const SESSION_MIN: f32 = 220.0;
-const CHAT_MIN: f32 = 640.0;
-const RIGHT_INITIAL: f32 = 360.0;
-const RIGHT_MIN: f32 = 320.0;
+pub(crate) const SESSION_INITIAL: f32 = 280.0;
+pub(crate) const SESSION_MIN: f32 = 220.0;
+pub(crate) const CHAT_MIN: f32 = 640.0;
+pub(crate) const RIGHT_INITIAL: f32 = 360.0;
+pub(crate) const RIGHT_MIN: f32 = 320.0;
 const PANE_PADDING: f32 = 12.0;
-const HANDLE_WIDTH: f32 = 8.0;
+pub(crate) const HANDLE_WIDTH: f32 = 8.0;
 const SEPARATOR_WIDTH: f32 = 1.0;
-const WORKSPACE_SPLIT_LENGTH: f32 = MAIN_WINDOW_WIDTH - FRAME_BORDERS - NAV_WIDTH - HANDLE_WIDTH;
-const CHAT_SPLIT_LENGTH: f32 = WORKSPACE_SPLIT_LENGTH - SESSION_INITIAL - HANDLE_WIDTH;
-const SESSION_RATIO: f32 = SESSION_INITIAL / WORKSPACE_SPLIT_LENGTH;
-const CHAT_RATIO: f32 = (CHAT_SPLIT_LENGTH - RIGHT_INITIAL) / CHAT_SPLIT_LENGTH;
+pub(crate) const WORKSPACE_CONTENT_WIDTH: f32 =
+    MAIN_WINDOW_WIDTH - FRAME_BORDERS - NAV_WIDTH - 2.0 * HANDLE_WIDTH;
 const SIDE_BACKGROUND: Color = Color::srgb_u8(0x0D, 0x26, 0x1B);
 const PANEL_BACKGROUND: Color = Color::srgb_u8(0x14, 0x35, 0x26);
 
@@ -41,12 +40,6 @@ struct ContextStatus;
 
 #[derive(Component, Clone, Default)]
 struct QuotaStatusLabel;
-
-#[derive(Component, Clone, Copy)]
-struct InitialSplit {
-    ratio: f32,
-    width: f32,
-}
 
 #[derive(Event)]
 pub struct OpenSettings;
@@ -95,29 +88,11 @@ pub fn workspace_title() -> impl Scene {
 }
 
 pub(crate) fn install(app: &mut App) {
-    app.add_plugins(WidgetrySplitterPlugin)
-        .add_systems(
-            PostUpdate,
-            (sync_context, sync_quota).before(UiSystems::Content),
-        )
-        .add_systems(PostUpdate, initialize_splits.after(UiSystems::Layout));
-}
-
-fn initialize_splits(
-    mut commands: Commands,
-    splits: Query<(Entity, &InitialSplit, &ComputedNode)>,
-) {
-    for (root, initial, geometry) in &splits {
-        let width = geometry.size().x * geometry.inverse_scale_factor();
-        if width + 1.0 >= initial.width {
-            WidgetrySplitter::set_split_ratio(&mut commands, root, initial.ratio);
-            commands.entity(root).remove::<InitialSplit>();
-        }
-    }
-}
-
-fn split_changed(event: On<ValueChange<f32>>, mut commands: Commands) {
-    commands.entity(event.source).remove::<InitialSplit>();
+    app.add_plugins(WidgetrySplitterPlugin).add_systems(
+        PostUpdate,
+        (sync_context, sync_quota).before(UiSystems::Content),
+    );
+    workspace_layout::install(app);
 }
 
 fn sync_context(state: Res<ChatState>, mut labels: Query<&mut Text, With<ContextStatus>>) {
@@ -176,7 +151,10 @@ pub(crate) fn scene(
     chat: impl SceneList + 'static,
     archives: impl SceneList + 'static,
     tasks: impl Scene + 'static,
+    layout: WorkspaceRatios,
 ) -> impl Scene {
+    let session_ratio = workspace_layout::initial_ratio(layout, Split::Session);
+    let chat_ratio = workspace_layout::initial_ratio(layout, Split::Chat);
     let session_pane = Box::new(bsn! {
         Name("WorkspaceC")
         BackgroundColor(SIDE_BACKGROUND)
@@ -192,7 +170,7 @@ pub(crate) fn scene(
         Node { min_width: px(CHAT_MIN + RIGHT_MIN + HANDLE_WIDTH) }
         Children [
             @WidgetrySplitter {
-                @split_ratio: CHAT_RATIO,
+                @split_ratio: chat_ratio,
                 @handle_thickness: HANDLE_WIDTH,
                 @line_thickness: SEPARATOR_WIDTH,
                 @pane_a: {Some(conversation_pane)},
@@ -200,8 +178,8 @@ pub(crate) fn scene(
             }
             Name("WorkspaceChatSplit")
             Node { width: percent(100), height: percent(100) }
-            template(|_| Ok(InitialSplit { ratio: CHAT_RATIO, width: CHAT_SPLIT_LENGTH + HANDLE_WIDTH }))
-            on(split_changed)
+            template(|_| Ok(Split::Chat))
+            on(workspace_layout::changed)
         ]
     }) as Box<dyn Scene>;
     bsn! {
@@ -210,7 +188,7 @@ pub(crate) fn scene(
         Children [
             @navigation()--
             @WidgetrySplitter {
-                @split_ratio: SESSION_RATIO,
+                @split_ratio: session_ratio,
                 @handle_thickness: HANDLE_WIDTH,
                 @line_thickness: SEPARATOR_WIDTH,
                 @pane_a: {Some(session_pane)},
@@ -218,8 +196,8 @@ pub(crate) fn scene(
             }
             Name("WorkspaceSessionSplit")
             Node { flex_grow: 1.0, flex_basis: px(0), height: percent(100), min_width: px(0) }
-            template(|_| Ok(InitialSplit { ratio: SESSION_RATIO, width: WORKSPACE_SPLIT_LENGTH + HANDLE_WIDTH }))
-            on(split_changed)
+            template(|_| Ok(Split::Session))
+            on(workspace_layout::changed)
         ]
     }
 }
@@ -276,8 +254,11 @@ fn right_column(tasks: impl Scene + 'static) -> impl Scene {
         Node { min_width: px(RIGHT_MIN), flex_direction: FlexDirection::Column }
         Children [
             Name("WorkspaceE") BackgroundColor(PANEL_BACKGROUND)
-            Node { width: percent(100), flex_basis: px(0), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, padding: UiRect::all(px(PANE_PADDING)), row_gap: px(PANE_PADDING) }
-            Children [ Text("后台任务") WidgetryText-- @tasks ]--
+            Node { width: percent(100), flex_basis: px(0), flex_grow: 1.0, min_height: px(0) }
+            Children [
+                Node { width: percent(100), height: percent(100), min_height: px(0), flex_direction: FlexDirection::Column, padding: UiRect::all(px(PANE_PADDING)), row_gap: px(PANE_PADDING) }
+                Children [ Text("后台任务") WidgetryText-- @tasks ]
+            ]--
             Name("WorkspaceF") BackgroundColor(SIDE_BACKGROUND)
             Node { width: percent(100), flex_basis: px(0), flex_grow: 1.0, min_height: px(0) }
         ]

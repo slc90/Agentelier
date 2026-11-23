@@ -1,3 +1,4 @@
+use agentelier_chat_ui::WorkspaceRatios;
 use agentelier_controls::AvatarCrop;
 use bevy::prelude::Resource;
 use bevy_app_assets::user_avatar::AvatarFile;
@@ -31,6 +32,8 @@ pub(crate) struct AppConfig {
     pub(crate) default_reasoning_effort: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) user_avatar: Option<AvatarSettings>,
+    #[serde(default)]
+    pub(crate) workspace_layout: WorkspaceRatios,
     #[serde(
         default,
         rename = "codex_auth_file",
@@ -104,6 +107,7 @@ impl Default for AppConfig {
             default_model_slug: default_model_slug(),
             default_reasoning_effort: default_reasoning_effort(),
             user_avatar: None,
+            workspace_layout: WorkspaceRatios::default(),
             _legacy_codex_auth_file: (),
         }
     }
@@ -127,6 +131,12 @@ impl AppConfig {
                     format!("{field} 必须为 {BRP_PORT_RANGE:?}"),
                 ));
             }
+        }
+        if !self.workspace_layout.is_valid() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "工作区布局比例无效",
+            ));
         }
         if self.brp_port == self.brp_render_port {
             return Err(io::Error::new(
@@ -225,6 +235,10 @@ impl ConfigStore {
         self.update(|config| config.user_avatar = avatar)
     }
 
+    pub(crate) fn save_workspace_layout(&self, ratios: WorkspaceRatios) -> io::Result<()> {
+        self.update(|config| config.workspace_layout = ratios)
+    }
+
     fn update(&self, change: impl FnOnce(&mut AppConfig)) -> io::Result<()> {
         let mut current = self
             .0
@@ -245,7 +259,7 @@ impl ConfigStore {
 
 pub(crate) fn load(path: PathBuf) -> io::Result<LoadedConfig> {
     let file = ConfigFile { path };
-    let config = match fs::read_to_string(&file.path) {
+    let mut config: AppConfig = match fs::read_to_string(&file.path) {
         Ok(content) => ron::from_str::<AppConfig>(&content).map_err(io::Error::other)?,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let config = AppConfig::default();
@@ -254,6 +268,10 @@ pub(crate) fn load(path: PathBuf) -> io::Result<LoadedConfig> {
         }
         Err(error) => return Err(error),
     };
+    if !config.workspace_layout.is_valid() {
+        tracing::warn!("配置中的工作区布局比例无效，运行时使用默认比例");
+        config.workspace_layout = WorkspaceRatios::default();
+    }
     config.validate()?;
     Ok(LoadedConfig { config, file })
 }

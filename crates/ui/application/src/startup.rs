@@ -115,6 +115,9 @@ fn run_application(
     let host_plugin = AgentHostPlugin::default();
     let backend = host_plugin.host();
     app.insert_resource(config_store.clone())
+        .insert_resource(agentelier_chat_ui::WorkspaceLayout::new(
+            config.workspace_layout,
+        ))
         .insert_resource(AGENTELIER_THEME)
         .add_plugins((
             AppAssetPlugin,
