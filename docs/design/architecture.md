@@ -16,7 +16,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/ui/agent_host/` | `agentelier_agent_host` | 唯一 Connection、Winit 唤醒、命令提交、业务消息分发及执行收尾 |
 | `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、Codex 账号界面及 Bevy/Bridge 衔接 |
 | `crates/agent/login/` | `agentelier_login` | 数据环境、Codex 浏览器 OAuth、凭据持久化与身份摘要 |
-| `crates/agent/account/` | `agentelier_account` | Codex 来源状态、共享凭据请求和执行身份门控 |
+| `crates/agent/account/` | `agentelier_account` | Codex 来源状态、共享凭据请求、执行身份门控和账号额度 |
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录与窗口能力、Responses 的 HTTP/SSE 与 WebSocket 传输、响应使用量和模型错误语义 |
 | `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的聊天会话、Turn 身份、工作窗口计量、压缩检查点及恢复、展示记录与结果收敛 |
 | `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话日志、恢复读取、执行事件追加、独立名称与删除元数据、受控会话清理、不可变图片附件、单写入者、提交确认与存储收尾 |
@@ -110,7 +110,7 @@ flowchart TD
 
 `application` 安装由 controls 提供的应用主题与共享控件插件。登录、目录设置和聊天界面的普通按钮由 `AgentelierButton` 组合，业务内容和事件处理留在调用方。样式与焦点环由 controls 更新，Widgetry 持有输入、禁用及 Loading 状态。账号和对话使用 `AgentelierAvatar`，通过 Assets 提供的图像句柄显示内嵌头像。详见[控件体系](ui/components.md)。
 
-主窗口以 Widgetry Window 提供原生边缘缩放和标题栏拖动。chat_ui 装配固定导航栏与两层 Widgetry Splitter。会话导航、聊天和任务区域分别嵌入 C、D、E，右栏的下半区保持空白。标题栏投影当前会话的上下文占用，账号界面由 B 区入口打开独立窗口。关闭主窗口触发应用收尾。
+主窗口以 Widgetry Window 提供原生边缘缩放和标题栏拖动。chat_ui 装配固定导航栏与两层 Widgetry Splitter。会话导航、聊天和任务区域分别嵌入 C、D、E，右栏的下半区保持空白。标题栏投影当前会话的上下文占用和账号额度，账号界面由 B 区入口打开独立窗口。关闭主窗口触发应用收尾。
 
 启动界面复用 Widgetry 目录选择器，通过辅助 Job 调用 Login 检查并占用目录。配置由 application 的 ConfigStore 串行合并并完整替换提交；成功后复用同一窗口进入主界面，通过共享 AgentHost 发起账号恢复。数据环境保持到后台执行及日志收尾完成。
 

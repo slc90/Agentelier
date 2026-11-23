@@ -31,6 +31,15 @@ impl CredentialVersion {
     }
 }
 
+impl CodexOAuthCredentials {
+    pub fn version(&self) -> CredentialVersion {
+        CredentialVersion {
+            identity: self.summary().identity.clone(),
+            fingerprint: Sha256::digest(self.access_token().as_bytes()).into(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct UsableCredentials {
     access_token: String,
@@ -45,20 +54,10 @@ impl UsableCredentials {
         {
             return Err(SessionFailure::new("Codex OAuth 凭据已过期"));
         }
-        Ok(Self::new(
-            credentials.summary().identity.clone(),
-            credentials.access_token().to_owned(),
-        ))
-    }
-
-    fn new(identity: CodexIdentity, access_token: String) -> Self {
-        Self {
-            version: CredentialVersion {
-                identity,
-                fingerprint: Sha256::digest(access_token.as_bytes()).into(),
-            },
-            access_token,
-        }
+        Ok(Self {
+            version: credentials.version(),
+            access_token: credentials.access_token().to_owned(),
+        })
     }
 
     pub fn access_token(&self) -> &str {

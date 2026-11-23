@@ -152,7 +152,7 @@ Codex CLI 的相关实现参考：
 - [账号 Rate Limits 查询](https://github.com/openai/codex/blob/main/codex-rs/app-server/src/request_processors/account_processor.rs)
 - [Rate Limit 响应解析](https://github.com/openai/codex/blob/main/codex-rs/codex-api/src/rate_limits.rs)
 
-当前 Agentelier 的 `agent/account` 尚未提供可直接展示的额度快照，因此本次需要补充账号状态查询与安全投影。
+当前 A 区通过 Account Bridge 接收 5 小时与周额度快照，显示剩余百分比和 UTC 重置时间。额度跟随账号，窗口缺失时显示不可用，刷新失败时保留同一账号的上次快照并标记为过期。[认证运行与凭据管理](../modules/authentication.md#codex-额度快照)
 
 ### B · 五个管理入口
 

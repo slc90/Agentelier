@@ -17,10 +17,27 @@ pub enum AccountEventKind {
     LoginCancelled,
     SourceSettling,
     SourceChanged(Result<SourceSnapshot, BridgeFailure>),
+    Quota(Box<QuotaStatus>),
     LogoutFinished {
         source: SourceSnapshot,
         remote_warning: Option<String>,
     },
+}
+
+#[derive(Clone)]
+pub struct QuotaWindow {
+    pub remaining_percent: f64,
+    pub resets_at: Option<i64>,
+}
+
+#[derive(Clone)]
+pub struct QuotaStatus {
+    pub subject: String,
+    pub workspace_id: String,
+    pub fetched_at: Option<u64>,
+    pub five_hours: Option<QuotaWindow>,
+    pub week: Option<QuotaWindow>,
+    pub stale: bool,
 }
 
 pub struct ManualLogin {
@@ -56,6 +73,28 @@ pub fn convert(kind: agentelier_account::AccountEventKind) -> AccountEventKind {
         agentelier_account::AccountEventKind::SourceChanged(result) => {
             AccountEventKind::SourceChanged(result.map(convert_source).map_err(BridgeFailure))
         }
+        agentelier_account::AccountEventKind::Quota(update) => {
+            let agentelier_account::QuotaUpdate {
+                identity,
+                snapshot,
+                stale,
+            } = *update;
+            let (fetched_at, five_hours, week) = snapshot.map_or((None, None, None), |snapshot| {
+                (
+                    Some(snapshot.fetched_at),
+                    snapshot.five_hours,
+                    snapshot.week,
+                )
+            });
+            AccountEventKind::Quota(Box::new(QuotaStatus {
+                subject: identity.subject,
+                workspace_id: identity.workspace_id,
+                fetched_at,
+                five_hours: five_hours.map(quota_window),
+                week: week.map(quota_window),
+                stale,
+            }))
+        }
         agentelier_account::AccountEventKind::LogoutFinished {
             source,
             remote_warning,
@@ -63,6 +102,13 @@ pub fn convert(kind: agentelier_account::AccountEventKind) -> AccountEventKind {
             source: convert_source(source),
             remote_warning,
         },
+    }
+}
+
+fn quota_window(window: agentelier_account::QuotaWindow) -> QuotaWindow {
+    QuotaWindow {
+        remaining_percent: 100.0 - window.used_percent,
+        resets_at: window.resets_at,
     }
 }
 

@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod credentials;
 mod operations;
+mod quota;
 mod source;
 
 pub use agentelier_login::{
@@ -15,4 +16,5 @@ pub use operations::{
     DeliveryFailure, LoginFailure, LoginPrompt, LogoutCompletion, RefreshAttempt,
     RefreshCompletion,
 };
+pub use quota::{QuotaAttempt, QuotaCompletion, QuotaSnapshot, QuotaUpdate, QuotaWindow};
 pub use source::AccountSource;

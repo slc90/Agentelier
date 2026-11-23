@@ -46,6 +46,7 @@ pub enum AccountEventKind {
     LoginCancelled,
     SourceSettling,
     SourceChanged(Result<AccountSource, String>),
+    Quota(Box<crate::QuotaUpdate>),
     LogoutFinished {
         source: AccountSource,
         remote_warning: Option<String>,
@@ -115,6 +116,7 @@ pub struct Account {
     snapshot: Option<AccountSource>,
     renewal: Renewal,
     signing_out: bool,
+    pub(super) quota: Option<crate::QuotaSnapshot>,
 }
 
 impl Account {
@@ -126,6 +128,7 @@ impl Account {
             snapshot: None,
             renewal: Renewal::default(),
             signing_out: false,
+            quota: None,
         }
     }
 
@@ -136,6 +139,18 @@ impl Account {
         self.snapshot
             .as_ref()
             .and_then(AccountSource::codex_identity)
+    }
+
+    pub fn quota_version(&self) -> Option<crate::CredentialVersion> {
+        self.codex_identity()?;
+        self.current.as_ref().map(CodexOAuthCredentials::version)
+    }
+
+    pub fn quota_attempt(&self) -> Option<crate::QuotaAttempt> {
+        Some(crate::QuotaAttempt::new(
+            self.credentials.clone(),
+            self.quota_version()?,
+        ))
     }
 
     pub async fn browser_login(
@@ -243,6 +258,9 @@ impl Account {
             || previous.is_some_and(|old| old.codex_identity() != snapshot.codex_identity());
         self.credentials
             .update_source(matches!(snapshot, AccountSource::Codex(_)), replaced)?;
+        if replaced || !matches!(&snapshot, AccountSource::Codex(_)) {
+            self.quota = None;
+        }
         if operation_id == 0 && previous == Some(&snapshot) {
             return Ok(AccountEffect::None);
         }

@@ -88,6 +88,7 @@ impl Account {
             }
         };
         self.snapshot = Some(source.clone());
+        self.quota = None;
         self.signing_out = false;
         self.credentials.finish_source_change()?;
         Ok(AccountEffect::Event(AccountEvent {

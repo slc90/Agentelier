@@ -1,3 +1,4 @@
+use agentelier_account_bridge::QuotaStatus;
 use agentelier_controls::{
     AgentelierAvatar, AgentelierButton, AgentelierButtonLoading, AgentelierButtonStyle,
 };
@@ -27,6 +28,8 @@ pub struct AccountState {
     pub(crate) error: Option<String>,
     pub(crate) notice: Option<String>,
     pub runtime_failed: bool,
+    #[reflect(ignore)]
+    pub(crate) quota: Option<QuotaStatus>,
 }
 
 #[derive(Reflect, Clone)]
@@ -46,6 +49,12 @@ pub(crate) enum AccountPhase {
 }
 
 impl AccountState {
+    pub fn quota(&self) -> Option<&QuotaStatus> {
+        self.quota.as_ref().filter(|quota| {
+            self.model_identity() == Some((quota.subject.as_str(), quota.workspace_id.as_str()))
+        })
+    }
+
     pub(crate) fn phase(&self) -> Option<AccountPhase> {
         self.operation.as_ref().map(|operation| operation.phase)
     }

@@ -180,6 +180,14 @@ fn receive(
             AccountEventKind::SourceSettling => {
                 state.source_settling = true;
                 state.authorization_url = None;
+                state.quota = None;
+            }
+            AccountEventKind::Quota(quota) => {
+                if state.model_identity()
+                    == Some((quota.subject.as_str(), quota.workspace_id.as_str()))
+                {
+                    state.quota = Some((**quota).clone());
+                }
             }
             AccountEventKind::LogoutFinished {
                 source,
@@ -215,6 +223,7 @@ fn receive(
         state.clear_operation();
         state.error = Some(failure.reason.to_string());
         state.runtime_failed = true;
+        state.quota = None;
         error!(error = %failure.reason, "认证后台运行失败");
     }
     Ok(())
@@ -233,6 +242,9 @@ fn apply_source(state: &mut AccountState, snapshot: &SourceSnapshot, operation_i
             Some(CodexStatus::Failed(message.clone()))
         }
     };
+    if state.quota().is_none() {
+        state.quota = None;
+    }
     if operation_id != 0 {
         info!(operation_id, "当前账号状态已更新");
     }

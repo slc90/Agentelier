@@ -1,5 +1,6 @@
 use crate::conversation::ChatState;
 use agentelier_controls::{AgentelierAvatar, AgentelierButton, AgentelierButtonStyle};
+use agentelier_login_ui::{AccountState, QuotaWindow};
 use bevy::prelude::*;
 use bevy::ui::{InteractionDisabled, UiSystems};
 use bevy::ui_widgets::{Activate, ValueChange};
@@ -38,6 +39,9 @@ const PANEL_BACKGROUND: Color = Color::srgb_u8(0x14, 0x35, 0x26);
 
 #[derive(Component, Clone, Default)]
 struct ContextStatus;
+
+#[derive(Component, Clone, Default)]
+struct QuotaStatusLabel;
 
 #[derive(Component, Clone, Copy)]
 struct InitialSplit {
@@ -83,7 +87,8 @@ pub fn workspace_title() -> impl Scene {
         Node { min_width: px(0), align_items: AlignItems::Center, column_gap: px(NAV_GAP), padding: UiRect::horizontal(px(PANE_PADDING)) }
         Children [
             WidgetryWindowTitle WidgetryText Pickable::IGNORE--
-            Text::default() WidgetryText Pickable::IGNORE Name("AccountQuotaStatus")--
+            Text::default() WidgetryText Pickable::IGNORE QuotaStatusLabel Name("AccountQuotaStatus")
+            TextLayout::no_wrap()--
             Text::default() WidgetryText Pickable::IGNORE ContextStatus Name("WorkspaceContextStatus")
             TextLayout::no_wrap()
         ]
@@ -92,7 +97,10 @@ pub fn workspace_title() -> impl Scene {
 
 pub(crate) fn install(app: &mut App) {
     app.add_plugins(WidgetrySplitterPlugin)
-        .add_systems(PostUpdate, sync_context.before(UiSystems::Content))
+        .add_systems(
+            PostUpdate,
+            (sync_context, sync_quota).before(UiSystems::Content),
+        )
         .add_systems(PostUpdate, initialize_splits.after(UiSystems::Layout));
 }
 
@@ -123,6 +131,46 @@ fn sync_context(state: Res<ChatState>, mut labels: Query<&mut Text, With<Context
             text.0 = label.to_owned();
         }
     }
+}
+
+fn sync_quota(state: Res<AccountState>, mut labels: Query<&mut Text, With<QuotaStatusLabel>>) {
+    for mut text in &mut labels {
+        if !state.is_changed() && !text.is_added() {
+            continue;
+        }
+        let quota = state.quota();
+        let hours = quota.and_then(|quota| quota.five_hours.as_ref());
+        let week = quota.and_then(|quota| quota.week.as_ref());
+        let stale = quota.is_some_and(|quota| quota.stale && quota.fetched_at.is_some());
+        let mark = if stale { "（已过期）" } else { "" };
+        text.set_if_neq(Text(format!(
+            "5 小时 {}  ·  周额度 {}{mark}",
+            format_quota_window(hours),
+            format_quota_window(week),
+        )));
+    }
+}
+
+fn format_quota_window(window: Option<&QuotaWindow>) -> String {
+    let Some(window) = window else {
+        return "不可用".into();
+    };
+    let timestamp = window
+        .resets_at
+        .and_then(|time| time::OffsetDateTime::from_unix_timestamp(time).ok())
+        .map_or_else(
+            || "未知".to_owned(),
+            |time| {
+                format!(
+                    "{:02}-{:02} {:02}:{:02} UTC",
+                    time.month() as u8,
+                    time.day(),
+                    time.hour(),
+                    time.minute()
+                )
+            },
+        );
+    format!("剩余 {:.0}% · 重置 {timestamp}", window.remaining_percent)
 }
 
 pub(crate) fn scene(

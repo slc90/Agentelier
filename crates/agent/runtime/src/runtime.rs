@@ -153,6 +153,8 @@ enum Command {
     ),
     Created(io::Result<agentelier_session_store::Commit>),
     Account(AccountCommand),
+    RefreshQuota,
+    QuotaFinished(Result<agentelier_account::QuotaCompletion, tokio::task::JoinError>),
     BeginLogin(u64),
     CancelLogin(u64),
     LoginWaiting(u64, LoginPrompt),
@@ -331,6 +333,11 @@ impl AgentRuntime {
                         let mut suspending = 0usize;
                         let mut finalizing = false;
                         let mut account = Account::new(owner_credentials.clone(), environment);
+                        let quota_interval = std::time::Duration::from_secs(120);
+                        let mut quota_tick = tokio::time::interval(quota_interval);
+                        quota_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        let mut quota_due = false;
+                        let mut quota_task: Option<tokio::task::JoinHandle<_>> = None;
                         let mut login = None;
                         let mut refresh: Option<tokio::task::JoinHandle<RefreshCompletion>> = None;
                         let mut logout: Option<(u64, tokio::task::JoinHandle<LogoutCompletion>)> = None;
@@ -360,12 +367,28 @@ impl AgentRuntime {
                                 emit(&publish, event.operation_id, AgentEventKind::Account(event.kind))?;
                             }
                             loop {
+                                if quota_due && quota_task.is_none() && !owner_credentials.source_settling()? {
+                                    quota_due = false;
+                                    if let Some(attempt) = account.quota_attempt() {
+                                        quota_task = Some(tokio::spawn(attempt.run()));
+                                    }
+                                }
                                 let idle_work = session_tools.as_ref().map(|(_, tools)| tools.work.clone());
                                 let root_cancel = model.as_ref()
                                     .filter(|task| task.chat && stopping_root != Some(task.id))
                                     .map(|task| task.control.cancel.clone());
                                 let command = tokio::select! { biased;
                                     _ = runtime_shutdown.cancelled() => break,
+                                    _ = quota_tick.tick() => Command::RefreshQuota,
+                                    result = async {
+                                        match &mut quota_task {
+                                            Some(task) => task.await,
+                                            None => std::future::pending().await,
+                                        }
+                                    }, if quota_task.is_some() => {
+                                        quota_task = None;
+                                        Command::QuotaFinished(result)
+                                    },
                                     _ = async move {
                                         match root_cancel {
                                             Some(cancel) => cancel.cancelled().await,
@@ -1082,7 +1105,19 @@ impl AgentRuntime {
                                     Command::LoginWaiting(id, prompt) => {
                                         emit(&publish, id, AgentEventKind::Account(AccountEventKind::LoginWaiting(prompt)))?;
                                     }
+                                    Command::RefreshQuota => quota_due = true,
+                                    Command::QuotaFinished(result) => match result {
+                                        Ok(result) => {
+                                            if let Some(quota) = account.accept_quota(result) {
+                                                emit(&publish, 0, AgentEventKind::Account(AccountEventKind::Quota(Box::new(quota))))?;
+                                            }
+                                        }
+                                        Err(failure) if failure.is_cancelled() => {}
+                                        Err(failure) => error!(%failure, "Codex 账号额度后台请求异常结束"),
+                                    },
                                     Command::Account(command) => {
+                                        let renewing = matches!(&command, AccountCommand::CompleteRefresh(_));
+                                        let previous_version = renewing.then(|| account.quota_version()).flatten();
                                         let (mut source_event, logout_request) = match account.handle(command).await? {
                                             AccountEffect::Event(event) => (Some(event), None),
                                             AccountEffect::Refresh(attempt) => {
@@ -1092,6 +1127,11 @@ impl AgentRuntime {
                                             AccountEffect::LogoutSettling(id) => (None, Some(id)),
                                             AccountEffect::None => (None, None),
                                         };
+                                        if renewing && previous_version != account.quota_version()
+                                            || source_event.as_ref().is_some_and(|event| matches!(&event.kind, AccountEventKind::SourceChanged(Ok(_))))
+                                        {
+                                            quota_due = true;
+                                        }
                                         let settling = owner_credentials.source_settling()?;
                                         let starting_settlement = settling && pending_source.is_none() && logout.is_none();
                                         if let Some(id) = logout_request {
@@ -1108,6 +1148,9 @@ impl AgentRuntime {
                                             pending_source = Some(SourceSettlement::Publish(event));
                                         }
                                         if starting_settlement {
+                                            if let Some(task) = &quota_task {
+                                                task.abort();
+                                            }
                                             requesting_catalog = None;
                                             model_catalog = None;
                                             if let Some(task) = &model {
@@ -1158,6 +1201,10 @@ impl AgentRuntime {
                             Ok::<(), RuntimeFailure>(())
                         }
                         .await;
+                        if let Some(task) = quota_task {
+                            task.abort();
+                            drop(task.await);
+                        }
                         if let Some(login) = login {
                             login.finish().await;
                         }
