@@ -8,6 +8,7 @@ pub use agentelier_mcp::{
     ConfigChange, ConfigSnapshot, Server, ServerId, ServerSettings, Transport,
 };
 pub use agentelier_memory::{MemoryDetail, MemoryInspection, MemorySource};
+pub use agentelier_skills::{SkillEntry, SkillRequest, SkillSnapshot, UserSkillId};
 pub use operations::OperationSequence;
 
 pub use runtime::{

@@ -23,7 +23,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/memory/` | `agentelier_memory` | 数据目录级 SQLite、会话提取证据及状态、全局记忆候选选择、Markdown 发布与恢复、历史记忆检索、详情读取与显式修订工具，已发布材料的安全展示数据 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
 | `crates/agent/project_context/` | `agentelier_project_context` | 会话适用的项目规则发现、有界 UTF-8 读取、来源快照与确定性表示 |
-| `crates/agent/skills/` | `agentelier_skills` | 用户 Skills 发现、嵌入资源读取、有界元数据和任务目录快照 |
+| `crates/agent/skills/` | `agentelier_skills` | 用户 Skills 发现与目录管理、嵌入资源读取、有界元数据和任务目录快照 |
 | `crates/agent/mcp/` | `agentelier_mcp` | MCP 配置、stdio 与 Streamable HTTP 连接、工具和材料协议 |
 | `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示，以及 Windows 桌面 Driver、Rhai 脚本会话和会话级 UI Automation Runtime |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、封闭边界自动压缩与检查点提交、正文增量和受控取消 |
@@ -271,3 +271,5 @@ Runtime 持有会话许可、进程表和独立工具句柄。Tools 的 sessions
 Runner 在每个实际启动的任务（含 Queue 与 Retry）开始时，通过可取消并等待回收的阻塞工作调用 Skills，取得本次数据环境的用户与内置目录快照。Conversation 的 TurnView 保存目录与来源诊断，并随既有任务状态写入存档；固定 Prompt、项目规则和工具执行均不因此改变。目录筛选允许隐式调用的条目后，在每个模型请求中以独立 developer 材料提供一次，模型按来源使用文件工具或 Runtime 注册的只读嵌入资源工具读取正文与引用。目录不写入协议历史，实际角色、位置、文本和摘要随冻结请求事实保存；它参与上下文估算。任务启动前解析 `$name`，唯一有效的选中技能保存完整正文与摘要，并以独立 user 材料在每次请求中重用。Steer 不能更换任务技能，Queue 和 Retry 在各自启动时重新发现与选择。详见 [Skills 当前实现与目标机制](skills/README.md)。
 
 内置 skill-creator 以类型化身份提供编译期资源，包含说明、引用、图标、许可与上游来源。Runtime 注册 `read_skill_resource`，只接受根目录下的已嵌入相对路径。冻结 Skill 选择和请求事实分别保存文件路径或嵌入身份，历史文件引用仍按原格式回放。已有会话继续使用创建时冻结的工具目录，含嵌入读取工具的新会话可发现内置资源。 Runtime 从固定的数据环境取得用户技能根，注册 Rust 初始化、元数据更新和结构验证。Skills 先在同目录准备新目录，再无覆盖发布。已有元数据写入核对用户提供版本与提交前内容，保持已保存的依赖与未指定字段。
+
+Skill 管理窗口通过 AgentHost 与现有 Connection 读取目录投影，用户确认后提交导入或删除。Runtime 在阻塞工作者上调用同一 Skills 所有者，并返回重新读取的目录和诊断。导入在根内暂存，对完整候选进行校验，再无覆盖发布。删除使用目录签发的用户来源身份及固定的目录边界。内置项只有只读投影。

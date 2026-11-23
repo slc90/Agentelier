@@ -19,6 +19,7 @@ pub enum BridgeEventKind {
     Model(ModelEventKind),
     Conversation(Box<agentelier_conversation_bridge::ConversationEvent>),
     McpConfig(Result<crate::ConfigSnapshot, String>),
+    Skills(Result<crate::SkillSnapshot, String>),
     McpStatus(Vec<crate::ConnectionStatus>),
     Memory(Result<crate::MemoryReply, String>),
     ImageAttachment(Result<crate::ImageAttachmentReply, String>),
@@ -76,6 +77,7 @@ pub struct Connection {
     reserved_queue: HashSet<u64>,
     pending_requests: HashSet<u64>,
     pending_mcp: HashSet<u64>,
+    pending_skills: HashSet<u64>,
     pending_memory: HashSet<u64>,
     pending_projects: HashSet<u64>,
     pending_session_models: HashMap<u64, SessionId>,
@@ -120,6 +122,9 @@ impl Connection {
                         AgentEventKind::McpStatus(status) => BridgeEventKind::McpStatus(status),
                         AgentEventKind::McpConfig(result) => {
                             BridgeEventKind::McpConfig(result.map_err(|error| error.to_string()))
+                        }
+                        AgentEventKind::Skills(result) => {
+                            BridgeEventKind::Skills(result.map_err(|error| error.to_string()))
                         }
                         AgentEventKind::Conversation(kind) => BridgeEventKind::Conversation(Box::new(
                             agentelier_conversation_bridge::convert(kind),
@@ -168,6 +173,7 @@ impl Connection {
             reserved_queue: HashSet::new(),
             pending_requests: HashSet::new(),
             pending_mcp: HashSet::new(),
+            pending_skills: HashSet::new(),
             pending_memory: HashSet::new(),
             pending_projects: HashSet::new(),
             pending_session_models: HashMap::new(),
@@ -256,6 +262,21 @@ impl Connection {
             .cancel_transcription(id, session)
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
         Ok(true)
+    }
+
+    pub fn manage_skills(&mut self, request: crate::SkillRequest) -> Result<u64, BridgeFailure> {
+        if self.stopping || self.failure.is_some() {
+            return Err(BridgeFailure("执行连接已经关闭".into()));
+        }
+        let id = self
+            .operations
+            .allocate()
+            .map_err(|error| BridgeFailure(error.to_string()))?;
+        self.runtime
+            .manage_skills(id, request)
+            .map_err(|error| BridgeFailure(error.to_string()))?;
+        self.pending_skills.insert(id);
+        Ok(id)
     }
 
     pub fn mcp_config(&mut self, change: crate::ConfigChange) -> Result<u64, BridgeFailure> {
@@ -692,6 +713,12 @@ impl Connection {
                 if matches!(event.kind, BridgeEventKind::McpStatus(_)) {
                     return Ok(Some(event));
                 }
+                if matches!(event.kind, BridgeEventKind::Skills(_)) {
+                    if !self.pending_skills.remove(&event.operation_id) {
+                        return self.protocol_failure();
+                    }
+                    return Ok(Some(event));
+                }
                 if matches!(
                     event.kind,
                     BridgeEventKind::McpConfig(_) | BridgeEventKind::McpMaterial(_)
@@ -705,6 +732,7 @@ impl Connection {
                     BridgeEventKind::McpStatus(_)
                     | BridgeEventKind::Memory(_)
                     | BridgeEventKind::ImageAttachment(_)
+                    | BridgeEventKind::Skills(_)
                     | BridgeEventKind::McpConfig(_)
                     | BridgeEventKind::McpMaterial(_) => {
                         return self.protocol_failure();

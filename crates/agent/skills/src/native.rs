@@ -1,7 +1,9 @@
+mod management;
 mod metadata;
 mod validation;
 
 use crate::{Failure, MAX_SKILL_BYTES, Metadata, check, discovery::read_file, parse};
+pub use management::{SkillEntry, SkillRequest, SkillSnapshot, UserSkillId};
 pub use metadata::{InterfacePatch, MetadataUpdate};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -13,7 +15,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use tempfile::Builder;
 use tokio_util::sync::CancellationToken;
 
-const REPARSE_POINT: u32 = 0x0000_0400;
+pub(crate) const REPARSE_POINT: u32 = 0x0000_0400;
 const STARTER: &str = "<!-- agentelier:skill-starter -->";
 
 #[derive(Clone)]

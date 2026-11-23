@@ -61,6 +61,7 @@ pub enum AgentEventKind {
     ModelCancelled,
     Conversation(ConversationEvent),
     McpConfig(io::Result<agentelier_mcp::ConfigSnapshot>),
+    Skills(Result<crate::SkillSnapshot, agentelier_skills::Failure>),
     McpStatus(Vec<agentelier_mcp::ConnectionStatus>),
     McpMaterial(Result<agentelier_mcp::MaterialReply, String>),
     Memory(Result<MemoryReply, String>),
@@ -136,6 +137,11 @@ enum Command {
     AudioFinished(u64, SessionId, audio_task::Reply),
     McpMaterialFinished(Result<agentelier_mcp::MaterialReply, String>),
     McpConfig(u64, agentelier_mcp::ConfigChange),
+    Skills(u64, crate::SkillRequest),
+    SkillsFinished(
+        u64,
+        Result<crate::SkillSnapshot, agentelier_skills::Failure>,
+    ),
     McpStatus(Vec<agentelier_mcp::ConnectionStatus>),
     Rename {
         id: u64,
@@ -390,7 +396,8 @@ impl AgentRuntime {
                         extensions.push(list_agents::registration(mailbox_sender.clone()));
                         extensions.push(skill_resource::registration());
                         let user_skills = agentelier_skills::UserSkills::new(data_root.join("skills"));
-                        extensions.extend(skill_creation::registrations(user_skills));
+                        extensions.extend(skill_creation::registrations(user_skills.clone()));
+                        let mut skill_jobs = tokio::task::JoinSet::new();
                         let mut conversation = Conversation::with_extensions(extensions);
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
@@ -502,6 +509,11 @@ impl AgentRuntime {
                                             None => std::future::pending().await,
                                         }
                                     } => Command::McpMaterialFinished(reply),
+                                    result = skill_jobs.join_next(), if !skill_jobs.is_empty() => {
+                                        let (id, result) = result.ok_or(RuntimeFailure::ModelState)?
+                                            .map_err(|_| RuntimeFailure::ModelState)?;
+                                        Command::SkillsFinished(id, result)
+                                    },
                                     result = image_attachments.join_next(), if !image_attachments.is_empty() => {
                                         let (id, result) = result.ok_or(RuntimeFailure::ModelState)?
                                             .map_err(|_| RuntimeFailure::ModelState)?;
@@ -743,6 +755,14 @@ impl AgentRuntime {
                                     Command::McpMaterialFinished(reply) => {
                                         let job = material.take().ok_or(RuntimeFailure::ModelState)?;
                                         emit(&publish, job.id, AgentEventKind::McpMaterial(reply))?;
+                                    }
+                                    Command::Skills(id, request) => {
+                                        let skills = user_skills.clone();
+                                        let cancel = runtime_shutdown.child_token();
+                                        skill_jobs.spawn_blocking(move || (id, skills.manage(request, &cancel)));
+                                    }
+                                    Command::SkillsFinished(id, result) => {
+                                        emit(&publish, id, AgentEventKind::Skills(result))?;
                                     }
                                     Command::McpConfig(id, change) => {
                                         let changes_disk = !matches!(change, agentelier_mcp::ConfigChange::Read);
@@ -1415,6 +1435,7 @@ impl AgentRuntime {
                                 error!(operation_id = job.id, "关闭时 MCP 材料请求任务异常结束");
                             }
                         }
+                        while skill_jobs.join_next().await.is_some() {}
                         while let Some(result) = image_attachments.join_next().await {
                             match result {
                                 Ok((id, Err(failure))) => error!(operation_id = id, error = %failure, "关闭期间处理生成图片附件失败"),
@@ -1526,6 +1547,14 @@ impl AgentRuntime {
 
     pub fn request_memory(&self, id: u64, request: MemoryRequest) -> Result<(), RuntimeFailure> {
         self.send(Command::Memory(id, request))
+    }
+
+    pub fn manage_skills(
+        &self,
+        id: u64,
+        request: crate::SkillRequest,
+    ) -> Result<(), RuntimeFailure> {
+        self.send(Command::Skills(id, request))
     }
 
     pub fn request_image_attachment(

@@ -71,6 +71,12 @@ pub struct McpConfigEvent {
 }
 
 #[derive(Message)]
+pub struct SkillsEvent {
+    pub operation_id: u64,
+    pub result: std::result::Result<agentelier_bridge_connection::SkillSnapshot, String>,
+}
+
+#[derive(Message)]
 pub struct McpMaterialEvent {
     pub operation_id: u64,
     pub result: std::result::Result<agentelier_bridge_connection::MaterialReply, String>,
@@ -109,6 +115,7 @@ impl Plugin for AgentHostPlugin {
             .add_message::<GlobalTaskNotificationEvent>()
             .add_message::<HostFailed>()
             .add_message::<McpConfigEvent>()
+            .add_message::<SkillsEvent>()
             .add_message::<MemoryEvent>()
             .add_message::<ImageAttachmentEvent>()
             .add_message::<McpStatusEvent>()
@@ -195,6 +202,13 @@ impl AgentHost {
 
     pub fn mcp_config(&self, change: agentelier_bridge_connection::ConfigChange) -> Result<u64> {
         self.submit(|connection| connection.mcp_config(change))
+    }
+
+    pub fn manage_skills(
+        &self,
+        request: agentelier_bridge_connection::SkillRequest,
+    ) -> Result<u64> {
+        self.submit(|connection| connection.manage_skills(request))
     }
 
     pub fn mcp_material(
@@ -384,6 +398,12 @@ fn receive(world: &mut World) -> Result {
             }
             BridgeEventKind::McpStatus(status) => {
                 world.write_message(McpStatusEvent(status));
+            }
+            BridgeEventKind::Skills(result) => {
+                world.write_message(SkillsEvent {
+                    operation_id: event.operation_id,
+                    result,
+                });
             }
             BridgeEventKind::McpConfig(result) => {
                 world.write_message(McpConfigEvent {

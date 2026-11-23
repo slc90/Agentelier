@@ -3,7 +3,7 @@ use crate::workspace_layout::{self, Split, WorkspaceRatios};
 use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
 use agentelier_login_ui::{AccountState, QuotaWindow};
 use bevy::prelude::*;
-use bevy::ui::{InteractionDisabled, UiSystems};
+use bevy::ui::UiSystems;
 use bevy::ui_widgets::Activate;
 use bevy_app_assets::NavigationIcon;
 use bevy_widgetry::icon::WidgetryIcon;
@@ -227,21 +227,18 @@ fn icon(icon: NavigationIcon) -> impl SceneList {
 fn entry(entry: Entry, children: impl SceneList + 'static) -> impl Scene {
     let name = entry.name();
     let label = entry.label();
-    (
-        bsn! {
+    bsn! {
             @AgentelierButton { @style: AgentelierButtonStyle::Icon, @children: {Some(Box::new(children) as Box<dyn SceneList>)} }
             @WidgetryTooltip { @content: {TooltipContentFactory::new(move || bsn_list! { Text(label) WidgetryText })} }
             Name(name) template(move |_| Ok(entry))
             on(open)
-        },
-        matches!(entry, Entry::Skills).then_some(bsn! { InteractionDisabled }),
-    )
+    }
 }
 
 fn open(event: On<Activate>, entries: Query<&Entry>, mut commands: Commands) -> Result {
     match entries.get(event.entity)? {
         Entry::Settings => commands.trigger(OpenSettings),
-        Entry::Skills => {}
+        Entry::Skills => commands.queue(crate::skills::open),
         Entry::Mcp => commands.queue(crate::prompts::open_mcp),
         Entry::Memory => commands.queue(crate::prompts::open_memory),
     }

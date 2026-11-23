@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
+use std::os::windows::fs::MetadataExt;
 use std::path::Path;
 use tokio_util::sync::CancellationToken;
 
@@ -109,12 +110,7 @@ fn skill(
         .parent()
         .ok_or_else(|| Failure("Skill 缺少父目录".into()))?
         .join("agents/openai.yaml");
-    let extension = match fs::symlink_metadata(&extra_path) {
-        Ok(_) => read_file(&extra_path, crate::MAX_METADATA_BYTES)
-            .and_then(|text| extension(&text).map(|extra| (extra, text.len()))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((Extension::default(), 0)),
-        Err(e) => Err(Failure(e.to_string())),
-    };
+    let extension = read_extension(&extra_path);
     let (extension, warning, extension_bytes) = match extension {
         Ok((extra, bytes)) => (extra, None, bytes),
         Err(error) => (
@@ -149,6 +145,26 @@ fn skill(
     ))
 }
 
+fn read_extension(path: &Path) -> Result<(Extension, usize), Failure> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Failure("Skill 扩展元数据缺少父目录".into()))?;
+    for part in [parent, path] {
+        match fs::symlink_metadata(part) {
+            Ok(metadata) if metadata.file_attributes() & crate::native::REPARSE_POINT != 0 => {
+                return Err(Failure("Skill 扩展元数据不能经过重解析点".into()));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((Extension::default(), 0));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let text = read_file(path, crate::MAX_METADATA_BYTES)?;
+    Ok((extension(&text)?, text.len()))
+}
+
 pub(crate) fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<Catalog, Failure> {
     let mut catalog = Catalog {
         roots,
@@ -162,7 +178,12 @@ pub(crate) fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<C
         let mut pending = vec![(root.path, 0)];
         while let Some((directory, depth)) = pending.pop() {
             check(cancel)?;
-            let canonical = match directory.canonicalize() {
+            let canonical = match fs::symlink_metadata(&directory).and_then(|metadata| {
+                if metadata.file_attributes() & crate::native::REPARSE_POINT != 0 {
+                    return Err(std::io::Error::other("Skill 目录不能是链接或重解析点"));
+                }
+                directory.canonicalize()
+            }) {
                 Ok(path) => path,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound && depth == 0 => {
                     if fs::symlink_metadata(&directory)
@@ -189,7 +210,14 @@ pub(crate) fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<C
             }
             let candidate = directory.join("SKILL.md");
             match fs::symlink_metadata(&candidate) {
-                Ok(_) => {
+                Ok(metadata) => {
+                    if metadata.file_attributes() & crate::native::REPARSE_POINT != 0 {
+                        catalog.diagnostics.push(Diagnostic {
+                            path: candidate,
+                            message: "SKILL.md 不能是链接或重解析点".into(),
+                        });
+                        continue;
+                    }
                     let result = skill(&candidate, &root.source, &mut bytes_used);
                     if bytes_used > crate::MAX_DISCOVERY_BYTES {
                         return Err(Failure("Skills 发现材料超过 4 MiB".into()));
@@ -246,7 +274,15 @@ pub(crate) fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<C
                         if child.file_name().to_string_lossy().starts_with('.') {
                             continue;
                         }
-                        match fs::metadata(&path) {
+                        match fs::symlink_metadata(&path) {
+                            Ok(meta)
+                                if meta.file_attributes() & crate::native::REPARSE_POINT != 0 =>
+                            {
+                                catalog.diagnostics.push(Diagnostic {
+                                    path,
+                                    message: "Skill 目录项不能是链接或重解析点".into(),
+                                });
+                            }
                             Ok(meta) if meta.is_dir() => paths.push(path),
                             Ok(_) => (),
                             Err(e) => catalog.diagnostics.push(Diagnostic {

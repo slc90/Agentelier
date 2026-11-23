@@ -133,6 +133,7 @@ pub fn install(
     crate::prompts::install(app)?;
     crate::mcp::install(app);
     crate::memory::install(app);
+    crate::skills::install(app)?;
     crate::workspace::install(app);
     app.register_widgetry_combo_box::<ModelChoice>()
         .map_err(|failure| failure.into_bevy_error())?;

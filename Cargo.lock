@@ -2192,6 +2192,7 @@ dependencies = [
  "bevy_widgetry_file_dialog",
  "bevy_widgetry_job",
  "bevy_widgetry_list_view",
+ "bevy_widgetry_message_box",
  "bevy_widgetry_scroll_area",
  "bevy_widgetry_slider",
  "bevy_widgetry_splitter",
