@@ -812,7 +812,7 @@ impl ActiveTurn<'_> {
             arguments_truncated,
             status,
             output: None,
-            generated_image: None,
+            image: None,
             retained: false,
         };
         if let Some(index) = existing {
@@ -1035,8 +1035,19 @@ impl ActiveTurn<'_> {
             .filter(|entry| entry.saved.is_none())
             .ok_or_else(|| ConversationFailure::new("保存回执缺少唯一工具载荷"))?;
         result.saved = Some(sequence);
+        let image = match (generated_image, &result.output) {
+            (Some(generated), _) => Some(crate::ToolImage::Generated(generated.image)),
+            (None, ToolPayload::Image { summary, image }) => {
+                Some(crate::ToolImage::Attachment(crate::StoredImage {
+                    session: self.view.id,
+                    summary: summary.to_string(),
+                    image: image.descriptor(),
+                }))
+            }
+            _ => None,
+        };
         let changed = self.confirm_task_status(call_id, execution, status, sequence)?;
-        if let Some(generated) = generated_image {
+        if let Some(image) = image {
             let tool = self
                 .view
                 .turn
@@ -1046,7 +1057,7 @@ impl ActiveTurn<'_> {
                 .flat_map(|turn| &mut turn.tools)
                 .find(|tool| tool.retained && tool.call_id == call_id)
                 .ok_or_else(|| ConversationFailure::new("保存回执缺少图片调用"))?;
-            tool.generated_image = Some(generated.image);
+            tool.image = Some(image);
         }
         Ok(changed)
     }

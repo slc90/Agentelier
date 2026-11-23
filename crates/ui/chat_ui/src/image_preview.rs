@@ -1,4 +1,4 @@
-use crate::conversation::ChatGeneratedImage;
+use crate::conversation::ChatToolImage;
 use agentelier_agent_host::{
     AgentHost, HostFailed, ImageAttachmentAction, ImageAttachmentEvent, ImageAttachmentReply,
     ReceiveAgentEvents,
@@ -68,14 +68,15 @@ pub(crate) fn install(app: &mut App) {
     );
 }
 
-pub(crate) fn card(session: SessionId, call: String, image: ChatGeneratedImage) -> impl Scene {
+pub(crate) fn card(session: SessionId, call: String, image: ChatToolImage) -> impl Scene {
     let (label, extension) = if image.mime == "image/png" {
         ("PNG", "png")
     } else {
         ("JPEG", "jpg")
     };
     let metadata = format!("{label} · {} × {}", image.width, image.height);
-    let name = format!("GeneratedImage-{}", call);
+    let name = format!("ToolImage-{call}");
+    let exportable = image.exportable;
     let width = image.width as f32;
     let height = image.height as f32;
     let scale = (PREVIEW_WIDTH / width)
@@ -89,11 +90,13 @@ pub(crate) fn card(session: SessionId, call: String, image: ChatGeneratedImage) 
         Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(8), flex_shrink: 0.0 }
         Children [
             Text(metadata) WidgetryText--
-            PreviewNode Name("GeneratedImagePreview") ImageNode::default() Visibility::Hidden
+            PreviewNode Name("ToolImagePreview") ImageNode::default() Visibility::Hidden
             Node { width: px(width), max_width: percent(100), height: px(height), flex_shrink: 0.0 }--
-            @AgentelierButton { @children: {Some(Box::new(bsn_list! { Text("另存为") WidgetryText }) as Box<dyn SceneList>)} }
-            SaveButton Name("SaveGeneratedImage") Node { align_self: AlignSelf::Start } on(choose)--
-            Text("正在读取预览…") WidgetryText ImageStatus Name("GeneratedImageStatus")
+            @{exportable.then(|| bsn! {
+                @AgentelierButton { @children: {Some(Box::new(bsn_list! { Text("另存为") WidgetryText }) as Box<dyn SceneList>)} }
+                SaveButton Name("SaveGeneratedImage") Node { align_self: AlignSelf::Start } on(choose)
+            })}--
+            Text("正在读取预览…") WidgetryText ImageStatus Name("ToolImageStatus")
         ]
     }
 }

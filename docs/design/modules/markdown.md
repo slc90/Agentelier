@@ -10,6 +10,8 @@
 
 聊天阅读由 chat_ui 管理：公开 ScrollPosition 与布局尺寸确定是否在底部，用户向上滚动后停止自动跟随；更新后布局只在跟随时移到底部。回到底部按钮恢复跟随，必要时请求重绘。页面重建恢复内存中的阅读状态。
 
+ConversationView 将用户头像与正文放在右侧，将助手头像、公开阶段和 Markdown 正文放在左侧。头像独占一行，正文可使用聊天区的可用宽度。消息行使用会话、输入或输出身份复用，收到变化时只更新对应正文或工具卡片。工具图片预览从已确认的会话附件取得，读取失败在原工具卡片中显示占位提示。
+
 解析器依据：[官方指南](https://pulldown-cmark.github.io/pulldown-cmark/)、[0.13.6 API](https://docs.rs/pulldown-cmark/0.13.6/pulldown_cmark/)。
 
 原文与排版共用一个 MarkdownSource。MarkdownView 的工具栏、渲染正文和只读 TextField 均保持身份，切换只改变展示，不重新请求。原文更新通过 WidgetryTextFieldHeadless 公开 API 同步，保留控件允许保留的选择位置。复制正文直接取当前 MarkdownSource；代码复制直接取当前解析代码文本。同步系统剪贴板结果显示在对应按钮并记录操作结果，正文不写入日志。渲染子树尚在 Scene 构造时仅保留待处理身份，完成后再同步。

@@ -157,8 +157,23 @@ pub struct ToolView {
     pub status: ToolStatus,
     pub output: Option<String>,
     #[serde(skip)]
-    pub generated_image: Option<agentelier_tools::ImageDescriptor>,
+    pub image: Option<ToolImage>,
     pub retained: bool,
+}
+
+#[derive(Clone)]
+pub enum ToolImage {
+    Attachment(crate::StoredImage),
+    Generated(agentelier_tools::ImageDescriptor),
+}
+
+impl ToolImage {
+    pub fn descriptor(&self) -> &agentelier_tools::ImageDescriptor {
+        match self {
+            Self::Attachment(stored) => &stored.image,
+            Self::Generated(image) => image,
+        }
+    }
 }
 
 pub(crate) fn is_collaboration_tool(tool: &agentelier_tools::ToolDefinition) -> bool {
@@ -366,11 +381,7 @@ impl Conversation {
         self.session.as_ref().map(|session| session.view.clone())
     }
 
-    pub fn generated_image(
-        &self,
-        session: SessionId,
-        call_id: &str,
-    ) -> Option<agentelier_tools::ImageDescriptor> {
+    pub fn tool_image(&self, session: SessionId, call_id: &str) -> Option<ToolImage> {
         let view = &self
             .session
             .as_ref()
@@ -382,7 +393,7 @@ impl Conversation {
             .chain(&view.previous_turns)
             .flat_map(|turn| &turn.tools)
             .find(|tool| tool.retained && tool.call_id == call_id)?
-            .generated_image
+            .image
             .clone()
     }
 

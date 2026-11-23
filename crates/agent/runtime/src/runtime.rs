@@ -623,14 +623,14 @@ impl AgentRuntime {
                                         emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::AudioTranscription { session, result }))?;
                                     }
                                     Command::ImageAttachment(id, session, call, action) => {
-                                        if let Some(image) = conversation.generated_image(session, &call) {
+                                        if let Some(image) = conversation.tool_image(session, &call) {
                                             let client = store.client();
                                             let root = data_root.clone();
                                             image_attachments.spawn(async move {
                                                 (id, image_attachment::execute(client, root, session, image, action).await)
                                             });
                                         } else {
-                                            emit(&publish, id, AgentEventKind::ImageAttachment(Err("当前会话没有这张已确认的生成图片".into())))?;
+                                            emit(&publish, id, AgentEventKind::ImageAttachment(Err("当前会话没有这张已确认的图片".into())))?;
                                         }
                                     }
                                     Command::ImageAttachmentFinished(id, result) => {
@@ -1424,7 +1424,13 @@ impl AgentRuntime {
         call: String,
         action: ImageAttachmentAction,
     ) -> Result<(), RuntimeFailure> {
-        self.send(Command::ImageAttachment(id, session, call, action))
+        let preview = matches!(&action, ImageAttachmentAction::Preview);
+        let command = Command::ImageAttachment(id, session, call, action);
+        if preview {
+            self.submit(command)
+        } else {
+            self.send(command)
+        }
     }
 
     pub fn change_audio_draft(

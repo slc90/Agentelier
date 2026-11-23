@@ -1,6 +1,6 @@
-use agentelier_conversation::SessionId;
+use agentelier_conversation::{SessionId, ToolImage};
 use agentelier_session_store::SessionStoreClient;
-use agentelier_tools::{ImageDescriptor, OriginalImage};
+use agentelier_tools::OriginalImage;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -24,20 +24,33 @@ pub(super) async fn execute(
     store: SessionStoreClient,
     root: PathBuf,
     session: SessionId,
-    image: ImageDescriptor,
+    image: ToolImage,
     action: ImageAttachmentAction,
 ) -> io::Result<ImageAttachmentReply> {
-    let original = store.read_generated(session, image).await?;
-    tokio::task::spawn_blocking(move || match action {
-        ImageAttachmentAction::Preview => preview(&original),
-        ImageAttachmentAction::Export(path) => export(&root, &original, &path),
-    })
-    .await
-    .map_err(io::Error::other)?
+    match (image, action) {
+        (ToolImage::Attachment(reference), ImageAttachmentAction::Preview) => {
+            let attachment = store.read_image(reference).await?;
+            tokio::task::spawn_blocking(move || preview(attachment.bytes()))
+                .await
+                .map_err(io::Error::other)?
+        }
+        (ToolImage::Generated(image), action) => {
+            let original = store.read_generated(session, image).await?;
+            tokio::task::spawn_blocking(move || match action {
+                ImageAttachmentAction::Preview => preview(original.bytes()),
+                ImageAttachmentAction::Export(path) => export(&root, &original, &path),
+            })
+            .await
+            .map_err(io::Error::other)?
+        }
+        (ToolImage::Attachment(_), ImageAttachmentAction::Export(_)) => {
+            Err(io::Error::other("工具结果只提供预览"))
+        }
+    }
 }
 
-fn preview(original: &OriginalImage) -> io::Result<ImageAttachmentReply> {
-    let decoded = image::load_from_memory(original.bytes()).map_err(io::Error::other)?;
+fn preview(bytes: &[u8]) -> io::Result<ImageAttachmentReply> {
+    let decoded = image::load_from_memory(bytes).map_err(io::Error::other)?;
     let pixels = decoded
         .thumbnail(MAX_PREVIEW_EDGE, MAX_PREVIEW_EDGE)
         .into_rgba8();

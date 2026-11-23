@@ -19,7 +19,7 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
 use bevy::input_focus::{InputFocus, InputFocusSystems};
 use bevy::prelude::*;
-use bevy::text::{EditableTextSystems, LineBreak};
+use bevy::text::{EditableTextSystems, Justify, LineBreak};
 use bevy::ui::{InteractionDisabled, UiSystems};
 use bevy::ui_widgets::Activate;
 use bevy::window::Ime;
@@ -27,6 +27,7 @@ use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::scroll_area::WidgetryScrollArea;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{AutoSize, WidgetryTextField, WidgetryTextFieldHeadless};
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -76,16 +77,17 @@ pub struct ChatTool {
     pub arguments_truncated: bool,
     pub status: String,
     pub output: Option<String>,
-    pub generated_image: Option<ChatGeneratedImage>,
+    pub image: Option<ChatToolImage>,
     pub retained: bool,
 }
 
 #[derive(Clone, Reflect, PartialEq)]
-pub struct ChatGeneratedImage {
+pub struct ChatToolImage {
     pub digest: String,
     pub width: u32,
     pub height: u32,
     pub mime: String,
+    pub exportable: bool,
 }
 #[derive(Clone, Reflect)]
 pub struct ChatProcessCleanup {
@@ -312,7 +314,7 @@ enum ChatAction {
     ConfirmReplacement,
     KeepSession,
 }
-#[derive(Component, Clone, PartialEq, Eq)]
+#[derive(Component, Clone, PartialEq, Eq, Hash)]
 struct ChatRow {
     request_index: u32,
     session: SessionId,
@@ -376,13 +378,7 @@ pub(crate) fn panel(state: &ChatState, account: &AccountState) -> impl Scene {
                 @button("保留当前会话", "KeepChatSession", ChatAction::KeepSession)
             ]--
             Text(status) WidgetryText ChatStatus Name("ChatStatus")--
-            @WidgetryScrollArea {
-                @children: {Some(Box::new(bsn_list! {
-                    MessageList Name("ChatMessages")
-                    Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP) }
-                }) as Box<dyn SceneList>)}
-            }
-            Name("ChatMessageScroll") crate::reading::ChatReadingScroll Node { width: percent(100), height: px(0), flex_basis: px(0), flex_grow: 1.0, flex_shrink: 1.0, min_height: px(0) }--
+            @conversation_view()--
             @crate::queue::panel()--
             @crate::audio_attachment::panel()--
             @crate::transcription::panel(crate::transcription::Target::Draft)--
@@ -402,6 +398,19 @@ pub(crate) fn panel(state: &ChatState, account: &AccountState) -> impl Scene {
                 @crate::reading::bottom_button()
             ]
         ]
+    }
+}
+
+fn conversation_view() -> impl Scene {
+    bsn! {
+        @WidgetryScrollArea {
+            @children: {Some(Box::new(bsn_list! {
+                MessageList Name("ChatMessages")
+                Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP) }
+            }) as Box<dyn SceneList>)}
+        }
+        Name("ConversationView") crate::reading::ChatReadingScroll
+        Node { width: percent(100), height: px(0), flex_basis: px(0), flex_grow: 1.0, flex_shrink: 1.0, min_height: px(0) }
     }
 }
 
@@ -1163,11 +1172,12 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
                 arguments_truncated: tool.arguments_truncated,
                 status: tool.status,
                 output: tool.output,
-                generated_image: tool.generated_image.map(|image| ChatGeneratedImage {
+                image: tool.image.map(|image| ChatToolImage {
                     digest: image.digest,
                     width: image.width,
                     height: image.height,
                     mime: image.mime,
+                    exportable: image.exportable,
                 }),
                 retained: tool.retained,
             })
@@ -1727,13 +1737,14 @@ fn reconcile(world: &mut World) -> Result {
     let lists: Vec<_> = lists.iter(world).collect();
     for list in lists {
         let mut rows = world.query::<(Entity, &ChatRow, &ChildOf)>();
-        let existing: Vec<_> = rows
+        let mut existing: HashMap<_, _> = rows
             .iter(world)
             .filter(|(_, _, parent)| parent.parent() == list)
-            .map(|(entity, row, _)| (entity, row.clone()))
+            .map(|(entity, row, _)| (row.clone(), entity))
             .collect();
         let mut desired: Vec<(ChatRow, RowContent)> = Vec::new();
         if let Some(session) = &state.session {
+            let mut inputs = HashSet::new();
             for turn in session.previous_turns.iter().chain(session.turn.iter()) {
                 let user_key = ChatRow {
                     session: session.id,
@@ -1742,11 +1753,8 @@ fn reconcile(world: &mut World) -> Result {
                     output_index: None,
                     item_id: None,
                 };
-                if !turn.result_continuation && !desired.iter().any(|(key, _)| key == &user_key) {
-                    desired.push((
-                        user_key.clone(),
-                        RowContent::User(format!("你\n{}", turn.input)),
-                    ));
+                if !turn.result_continuation && inputs.insert(turn.input_id) {
+                    desired.push((user_key.clone(), RowContent::User(turn.input.clone())));
                     if let Some(audio) = &turn.audio {
                         let key = ChatRow {
                             item_id: Some(format!("audio-{}", audio.id)),
@@ -1850,27 +1858,22 @@ fn reconcile(world: &mut World) -> Result {
                 desired.extend(output);
             }
         }
-        for (entity, key) in &existing {
-            if !desired.iter().any(|(wanted, _)| wanted == key) {
-                world.entity_mut(*entity).despawn();
-            }
-        }
-        let mut ordered = Vec::new();
+        let mut ordered = Vec::with_capacity(desired.len());
         for (key, content) in desired {
-            if let Some((entity, _)) = existing.iter().find(|(_, row)| *row == key) {
-                ordered.push(*entity);
+            if let Some(entity) = existing.remove(&key) {
+                ordered.push(entity);
                 match content {
                     RowContent::Audio(_) => {}
-                    RowContent::Tool(tool) => crate::tool_timeline::set_tool(world, *entity, tool)?,
+                    RowContent::Tool(tool) => crate::tool_timeline::set_tool(world, entity, tool)?,
                     RowContent::Plain(text) => {
                         world
-                            .get_mut::<Text>(*entity)
+                            .get_mut::<Text>(entity)
                             .ok_or_else(|| io::Error::other("聊天消息缺少正文"))?
                             .set_if_neq(Text(text));
                     }
                     RowContent::User(text) => {
                         let body = world
-                            .get::<Children>(*entity)
+                            .get::<Children>(entity)
                             .and_then(|children| {
                                 children
                                     .iter()
@@ -1884,7 +1887,7 @@ fn reconcile(world: &mut World) -> Result {
                     }
                     RowContent::Assistant { label, source } => {
                         let children = world
-                            .get::<Children>(*entity)
+                            .get::<Children>(entity)
                             .ok_or_else(|| io::Error::other("助手消息缺少内容区域"))?
                             .to_vec();
                         for child in children {
@@ -1928,7 +1931,7 @@ fn reconcile(world: &mut World) -> Result {
                         Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
                         Node {width:percent(100),min_width:px(0),flex_shrink:0.0,flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP)}
                         Children [
-                            @AgentelierAvatar { @source: AvatarSource::Assistant } Name("ChatAssistantAvatar")--
+                            @AgentelierAvatar { @source: AvatarSource::Assistant } Name("ChatAssistantAvatar") Node { align_self: AlignSelf::Start }--
                             Text(label) WidgetryText MessageLabel--
                             @MarkdownView { @source: source }
                         ]
@@ -1938,7 +1941,9 @@ fn reconcile(world: &mut World) -> Result {
                         Node {width:percent(100),min_width:px(0),flex_shrink:0.0,flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP)}
                         Children [
                             @AgentelierAvatar Name("ChatUserAvatar") Node { align_self: AlignSelf::End }--
-                            Text(text) WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter)
+                            Text(text) WidgetryText Name("ChatUserMessageBody")
+                            TextLayout { justify: Justify::Right, linebreak: LineBreak::AnyCharacter }
+                            Node { width: percent(100), min_width: px(0) }
                         ]
                     }).id(),
                     RowContent::Plain(text) => world.commands().spawn_scene_with_error_handler(bsn! {
@@ -1949,6 +1954,9 @@ fn reconcile(world: &mut World) -> Result {
                 };
                 ordered.push(entity);
             }
+        }
+        for entity in existing.into_values() {
+            world.entity_mut(entity).despawn();
         }
         let unchanged = world
             .get::<Children>(list)

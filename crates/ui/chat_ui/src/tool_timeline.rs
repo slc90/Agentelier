@@ -1,5 +1,5 @@
 use crate::conversation::{ChatState, ChatTool};
-use crate::generated_image;
+use crate::image_preview;
 use agentelier_controls::AgentelierButton;
 use agentelier_conversation_bridge::SessionId;
 use bevy::prelude::*;
@@ -31,7 +31,7 @@ struct ToolDetails;
 struct ToggleLabel;
 
 pub(crate) fn install(app: &mut App) {
-    generated_image::install(app);
+    image_preview::install(app);
     app.register_type::<ToolCard>()
         .add_systems(PostUpdate, synchronize.before(UiSystems::Content));
 }
@@ -151,6 +151,11 @@ fn summary(tool: &ChatTool) -> String {
             .and_then(|value| value.get("data"))
             .filter(|data| data.get("sha256").is_some())
             .map(|data| {
+                let path = data["path"]
+                    .as_str()
+                    .map(std::path::Path::new)
+                    .map(bevy_widgetry_path_display::display_path)
+                    .unwrap_or_default();
                 format!(
                     "{} · {} × {} → {} × {} · {} · SHA256 {}",
                     data["original_format"].as_str().unwrap_or(""),
@@ -158,7 +163,7 @@ fn summary(tool: &ChatTool) -> String {
                     data["original_height"],
                     data["width"],
                     data["height"],
-                    preview(data["path"].as_str().unwrap_or("")),
+                    preview(&path),
                     data["sha256"].as_str().unwrap_or("")
                 )
             })
@@ -237,14 +242,14 @@ fn synchronize(world: &mut World) -> Result {
             .get::<Children>(root)
             .map(|children| children.to_vec())
             .unwrap_or_default();
-        if let Some(image) = card.tool.generated_image.clone()
+        if let Some(image) = card.tool.image.clone()
             && !children
                 .iter()
-                .any(|child| world.get::<generated_image::ImageCard>(*child).is_some())
+                .any(|child| world.get::<image_preview::ImageCard>(*child).is_some())
         {
             let call = card.tool.call_id.clone();
             world.commands().spawn_scene_with_error_handler(bsn! {
-                @generated_image::card(card.session,call,image)
+                @image_preview::card(card.session,call,image)
                 ChildOf(root)
             });
         }

@@ -508,7 +508,7 @@ fn replay(
     let mut next_turn = 0;
     let mut notices = Vec::new();
     let mut historical_processes = BTreeMap::new();
-    let mut generated_images = HashMap::new();
+    let mut tool_images = HashMap::new();
     let mut audio_draft: Option<crate::AudioAttachment> = None;
     let mut audio_ids = HashMap::<crate::AudioId, crate::AudioAttachment>::new();
     let mut transcriptions = Vec::<crate::AudioTranscription>::new();
@@ -1222,14 +1222,16 @@ fn replay(
                     return Err(ConversationFailure::new("已保存的工具结果缺少终态"));
                 }
                 if let ArchivedPayload::Image { summary, image } = &output {
-                    let loaded = load(&StoredImage {
+                    let attachment = StoredImage {
                         session: initial.session,
                         summary: summary.clone(),
                         image: image.clone(),
-                    })?;
+                    };
+                    let loaded = load(&attachment)?;
                     if loaded.descriptor() != *image {
                         return Err(ConversationFailure::new("已保存工具结果的附件不匹配"));
                     }
+                    tool_images.insert(call_id.clone(), crate::ToolImage::Attachment(attachment));
                 }
                 let response = pending
                     .call_source(&incoming, &call_id)
@@ -1268,7 +1270,7 @@ fn replay(
                     if !image.matches(turn.id, tool, status) {
                         return Err(ConversationFailure::new("生成原图与存档工具结果身份不符"));
                     }
-                    generated_images.insert(call_id.clone(), image.image);
+                    tool_images.insert(call_id.clone(), crate::ToolImage::Generated(image.image));
                 }
                 if matches!(
                     initial
@@ -1707,7 +1709,7 @@ fn replay(
         .flat_map(|turn| &mut turn.tools)
         .filter(|tool| tool.retained)
     {
-        tool.generated_image = generated_images.remove(&tool.call_id);
+        tool.image = tool_images.remove(&tool.call_id);
     }
     state.context.refresh(
         &history,
