@@ -239,7 +239,7 @@ fn open(event: On<Activate>, entries: Query<&Entry>, mut commands: Commands) -> 
     match entries.get(event.entity)? {
         Entry::Settings => commands.trigger(OpenSettings),
         Entry::Skills => commands.queue(crate::skills::open),
-        Entry::Mcp => commands.queue(crate::prompts::open_mcp),
+        Entry::Mcp => commands.queue(crate::mcp::open),
         Entry::Memory => commands.queue(crate::prompts::open_memory),
     }
     Ok(())

@@ -2185,6 +2185,7 @@ source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a
 dependencies = [
  "bevy_widgetry_app_logging",
  "bevy_widgetry_button",
+ "bevy_widgetry_collapsible",
  "bevy_widgetry_combo_box",
  "bevy_widgetry_core",
  "bevy_widgetry_cursor",
@@ -2194,10 +2195,12 @@ dependencies = [
  "bevy_widgetry_list_view",
  "bevy_widgetry_message_box",
  "bevy_widgetry_scroll_area",
+ "bevy_widgetry_segmented",
  "bevy_widgetry_slider",
  "bevy_widgetry_splitter",
  "bevy_widgetry_text_field",
  "bevy_widgetry_theme",
+ "bevy_widgetry_toggle_button",
  "bevy_widgetry_tooltip",
  "bevy_widgetry_tree",
  "bevy_widgetry_ui_scale",
@@ -2249,6 +2252,20 @@ source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a
 dependencies = [
  "bevy",
  "bevy_widgetry_asset",
+ "bevy_widgetry_core",
+ "bevy_widgetry_diagnostics",
+ "bevy_widgetry_internal_log",
+ "bevy_widgetry_theme",
+]
+
+[[package]]
+name = "bevy_widgetry_collapsible"
+version = "0.1.0"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+dependencies = [
+ "bevy",
+ "bevy_widgetry_asset",
+ "bevy_widgetry_button",
  "bevy_widgetry_core",
  "bevy_widgetry_diagnostics",
  "bevy_widgetry_internal_log",
@@ -2411,6 +2428,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_widgetry_segmented"
+version = "0.1.0"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+dependencies = [
+ "bevy",
+ "bevy_widgetry_core",
+ "bevy_widgetry_diagnostics",
+ "bevy_widgetry_internal_log",
+ "bevy_widgetry_theme",
+]
+
+[[package]]
 name = "bevy_widgetry_slider"
 version = "0.1.0"
 source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
@@ -2455,6 +2484,18 @@ dependencies = [
  "bevy",
  "bevy_widgetry_diagnostics",
  "bevy_widgetry_internal_log",
+]
+
+[[package]]
+name = "bevy_widgetry_toggle_button"
+version = "0.1.0"
+source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+dependencies = [
+ "bevy",
+ "bevy_widgetry_core",
+ "bevy_widgetry_diagnostics",
+ "bevy_widgetry_internal_log",
+ "bevy_widgetry_theme",
 ]
 
 [[package]]

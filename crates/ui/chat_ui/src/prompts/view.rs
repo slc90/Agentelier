@@ -114,7 +114,7 @@ pub(crate) fn render(world: &mut World) -> Result {
                 reference.version
             ),
         };
-        let prompt_page = !matches!(page, Page::Mcp | Page::Memory);
+        let prompt_page = !matches!(page, Page::Memory);
         let prompt_navigation = prompt_page.then(|| {
             bsn_list! {
                 @button("提示词库", "PromptLibraryTab", Action::Library, busy)--
@@ -127,7 +127,6 @@ pub(crate) fn render(world: &mut World) -> Result {
             Text(status) WidgetryText Name("PromptManagerStatus") TextLayout::linebreak(LineBreak::AnyCharacter)
         });
         let body: Box<dyn Scene> = match page {
-            Page::Mcp => crate::mcp::panel(world),
             Page::Memory => Box::new(crate::memory::panel(
                 world.resource::<crate::memory::MemoryPane>(),
             )),

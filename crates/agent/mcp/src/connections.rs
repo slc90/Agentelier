@@ -51,6 +51,7 @@ pub struct ConnectionStatus {
     pub server: ServerId,
     pub state: ConnectionState,
     pub tools: Option<Result<usize, &'static str>>,
+    pub tool_names: Vec<String>,
     pub tool_issues: Vec<String>,
 }
 
@@ -217,6 +218,24 @@ impl Connections {
                     .as_ref()
                     .and_then(|result| result.as_ref().ok())
                     .map(|catalog| catalog.issues.clone())
+                    .unwrap_or_default(),
+                tool_names: connection
+                    .catalog
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .map(|catalog| {
+                        catalog
+                            .tools
+                            .iter()
+                            .filter_map(|definition| {
+                                if let ToolSource::Mcp { tool, .. } = &definition.source {
+                                    Some(tool.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default(),
             })
             .collect()

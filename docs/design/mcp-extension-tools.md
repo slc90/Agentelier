@@ -70,6 +70,8 @@ sequenceDiagram
 
 ## MCP 连接负责什么
 
+独立 MCP 管理窗口从 AgentHost 当前配置和连接回执构建投影。配置写入经 ConfigStore 提交，列表同时显示保存、启用及连接状态。Runtime 独立推送连接变化和已发现的公开工具名，表单中的编辑与焦点不随这些变化刷新。资源和提示词沿现有材料请求预览，只有显式确认才复制进当前普通聊天草稿。
+
 MCP Server 运行在 Agentelier 外部。使用 `bevy_brp_mcp` 时，它是一个由客户端通过 stdio 启动的子进程，向连接方公开 MCP 能力；它再用 BRP HTTP 操作运行中的 Bevy App。MCP Client 不直接变成 BRP Client，也不需要让 `agent/tools` 依赖 Bevy。
 
 ```mermaid

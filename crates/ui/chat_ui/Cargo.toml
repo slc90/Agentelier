@@ -20,6 +20,7 @@ futures-timer.workspace = true
 bevy.workspace = true
 bevy_widgetry = { workspace = true, features = [
   "combo_box",
+  "collapsible",
   "list_view",
   "tree",
   "tooltip",
@@ -28,6 +29,8 @@ bevy_widgetry = { workspace = true, features = [
   "text_field",
   "file_dialog",
   "message_box",
+  "segmented",
+  "toggle_button",
   "splitter",
   "job",
 ] }

@@ -131,7 +131,7 @@ pub fn install(
     crate::task_toast::install(app);
     crate::working_directory::install(app);
     crate::prompts::install(app)?;
-    crate::mcp::install(app);
+    crate::mcp::install(app)?;
     crate::memory::install(app);
     crate::skills::install(app)?;
     crate::workspace::install(app);

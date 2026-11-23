@@ -50,7 +50,6 @@ enum Page {
     #[default]
     Config,
     Session,
-    Mcp,
     Memory,
 }
 
@@ -110,7 +109,6 @@ enum Field {
 #[derive(Component, Clone, Copy, Debug)]
 enum Action {
     Open,
-    Mcp,
     Memory,
     Close,
     Library,
@@ -186,10 +184,6 @@ pub(super) fn memory_visible(world: &World) -> bool {
     world.resource::<PromptState>().opened && world.resource::<PromptStore>().page == Page::Memory
 }
 
-pub(super) fn mcp_visible(world: &World) -> bool {
-    world.resource::<PromptState>().opened && world.resource::<PromptStore>().page == Page::Mcp
-}
-
 pub(crate) fn snapshot(world: &World) -> io::Result<InstructionSnapshot> {
     let state = world.resource::<PromptState>();
     if !state.ready {
@@ -202,9 +196,6 @@ pub(crate) fn snapshot(world: &World) -> io::Result<InstructionSnapshot> {
 }
 
 fn refresh(world: &mut World) -> Result {
-    if mcp_visible(world) {
-        crate::mcp::capture(world)?;
-    }
     let store = world.resource::<PromptStore>();
     let entries: Vec<_> = store
         .library
@@ -403,17 +394,12 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
     Ok(())
 }
 
-pub(crate) fn open_mcp(world: &mut World) -> Result {
-    activate_action(world, Action::Mcp)
-}
-
 pub(crate) fn open_memory(world: &mut World) -> Result {
     activate_action(world, Action::Memory)
 }
 
 fn activate_action(world: &mut World, action: Action) -> Result {
     capture(world)?;
-    crate::mcp::capture(world)?;
     if let Err(failure) = apply(world, action) {
         error!(error = %failure, "提示词操作失败");
         world.resource_mut::<PromptState>().status = failure
@@ -428,14 +414,11 @@ fn activate_action(world: &mut World, action: Action) -> Result {
 
 fn apply(world: &mut World, action: Action) -> Result {
     if world.resource::<PromptState>().busy
-        && !matches!(
-            action,
-            Action::Open | Action::Mcp | Action::Memory | Action::Close
-        )
+        && !matches!(action, Action::Open | Action::Memory | Action::Close)
     {
         return Ok(());
     }
-    if memory_visible(world) && matches!(action, Action::Open | Action::Mcp | Action::Close) {
+    if memory_visible(world) && matches!(action, Action::Open | Action::Close) {
         crate::memory::close(world);
     }
     match action {
@@ -447,19 +430,11 @@ fn apply(world: &mut World, action: Action) -> Result {
         Action::Open => {
             world.resource_mut::<PromptState>().opened = true;
             let mut store = world.resource_mut::<PromptStore>();
-            if matches!(store.page, Page::Mcp | Page::Memory) {
+            if matches!(store.page, Page::Memory) {
                 store.page = Page::Config;
             }
         }
-        Action::Mcp => {
-            world.resource_mut::<PromptState>().opened = true;
-            world.resource_mut::<PromptStore>().page = Page::Mcp;
-            crate::mcp::open(world);
-        }
         Action::Close => {
-            if crate::mcp_materials::opened(world) {
-                crate::mcp_materials::close(world)?;
-            }
             world.resource_mut::<PromptState>().opened = false;
         }
         Action::Library | Action::Config | Action::Session => {

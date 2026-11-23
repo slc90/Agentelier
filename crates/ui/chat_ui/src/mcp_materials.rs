@@ -150,8 +150,8 @@ fn receive(mut events: MessageReader<McpMaterialEvent>, mut commands: Commands) 
                 preview_ready: panel.preview.as_ref().is_some_and(|result| result.usable),
                 status,
             };
-            if crate::prompts::mcp_visible(world) && opened(world) {
-                crate::prompts::render(world)?;
+            if opened(world) {
+                crate::mcp::render(world)?;
             }
             Ok(())
         });
@@ -183,7 +183,7 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
         if let Err(failure) = apply(world, action) {
             world.resource_mut::<McpMaterialState>().status = failure.to_string();
         }
-        crate::prompts::render(world)
+        crate::mcp::render(world)
     });
     Ok(())
 }
