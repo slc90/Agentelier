@@ -14,6 +14,9 @@ pub struct AvatarAssets {
     pub assistant: Handle<Image>,
 }
 
+#[derive(Resource)]
+pub struct MainWindowBackground(pub Handle<Image>);
+
 #[derive(Clone, Copy)]
 pub enum NavigationIcon {
     Settings,
@@ -40,6 +43,7 @@ impl Plugin for AppAssetPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "assets/avatars/user.png");
         embedded_asset!(app, "assets/avatars/assistant.png");
+        embedded_asset!(app, "assets/backgrounds/main-window-background.png");
         embedded_asset!(app, "assets/navigation/settings.svg");
         embedded_asset!(app, "assets/navigation/skills.svg");
         embedded_asset!(app, "assets/navigation/mcp.svg");
@@ -49,6 +53,10 @@ impl Plugin for AppAssetPlugin {
             default_user: load_embedded_asset!(server, "assets/avatars/user.png"),
             assistant: load_embedded_asset!(server, "assets/avatars/assistant.png"),
         };
-        app.insert_resource(avatars);
+        let background = MainWindowBackground(load_embedded_asset!(
+            server,
+            "assets/backgrounds/main-window-background.png"
+        ));
+        app.insert_resource(avatars).insert_resource(background);
     }
 }

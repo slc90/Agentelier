@@ -9,15 +9,16 @@ use bevy::window::{
 };
 use bevy::winit::WinitSettings;
 use bevy::{prelude::*, render::RenderPlugin, tasks::block_on};
-use bevy_app_assets::AppAssetPlugin;
+use bevy_app_assets::{AppAssetPlugin, MainWindowBackground};
 use bevy_brp_runtime::BrpRuntimePlugin;
 use bevy_widgetry::app_logging::{AppLogging, LoggingGuard, log_plugin};
 use bevy_widgetry::job::JobManager;
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::ui_scale::{WidgetryUiScale, WidgetryUiScalePlugin};
 use bevy_widgetry::window::{
-    WidgetryWindowBackground, WidgetryWindowControlsConfig, WidgetryWindowPlugin,
-    prepare_native_window, transparent_render_creation, widgetry_window,
+    WidgetryWindowBackground, WidgetryWindowControlsConfig, WidgetryWindowImageBackground,
+    WidgetryWindowImageMode, WidgetryWindowPlugin, prepare_native_window,
+    transparent_render_creation, widgetry_window,
 };
 use bevy_widgetry_path_display::display_path;
 use tracing::debug;
@@ -141,8 +142,6 @@ fn enter_main(
     let mut window = primary.single_mut().map_err(diagnostics::operation)?;
     window.title = "agentelier".into();
     window.resize_constraints.min_width = MIN_MAIN_WINDOW_WIDTH;
-    window.resolution.set(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT);
-    window.position = WindowPosition::Centered(MonitorSelection::Primary);
     debug!("数据目录准备完成，进入主界面");
     Ok(())
 }
@@ -150,7 +149,7 @@ fn enter_main(
 fn initial_window() -> Window {
     let mut window = Window {
         title: "选择应用数据目录".into(),
-        resolution: WindowResolution::new(1100, 760),
+        resolution: WindowResolution::new(MAIN_WINDOW_WIDTH as u32, MAIN_WINDOW_HEIGHT as u32),
         position: WindowPosition::Centered(MonitorSelection::Primary),
         ..default()
     };
@@ -158,15 +157,24 @@ fn initial_window() -> Window {
     prepare_native_window(window)
 }
 
-fn setup(mut commands: Commands, primary_window: Query<Entity, With<PrimaryWindow>>) -> Result {
+fn setup(
+    mut commands: Commands,
+    primary_window: Query<Entity, With<PrimaryWindow>>,
+    background: Res<MainWindowBackground>,
+) -> Result {
     let target = primary_window.single().map_err(diagnostics::operation)?;
     let camera = commands.spawn(Camera2d).id();
+    let background = WidgetryWindowBackground::Image(WidgetryWindowImageBackground {
+        image: background.0.clone(),
+        mode: WidgetryWindowImageMode::Cover,
+        opacity: 1.0,
+    });
     commands.spawn_scene_with_error_handler(bsn! {
         @widgetry_window(
             target,
             camera,
             WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
-            WidgetryWindowBackground::Theme,
+            background,
             Default::default(),
             bsn_list! { @workspace_title() },
             bsn_list! {

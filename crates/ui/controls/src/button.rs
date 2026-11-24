@@ -14,7 +14,7 @@ const BUTTON_RADIUS: f32 = 6.0;
 const HORIZONTAL_PADDING: f32 = 12.0;
 const VERTICAL_PADDING: f32 = 4.0;
 const FOCUS_WIDTH: f32 = 2.0;
-const DANGER_IDLE_INTENSITY: f32 = 0.65;
+const DANGER_IDLE_INTENSITY: f32 = 0.22;
 
 #[derive(Clone, Copy, Default, Reflect)]
 pub enum AgentelierButtonStyle {
@@ -71,24 +71,44 @@ impl AgentelierButtonStyle {
     }
 
     fn colors(self, theme: &WidgetryTheme) -> WidgetryButtonColorOverrides {
-        let background = |color| WidgetryButtonStateColorOverrides {
+        let surface = |color, text| WidgetryButtonStateColorOverrides {
             background: Some(color),
+            foreground: Some(text),
             ..default()
         };
         match self {
             Self::Primary => default(),
             Self::Secondary | Self::Icon => WidgetryButtonColorOverrides {
-                normal: background(theme.text_field.editable.normal.background),
-                hovered: background(theme.text_field.editable.hovered.background),
+                normal: surface(
+                    theme.text_field.editable.normal.background,
+                    theme.text.normal.foreground,
+                ),
+                hovered: surface(
+                    theme.list_view.item.hovered.background,
+                    theme.text.normal.foreground,
+                ),
+                pressed: surface(
+                    theme.list_view.item.selected.background,
+                    theme.text.normal.foreground,
+                ),
                 ..default()
             },
             Self::Danger => WidgetryButtonColorOverrides {
-                normal: background(theme.window.frame.normal.background.mix(
-                    &theme.window.close.pressed.background,
-                    DANGER_IDLE_INTENSITY,
-                )),
-                hovered: background(theme.window.close.hovered.background),
-                pressed: background(theme.window.close.pressed.background),
+                normal: surface(
+                    theme.window.frame.normal.background.mix(
+                        &theme.window.close.pressed.background,
+                        DANGER_IDLE_INTENSITY,
+                    ),
+                    theme.text.normal.foreground,
+                ),
+                hovered: surface(
+                    theme.window.close.hovered.background,
+                    theme.window.close.hovered.foreground,
+                ),
+                pressed: surface(
+                    theme.window.close.pressed.background,
+                    theme.window.close.pressed.foreground,
+                ),
                 ..default()
             },
         }

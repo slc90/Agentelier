@@ -5,7 +5,7 @@ Agent，不需要独立品牌色或企业视觉识别。主窗口以浅薄荷绿
 
 ## 主窗口背景与色彩体系
 
-主窗口与 Splash 最终帧使用同一张共享背景图片：
+主窗口以居中 Cover 显示 Assets crate 中的背景图片。Splash 的目标设计复用此资源作为最终帧：
 
 <figure>
 <img src="images/main-window-background.png"
@@ -19,7 +19,7 @@ F 区组件。
 色彩角色继续参考 `bevy_widgetry` 的 `WidgetryTheme`
 语义：窗口背景、Surface、Elevated Surface、Hover /
 Pressed、Border、Text、Primary、Focus、Selected 和 Danger。Agentelier
-使用自己的浅色配色覆盖 Widgetry 默认 Dark Theme 的深色表面和蓝色强调色。
+以 Widgetry Light Theme 为基础配置浅薄荷绿表面和森林绿强调色。
 
 | 语义         | 颜色                         |
 |:-------------|:-----------------------------|
@@ -44,8 +44,7 @@ Pressed、Border、Text、Primary、Focus、Selected 和 Danger。Agentelier
 
 主题负责颜色，不负责尺寸、字体、布局或动效。Widgetry 的 `WidgetryTheme`
 与控件 ColorOverrides 提供颜色状态映射；Agentelier
-通过项目主题值覆盖默认配色。主窗口背景图片由 Assets crate
-统一注册，Splash 与主窗口共享同一资源。
+通过项目主题值覆盖默认配色。主窗口初始逻辑尺寸为 1920 × 1080，数据目录就绪时保留原有尺寸和位置。
 
 ## 字体与排版
 

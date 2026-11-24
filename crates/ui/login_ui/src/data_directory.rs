@@ -18,6 +18,7 @@ use std::sync::Arc;
 use tracing::{debug, error, info};
 
 type RememberDirectory = Arc<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
+const STARTUP_SURFACE: Color = Color::srgb_u8(0xF7, 0xFB, 0xF7);
 
 pub struct LoginUiPlugin {
     options: StartupOptions,
@@ -138,7 +139,7 @@ fn show_picker(world: &mut World) -> Result {
     let host = host(world)?;
     world.resource_mut::<StartupUi>().phase = Phase::Choosing;
     let screen = world.commands().spawn_scene_with_error_handler(bsn! {
-        Name("LoginDirectorySelection") ChildOf(host)
+        Name("LoginDirectorySelection") ChildOf(host) BackgroundColor(STARTUP_SURFACE)
         Node {
             width: percent(100), height: percent(100),
             flex_direction: FlexDirection::Column, padding: UiRect::all(px(16)), row_gap: px(12),
@@ -239,7 +240,7 @@ fn start_check(world: &mut World, path: PathBuf) -> Result {
     let screen = world
         .commands()
         .spawn_scene_with_error_handler(bsn! {
-            Name("LoginDirectoryChecking") ChildOf(host)
+            Name("LoginDirectoryChecking") ChildOf(host) BackgroundColor(STARTUP_SURFACE)
             Node { width: percent(100), height: percent(100), padding: UiRect::all(px(24)) }
             Children [Text("正在检查应用数据目录并保存选择…") WidgetryText]
         })
@@ -346,7 +347,7 @@ fn show_failure(world: &mut World, path: PathBuf, title: &str, reason: &str) -> 
     let screen = world
         .commands()
         .spawn_scene_with_error_handler(bsn! {
-            Name("LoginDirectoryFailure") ChildOf(host)
+            Name("LoginDirectoryFailure") ChildOf(host) BackgroundColor(STARTUP_SURFACE)
             Node {
                 width: percent(100), height: percent(100), flex_direction: FlexDirection::Column,
                 padding: UiRect::all(px(24)), row_gap: px(24),

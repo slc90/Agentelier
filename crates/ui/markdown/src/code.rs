@@ -6,12 +6,18 @@ use bevy::ui::{OverflowAxis, ScrollPosition};
 use bevy::ui_widgets::Activate;
 use bevy::ui_widgets::ScrollArea;
 use bevy_widgetry::scroll_area::{ScrollAxis, WidgetryScrollArea};
-use bevy_widgetry::text::WidgetryText;
+use bevy_widgetry::text::{
+    WidgetryText, WidgetryTextColorOverrides, WidgetryTextStateColorOverrides,
+};
 
 const CODE_SIZE: f32 = 16.0;
 const CODE_LINE_HEIGHT: f32 = 24.0;
 const SCROLLBAR_SPACE: f32 = 16.0;
 const HEADER_GAP: f32 = 6.0;
+const CODE_PADDING: f32 = 8.0;
+const CODE_BACKGROUND: Color = Color::srgb_u8(0xE4, 0xF0, 0xE8);
+const CODE_BORDER: Color = Color::srgb_u8(0xD0, 0xE4, 0xD6);
+const CODE_FOREGROUND: Color = Color::srgb_u8(0x14, 0x53, 0x42);
 #[derive(Component, Clone, Default)]
 struct CodeText;
 #[derive(Component, Clone, Default)]
@@ -120,7 +126,8 @@ pub(crate) fn scene(language: &str, text: &str) -> Box<dyn Scene> {
     };
     Box::new(bsn! {
         CodeBlock Name("MarkdownCodeBlock")
-        Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(HEADER_GAP), flex_shrink: 0.0 }
+        BackgroundColor(CODE_BACKGROUND) BorderColor::all(CODE_BORDER)
+        Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(HEADER_GAP), flex_shrink: 0.0, padding: UiRect::all(px(CODE_PADDING)), border: UiRect::all(px(1)) }
         Children [
             Node { column_gap: px(HEADER_GAP), align_items: AlignItems::Center, flex_shrink: 0.0 }
             Children [Text(label) WidgetryText-- @crate::source::copy_button("复制代码", "MarkdownCopyCode") on(copy_code)]--
@@ -128,7 +135,13 @@ pub(crate) fn scene(language: &str, text: &str) -> Box<dyn Scene> {
                 @axis: ScrollAxis::Horizontal,
                 @content: {Some(Box::new(bsn! { on(forward_vertical) }) as Box<dyn Scene>)},
                 @children: {Some(Box::new(bsn_list! {
-                    Text(text) WidgetryText CodeText Name("MarkdownCodeText")
+                    Text(text) CodeText Name("MarkdownCodeText")
+                    @WidgetryText {
+                        @colors: {WidgetryTextColorOverrides {
+                            normal: WidgetryTextStateColorOverrides { foreground: Some(CODE_FOREGROUND) },
+                            ..default()
+                        }},
+                    }
                     template(move |_| Ok(font.clone()))
                     LineHeight::Px(CODE_LINE_HEIGHT) TextLayout::linebreak(LineBreak::NoWrap)
                     Node { flex_shrink: 0.0 }

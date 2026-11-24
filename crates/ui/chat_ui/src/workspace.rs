@@ -32,8 +32,8 @@ pub(crate) const HANDLE_WIDTH: f32 = 8.0;
 const SEPARATOR_WIDTH: f32 = 1.0;
 pub(crate) const WORKSPACE_CONTENT_WIDTH: f32 =
     MAIN_WINDOW_WIDTH - FRAME_BORDERS - NAV_WIDTH - 2.0 * HANDLE_WIDTH;
-const SIDE_BACKGROUND: Color = Color::srgb_u8(0x0D, 0x26, 0x1B);
-const PANEL_BACKGROUND: Color = Color::srgb_u8(0x14, 0x35, 0x26);
+const SIDE_BACKGROUND: Color = Color::srgb_u8(0xED, 0xF6, 0xEE);
+pub(crate) const TASK_PANEL_BACKGROUND: Color = Color::srgb_u8(0xF2, 0xF8, 0xF1);
 
 #[derive(Component, Clone, Default)]
 struct ContextStatus;
@@ -250,13 +250,13 @@ fn right_column(tasks: impl Scene + 'static) -> impl Scene {
         Name("WorkspaceRight")
         Node { min_width: px(RIGHT_MIN), flex_direction: FlexDirection::Column }
         Children [
-            Name("WorkspaceE") BackgroundColor(PANEL_BACKGROUND)
+            Name("WorkspaceE") BackgroundColor(TASK_PANEL_BACKGROUND)
             Node { width: percent(100), flex_basis: px(0), flex_grow: 1.0, min_height: px(0) }
             Children [
                 Node { width: percent(100), height: percent(100), min_height: px(0), flex_direction: FlexDirection::Column, padding: UiRect::all(px(PANE_PADDING)), row_gap: px(PANE_PADDING) }
                 Children [ Text("后台任务") WidgetryText-- @tasks ]
             ]--
-            Name("WorkspaceF") BackgroundColor(SIDE_BACKGROUND)
+            Name("WorkspaceF")
             Node { width: percent(100), flex_basis: px(0), flex_grow: 1.0, min_height: px(0) }
         ]
     }

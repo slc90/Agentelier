@@ -33,7 +33,10 @@ use std::io;
 use std::sync::Arc;
 use tracing::{error, info};
 
+const MESSAGE_SURFACE: Color = Color::srgb_u8(0xF6, 0xFB, 0xF7);
+const COMPOSER_SURFACE: Color = Color::srgb_u8(0xF7, 0xFB, 0xF7);
 const CONTENT_GAP: f32 = 12.0;
+const CONTENT_PADDING: f32 = 8.0;
 const BUTTON_HEIGHT: f32 = 40.0;
 const COMPOSER_MIN_ROWS: usize = 2;
 const COMPOSER_MAX_ROWS: usize = 6;
@@ -353,6 +356,7 @@ pub(crate) fn panel(state: &ChatState, account: &AccountState, model_source: Ent
         Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP) }
         Children [
             Node { column_gap: px(CONTENT_GAP), row_gap: px(CONTENT_GAP), align_items: AlignItems::Center, flex_shrink: 0.0, flex_wrap: FlexWrap::Wrap }
+            BackgroundColor(MESSAGE_SURFACE) Node { padding: UiRect::all(px(CONTENT_PADDING)) }
             Children [
                 @button("重置当前会话", "ResetChatSession", ChatAction::Reset)--
                 @button("更改会话目录", "SetSessionWorkingDirectory", ChatAction::SetWorkingDirectory)--
@@ -367,7 +371,8 @@ pub(crate) fn panel(state: &ChatState, account: &AccountState, model_source: Ent
                 @button("确认新建", "ConfirmChatReplacement", ChatAction::ConfirmReplacement)--
                 @button("保留当前会话", "KeepChatSession", ChatAction::KeepSession)
             ]--
-            Text(status) WidgetryText ChatStatus Name("ChatStatus")--
+            Text(status) WidgetryText ChatStatus Name("ChatStatus") BackgroundColor(MESSAGE_SURFACE)
+            Node { padding: UiRect::all(px(CONTENT_PADDING)) }--
             @crate::queue::panel()--
             @crate::audio_attachment::panel()--
             @crate::transcription::panel(crate::transcription::Target::Draft)--
@@ -380,8 +385,8 @@ pub(crate) fn panel(state: &ChatState, account: &AccountState, model_source: Ent
 
 fn chat_composer(draft: String, model_source: Entity) -> impl Scene {
     bsn! {
-        Name("ChatComposerPanel")
-        Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP), flex_shrink: 0.0 }
+        Name("ChatComposerPanel") BackgroundColor(COMPOSER_SURFACE)
+        Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP), flex_shrink: 0.0, padding: UiRect::all(px(CONTENT_PADDING)) }
         Children [
             @WidgetryTextField {
                 @value: {draft}, @multiline: true,
@@ -1938,7 +1943,8 @@ pub(super) fn reconcile_list(
                     }
                     RowContent::Assistant {label,source} => world.commands().spawn_scene_with_error_handler(bsn! {
                         Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
-                        Node {width:percent(100),min_width:px(0),flex_shrink:0.0,flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP)}
+                        BackgroundColor(MESSAGE_SURFACE)
+                        Node {width:percent(100),min_width:px(0),flex_shrink:0.0,flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP),padding:UiRect::all(px(CONTENT_PADDING))}
                         Children [
                             @AgentelierAvatar { @source: AvatarSource::Assistant } Name("ChatAssistantAvatar") Node { align_self: AlignSelf::Start }--
                             Text(label) WidgetryText MessageLabel--
@@ -1947,7 +1953,8 @@ pub(super) fn reconcile_list(
                     }).id(),
                     RowContent::User(text) => world.commands().spawn_scene_with_error_handler(bsn! {
                         Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
-                        Node {width:percent(100),min_width:px(0),flex_shrink:0.0,flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP)}
+                        BackgroundColor(MESSAGE_SURFACE)
+                        Node {width:percent(100),min_width:px(0),flex_shrink:0.0,flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP),padding:UiRect::all(px(CONTENT_PADDING))}
                         Children [
                             @AgentelierAvatar Name("ChatUserAvatar") Node { align_self: AlignSelf::End }--
                             Text(text) WidgetryText Name("ChatUserMessageBody")
@@ -1957,8 +1964,9 @@ pub(super) fn reconcile_list(
                     }).id(),
                     RowContent::Plain(text) => world.commands().spawn_scene_with_error_handler(bsn! {
                         Name(name) ChildOf(list) Text(text) WidgetryText template(move |_| Ok(key.clone()))
+                        BackgroundColor(MESSAGE_SURFACE)
                         TextLayout::linebreak(LineBreak::AnyCharacter)
-                        Node {width:percent(100),min_width:px(0),flex_shrink:0.0}
+                        Node {width:percent(100),min_width:px(0),flex_shrink:0.0,padding:UiRect::all(px(CONTENT_PADDING))}
                     }).id(),
                 };
             ordered.push(entity);

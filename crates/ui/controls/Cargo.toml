@@ -7,7 +7,7 @@ edition.workspace = true
 [dependencies]
 bevy_app_assets = { path = "../assets" }
 bevy.workspace = true
-bevy_widgetry = { workspace = true, features = ["button"] }
+bevy_widgetry = { workspace = true, features = ["button", "light"] }
 
 [lints]
 workspace = true

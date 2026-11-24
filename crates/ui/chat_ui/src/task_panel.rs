@@ -1,8 +1,11 @@
-use crate::{conversation::ChatState, global_tasks::GlobalTaskState};
+use crate::{
+    conversation::ChatState, global_tasks::GlobalTaskState, workspace::TASK_PANEL_BACKGROUND,
+};
 use agentelier_conversation_bridge::SessionId;
 use bevy::{prelude::*, ui::UiSystems};
 use bevy_widgetry::list_view::{
     WidgetryListModel, WidgetryListView, WidgetryListViewAppExt, WidgetryListViewColorOverrides,
+    WidgetryListViewContainerColorOverrides, WidgetryListViewContainerStateColorOverrides,
     WidgetryListViewItemColorOverrides, WidgetryListViewItemStateColorOverrides,
     WidgetryListViewRenderer,
 };
@@ -93,14 +96,24 @@ pub(crate) fn panel(world: &World) -> impl Scene + use<> {
             @source: source,
             @item_height: 30.0,
             @colors: {WidgetryListViewColorOverrides {
-                item: WidgetryListViewItemColorOverrides {
-                    disabled: WidgetryListViewItemStateColorOverrides {
-                        foreground: Some(Color::srgb_u8(0xE5, 0xEB, 0xE8)),
+                container: WidgetryListViewContainerColorOverrides {
+                    normal: WidgetryListViewContainerStateColorOverrides {
+                        background: Some(TASK_PANEL_BACKGROUND),
+                        ..default()
+                    },
+                    focused: WidgetryListViewContainerStateColorOverrides {
+                        background: Some(TASK_PANEL_BACKGROUND),
                         ..default()
                     },
                     ..default()
                 },
-                ..default()
+                item: WidgetryListViewItemColorOverrides {
+                    disabled: WidgetryListViewItemStateColorOverrides {
+                        foreground: Some(Color::srgb_u8(0x45, 0x66, 0x56)),
+                        ..default()
+                    },
+                    ..default()
+                },
             }},
             @renderer: {WidgetryListViewRenderer::new(Row::content)},
         }
