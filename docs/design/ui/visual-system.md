@@ -5,7 +5,7 @@ Agent，不需要独立品牌色或企业视觉识别。主窗口以浅薄荷绿
 
 ## 主窗口背景与色彩体系
 
-主窗口以居中 Cover 显示 Assets crate 中的背景图片。Splash 的目标设计复用此资源作为最终帧：
+主窗口以居中 Cover 显示 Assets crate 中的背景图片。Splash 的最终帧复用同一图片和裁切方式：
 
 <figure>
 <img src="images/main-window-background.png"

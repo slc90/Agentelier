@@ -5,11 +5,14 @@ mod portrait;
 use crate::diagnostics;
 use agentelier_login_ui::{BeginDataDirectorySetup, LoginUiHost};
 use bevy::camera::RenderTarget;
+use bevy::diagnostic::FrameCount;
 use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
 use bevy::render::view::Msaa;
 use bevy::ui::widget::NodeImageMode;
-use bevy::window::{PrimaryWindow, RequestRedraw, WindowRef, WindowResolution};
+use bevy::window::{
+    MonitorSelection, PrimaryWindow, RequestRedraw, WindowPosition, WindowRef, WindowResolution,
+};
 use bevy::winit::{WINIT_WINDOWS, WinitSettings};
 use bevy_app_assets::MainWindowBackground;
 use bevy_widgetry::app_logging::safe_diagnostic;
@@ -21,6 +24,7 @@ use tracing::{debug, error};
 
 const PLAYBACK_DURATION: Duration = Duration::from_millis(4820);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(8);
+const WINDOW_ASPECT: UVec2 = UVec2::new(16, 9);
 
 #[derive(Resource, Default)]
 enum StartupSplash {
@@ -48,7 +52,10 @@ struct SplashScene {
 enum Phase {
     Loading(Duration),
     AwaitingFirstFrame(Duration),
-    Playing(Duration),
+    Playing {
+        shown_at: Duration,
+        first_frame: u32,
+    },
     HandingOff(Duration),
 }
 
@@ -58,7 +65,7 @@ impl Phase {
             Self::Loading(since) => (since, "加载画面"),
             Self::AwaitingFirstFrame(since) => (since, "确认 Splash 首帧"),
             Self::HandingOff(since) => (since, "确认主窗口交接帧"),
-            Self::Playing(_) => return None,
+            Self::Playing { .. } => return None,
         };
         (now.saturating_sub(since) >= STARTUP_TIMEOUT).then_some(stage)
     }
@@ -100,6 +107,15 @@ fn drive(world: &mut World) -> Result {
                     *startup = StartupSplash::Done;
                     return fallback(world, main, None, &timeout("准备主窗口"));
                 };
+                let fit = WINDOW_ASPECT * (size / WINDOW_ASPECT).min_element();
+                if fit != size && fit.min_element() > 0 {
+                    let mut window = world.get_mut::<Window>(main).ok_or_else(|| {
+                        diagnostics::operation(io::Error::other("计算启动尺寸时主窗口已消失"))
+                    })?;
+                    window.resolution.set_physical_resolution(fit.x, fit.y);
+                    window.position = WindowPosition::Centered(MonitorSelection::Current);
+                    return Ok(());
+                }
                 match start(world, main, size, now) {
                     Ok(active) => *startup = StartupSplash::Active(active),
                     Err(failure) => {
@@ -200,25 +216,59 @@ fn advance(world: &mut World, active: &mut ActiveSplash, now: Duration) -> Resul
             let Some(scene) = active.scene.as_ref() else {
                 return Ok(());
             };
-            if scene.glyphs.ready().map_err(diagnostics::operation)? {
+            if scene.glyphs.ready().map_err(diagnostics::operation)? && align_main(world, active)? {
                 Splash::ready(world, active.window).map_err(|failure| failure.into_bevy_error())?;
                 active.phase = Phase::AwaitingFirstFrame(now);
             }
         }
-        Phase::Playing(shown_at) if now.saturating_sub(shown_at) >= PLAYBACK_DURATION => {
-            if let Some(scene) = &active.scene {
+        Phase::Playing {
+            shown_at,
+            first_frame,
+        } => {
+            let elapsed = now.saturating_sub(shown_at);
+            let scene = active.scene.as_ref().ok_or_else(|| {
+                diagnostics::operation(io::Error::other("Splash 播放期间缺少场景"))
+            })?;
+            if elapsed < PLAYBACK_DURATION {
+                scene
+                    .glyphs
+                    .play_at(world, elapsed.as_secs_f32())
+                    .map_err(diagnostics::operation)?;
+            } else {
                 world
-                    .entity_mut(scene.glyphs.batch)
+                    .get_entity_mut(scene.glyphs.batch)?
                     .insert(Visibility::Hidden);
-                world.entity_mut(scene.image).insert(Visibility::Visible);
+                world
+                    .get_entity_mut(scene.image)?
+                    .insert(Visibility::Visible);
+                Splash::finished(world, active.window)
+                    .map_err(|failure| failure.into_bevy_error())?;
+                active.phase = Phase::HandingOff(now);
+                let update_frames = world.resource::<FrameCount>().0.wrapping_sub(first_frame);
+                debug!(
+                    elapsed_ms = elapsed.as_millis(),
+                    update_frames, "Splash 播放结束，等待主窗口呈现"
+                );
             }
-            Splash::finished(world, active.window).map_err(|failure| failure.into_bevy_error())?;
-            active.phase = Phase::HandingOff(now);
-            debug!("Splash 播放结束，等待主窗口呈现");
         }
         _ => {}
     }
     Ok(())
+}
+
+fn align_main(world: &mut World, active: &ActiveSplash) -> Result<bool> {
+    let (Some(main_origin), Some(splash_origin)) = native_origins(active.main, active.window)
+    else {
+        return Ok(false);
+    };
+    let aligned = main_origin == splash_origin;
+    if !aligned {
+        let mut main = world
+            .get_mut::<Window>(active.main)
+            .ok_or_else(|| diagnostics::operation(io::Error::other("对齐画面时主窗口已消失")))?;
+        main.position = WindowPosition::At(splash_origin);
+    }
+    Ok(aligned)
 }
 
 fn render_scene(
@@ -264,13 +314,22 @@ fn render_scene(
     })
 }
 
-fn shown(event: On<SplashShown>, mut startup: ResMut<StartupSplash>, now: Res<Time<Real>>) {
+fn shown(
+    event: On<SplashShown>,
+    mut startup: ResMut<StartupSplash>,
+    now: Res<Time<Real>>,
+    frame: Res<FrameCount>,
+) {
     if let StartupSplash::Active(active) = &mut *startup
         && active.window == event.splash
         && matches!(active.phase, Phase::AwaitingFirstFrame(_))
     {
-        active.phase = Phase::Playing(now.elapsed());
-        debug!("Splash 首帧已呈现，开始播放");
+        active.phase = Phase::Playing {
+            shown_at: now.elapsed(),
+            first_frame: frame.0,
+        };
+        let (main_origin, splash_origin) = native_origins(active.main, active.window);
+        debug!(?main_origin, ?splash_origin, "Splash 首帧已呈现，开始播放");
     }
 }
 
@@ -284,12 +343,23 @@ fn completed(event: On<SplashCompleted>, mut commands: Commands) {
         if let StartupSplash::Active(active) = std::mem::replace(&mut *startup, StartupSplash::Done)
         {
             let main = active.main;
+            let (main_origin, splash_origin) = native_origins(main, splash);
             cleanup(world, active)?;
-            debug!("Splash 已完成主窗口交接");
+            debug!(?main_origin, ?splash_origin, "Splash 已完成主窗口交接");
             begin_directory_setup(world, main);
         }
         Ok(())
     });
+}
+
+fn native_origins(main: Entity, splash: Entity) -> (Option<IVec2>, Option<IVec2>) {
+    WINIT_WINDOWS.with_borrow(|windows| {
+        let position = |entity| {
+            let position = windows.get_window(entity)?.outer_position().ok()?;
+            Some(IVec2::new(position.x, position.y))
+        };
+        (position(main), position(splash))
+    })
 }
 
 fn fallback(
