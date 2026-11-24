@@ -1,4 +1,4 @@
-use crate::{config, diagnostics, settings, shutdown, tray};
+use crate::{config, diagnostics, settings, shutdown, splash, tray};
 use agentelier_agent_host::AgentHostPlugin;
 use agentelier_chat_ui::{MAIN_WINDOW_WIDTH, MIN_MAIN_WINDOW_WIDTH, workspace_title};
 use agentelier_controls::{AGENTELIER_THEME, AgentelierControlsPlugin};
@@ -80,7 +80,7 @@ fn run_application(logging_ready: &mut bool, guard: &mut Option<LoggingGuard>) -
         WidgetryUiScale::new(config.scale_factor).map_err(|failure| failure.into_bevy_error())?,
     )
     .add_plugins(WidgetryUiScalePlugin);
-    app.insert_resource(WinitSettings::desktop_app());
+    app.insert_resource(WinitSettings::continuous());
 
     app.add_plugins(
         DefaultPlugins
@@ -124,6 +124,7 @@ fn run_application(logging_ready: &mut bool, guard: &mut Option<LoggingGuard>) -
     agentelier_chat_ui::install(&mut app, move || config_store.session_model_defaults())?;
     settings::install(&mut app)?;
     tray::install(&mut app)?;
+    splash::install(&mut app);
     let manager = app.world().resource::<JobManager>().clone();
     shutdown::install(&mut app);
     debug!("应用装配完成，进入主循环");
@@ -140,7 +141,6 @@ fn enter_main(
     mut primary: Query<&mut Window, With<PrimaryWindow>>,
 ) -> Result {
     let mut window = primary.single_mut().map_err(diagnostics::operation)?;
-    window.title = "agentelier".into();
     window.resize_constraints.min_width = MIN_MAIN_WINDOW_WIDTH;
     debug!("数据目录准备完成，进入主界面");
     Ok(())
@@ -148,7 +148,8 @@ fn enter_main(
 
 fn initial_window() -> Window {
     let mut window = Window {
-        title: "选择应用数据目录".into(),
+        title: "agentelier".into(),
+        visible: false,
         resolution: WindowResolution::new(MAIN_WINDOW_WIDTH as u32, MAIN_WINDOW_HEIGHT as u32),
         position: WindowPosition::Centered(MonitorSelection::Primary),
         ..default()

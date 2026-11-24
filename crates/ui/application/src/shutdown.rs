@@ -1,3 +1,4 @@
+use crate::splash;
 use agentelier_agent_host::AgentHost;
 use bevy::app::OnAppExitSystems;
 use bevy::prelude::*;
@@ -28,6 +29,13 @@ pub(crate) fn install(app: &mut App) {
             Last,
             retire_file_dialogs
                 .after(CursorSystems::Update)
+                .before(JobManagerSystems::EndFrame),
+        )
+        .add_systems(
+            Last,
+            splash::retire
+                .after(ExitSystems)
+                .before(coordinate)
                 .before(JobManagerSystems::EndFrame),
         )
         .add_systems(

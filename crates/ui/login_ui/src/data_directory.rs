@@ -1,7 +1,10 @@
 use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
 use agentelier_login::DataEnvironment;
+use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
+use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
+use bevy::window::{MonitorSelection, WindowCloseRequested, WindowClosed, WindowPosition};
 use bevy_widgetry::file_dialog::{
     WidgetryFileDialog, WidgetryFileDialogMode, WidgetryFileDialogPlugin, WidgetryFileDialogResult,
     WidgetryFileDialogResultEvent,
@@ -11,6 +14,10 @@ use bevy_widgetry::job::{
 };
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
+use bevy_widgetry::window::{
+    WidgetryModalWindow, WidgetryWindowBackground, WidgetryWindowControlsConfig,
+    WidgetryWindowTitle, owned_widgetry_window, widgetry_window_target,
+};
 use bevy_widgetry_path_display::display_path;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -19,6 +26,8 @@ use tracing::{debug, error, info};
 
 type RememberDirectory = Arc<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
 const STARTUP_SURFACE: Color = Color::srgb_u8(0xF7, 0xFB, 0xF7);
+const PICKER_WIDTH: u32 = 840;
+const PICKER_HEIGHT: u32 = 580;
 
 pub struct LoginUiPlugin {
     options: StartupOptions,
@@ -54,11 +63,14 @@ impl Plugin for LoginUiPlugin {
         app.insert_resource(StartupUi {
             options: self.options.clone(),
             host: None,
+            main: None,
             screen: None,
+            picker: None,
             phase: Phase::Waiting,
         })
-        .add_observer(initialize)
-        .add_systems(Update, receive_check);
+        .add_observer(mount_host)
+        .add_message::<BeginDataDirectorySetup>()
+        .add_systems(Update, (begin_setup, close_picker, receive_check).chain());
     }
 }
 
@@ -67,6 +79,11 @@ pub struct LoginUiHost;
 
 #[derive(Component, Clone, Default)]
 pub struct HomeContent;
+
+#[derive(Message, Clone, Copy)]
+pub struct BeginDataDirectorySetup {
+    pub main: Entity,
+}
 
 #[derive(Event)]
 pub struct DataDirectoryReady {
@@ -77,7 +94,9 @@ pub struct DataDirectoryReady {
 struct StartupUi {
     options: StartupOptions,
     host: Option<Entity>,
+    main: Option<Entity>,
     screen: Option<Entity>,
+    picker: Option<Entity>,
     phase: Phase,
 }
 
@@ -87,7 +106,14 @@ enum Phase {
     Checking(PendingCheck),
     Failed(PathBuf),
     Ready,
+    Exiting,
 }
+
+#[derive(Component, Clone, Default)]
+struct DirectoryPicker;
+
+#[derive(Component, Clone, Default)]
+struct DirectoryPickerStatus;
 
 struct PendingCheck {
     path: PathBuf,
@@ -102,14 +128,25 @@ enum CheckResult {
     Cancelled,
 }
 
-fn initialize(event: On<Add<LoginUiHost>>, mut commands: Commands) {
-    let host = event.entity;
+fn mount_host(event: On<Add<LoginUiHost>>, mut state: ResMut<StartupUi>) -> Result {
+    if state.host.is_some() {
+        return Err(io::Error::other("登录启动界面已经存在").into());
+    }
+    state.host = Some(event.entity);
+    Ok(())
+}
+
+fn begin_setup(mut requests: MessageReader<BeginDataDirectorySetup>, mut commands: Commands) {
+    let Some(BeginDataDirectorySetup { main }) = requests.read().last().copied() else {
+        return;
+    };
     commands.queue(move |world: &mut World| -> Result {
+        host(world)?;
         let mut state = world.resource_mut::<StartupUi>();
-        if state.host.is_some() {
-            return Err(io::Error::other("登录启动界面已经存在").into());
+        if state.main.is_some() {
+            return Ok(());
         }
-        state.host = Some(host);
+        state.main = Some(main);
         let saved = state.options.saved_directory.clone();
         if let Some(path) = saved {
             start_check(world, path)
@@ -127,6 +164,14 @@ fn clear_screen(world: &mut World) {
     }
 }
 
+fn clear_picker(world: &mut World) {
+    if let Some(picker) = world.resource_mut::<StartupUi>().picker.take()
+        && let Ok(entity) = world.get_entity_mut(picker)
+    {
+        entity.despawn();
+    }
+}
+
 fn host(world: &World) -> Result<Entity> {
     world
         .resource::<StartupUi>()
@@ -135,25 +180,72 @@ fn host(world: &World) -> Result<Entity> {
 }
 
 fn show_picker(world: &mut World) -> Result {
+    let main = world
+        .resource::<StartupUi>()
+        .main
+        .ok_or_else(|| io::Error::other("目录选择缺少主窗口"))?;
     clear_screen(world);
-    let host = host(world)?;
-    world.resource_mut::<StartupUi>().phase = Phase::Choosing;
-    let screen = world.commands().spawn_scene_with_error_handler(bsn! {
-        Name("LoginDirectorySelection") ChildOf(host) BackgroundColor(STARTUP_SURFACE)
-        Node {
-            width: percent(100), height: percent(100),
-            flex_direction: FlexDirection::Column, padding: UiRect::all(px(16)), row_gap: px(12),
-        }
-        Children [
-            Text("选择应用数据目录。浏览文件夹不会提交，点击确认后才会记住选择。") WidgetryText--
-            @WidgetryFileDialog { @mode: WidgetryFileDialogMode::PickDirectory }
-            Name("LoginDirectoryPicker")
-            Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }
-            on(selected)
-        ]
+    let picker = world.commands().spawn_scene_with_error_handler(bsn! {
+        Name("LoginDirectorySelection")
+        template(move |_| Ok(WidgetryModalWindow { parent: main }))
+        @owned_widgetry_window(
+            Window {
+                title: "选择应用数据目录".into(),
+                resolution: (PICKER_WIDTH, PICKER_HEIGHT).into(),
+                position: WindowPosition::Centered(MonitorSelection::Current),
+                ..default()
+            },
+            WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
+            WidgetryWindowBackground::Theme,
+            Default::default(),
+            bsn_list! { WidgetryWindowTitle WidgetryText Pickable::IGNORE },
+            bsn_list! {
+                Node {
+                    width: percent(100), height: percent(100),
+                    flex_direction: FlexDirection::Column, padding: UiRect::all(px(16)), row_gap: px(12),
+                }
+                Children [
+                    Text("选择应用数据目录。浏览文件夹不会提交，点击确认后才会记住选择。")
+                    WidgetryText DirectoryPickerStatus--
+                    @WidgetryFileDialog { @mode: WidgetryFileDialogMode::PickDirectory }
+                    Name("LoginDirectoryPicker") DirectoryPicker
+                    Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }
+                    on(selected)
+                ]
+            },
+        )
     }).id();
-    world.resource_mut::<StartupUi>().screen = Some(screen);
+    let mut state = world.resource_mut::<StartupUi>();
+    state.picker = Some(picker);
+    state.phase = Phase::Choosing;
     Ok(())
+}
+
+fn close_picker(
+    world: &mut World,
+    mut requested: Local<MessageCursor<WindowCloseRequested>>,
+    mut closed: Local<MessageCursor<WindowClosed>>,
+) {
+    let state = world.resource::<StartupUi>();
+    let native = state
+        .picker
+        .and_then(|root| widgetry_window_target(world, root));
+    let picker_requested = requested
+        .read(world.resource::<Messages<WindowCloseRequested>>())
+        .any(|event| Some(event.window) == native);
+    let window_closed = closed
+        .read(world.resource::<Messages<WindowClosed>>())
+        .any(|event| Some(event.window) == native || Some(event.window) == state.main);
+    if state.picker.is_some() && (picker_requested || window_closed) {
+        cancel_setup(world);
+    }
+}
+
+fn cancel_setup(world: &mut World) {
+    world.resource_mut::<StartupUi>().phase = Phase::Exiting;
+    clear_picker(world);
+    info!("用户取消数据目录选择，结束启动");
+    world.write_message(AppExit::Success);
 }
 
 fn selected(event: On<WidgetryFileDialogResultEvent>, mut commands: Commands) {
@@ -165,8 +257,7 @@ fn selected(event: On<WidgetryFileDialogResultEvent>, mut commands: Commands) {
         match result {
             WidgetryFileDialogResult::Directory(path) => start_check(world, path),
             WidgetryFileDialogResult::Cancelled => {
-                info!("用户取消数据目录选择，结束启动");
-                world.write_message(AppExit::Success);
+                cancel_setup(world);
                 Ok(())
             }
             _ => Err(io::Error::other("目录选择器返回了不匹配的结果类型").into()),
@@ -177,6 +268,8 @@ fn selected(event: On<WidgetryFileDialogResultEvent>, mut commands: Commands) {
 fn start_check(world: &mut World, path: PathBuf) -> Result {
     clear_screen(world);
     let host = host(world)?;
+    let screen = show_checking(world, host)?;
+    world.resource_mut::<StartupUi>().screen = screen;
     let options = world.resource::<StartupUi>().options.clone();
     let manager = world.resource::<JobManager>().clone();
     let checking_path = path.clone();
@@ -237,16 +330,7 @@ fn start_check(world: &mut World, path: PathBuf) -> Result {
             );
         }
     };
-    let screen = world
-        .commands()
-        .spawn_scene_with_error_handler(bsn! {
-            Name("LoginDirectoryChecking") ChildOf(host) BackgroundColor(STARTUP_SURFACE)
-            Node { width: percent(100), height: percent(100), padding: UiRect::all(px(24)) }
-            Children [Text("正在检查应用数据目录并保存选择…") WidgetryText]
-        })
-        .id();
     let mut state = world.resource_mut::<StartupUi>();
-    state.screen = Some(screen);
     state.phase = Phase::Checking(PendingCheck {
         path,
         id,
@@ -254,6 +338,31 @@ fn start_check(world: &mut World, path: PathBuf) -> Result {
         result: None,
     });
     Ok(())
+}
+
+fn show_checking(world: &mut World, host: Entity) -> Result<Option<Entity>> {
+    let checking = "正在检查应用数据目录并保存选择…";
+    if world.resource::<StartupUi>().picker.is_some() {
+        let picker = world
+            .query_filtered::<Entity, With<DirectoryPicker>>()
+            .single(world)?;
+        world
+            .query_filtered::<&mut Text, With<DirectoryPickerStatus>>()
+            .single_mut(world)?
+            .0 = checking.into();
+        world.entity_mut(picker).insert(InteractionDisabled);
+        return Ok(None);
+    }
+    Ok(Some(
+        world
+            .commands()
+            .spawn_scene_with_error_handler(bsn! {
+                Name("LoginDirectoryChecking") ChildOf(host) BackgroundColor(STARTUP_SURFACE)
+                Node { width: percent(100), height: percent(100), padding: UiRect::all(px(24)) }
+                Children [Text(checking) WidgetryText]
+            })
+            .id(),
+    ))
 }
 
 fn receive_check(world: &mut World) -> Result {
@@ -297,6 +406,7 @@ fn receive_check(world: &mut World) -> Result {
     match result.as_ref() {
         CheckResult::Ready(environment) => {
             clear_screen(world);
+            clear_picker(world);
             world.resource_mut::<StartupUi>().phase = Phase::Ready;
             let host = host(world)?;
             world.commands().spawn_scene_with_error_handler(bsn! {
@@ -342,6 +452,7 @@ fn recovery_button(label: &'static str, name: &'static str, choice: RecoveryChoi
 
 fn show_failure(world: &mut World, path: PathBuf, title: &str, reason: &str) -> Result {
     clear_screen(world);
+    clear_picker(world);
     let host = host(world)?;
     let text = format!("{title}\n\n目录：{}\n原因：{reason}", display_path(&path));
     let screen = world

@@ -119,7 +119,7 @@ Assets 保存相同图案的 EXE ICO、主窗口与任务栏 PNG，以及托盘 
 
 C 区使用 Widgetry Tree 同时显示项目与单独聊天。项目定义与会话归属由 Session Store 写入，Conversation 定义命令和目录投影。界面通过 Bridge 取得保存后的目录，并在 Agent 确认打开后切换 D 区。Runtime 保留原会话仍在使用的后台工具资源，并发布跨会话的安全任务快照。[项目组织与归属](modules/session-store.md#项目组织与归属)
 
-启动界面复用 Widgetry 目录选择器，通过辅助 Job 调用 Login 检查目录并建立数据环境。配置由 application 的 ConfigStore 串行合并并完整替换提交。成功后复用同一窗口进入主界面，通过共享 AgentHost 发起账号恢复。数据根路径在本次运行中保持固定。
+Application 启动时隐藏主窗口，由 Widgetry Splash 窗口先呈现共享背景。完成窗口交接后，Login UI 检查保存的目录，或在主窗口前打开独立的 Widgetry 模态目录选择器。辅助 Job 调用 Login 检查目录并建立数据环境，配置由 Application 的 ConfigStore 串行合并并完整替换提交。成功后主窗口挂载工作区，通过共享 AgentHost 发起账号恢复。数据根路径在本次运行中保持固定。启动窗口的时序见[Splash 启动演出与主窗口交接](modules/splash.md)。
 
 Application 装配独立的设置窗口，提供当前数据目录、下次启动目录、UI Scale 和新会话默认模型设置。目录检查使用辅助 Job，成功提交后更新下次启动位置。缩放配置提交后立即更新窗口，新默认设置在创建会话时读取。关系见[数据目录与启动](mechanisms/application-data.md)。
 

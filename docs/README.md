@@ -4,6 +4,7 @@
 
 - [总体架构](design/architecture.md)：Workspace、程序入口、宿主与内部 Crate 的职责及依赖。
 - [数据目录与启动](design/mechanisms/application-data.md)：配置、目录选择、启动检查及关闭边界。
+- [Splash 启动演出与主窗口交接](design/modules/splash.md)：Splash 窗口会话、帧确认及数据目录初始化时序。
 - [认证运行与凭据管理](design/modules/authentication.md)：账号持久化、认证工作者和凭据生命周期。
 - [账号界面投影](design/modules/account-ui.md)：账号状态与界面职责边界。
 - [模型请求](design/modules/model-request.md)：模型目录、请求协议、流式解析与取消。

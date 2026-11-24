@@ -18,6 +18,7 @@ bevy_widgetry = { workspace = true, features = [
   "job",
   "scroll_area",
   "slider",
+  "splash",
   "text_field",
   "tray",
 ] }

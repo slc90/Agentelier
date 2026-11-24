@@ -5,6 +5,7 @@ mod config;
 mod diagnostics;
 mod settings;
 mod shutdown;
+mod splash;
 mod startup;
 mod tray;
 
