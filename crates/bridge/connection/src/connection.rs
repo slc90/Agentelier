@@ -113,6 +113,7 @@ pub struct Connection {
 impl Connection {
     pub fn start(
         environment: crate::DataEnvironment,
+        ecs_access: crate::ecs_access::EcsAccess,
         notify: impl Fn() -> bool + Send + Sync + 'static,
     ) -> Result<Self, BridgeFailure> {
         let (sender, events) = mpsc::sync_channel(RESULT_CAPACITY);
@@ -131,6 +132,7 @@ impl Connection {
         let runtime = AgentRuntime::start(
             environment,
             operations.clone(),
+            ecs_access,
             move |event| {
                 let event = BridgeEvent {
                     operation_id: event.operation_id,

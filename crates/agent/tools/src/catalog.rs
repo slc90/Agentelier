@@ -147,6 +147,7 @@ enum Executor {
     Shell,
     Stdin,
     Computer,
+    Ecs,
     TaskControl(crate::TaskControl),
 }
 
@@ -303,9 +304,26 @@ impl ToolRegistration {
                         "桌面执行缺少独占许可",
                     );
                 }
-                let result =
-                    crate::script::execute_tool(scripts, arguments, cancel, context.image_input())
-                        .await;
+                let result = crate::script::execute_tool(
+                    scripts,
+                    crate::script::ScriptTarget::Desktop,
+                    arguments,
+                    cancel,
+                    context.image_input(),
+                )
+                .await;
+                drop(permit);
+                self.limit_result(result)
+            }),
+            Executor::Ecs => Box::pin(async move {
+                let result = crate::script::execute_tool(
+                    scripts,
+                    crate::script::ScriptTarget::Ecs,
+                    arguments,
+                    cancel,
+                    None,
+                )
+                .await;
                 drop(permit);
                 self.limit_result(result)
             }),
@@ -360,6 +378,12 @@ impl ToolCatalog {
                 executor: Executor::Computer,
                 access: ToolAccess::Exclusive,
                 image_result: image_input != Some(false),
+            },
+            ToolRegistration {
+                definition: crate::script::ecs_definition(),
+                executor: Executor::Ecs,
+                access: ToolAccess::Exclusive,
+                image_result: false,
             },
             ToolRegistration::new(ToolDefinition {
                 name: "view_image".into(),
@@ -585,7 +609,10 @@ impl ToolCatalog {
             matches!(tool.definition.source, ToolSource::Builtin)
                 && !matches!(
                     tool.executor,
-                    Executor::TaskControl(_) | Executor::CodexImage | Executor::Computer
+                    Executor::TaskControl(_)
+                        | Executor::CodexImage
+                        | Executor::Computer
+                        | Executor::Ecs
                 )
                 && !seen.contains(&tool.definition.name)
         }) {

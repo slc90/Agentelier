@@ -13,7 +13,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/ui/controls/` | `agentelier_controls` | 应用主题、跨页面基础控件与所属 Widgetry 窗口的关闭支持 |
 | `crates/ui/markdown/` | `agentelier_markdown` | 原生 Markdown 解析、块更新、行内样式、原文复制与用户主动链接交互 |
 | `crates/ui/chat_ui/` | `agentelier_chat_ui` | 主窗口工作区布局、模型准备、会话导航、按会话隔离的草稿与阅读状态、多轮流式聊天和相应交互投影 |
-| `crates/ui/agent_host/` | `agentelier_agent_host` | 唯一 Connection、Winit 唤醒、命令提交、业务消息分发及执行收尾 |
+| `crates/ui/agent_host/` | `agentelier_agent_host` | 唯一 Connection、Winit 唤醒、命令提交、业务消息分发、主线程 ECS 请求处理及执行收尾 |
 | `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、Codex 账号界面及 Bevy/Bridge 衔接 |
 | `crates/agent/login/` | `agentelier_login` | 数据环境、Codex 浏览器 OAuth、凭据持久化与身份摘要 |
 | `crates/agent/account/` | `agentelier_account` | Codex 来源状态、共享凭据请求、执行身份门控和账号额度 |
@@ -25,7 +25,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/project_context/` | `agentelier_project_context` | 会话适用的项目规则发现、有界 UTF-8 读取、来源快照与确定性表示 |
 | `crates/agent/skills/` | `agentelier_skills` | 用户 Skills 发现与目录管理、嵌入资源读取、有界元数据和任务目录快照 |
 | `crates/agent/mcp/` | `agentelier_mcp` | MCP 配置、stdio 与 Streamable HTTP 连接、工具和材料协议 |
-| `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示，以及 Windows 桌面 Driver、Rhai 脚本会话和会话级 UI Automation Runtime |
+| `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示，以及 Windows 桌面 Driver、Rhai 脚本会话、会话级 UI Automation Runtime 和无 Bevy 依赖的 ECS 请求契约 |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、封闭边界自动压缩与检查点提交、正文增量和受控取消 |
 | `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型任务取消/回收及执行收尾 |
 | `crates/bridge/account/` | `agentelier_account_bridge` | Codex 凭据安全摘要及账号事件转换 |
@@ -150,6 +150,8 @@ Runtime 接收账号命令并交给 Account，同时在同一 Tokio 中运行模
 Account Bridge 将 AccountEventKind 转为自己的账号事件和安全摘要，投影浏览器等待、账号状态、退出结果和操作错误；LLM Model Bridge 将模型结果转换为自己的回复、错误及完成/取消类型。两者都不执行后台业务，不持有 Agent 的执行状态或 UI 的展示状态。
 
 Connection 只包装和调用对应业务转换，返回带 operation_id 的 BridgeEvent；BridgeEventKind 区分 Account 与 Model。它分配操作身份、隔离迟到结果、协调在途操作、转发控制命令并持有连接收尾句柄，不实现字段投影或业务错误分类。UI 显式消费连接封装和相应业务类型。
+
+AgentHost 在建立 Connection 时把 ECS 请求发送端交给 Runtime，再传入各会话的 Rhai 执行者。`ecs_execute` 从阻塞工作线程发送有界请求，由 AgentHost 在 Bevy 主线程处理。`computer_execute` 与它共用会话脚本状态，各自拥有执行上下文。关闭应用时 Bevy 主循环持续运行至 Runtime 回收，随后释放请求接收端。详见[Agent 自主 ECS 访问与动态 UI 构造](mechanisms/agent-ecs-access.md)。
 
 命令队列容量为四，退出控制队列为一，结果队列为三十二。当前只接纳一个在途账号操作、模型操作或聊天操作；活动聊天的补充输入复用该任务，不占第二个任务槽，退出可停止当前操作；保存重试沿用同一操作 ID，全局 SessionStatus 使用保留 ID 0。满队列、通道关闭、通知失败和意外停止形成明确错误。
 

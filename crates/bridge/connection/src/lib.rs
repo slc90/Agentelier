@@ -9,6 +9,7 @@ pub use agentelier_agent_runtime::{
 };
 
 pub use agentelier_agent_runtime::DataEnvironment;
+pub use agentelier_agent_runtime::ecs_access;
 pub use agentelier_agent_runtime::{
     ConfigChange, ConfigSnapshot, Server, ServerId, ServerSettings, Transport,
 };

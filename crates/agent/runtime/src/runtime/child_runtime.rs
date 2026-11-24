@@ -80,6 +80,7 @@ pub(super) struct Execution {
     pub(super) turn: ChildTurn,
     pub(super) store: SessionStoreClient,
     pub(super) credentials: CredentialClient,
+    pub(super) ecs_access: crate::ecs_access::EcsAccess,
     pub(super) skills_root: PathBuf,
     pub(super) stop: CancellationToken,
     pub(super) parent_stop: CancellationToken,
@@ -160,6 +161,7 @@ impl Execution {
             &view,
             &conversation,
             store.clone(),
+            &self.ecs_access,
         );
         let (control, steers, task_actions) = ModelControl::new(operation);
         let (progress, incoming) = mpsc::channel(model_task::PROGRESS_CAPACITY);

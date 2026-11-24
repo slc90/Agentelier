@@ -1,7 +1,7 @@
 use agentelier_llm_model::FunctionCall;
 use agentelier_tools::{
     ExecutionContext, ProcessSessions, ScriptSession, ToolAccess, ToolAdmission, ToolCatalog,
-    ToolMode, ToolResult, ToolStatus,
+    ToolMode, ToolResult, ToolStatus, ecs_access::EcsAccess,
 };
 use agentelier_turn_runner::{
     ToolAuthorization, ToolBatch, ToolCommand, ToolDispatcher, ToolEvent, ToolJobRequest, ToolWork,
@@ -35,6 +35,7 @@ impl SessionTools {
         view: &agentelier_conversation::SessionView,
         conversation: &agentelier_conversation::Conversation,
         store: agentelier_session_store::SessionStoreClient,
+        ecs_access: &EcsAccess,
     ) -> Self {
         let session = view.id;
         if let Some((id, tools)) = active
@@ -75,7 +76,13 @@ impl SessionTools {
         let (dispatcher, commands, events, incoming) =
             ToolDispatcher::channel(admission.clone(), process_views.clone());
         let work = Arc::new(tokio::sync::Mutex::new(ToolWork::new(incoming)));
-        let worker = tokio::spawn(run(commands, events, processes.clone(), admission.clone()));
+        let worker = tokio::spawn(run(
+            commands,
+            events,
+            processes.clone(),
+            admission.clone(),
+            ecs_access.clone(),
+        ));
         let tools = Self {
             model_connection: Arc::default(),
             processes,
@@ -439,13 +446,14 @@ async fn run(
     events: mpsc::UnboundedSender<ToolEvent>,
     processes: Arc<ProcessSessions>,
     admission: ToolAdmission,
+    ecs_access: EcsAccess,
 ) -> RetainedResults {
     let mut execution = Execution {
         calls: JoinSet::new(),
         events,
         identities: HashMap::new(),
         processes,
-        scripts: ScriptSession::default(),
+        scripts: ScriptSession::new(ecs_access),
         admission,
         ordinary: None,
         controls: None,

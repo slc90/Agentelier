@@ -24,6 +24,7 @@ const INSTRUCTIONS: &str = "This is the user's global memory management conversa
 
 pub(super) struct Dialogue {
     credentials: CredentialClient,
+    ecs_access: crate::ecs_access::EcsAccess,
     memory: Option<MemoryClient>,
     conversation: Conversation,
     model: Option<ModelTask>,
@@ -37,9 +38,14 @@ pub(super) enum Signal {
 }
 
 impl Dialogue {
-    pub(super) fn new(credentials: CredentialClient, memory: Option<MemoryClient>) -> Self {
+    pub(super) fn new(
+        credentials: CredentialClient,
+        memory: Option<MemoryClient>,
+        ecs_access: crate::ecs_access::EcsAccess,
+    ) -> Self {
         Self {
             credentials,
+            ecs_access,
             conversation: Conversation::with_extensions(
                 agentelier_memory::management_registrations(memory.clone()),
             ),
@@ -117,8 +123,13 @@ impl Dialogue {
         }
         self.conversation.validate_model_source(source)?;
         let view = self.conversation.start(id, request)?;
-        let tools =
-            SessionTools::for_session(&mut self.tools, &view, &self.conversation, store.client());
+        let tools = SessionTools::for_session(
+            &mut self.tools,
+            &view,
+            &self.conversation,
+            store.client(),
+            &self.ecs_access,
+        );
         let (control, steers, actions) = ModelControl::new(id);
         control.bind_root(&mut self.conversation, &view)?;
         let (sender, receiver) = mpsc::channel(PROGRESS_CAPACITY);

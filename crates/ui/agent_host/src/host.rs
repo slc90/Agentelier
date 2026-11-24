@@ -1,4 +1,5 @@
 use agentelier_account_bridge::AccountEventKind;
+use agentelier_bridge_connection::ecs_access::{EcsAccess, EcsRequest};
 use agentelier_bridge_connection::{BridgeEventKind, BridgeFailure, Connection, DataEnvironment};
 use agentelier_conversation_bridge::SessionId;
 use agentelier_llm_model_bridge::ModelEventKind;
@@ -6,6 +7,7 @@ use bevy::prelude::*;
 use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
 use std::io;
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tracing::debug;
 
@@ -17,6 +19,7 @@ pub struct AgentHost(Arc<Mutex<HostState>>);
 #[derive(Default)]
 struct HostState {
     connection: Option<Connection>,
+    ecs_requests: Option<Receiver<EcsRequest>>,
     notify: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     stopping: bool,
     failed: bool,
@@ -125,7 +128,12 @@ impl Plugin for AgentHostPlugin {
             .add_message::<ImageAttachmentEvent>()
             .add_message::<McpStatusEvent>()
             .add_message::<McpMaterialEvent>()
-            .add_systems(Update, receive.in_set(ReceiveAgentEvents));
+            .add_systems(
+                Update,
+                (receive, crate::ecs_access::process)
+                    .chain()
+                    .in_set(ReceiveAgentEvents),
+            );
     }
 }
 
@@ -147,10 +155,29 @@ impl AgentHost {
         let proxy = (**proxy).clone();
         let notify = Arc::new(move || proxy.send_event(WinitUserEvent::WakeUp).is_ok());
         let wake_window = notify.clone();
-        state.connection = Some(Connection::start(environment, move || wake_window())?);
+        let (ecs_access, ecs_requests) = EcsAccess::channel();
+        state.connection = Some(Connection::start(environment, ecs_access, move || {
+            wake_window()
+        })?);
+        state.ecs_requests = Some(ecs_requests);
         state.notify = Some(notify);
         debug!("共享执行连接已建立");
         Ok(())
+    }
+
+    pub(super) fn next_ecs_request(&self) -> Result<Option<EcsRequest>> {
+        let mut state = self.state()?;
+        let Some(requests) = &state.ecs_requests else {
+            return Ok(None);
+        };
+        match requests.try_recv() {
+            Ok(request) => Ok(Some(request)),
+            Err(TryRecvError::Empty) => Ok(None),
+            Err(TryRecvError::Disconnected) => {
+                state.ecs_requests = None;
+                Ok(None)
+            }
+        }
     }
 
     fn submit<T>(
@@ -319,9 +346,11 @@ impl AgentHost {
 
     pub fn finish(&self) -> Result {
         self.begin_shutdown()?;
-        if let Some(connection) = &mut self.state()?.connection {
+        let mut state = self.state()?;
+        if let Some(connection) = &mut state.connection {
             connection.finish()?;
         }
+        state.ecs_requests = None;
         Ok(())
     }
 }

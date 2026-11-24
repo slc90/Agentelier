@@ -1,6 +1,6 @@
 # Agent 自主 ECS 访问与动态 UI 构造
 
-> 状态：待实施目标设计。
+> 当前实现已开放 `ecs_execute` 与 `ecs_world_info()`。Reflect 读取、World 修改、派发和 Scene Factory 仍是后续目标，见[执行方案](../../../plans/agent-ecs-access/00-overview.md)。
 
 Agentelier 的 Agent 操作目标是当前进程中的 Bevy World，而不是外部桌面应用。Agent 生成 Rhai 脚本，Rust Native API 将脚本操作转换为对 Entity、Component、Resource、Event、Message 和已注册 UI Scene 的查询与修改。
 
@@ -40,7 +40,7 @@ Bevy UI 的实际结构由 ECS 数据组成。一个界面区域可能包含多�
 
 现有 `ScriptSession` 已经为每个 Conversation 保存 Rhai Engine、Scope 和函数 AST。它支持多步脚本、变量、函数、条件和循环，并在同一 Session 的后续调用之间保留上下文。新增 ECS 能力继续复用这套 Session 级 Rhai 上下文，不建立第二个脚本引擎。
 
-新增一个内置 Function Tool，名称暂定为 `ecs_execute`。模型通过现有 Function Calling 提交 Rhai 脚本，工具调用仍由现有 ToolCatalog、ToolDispatcher 和 ToolAdmission 管理。一次调用执行一段有界脚本，返回文本结果；模型可以按现有 Function Calling 流程决定是否再次调用。
+新建会话的固定工具目录包含内置 Function Tool `ecs_execute`。模型通过现有 Function Calling 提交 Rhai 脚本，工具调用由 ToolCatalog、ToolDispatcher 和 ToolAdmission 管理。一次调用执行一段有界脚本，返回文本结果；模型可以按现有 Function Calling 流程决定是否再次调用。恢复会话沿用其已保存的工具目录。
 
 `ecs_execute` 与现有 `computer_execute` 共享 Session 级 Engine / Scope，但不共享桌面执行上下文：
 
@@ -74,6 +74,8 @@ sequenceDiagram
 Agent 侧定义不依赖 Bevy 的 EcsAccess 请求契约。UI Host 持有请求接收端，并通过 Bevy System 在主线程执行请求。请求和响应使用受限、可序列化的数据值，不传递 Rhai `Dynamic`、Bevy `World` 或 ECS 借用。
 
 请求队列、单次操作和返回数据都必须有界。查询 API 提供明确的结果数量限制和分页，避免一次脚本扫描并返回无限量数据。主线程每帧只处理有限工作量，不在主线程运行整段 Rhai 脚本。
+
+当前通道容量为 32，AgentHost 在连续更新的 `Update` 中每次至多处理 8 个请求。`ecs_world_info()` 返回当前在 World 中生成的实体数、已登记的 ECS ID 数、Reflect 类型数和当前可用的操作。排队已满会立即报告错误；脚本等待响应时每隔至多 10 毫秒检查取消与原有脚本截止时间。
 
 Rhai Worker 等待响应时不会阻塞 Agent Runtime 的 Tokio current-thread，也不会阻塞 Bevy 主线程。正常情况下，脚本每次调用一个 Native API，主线程处理该操作，随后脚本继续执行。
 

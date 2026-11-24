@@ -218,6 +218,7 @@ struct ChildHandle {
 
 #[derive(Clone, Copy)]
 pub(super) struct SpawnEnvironment<'a> {
+    pub(super) ecs_access: &'a crate::ecs_access::EcsAccess,
     pub(super) store: &'a SessionStoreClient,
     pub(super) credentials: &'a CredentialClient,
     pub(super) operations: &'a crate::OperationSequence,

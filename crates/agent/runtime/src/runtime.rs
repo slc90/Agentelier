@@ -292,6 +292,7 @@ impl AgentRuntime {
     pub fn start(
         environment: crate::DataEnvironment,
         operations: crate::OperationSequence,
+        ecs_access: crate::ecs_access::EcsAccess,
         publish: impl Fn(AgentEvent) -> Result<(), DeliveryFailure> + Send + 'static,
         finished: impl Fn() -> Result<(), DeliveryFailure> + Send + 'static,
     ) -> Result<Self, RuntimeFailure> {
@@ -408,6 +409,7 @@ impl AgentRuntime {
                         let mut conversation = Conversation::with_extensions(extensions);
                         let mut memory_dialogue = memory_dialogue::Dialogue::new(
                             owner_credentials.clone(), memory.as_ref().ok().map(Memory::client),
+                            ecs_access.clone(),
                         );
                         let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
@@ -441,7 +443,7 @@ impl AgentRuntime {
                                         result: result.map_err(|failure| failure.to_string()),
                                     }))?;
                                     if model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
-                                        model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store)?;
+                                        model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store,&ecs_access)?;
                                     }
                                 }
                                 if catalog_dirty && catalog.is_none() {
@@ -604,6 +606,7 @@ impl AgentRuntime {
                                 match command {
                                     Command::SpawnAgent(invocation) => {
                                         children.spawn(*invocation, &mut conversation, model.as_ref(), spawn_agent::SpawnEnvironment {
+                                            ecs_access: &ecs_access,
                                             store: &store.client(),
                                             credentials: &owner_credentials,
                                             operations: &operations,
@@ -613,6 +616,7 @@ impl AgentRuntime {
                                     }
                                     Command::Mailbox(command) => {
                                         children.mailbox_command(command, &mut conversation, model.as_ref(), spawn_agent::SpawnEnvironment {
+                                            ecs_access: &ecs_access,
                                             store: &store.client(), credentials: &owner_credentials, operations: &operations,
                                             skills_root: &data_root.join("skills"), mailbox_commands: &mailbox_sender,
                                         }).await;
@@ -635,6 +639,7 @@ impl AgentRuntime {
                                         if let Some(agent) = ready
                                             && let Some(view) = conversation.current()
                                             && let Err(failure) = children.wake_pending(&mut conversation, view.id, agent, spawn_agent::SpawnEnvironment {
+                                                ecs_access: &ecs_access,
                                                 store: &store.client(), credentials: &owner_credentials, operations: &operations,
                                                 skills_root: &data_root.join("skills"), mailbox_commands: &mailbox_sender,
                                             }).await {
@@ -964,7 +969,7 @@ impl AgentRuntime {
                                         }
                                         if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && !pending_queue && !finalizing && pending_source.is_none() && pending_session_model.is_none() && !runtime_shutdown.is_cancelled()
                                             && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store)?;
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store,&ecs_access)?;
                                         }
                                     }
                                     Command::Created(result) => {
@@ -1039,7 +1044,7 @@ impl AgentRuntime {
                                         }
                                         if !finalizing && !pending_queue && suspending == 0 && pending_source.is_none() && pending_session_model.is_none() && delivery_failure.is_none() && !runtime_shutdown.is_cancelled()
                                             && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store)?;
+                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store,&ecs_access)?;
                                         }
                                     }
                                     Command::Session(command) => {
@@ -1293,7 +1298,7 @@ impl AgentRuntime {
                                                 }
                                                 match conversation.start(id, request) {
                                                     Ok(view) => {
-                                                        let tools = tool_jobs::SessionTools::for_session(&mut session_tools, &view, &conversation, store.client());
+                                                        let tools = tool_jobs::SessionTools::for_session(&mut session_tools, &view, &conversation, store.client(), &ecs_access);
                                                         control.bind_root(&mut conversation, &view)?;
                                                         *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?=Some(control.clone());
                                                         emit(

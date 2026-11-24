@@ -1,4 +1,4 @@
-use super::{ScriptOutput, ScriptSession};
+use super::{ScriptOutput, ScriptSession, ScriptTarget};
 use crate::{
     ToolDefinition, ToolMode, ToolPayload, ToolResult, ToolSource, ToolStatus, process::arguments,
 };
@@ -54,14 +54,29 @@ struct Arguments {
 }
 
 pub(crate) fn definition() -> ToolDefinition {
+    script_definition("computer_execute", DESCRIPTION)
+}
+
+pub(crate) fn ecs_definition() -> ToolDefinition {
+    script_definition(
+        "ecs_execute",
+        concat!(
+            "Execute Rhai against Agentelier's in-process Bevy ECS. Variables and functions persist within the live conversation. ",
+            "Use ecs_world_info() to discover world statistics and supported operations. Use print(value) or return a value. ",
+            "Rhai try/catch can read error.code and error.message. The script has a 30 second deadline."
+        ),
+    )
+}
+
+fn script_definition(name: &str, description: &str) -> ToolDefinition {
     ToolDefinition {
-        name: "computer_execute".into(),
+        name: name.into(),
         mode: ToolMode::Synchronous,
         source: ToolSource::Builtin,
         strict: true,
         display_source: None,
         output_schema: None,
-        description: DESCRIPTION.into(),
+        description: description.into(),
         parameters: json!({
             "type": "object",
             "properties": {"script": {"type": "string"}},
@@ -73,6 +88,7 @@ pub(crate) fn definition() -> ToolDefinition {
 
 pub(crate) async fn execute(
     session: &ScriptSession,
+    target: ScriptTarget,
     text: &str,
     cancel: &CancellationToken,
     image_input: Option<bool>,
@@ -81,7 +97,7 @@ pub(crate) async fn execute(
         Ok(input) => input,
         Err(error) => return ToolResult::error(ToolStatus::Failed, error.code, &error.to_string()),
     };
-    match session.run(&input.script, cancel).await {
+    match session.run(target, &input.script, cancel).await {
         Ok(output) => ToolResult {
             status: ToolStatus::Succeeded,
             output: payload(output, image_input),

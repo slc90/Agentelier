@@ -1,11 +1,13 @@
 mod computer;
+mod ecs;
 mod tool;
 
-pub(crate) use tool::{definition as tool_definition, execute as execute_tool};
+pub(crate) use tool::{definition as tool_definition, ecs_definition, execute as execute_tool};
 
 use crate::{
     ImagePayload, ToolFailure,
     desktop::{CaptureMapping, uia},
+    ecs_access::EcsAccess,
 };
 use rhai::{AST, Dynamic, Engine, Scope};
 use std::sync::{Arc, Mutex};
@@ -31,9 +33,15 @@ pub struct ScriptOutput {
     pub image: Option<Arc<ImagePayload>>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ScriptSession {
     state: Arc<AsyncMutex<ScriptState>>,
+    ecs_access: EcsAccess,
+}
+
+pub(crate) enum ScriptTarget {
+    Desktop,
+    Ecs,
 }
 
 struct ScriptState {
@@ -57,6 +65,7 @@ impl Default for ScriptState {
             .set_max_array_size(MAX_COLLECTION_SIZE)
             .set_max_map_size(MAX_COLLECTION_SIZE);
         computer::register(&mut engine);
+        ecs::register(&mut engine);
         Self {
             engine,
             scope: Scope::new(),
@@ -68,12 +77,20 @@ impl Default for ScriptState {
 }
 
 impl ScriptSession {
+    pub fn new(ecs_access: EcsAccess) -> Self {
+        Self {
+            state: Arc::default(),
+            ecs_access,
+        }
+    }
+
     pub async fn close_uia(&self) -> Result<(), ToolFailure> {
         self.state.lock().await.uia.close().await
     }
 
-    pub async fn run(
+    pub(crate) async fn run(
         &self,
+        target: ScriptTarget,
         script: &str,
         cancel: &CancellationToken,
     ) -> Result<ScriptOutput, ToolFailure> {
@@ -88,6 +105,20 @@ impl ScriptSession {
             () = cancel.cancelled() => return Err(cancelled()),
             state = self.state.clone().lock_owned() => state,
         };
+        if matches!(target, ScriptTarget::Ecs) {
+            let control = Control::new(cancel);
+            let _cancel_on_drop = control.cancel.clone().drop_guard();
+            let run = ecs::Run {
+                access: self.ecs_access.clone(),
+                control,
+            };
+            let script = script.to_owned();
+            return tokio::task::spawn_blocking(move || {
+                state.run(&script, run.control.clone(), Some(run))
+            })
+            .await
+            .map_err(worker_failure)?;
+        }
         let mut desktop = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(cancelled()),
@@ -99,17 +130,13 @@ impl ScriptSession {
                 "桌面输入清理尚未确认，当前无法接受新的桌面操作",
             ));
         }
-        let worker_cancel = cancel.child_token();
-        let _cancel_on_drop = worker_cancel.clone().drop_guard();
-        let control = Control {
-            cancel: worker_cancel,
-            deadline: Instant::now() + SCRIPT_TIMEOUT,
-        };
+        let control = Control::new(cancel);
+        let _cancel_on_drop = control.cancel.clone().drop_guard();
         let script = script.to_owned();
         tokio::task::spawn_blocking(move || {
             // Keep desktop ownership on this worker, including on unwind or dropped awaiters.
             *desktop = false;
-            let result = state.run(&script, control);
+            let result = state.run(&script, control, None);
             *desktop = result
                 .as_ref()
                 .err()
@@ -117,12 +144,17 @@ impl ScriptSession {
             result
         })
         .await
-        .map_err(|error| ToolFailure::new("script_worker_failed", error.to_string()))?
+        .map_err(worker_failure)?
     }
 }
 
 impl ScriptState {
-    fn run(&mut self, script: &str, control: Control) -> Result<ScriptOutput, ToolFailure> {
+    fn run(
+        &mut self,
+        script: &str,
+        control: Control,
+        ecs: Option<ecs::Run>,
+    ) -> Result<ScriptOutput, ToolFailure> {
         control.check()?;
         let ast = self
             .engine
@@ -150,22 +182,21 @@ impl ScriptState {
                     .map(|error| Dynamic::from(error.code))
             });
 
-        let desktop = Arc::new(Mutex::new(computer::Run::new(
-            control.clone(),
-            self.observed.clone(),
-            self.uia.clone(),
-        )));
-        let result = {
-            self.engine.set_default_tag(Dynamic::from(desktop.clone()));
-            let tagged = TaggedEngine(&mut self.engine);
-            tagged
-                .0
-                .eval_ast_with_scope::<Dynamic>(&mut self.scope, &program)
+        let (result, mapping, image) = if let Some(run) = ecs {
+            (self.evaluate(&program, Dynamic::from(run)), None, None)
+        } else {
+            let desktop = Arc::new(Mutex::new(computer::Run::new(
+                control.clone(),
+                self.observed.clone(),
+                self.uia.clone(),
+            )));
+            let result = self.evaluate(&program, Dynamic::from(desktop.clone()));
+            let (mapping, image) = desktop
+                .lock()
+                .map_err(|error| ToolFailure::new("desktop_input_cleanup", error.to_string()))?
+                .finish()?;
+            (result, Some(mapping), image)
         };
-        let (mapping, image) = desktop
-            .lock()
-            .map_err(|error| ToolFailure::new("desktop_input_cleanup", error.to_string()))?
-            .finish()?;
         let result = result.map_err(|error| computer::script_failure(&error));
         control
             .check()
@@ -182,7 +213,9 @@ impl ScriptState {
             })?;
         let value = result?;
         self.functions = program.clone_functions_only();
-        self.observed = mapping;
+        if let Some(mapping) = mapping {
+            self.observed = mapping;
+        }
 
         let mut output = output
             .lock()
@@ -194,6 +227,18 @@ impl ScriptState {
             text: std::mem::take(&mut output),
             image,
         })
+    }
+
+    fn evaluate(
+        &mut self,
+        program: &AST,
+        tag: Dynamic,
+    ) -> Result<Dynamic, Box<rhai::EvalAltResult>> {
+        self.engine.set_default_tag(tag);
+        let tagged = TaggedEngine(&mut self.engine);
+        tagged
+            .0
+            .eval_ast_with_scope::<Dynamic>(&mut self.scope, program)
     }
 }
 
@@ -212,6 +257,13 @@ struct Control {
 }
 
 impl Control {
+    fn new(cancel: &CancellationToken) -> Self {
+        Self {
+            cancel: cancel.child_token(),
+            deadline: Instant::now() + SCRIPT_TIMEOUT,
+        }
+    }
+
     fn check(&self) -> Result<(), ToolFailure> {
         if self.cancel.is_cancelled() {
             Err(cancelled())
@@ -221,6 +273,10 @@ impl Control {
             Ok(())
         }
     }
+}
+
+fn worker_failure(error: tokio::task::JoinError) -> ToolFailure {
+    ToolFailure::new("script_worker_failed", error.to_string())
 }
 
 fn cancelled() -> ToolFailure {

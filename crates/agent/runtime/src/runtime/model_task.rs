@@ -539,6 +539,7 @@ pub(super) fn start_queued(
         super::tool_jobs::SessionTools,
     )>,
     store: &agentelier_session_store::SessionStore,
+    ecs_access: &crate::ecs_access::EcsAccess,
 ) -> Result<(), RuntimeFailure> {
     if model.is_some() {
         return Ok(());
@@ -552,6 +553,7 @@ pub(super) fn start_queued(
         &view,
         conversation,
         store.client(),
+        ecs_access,
     );
     control.bind_root(conversation, &view)?;
     *shared.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control.clone());
