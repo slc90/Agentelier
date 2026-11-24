@@ -9,8 +9,8 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | 目录 | Package | 当前职责 |
 | --- | --- | --- |
 | `crates/ui/application/` | `agentelier_application` | 通用宿主、配置、日志、诊断、窗口装配与整体生命周期 |
-| `crates/ui/assets/` | `bevy_app_assets` | 应用 Asset 的统一注册 |
-| `crates/ui/controls/` | `agentelier_controls` | 应用主题与跨页面的基础控件，复用 Widgetry 的交互状态 |
+| `crates/ui/assets/` | `bevy_app_assets` | 应用 Asset 的统一注册与原生图标素材 |
+| `crates/ui/controls/` | `agentelier_controls` | 应用主题、跨页面基础控件与所属 Widgetry 窗口的关闭支持 |
 | `crates/ui/markdown/` | `agentelier_markdown` | 原生 Markdown 解析、块更新、行内样式、原文复制与用户主动链接交互 |
 | `crates/ui/chat_ui/` | `agentelier_chat_ui` | 主窗口工作区布局、模型准备、会话导航、按会话隔离的草稿与阅读状态、多轮流式聊天和相应交互投影 |
 | `crates/ui/agent_host/` | `agentelier_agent_host` | 唯一 Connection、Winit 唤醒、命令提交、业务消息分发及执行收尾 |
@@ -111,7 +111,11 @@ flowchart TD
 
 `application` 安装由 controls 提供的应用主题与共享控件插件。登录、目录设置和聊天界面的普通按钮由 `AgentelierButton` 组合，业务内容和事件处理留在调用方。样式与焦点环由 controls 更新，Widgetry 持有输入、禁用及 Loading 状态。账号和对话使用 `AgentelierAvatar`，通过 Assets 提供的图像句柄显示头像。设置窗口使用 `AvatarCropper` 编辑方形原图的归一化裁剪，保存后将同一渲染投影交给已登录头像与用户消息。详见[控件体系](ui/components.md)。
 
-主窗口以 Widgetry Window 提供原生边缘缩放和标题栏拖动。chat_ui 装配固定导航栏与两层 Widgetry Splitter。C 区和 E/F 的横向比例由 Application 保存，运行时面板按当前净宽与最小区域宽度换算。会话导航、聊天和任务区域分别嵌入 C、D、E，右栏的下半区保持空白。标题栏投影当前会话的上下文占用和账号额度，B 区账号入口按登录状态提供手动授权窗口或右键登出菜单。关闭主窗口触发应用收尾。
+主窗口以 Widgetry Window 提供原生边缘缩放和标题栏拖动。chat_ui 装配固定导航栏与两层 Widgetry Splitter。C 区和 E/F 的横向比例由 Application 保存，运行时面板按当前净宽与最小区域宽度换算。会话导航、聊天和任务区域分别嵌入 C、D、E，右栏的下半区保持空白。标题栏投影当前会话的上下文占用和账号额度，B 区账号入口按登录状态提供手动授权窗口或右键登出菜单。
+
+Application 在启动阶段安装 Widgetry Tray。托盘就绪后，关闭主窗口会记录并隐藏当前可见的窗口，保留窗口实体、模态关系和后台执行。隐藏期间新增的可见窗口在原生创建前加入快照，恢复时跳过已关闭的窗口并保留最小化状态。托盘左键恢复快照，主窗口未被 Widgetry 模态窗口阻挡时请求焦点。托盘初始化未就绪时，主窗口保持可见。各 UI 模块处理自己拥有的辅助窗口关闭请求，Widgetry 管理自身独立对话框的关闭。
+
+Assets 保存相同图案的 EXE ICO、主窗口与任务栏 PNG，以及托盘 ICO。可执行包通过 Widgetry 的图标构建依赖嵌入 EXE 资源，Application 通过 Widgetry 装配运行时图标和托盘。
 
 C 区使用 Widgetry Tree 同时显示项目与单独聊天。项目定义与会话归属由 Session Store 写入，Conversation 定义命令和目录投影。界面通过 Bridge 取得保存后的目录，并在 Agent 确认打开后切换 D 区。Runtime 保留原会话仍在使用的后台工具资源，并发布跨会话的安全任务快照。[项目组织与归属](modules/session-store.md#项目组织与归属)
 
@@ -177,7 +181,7 @@ sequenceDiagram
 
 Widgetry JobManager 管理目录 I/O 等应用辅助工作；账号更新、模型网络请求及其取消/回收由 Agent 侧管理。任务所属体系取决于业务所有者，不取决于是否异步。
 
-`application::shutdown` 暂存 AppExit，通过 `agentelier_agent_host::AgentHost` 的 begin_shutdown/is_finished/finish 停止连接与普通业务唤醒、取消模型及后台业务等待。退出协调使用自己的 Winit 通知保持事件循环推进，在 World 和接收端仍有效时非阻塞确认线程结束并显式 join。
+托盘菜单的「退出 Agentelier」提交 AppExit。`application::shutdown` 暂存退出请求，通过 `agentelier_agent_host::AgentHost` 的 begin_shutdown/is_finished/finish 停止连接与普通业务唤醒、取消模型及后台业务等待。收到退出请求时，Application 先销毁 FileDialog，释放辅助任务收尾所需的目录快照。退出协调使用自己的 Winit 通知保持事件循环推进，在 World 和接收端仍有效时非阻塞确认线程结束并显式 join。托盘在最终 AppExit 到达时释放。
 
 Account 完成在途更新和必要提交。Runtime 等待前台模型和长期记忆后台任务回收、Memory 关闭 SQLite 连接、Session Store 排空已接纳命令并回收存储线程，再释放 Tokio。两类后台均结束后才重新发布 AppExit。主循环返回后保留兜底收尾，宿主最后刷新日志。运行收尾错误影响进程退出结果，辅助任务仍执行收尾。
 

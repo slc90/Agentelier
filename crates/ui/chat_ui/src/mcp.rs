@@ -206,6 +206,7 @@ enum Action {
 }
 
 pub(crate) fn install(app: &mut App) -> Result {
+    agentelier_controls::install_owned_window_close::<Or<(With<Manager>, With<PathPicker>)>>(app);
     if !app.is_plugin_added::<WidgetryCollapsiblePlugin>() {
         app.add_plugins(WidgetryCollapsiblePlugin);
     }

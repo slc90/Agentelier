@@ -56,6 +56,7 @@ struct SourceChoice {
 
 pub(super) fn install(app: &mut App) {
     crate::memory_chat::install(app);
+    agentelier_controls::install_owned_window_close::<With<MemoryWindow>>(app);
     app.init_resource::<Overview>()
         .add_systems(
             Update,

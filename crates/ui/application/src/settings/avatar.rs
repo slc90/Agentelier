@@ -85,6 +85,7 @@ enum Action {
 }
 
 pub(super) fn install(app: &mut App) {
+    agentelier_controls::install_owned_window_close::<With<AvatarPicker>>(app);
     if !app.is_plugin_added::<WidgetrySliderPlugin>() {
         app.add_plugins(WidgetrySliderPlugin);
     }

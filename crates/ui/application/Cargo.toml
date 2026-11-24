@@ -19,6 +19,7 @@ bevy_widgetry = { workspace = true, features = [
   "scroll_area",
   "slider",
   "text_field",
+  "tray",
 ] }
 bevy_widgetry_path_display.workspace = true
 bevy_brp_runtime.workspace = true

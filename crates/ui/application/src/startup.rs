@@ -1,4 +1,4 @@
-use crate::{config, diagnostics, settings, shutdown};
+use crate::{config, diagnostics, settings, shutdown, tray};
 use agentelier_agent_host::AgentHostPlugin;
 use agentelier_chat_ui::{MAIN_WINDOW_WIDTH, MIN_MAIN_WINDOW_WIDTH, workspace_title};
 use agentelier_controls::{AGENTELIER_THEME, AgentelierControlsPlugin};
@@ -87,7 +87,8 @@ fn run_application(logging_ready: &mut bool, guard: &mut Option<LoggingGuard>) -
             .disable::<LogPlugin>()
             .set(WindowPlugin {
                 primary_window: Some(initial_window()),
-                exit_condition: ExitCondition::OnPrimaryClosed,
+                exit_condition: ExitCondition::DontExit,
+                close_when_requested: false,
                 ..default()
             })
             .set(RenderPlugin {
@@ -121,6 +122,7 @@ fn run_application(logging_ready: &mut bool, guard: &mut Option<LoggingGuard>) -
         .add_observer(mount_chat);
     agentelier_chat_ui::install(&mut app, move || config_store.session_model_defaults())?;
     settings::install(&mut app)?;
+    tray::install(&mut app)?;
     let manager = app.world().resource::<JobManager>().clone();
     shutdown::install(&mut app);
     debug!("应用装配完成，进入主循环");

@@ -6,5 +6,6 @@ mod diagnostics;
 mod settings;
 mod shutdown;
 mod startup;
+mod tray;
 
 pub use startup::run;

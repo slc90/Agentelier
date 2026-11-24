@@ -3,10 +3,10 @@ use agentelier_conversation_bridge::{TaskId, TaskNotification, TaskNotificationK
 use bevy::prelude::*;
 use bevy::tasks::futures_lite::future::or;
 use bevy::window::{
-    EnabledButtons, Monitor, OnMonitor, PrimaryMonitor, PrimaryWindow, WindowCloseRequested,
-    WindowLevel, WindowPosition, WindowResolution,
+    EnabledButtons, Monitor, OnMonitor, PrimaryMonitor, PrimaryWindow, WindowLevel, WindowPosition,
+    WindowResolution,
 };
-use bevy_widgetry::job::{JobId, JobManager, JobOptions};
+use bevy_widgetry::job::{JobId, JobManager, JobManagerSystems, JobOptions};
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::ui_scale::WidgetryUiScale;
@@ -41,29 +41,37 @@ struct Toast {
 }
 
 pub(crate) fn install(app: &mut App) {
+    agentelier_controls::install_owned_window_close::<With<Toast>>(app);
     app.init_resource::<ToastQueue>()
         .add_observer(cancel_timer)
-        .add_systems(Update, (receive, show).chain().after(ReceiveAgentEvents));
+        .add_systems(Update, (receive, show).chain().after(ReceiveAgentEvents))
+        .add_systems(Last, begin_shutdown.before(JobManagerSystems::EndFrame));
 }
 
-fn receive(
-    mut events: MessageReader<GlobalTaskNotificationEvent>,
-    mut close: MessageReader<WindowCloseRequested>,
-    mut exit: MessageReader<AppExit>,
-    main: Query<Entity, With<PrimaryWindow>>,
-    mut state: ResMut<ToastQueue>,
-) {
-    let primary = main.single().ok();
-    state.closing |=
-        exit.read().next().is_some() || close.read().any(|event| Some(event.window) == primary);
+fn receive(mut events: MessageReader<GlobalTaskNotificationEvent>, mut state: ResMut<ToastQueue>) {
     if state.closing {
-        state.pending.clear();
         return;
     }
     for GlobalTaskNotificationEvent(notification) in events.read() {
         if state.seen.insert((notification.task, notification.kind)) {
             state.pending.push_back(notification.clone());
         }
+    }
+}
+
+fn begin_shutdown(
+    mut exits: MessageReader<AppExit>,
+    mut state: ResMut<ToastQueue>,
+    windows: Query<Entity, With<Toast>>,
+    mut commands: Commands,
+) {
+    if exits.read().count() == 0 {
+        return;
+    }
+    state.closing = true;
+    state.pending.clear();
+    for root in &windows {
+        commands.entity(root).try_despawn();
     }
 }
 
@@ -76,23 +84,21 @@ fn show(
     scale: Res<WidgetryUiScale>,
     jobs: Res<JobManager>,
 ) -> Result {
-    let main_monitor = main.single();
-    if main_monitor.is_err() {
-        state.closing = true;
-        state.pending.clear();
+    let Ok(main_monitor) = main.single() else {
+        return Ok(());
+    };
+    if state.closing {
+        return Ok(());
     }
     let now = Instant::now();
     let mut occupied = [false; MAX_VISIBLE];
     for (entity, toast) in &windows {
-        if state.closing || toast.deadline <= now {
+        if toast.deadline <= now {
             commands.entity(entity).try_despawn();
         } else {
             occupied[toast.slot] = true;
         }
     }
-    let Ok(main_monitor) = main_monitor else {
-        return Ok(());
-    };
     let monitor = main_monitor
         .and_then(|on| monitors.get(on.0).ok().map(|(monitor, _)| monitor))
         .or_else(|| {
@@ -179,6 +185,7 @@ fn scene(toast: Toast, position: WindowPosition, notification: TaskNotification)
                 maximize_visible: false,
                 close_visible: true,
                 resizable: false,
+                double_click_maximize: false,
             },
             WidgetryWindowBackground::Theme,
             Default::default(),

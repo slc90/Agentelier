@@ -85,6 +85,9 @@ impl Choice {
 pub(crate) fn install(app: &mut App) -> Result {
     avatar::install(app);
     layout::install(app);
+    agentelier_controls::install_owned_window_close::<
+        Or<(With<SettingsWindow>, With<DirectoryPicker>)>,
+    >(app);
     app.register_widgetry_combo_box::<Choice>()
         .map_err(|failure| failure.into_bevy_error())?;
     app.init_resource::<Settings>()

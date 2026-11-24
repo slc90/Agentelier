@@ -90,6 +90,7 @@ name = "agentelier"
 version = "0.1.0"
 dependencies = [
  "agentelier_application",
+ "bevy_widgetry_app_icon_build",
 ]
 
 [[package]]
@@ -2181,7 +2182,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy_widgetry_app_logging",
  "bevy_widgetry_button",
@@ -2202,15 +2203,25 @@ dependencies = [
  "bevy_widgetry_theme",
  "bevy_widgetry_toggle_button",
  "bevy_widgetry_tooltip",
+ "bevy_widgetry_tray",
  "bevy_widgetry_tree",
  "bevy_widgetry_ui_scale",
  "bevy_widgetry_window",
 ]
 
 [[package]]
+name = "bevy_widgetry_app_icon_build"
+version = "0.1.0"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
+dependencies = [
+ "bevy_widgetry_diagnostics",
+ "winresource",
+]
+
+[[package]]
 name = "bevy_widgetry_app_logging"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_diagnostics",
@@ -2224,7 +2235,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_asset"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_internal_log",
@@ -2233,7 +2244,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_button"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2246,22 +2257,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "bevy_widgetry_check_box"
-version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
-dependencies = [
- "bevy",
- "bevy_widgetry_asset",
- "bevy_widgetry_core",
- "bevy_widgetry_diagnostics",
- "bevy_widgetry_internal_log",
- "bevy_widgetry_theme",
-]
-
-[[package]]
 name = "bevy_widgetry_collapsible"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_asset",
@@ -2275,7 +2273,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_combo_box"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_asset",
@@ -2292,7 +2290,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_core"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_asset",
@@ -2306,7 +2304,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_cursor"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_diagnostics",
@@ -2316,7 +2314,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_diagnostics"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy_ecs",
  "bevy_widgetry_internal_log",
@@ -2325,12 +2323,11 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_file_dialog"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_asset",
  "bevy_widgetry_button",
- "bevy_widgetry_check_box",
  "bevy_widgetry_combo_box",
  "bevy_widgetry_core",
  "bevy_widgetry_diagnostics",
@@ -2360,7 +2357,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_internal_log"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "tracing",
 ]
@@ -2368,7 +2365,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_job"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "async-broadcast",
  "bevy",
@@ -2384,7 +2381,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_list_view"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2397,7 +2394,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_message_box"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_button",
@@ -2412,12 +2409,12 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_path_display"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 
 [[package]]
 name = "bevy_widgetry_scroll_area"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2430,7 +2427,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_segmented"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2442,7 +2439,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_slider"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2454,7 +2451,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_splitter"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2466,7 +2463,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_text_field"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2479,7 +2476,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_theme"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_diagnostics",
@@ -2489,7 +2486,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_toggle_button"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2501,7 +2498,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_tooltip"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2511,9 +2508,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_widgetry_tray"
+version = "0.1.0"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
+dependencies = [
+ "bevy",
+ "bevy_widgetry_diagnostics",
+ "bevy_widgetry_internal_log",
+ "crossbeam-channel",
+ "image",
+ "tray-icon",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "bevy_widgetry_tree"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_asset",
@@ -2528,7 +2539,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_ui_scale"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_core",
@@ -2540,7 +2551,7 @@ dependencies = [
 [[package]]
 name = "bevy_widgetry_window"
 version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#171cba28816d498b72c2e37922a9029e825f4311"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
 dependencies = [
  "bevy",
  "bevy_widgetry_asset",
@@ -4464,6 +4475,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyboard-types"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0fbe853b403ae61a04233030ae8a79d94975281ed9770a1f9e246732b534b28d"
+dependencies = [
+ "bitflags 2.13.2",
+ "serde",
+]
+
+[[package]]
 name = "kurbo"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4769,6 +4790,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "muda"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4340e89c178916e62879c5c36b7f699019369be413e496178a6983ce91b8bc03"
+dependencies = [
+ "crossbeam-channel",
+ "dpi",
+ "keyboard-types",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "png",
+ "thiserror 2.0.21",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "mutants"
 version = "0.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5042,6 +5081,7 @@ checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
 dependencies = [
  "bitflags 2.13.2",
  "objc2 0.6.5",
+ "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
 ]
@@ -6813,7 +6853,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.6",
  "windows-sys 0.61.2",
@@ -7225,6 +7265,25 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "tray-icon"
+version = "0.26.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f5cc5858ecf9574ddd8f0032a2ff7ffd6f7724d2b81e48b9374984b3fd6ddc9"
+dependencies = [
+ "crossbeam-channel",
+ "muda",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "once_cell",
+ "png",
+ "thiserror 2.0.21",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8183,6 +8242,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "winresource"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2bc6d36480b829272a5bdabf08e6dca8004761c1da7e35efef800540c66221b"
+dependencies = [
+ "toml",
+ "version_check",
 ]
 
 [[package]]

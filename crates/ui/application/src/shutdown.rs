@@ -1,9 +1,11 @@
 use agentelier_agent_host::AgentHost;
 use bevy::app::OnAppExitSystems;
 use bevy::prelude::*;
-use bevy::window::ExitSystems;
+use bevy::window::{CursorSystems, ExitSystems};
 use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
+use bevy_widgetry::file_dialog::WidgetryFileDialogHeadless;
 use bevy_widgetry::job::{JobManager, JobManagerSystems, ShutdownHandle, ShutdownPhase};
+use bevy_widgetry::tray::WidgetryTraySystems;
 use std::time::Duration;
 use tracing::{debug, error, warn};
 
@@ -21,13 +23,35 @@ struct ExitState {
 }
 
 pub(crate) fn install(app: &mut App) {
-    app.init_resource::<ExitState>().add_systems(
-        Last,
-        coordinate
-            .after(JobManagerSystems::EndFrame)
-            .after(ExitSystems)
-            .before(OnAppExitSystems),
-    );
+    app.init_resource::<ExitState>()
+        .add_systems(
+            Last,
+            retire_file_dialogs
+                .after(CursorSystems::Update)
+                .before(JobManagerSystems::EndFrame),
+        )
+        .add_systems(
+            Last,
+            coordinate
+                .after(JobManagerSystems::EndFrame)
+                .after(ExitSystems)
+                .before(WidgetryTraySystems::Sync)
+                .before(OnAppExitSystems),
+        );
+}
+
+fn retire_file_dialogs(
+    mut exits: MessageReader<AppExit>,
+    dialogs: Query<Entity, With<WidgetryFileDialogHeadless>>,
+    mut commands: Commands,
+) {
+    if exits.read().count() == 0 {
+        return;
+    }
+    // The FileDialog snapshot worker waits for the UI to release its snapshots.
+    for dialog in &dialogs {
+        commands.entity(dialog).try_despawn();
+    }
 }
 
 fn coordinate(

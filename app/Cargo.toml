@@ -3,9 +3,13 @@ name = "agentelier"
 publish = false
 version.workspace = true
 edition.workspace = true
+build = "../crates/ui/assets/embed_exe_icon.rs"
 
 [dependencies]
 agentelier_application = { path = "../crates/ui/application" }
+
+[build-dependencies]
+bevy_widgetry_app_icon_build.workspace = true
 
 [lints]
 workspace = true

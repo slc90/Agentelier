@@ -47,6 +47,9 @@ struct View {
 }
 
 pub(crate) fn install(app: &mut App) -> Result {
+    agentelier_controls::install_owned_window_close::<Or<(With<SkillsWindow>, With<ImportPicker>)>>(
+        app,
+    );
     if !app.is_plugin_added::<WidgetryMessageBoxPlugin>() {
         app.add_plugins(WidgetryMessageBoxPlugin);
     }

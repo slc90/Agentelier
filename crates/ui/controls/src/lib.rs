@@ -5,6 +5,7 @@ mod avatar;
 mod avatar_cropper;
 mod button;
 mod theme;
+mod window;
 
 pub use avatar::{
     AgentelierAvatar, AgentelierAvatarProps, AvatarCrop, AvatarPresentation, AvatarSource,
@@ -14,6 +15,7 @@ pub use avatar_cropper::{AvatarCropper, AvatarCropperProps, AvatarCropperState};
 pub use bevy_widgetry::button::WidgetryButtonLoading as AgentelierButtonLoading;
 pub use button::{AgentelierButton, AgentelierButtonProps, AgentelierButtonStyle};
 pub use theme::AGENTELIER_THEME;
+pub use window::install_owned_window_close;
 
 use bevy::prelude::*;
 use bevy_widgetry::button::WidgetryButtonPlugin;

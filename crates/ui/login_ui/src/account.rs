@@ -186,6 +186,7 @@ fn sync_login_avatar(
 }
 
 pub(crate) fn install(app: &mut App) {
+    agentelier_controls::install_owned_window_close::<With<AuthorizationWindow>>(app);
     app.init_resource::<AccountState>()
         .register_type::<AccountState>()
         .add_observer(close_authorization)
