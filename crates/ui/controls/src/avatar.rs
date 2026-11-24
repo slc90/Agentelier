@@ -4,10 +4,6 @@ use bevy_app_assets::AvatarAssets;
 use bevy_widgetry::theme::WidgetryTheme;
 
 const DEFAULT_SIZE: f32 = 32.0;
-const ASSISTANT_CROP: AvatarCrop = AvatarCrop {
-    center: Vec2::new(0.52, 0.117),
-    zoom: 3.55,
-};
 
 #[derive(Clone, Copy, Reflect)]
 pub struct AvatarCrop {
@@ -167,7 +163,7 @@ fn sync(
                 |(image, crop)| (image, *crop),
             ),
             AvatarSource::DefaultUser => (&defaults.default_user, AvatarCrop::default()),
-            AvatarSource::Assistant => (&defaults.assistant, ASSISTANT_CROP),
+            AvatarSource::Assistant => (&defaults.assistant, AvatarCrop::default()),
             AvatarSource::Custom { image, crop } => (image, *crop),
         };
         let (image, rect) = images
