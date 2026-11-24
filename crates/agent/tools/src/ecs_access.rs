@@ -34,6 +34,9 @@ pub enum EcsOperation {
     ResourceRemove(String),
     Trigger(String, Map<String, Value>),
     WriteMessage(String, Map<String, Value>),
+    SceneTemplates,
+    SceneSpawn(String, EcsEntity, Map<String, Value>),
+    SceneDespawn(EcsEntity),
 }
 
 #[derive(Default, Deserialize)]

@@ -1,6 +1,7 @@
 pub(crate) mod dispatch;
 mod read;
 mod reflect_value;
+pub(crate) mod scenes;
 mod write;
 
 use crate::AgentHost;
@@ -76,6 +77,7 @@ fn execute(world: &mut World, operation: &EcsOperation) -> std::result::Result<V
                     "ecs_resource_insert(type, value)", "ecs_resource_set(type, value)",
                     "ecs_resource_patch(type, fields)", "ecs_resource_remove(type)",
                     "ecs_trigger(type, payload)", "ecs_write_message(type, payload)",
+                    "scene_templates()", "scene_spawn(name, parent, props) -> entity", "scene_despawn(root)",
                 ],
             }))
         }
@@ -122,5 +124,8 @@ fn execute(world: &mut World, operation: &EcsOperation) -> std::result::Result<V
         }
         EcsOperation::Trigger(name, payload) => dispatch::event(world, name, payload),
         EcsOperation::WriteMessage(name, payload) => dispatch::message(world, name, payload),
+        EcsOperation::SceneTemplates => Ok(scenes::templates(world)),
+        EcsOperation::SceneSpawn(name, parent, props) => scenes::spawn(world, name, *parent, props),
+        EcsOperation::SceneDespawn(root) => scenes::despawn(world, *root),
     }
 }

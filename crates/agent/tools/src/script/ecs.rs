@@ -266,6 +266,33 @@ pub(super) fn register(engine: &mut Engine) {
                     })(),
                 )
             },
+        )
+        .register_fn("scene_templates", |ctx: NativeCallContext<'_>| {
+            call(ctx, Ok(EcsOperation::SceneTemplates))
+        })
+        .register_fn(
+            "scene_spawn",
+            |ctx: NativeCallContext<'_>,
+             name: ImmutableString,
+             parent: ImmutableString,
+             props: Map| {
+                call(
+                    ctx,
+                    (|| {
+                        Ok(EcsOperation::SceneSpawn(
+                            type_name(name)?,
+                            EcsEntity::parse(&parent)?,
+                            from_map(props)?,
+                        ))
+                    })(),
+                )
+            },
+        )
+        .register_fn(
+            "scene_despawn",
+            |ctx: NativeCallContext<'_>, root: ImmutableString| {
+                call(ctx, EcsEntity::parse(&root).map(EcsOperation::SceneDespawn))
+            },
         );
 }
 

@@ -1,6 +1,6 @@
 # Agent 自主 ECS 访问与动态 UI 构造
 
-> 当前实现已开放 `ecs_execute`、Reflect 类型发现、World 读写及 Event / Message 派发。Scene Factory 仍是后续目标，见[执行方案](../../../plans/agent-ecs-access/00-overview.md)。
+> Agent 通过 `ecs_execute` 发现和读写 ECS、派发已登记的 Event / Message，并实例化已登记的 BSN Scene。实施顺序见[执行方案](../../../plans/agent-ecs-access/00-overview.md)。
 
 Agentelier 的 Agent 操作目标是当前进程中的 Bevy World，而不是外部桌面应用。Agent 生成 Rhai 脚本，Rust Native API 将脚本操作转换为对 Entity、Component、Resource、Event、Message 和已注册 UI Scene 的查询与修改。
 
@@ -92,8 +92,6 @@ Rhai Worker 等待响应时不会阻塞 Agent Runtime 的 Tokio current-thread�
 
 Rhai 中用 `ecs:<bits>` 字符串持有 `EcsEntity` 引用，保留 Bevy Entity 的完整身份，包括 generation。每次操作都会重新验证实体是否仍然存在；销毁后复用的 index 不会被误认为原实体。Bevy 的资源实体通过 Resource API 访问。
 
-初始 API 名称和职责建议如下，最终参数结构与返回类型在实现时按 Bevy Reflect 能力和 Rhai 值模型核定。
-
 ### 类型信息与 ECS 读取
 
 | API | 用途 |
@@ -181,7 +179,9 @@ Agentelier 的 UI 构造继续使用 BSN、Scene 和 SceneList。为运行时创
 
 每个模板都是 Rust 侧已经实现并注册的 Scene Function 或 SceneComponent 组合，内部仍使用 `bsn!`。Rhai 只选择模板、提供语义参数和父 Entity，不自行描述一套替代 BSN 的通用 UI 树语言。
 
-初始模板可以使用现有 `AgentelierButton`，提供文字和样式参数。Agent 可以创建多个按钮或其他已注册模板，并通过 ECS 层级关系组合它们。模板需要明确其子实体归属，`scene_despawn` 只清理该实例拥有的结构，不误删调用方提供的业务 Entity。
+Application 登记 `agentelier.button` 模板。它通过现有 `AgentelierButton` 和 `WidgetryText` Scene 构造按钮，接受非空 `label` 及 `primary`、`secondary`、`danger` 或 `icon` 样式。`scene_spawn` 校验父实体为存活的 UI Node，调用 Widgetry 的 Scene 构造入口，并在成功后返回根 Entity 引用。
+
+构造成功时在根实体记录该实例拥有的实体身份。清理时先解除后来挂入的外部子实体与该实例的关系，再销毁仍存活的实例实体。调用方提供的父实体和额外挂入的实体得以保留。
 
 这一机制允许 Agent 在运行时增加已有控件的实例、决定它们的父实体和组合方式。新增一种 Rust 控件类型仍然需要应用实现并注册相应 Scene；Rhai 不会在运行时生成新的 Rust 类型或 Observer / System。
 
@@ -208,13 +208,10 @@ Panic 或普通错误都不会自动回滚此前已完成的 ECS 修改。Agent 
 
 本阶段不把多页面长流程、持续任务推进或复杂自我规划作为验收条件。
 
-## 实施边界与待确认细节
+## 实施边界
 
 - `agent/tools` 不依赖 Bevy、UI 或 Bridge。ECS 请求契约由 Agent 侧定义，UI 宿主实现；依赖方向保持 `ui → agent / bridge`、`bridge → agent`。
 - ECS 执行路径不使用 Windows UIA、BRP、HTTP、MCP 或 OS 鼠标 / 键盘输入。BRP 仅作为外部开发验证工具。
 - 不为所有 Component 建立专用 Rhai 函数，也不维护按页面划分的硬编码操作清单；通用 API 面向运行时可查询和可反射的类型。
 - 不把任意 Bevy World 引用跨线程交给 Rhai，也不建立脚本级事务或自动回滚。
 - 不为 Widgetry 建立替代 BSN 的通用构造语言；动态控件通过已注册的 Scene Function 创建，并遵循 Widgetry 公开 API 对托管状态的契约。
-- Native API 的最终函数名、参数结构、反射值转换格式和请求预算需要在实现时核定。
-- Event / Message 的初始适配器清单，以及用于验证 Resource 写入的安全目标，需要从实际注册类型中选定，不预先假定任意类型都可用。
-- Scene Factory 的构造完成回执和实例清理方式，需要依据 Widgetry 公开 Scene API 落定。

@@ -16,7 +16,7 @@
 - [Markdown 展示](design/modules/markdown.md)：正文解析、实体投影与阅读状态。
 - [Direct 工具调用](design/tool_call.md)：工具协议、执行循环、运行中补充与队列。
 - [Computer Use](design/computer_use/computer-use.md)：Windows 窗口管理、截图、键鼠输入和 Rhai 执行。
-- [Agent 自主 ECS 访问与动态 UI 构造](design/mechanisms/agent-ecs-access.md)：Rhai 到 Bevy 主线程的进程内请求桥、当前可用的 ECS API 和后续设计。
+- [Agent 自主 ECS 访问与动态 UI 构造](design/mechanisms/agent-ecs-access.md)：Rhai 到 Bevy 主线程的进程内请求、反射读写、事件派发和 BSN Scene 动态实例。
 - [UI Automation](design/computer_use/ui-automation.md)：Computer Use 的控件语义操作设计，涵盖元素定位、Control Pattern、事件和缓存。
 - [已知问题](known_issues.md)：已确认但尚未解决的上游限制及影响。
 

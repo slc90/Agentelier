@@ -104,6 +104,7 @@ pub struct ReceiveAgentEvents;
 pub struct AgentHostPlugin {
     host: AgentHost,
     ecs_dispatch: crate::ecs_access::dispatch::Registry,
+    ecs_scenes: crate::ecs_access::scenes::Registry,
 }
 
 impl AgentHostPlugin {
@@ -121,12 +122,25 @@ impl AgentHostPlugin {
             .register_unit_event(name, description, event)?;
         Ok(self)
     }
+
+    pub fn with_ecs_scene<P: serde::de::DeserializeOwned + 'static, S: Scene>(
+        mut self,
+        name: &'static str,
+        description: &'static str,
+        parameters: &'static [(&'static str, &'static str)],
+        build: fn(P) -> Result<S>,
+    ) -> Result<Self> {
+        self.ecs_scenes
+            .register(name, description, parameters, build)?;
+        Ok(self)
+    }
 }
 
 impl Plugin for AgentHostPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.host.clone())
             .insert_resource(self.ecs_dispatch.clone())
+            .insert_resource(self.ecs_scenes.clone())
             .init_resource::<HostActivity>()
             .add_message::<AccountEvent>()
             .add_message::<ModelEvent>()
