@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#090d0b">
+    <title>Agentelier — Splash</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="styles.css">
+    <script type="module" src="src/main.js"></script>
+  </head>
+  <body>
+    <main class="screening">
+      <header class="masthead">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <h1>Agentelier<span>.</span></h1>
+        </div>
+        <div class="preview-actions">
+          <button class="preview-mode final-frame" type="button" aria-pressed="false" disabled>最终背景</button>
+          <button class="preview-mode workspace-mode" type="button" aria-pressed="false" aria-controls="workspace-preview" disabled>界面预览</button>
+          <button class="fullscreen" type="button" aria-label="全屏" title="全屏 (F)">
+            <span class="corners" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>全屏</span>
+          </button>
+        </div>
+      </header>
+
+      <section class="player" aria-label="Agentelier 启动演出">
+        <button class="fullscreen exit-fullscreen" type="button" aria-label="退出全屏" title="退出全屏 (Esc)">
+          <span class="corners" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>退出全屏</span>
+        </button>
+        <div class="stage">
+          <img class="shared-background" src="assets/main_window_background_reference.png" alt="浅薄荷绿的 Agentelier 主窗口背景" draggable="false">
+          <canvas aria-label="暗绿色知识碎片汇聚成助手的实时演出"></canvas>
+          <div class="view-scrim" aria-hidden="true"></div>
+          <div class="caption" aria-hidden="true">
+            <div class="caption-kicker"><span></span><b id="act-number">I</b> <i>/</i> IV</div>
+            <p id="act-title">数据之海</p>
+            <p id="act-subtitle">Sea of knowledge</p>
+          </div>
+          <section id="workspace-preview" class="workspace-preview" aria-label="主窗口控件叠加示意" hidden>
+            <header class="workspace-toolbar"><strong>Agentelier</strong><span>工作空间</span><span class="workspace-model">GPT</span></header>
+            <aside class="workspace-sidebar">
+              <h2>会话</h2>
+              <p class="workspace-selected">Splash 原型</p>
+            </aside>
+            <div class="workspace-chat">
+              <article class="workspace-message">
+                <h2>助手</h2>
+                <p>演出分为三个连续步骤。</p>
+                <pre><code>const steps = [
+  "汇聚", "成形", "交接"
+];</code></pre>
+              </article>
+              <div class="workspace-composer"><span>输入消息…</span><b>发送</b></div>
+            </div>
+            <aside class="workspace-tasks">
+              <h2>后台任务</h2>
+              <p>暂无运行中的任务</p>
+            </aside>
+          </section>
+          <p class="load-status" role="status">正在准备演出…</p>
+        </div>
+
+        <div class="transport">
+          <button class="play" type="button" aria-label="播放" title="播放 (空格)"><span aria-hidden="true"></span></button>
+          <div class="sequence">
+            <div class="scrub">
+              <div class="rail" aria-hidden="true"><div class="rail-progress"></div></div>
+              <input type="range" min="0" max="4.82" step="0.01" value="0" aria-label="演出进度">
+            </div>
+            <nav class="acts" aria-label="幕次"></nav>
+          </div>
+          <div class="clock" aria-hidden="true"><span id="elapsed">0.00s</span><span class="clock-divider">/</span><span id="duration">4.82s</span></div>
+          <button class="replay" type="button" aria-label="从头播放" title="从头播放 (R)"><span aria-hidden="true">↻</span></button>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
