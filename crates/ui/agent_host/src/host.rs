@@ -155,7 +155,8 @@ impl AgentHost {
         let proxy = (**proxy).clone();
         let notify = Arc::new(move || proxy.send_event(WinitUserEvent::WakeUp).is_ok());
         let wake_window = notify.clone();
-        let (ecs_access, ecs_requests) = EcsAccess::channel();
+        let wake_ecs = notify.clone();
+        let (ecs_access, ecs_requests) = EcsAccess::channel(move || wake_ecs());
         state.connection = Some(Connection::start(environment, ecs_access, move || {
             wake_window()
         })?);

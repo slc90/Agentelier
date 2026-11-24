@@ -3,11 +3,15 @@ use crate::{
     ToolFailure,
     ecs_access::{EcsAccess, EcsEntity, EcsError, EcsOperation, Page, Query},
 };
-use rhai::{Dynamic, Engine, EvalAltResult, ImmutableString, Map, NativeCallContext};
+use rhai::{Array, Dynamic, Engine, EvalAltResult, ImmutableString, Map, NativeCallContext};
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 const MAX_NAME_BYTES: usize = 1024;
 const MAX_FILTER_TYPES: usize = 16;
+const MAX_PAYLOAD_BYTES: usize = 32 * 1024;
+const MAX_PAYLOAD_DEPTH: usize = 16;
+const VALUE_OVERHEAD: usize = 16;
 type NativeResult = Result<Dynamic, Box<EvalAltResult>>;
 
 #[derive(Clone)]
@@ -109,6 +113,136 @@ pub(super) fn register(engine: &mut Engine) {
             |ctx: NativeCallContext<'_>, name: ImmutableString| {
                 call(ctx, type_name(name).map(EcsOperation::ResourceGet))
             },
+        )
+        .register_fn(
+            "ecs_spawn",
+            |ctx: NativeCallContext<'_>, components: Map| {
+                call(ctx, from_map(components).map(EcsOperation::Spawn))
+            },
+        )
+        .register_fn(
+            "ecs_insert",
+            |ctx: NativeCallContext<'_>,
+             entity: ImmutableString,
+             name: ImmutableString,
+             value: Dynamic| {
+                call(
+                    ctx,
+                    (|| {
+                        Ok(EcsOperation::Insert(
+                            EcsEntity::parse(&entity)?,
+                            type_name(name)?,
+                            from_value(value)?,
+                        ))
+                    })(),
+                )
+            },
+        )
+        .register_fn(
+            "ecs_patch",
+            |ctx: NativeCallContext<'_>,
+             entity: ImmutableString,
+             name: ImmutableString,
+             fields: Map| {
+                call(
+                    ctx,
+                    (|| {
+                        Ok(EcsOperation::Patch(
+                            EcsEntity::parse(&entity)?,
+                            type_name(name)?,
+                            from_map(fields)?,
+                        ))
+                    })(),
+                )
+            },
+        )
+        .register_fn(
+            "ecs_remove",
+            |ctx: NativeCallContext<'_>, entity: ImmutableString, name: ImmutableString| {
+                call(
+                    ctx,
+                    (|| {
+                        Ok(EcsOperation::Remove(
+                            EcsEntity::parse(&entity)?,
+                            type_name(name)?,
+                        ))
+                    })(),
+                )
+            },
+        )
+        .register_fn(
+            "ecs_despawn",
+            |ctx: NativeCallContext<'_>, entity: ImmutableString| {
+                call(ctx, EcsEntity::parse(&entity).map(EcsOperation::Despawn))
+            },
+        )
+        .register_fn(
+            "ecs_reparent",
+            |ctx: NativeCallContext<'_>, entity: ImmutableString, parent: ImmutableString| {
+                call(
+                    ctx,
+                    (|| {
+                        Ok(EcsOperation::Reparent(
+                            EcsEntity::parse(&entity)?,
+                            EcsEntity::parse(&parent)?,
+                        ))
+                    })(),
+                )
+            },
+        )
+        .register_fn(
+            "ecs_unparent",
+            |ctx: NativeCallContext<'_>, entity: ImmutableString| {
+                call(ctx, EcsEntity::parse(&entity).map(EcsOperation::Unparent))
+            },
+        )
+        .register_fn(
+            "ecs_resource_insert",
+            |ctx: NativeCallContext<'_>, name: ImmutableString, value: Dynamic| {
+                call(
+                    ctx,
+                    (|| {
+                        Ok(EcsOperation::ResourceInsert(
+                            type_name(name)?,
+                            from_value::<Value>(value)?,
+                        ))
+                    })(),
+                )
+            },
+        )
+        .register_fn(
+            "ecs_resource_set",
+            |ctx: NativeCallContext<'_>, name: ImmutableString, value: Dynamic| {
+                call(
+                    ctx,
+                    (|| {
+                        Ok(EcsOperation::ResourceSet(
+                            type_name(name)?,
+                            from_value(value)?,
+                        ))
+                    })(),
+                )
+            },
+        )
+        .register_fn(
+            "ecs_resource_patch",
+            |ctx: NativeCallContext<'_>, name: ImmutableString, fields: Map| {
+                call(
+                    ctx,
+                    (|| {
+                        Ok(EcsOperation::ResourcePatch(
+                            type_name(name)?,
+                            from_map(fields)?,
+                        ))
+                    })(),
+                )
+            },
+        )
+        .register_fn(
+            "ecs_resource_remove",
+            |ctx: NativeCallContext<'_>, name: ImmutableString| {
+                call(ctx, type_name(name).map(EcsOperation::ResourceRemove))
+            },
         );
 }
 
@@ -134,8 +268,51 @@ fn call(ctx: NativeCallContext<'_>, operation: Result<EcsOperation, EcsError>) -
 }
 
 fn from_map<T: DeserializeOwned>(map: Map) -> Result<T, EcsError> {
-    rhai::serde::from_dynamic(&Dynamic::from_map(map))
+    from_value(Dynamic::from_map(map))
+}
+
+fn from_value<T: DeserializeOwned>(value: Dynamic) -> Result<T, EcsError> {
+    let mut remaining = MAX_PAYLOAD_BYTES;
+    validate_payload(&value, 0, &mut remaining)?;
+    rhai::serde::from_dynamic(&value)
         .map_err(|error| EcsError::new("invalid_ecs_arguments", error.to_string()))
+}
+
+fn validate_payload(value: &Dynamic, depth: usize, remaining: &mut usize) -> Result<(), EcsError> {
+    if depth > MAX_PAYLOAD_DEPTH {
+        return Err(payload_limit());
+    }
+    reserve(remaining, VALUE_OVERHEAD)?;
+    if let Some(value) = value.read_lock::<Map>() {
+        for (key, value) in value.iter() {
+            reserve(remaining, key.len())?;
+            validate_payload(value, depth + 1, remaining)?;
+        }
+    } else if let Some(value) = value.read_lock::<Array>() {
+        for value in value.iter() {
+            validate_payload(value, depth + 1, remaining)?;
+        }
+    } else if let Some(value) = value.read_lock::<ImmutableString>() {
+        reserve(remaining, value.len())?;
+    } else if value
+        .read_lock::<rhai::FLOAT>()
+        .is_some_and(|number| !number.is_finite())
+    {
+        return Err(EcsError::new(
+            "invalid_ecs_arguments",
+            "ECS 参数须为有限浮点数",
+        ));
+    }
+    Ok(())
+}
+
+fn reserve(remaining: &mut usize, bytes: usize) -> Result<(), EcsError> {
+    *remaining = remaining.checked_sub(bytes).ok_or_else(payload_limit)?;
+    Ok(())
+}
+
+fn payload_limit() -> EcsError {
+    EcsError::new("ecs_input_limit", "ECS 参数超过大小或嵌套限制")
 }
 
 fn type_name(name: ImmutableString) -> Result<String, EcsError> {

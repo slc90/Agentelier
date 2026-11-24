@@ -1,5 +1,6 @@
 mod read;
 mod reflect_value;
+mod write;
 
 use crate::AgentHost;
 use agentelier_bridge_connection::ecs_access::{EcsError, EcsOperation};
@@ -8,6 +9,7 @@ use bevy::ecs::reflect::AppTypeRegistry;
 use bevy::prelude::*;
 use serde_json::{Value, json};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use write::{Change, Target};
 
 const MAX_REQUESTS_PER_UPDATE: usize = 8;
 const MAX_WORLD_INFO_ENTRIES: usize = 4096;
@@ -66,6 +68,11 @@ fn execute(world: &mut World, operation: &EcsOperation) -> std::result::Result<V
                     "ecs_exists(entity)", "ecs_components(entity)", "ecs_get(entity, type)",
                     "ecs_parent(entity)", "ecs_children(entity[, #{limit, cursor}]) -> #{items, cursor}",
                     "ecs_resources([#{limit, cursor}]) -> #{items, cursor}", "ecs_resource_get(type)",
+                    "ecs_spawn(#{TypeName: value}) -> entity", "ecs_insert(entity, type, value)",
+                    "ecs_patch(entity, type, fields)", "ecs_remove(entity, type)", "ecs_despawn(entity)",
+                    "ecs_reparent(entity, parent)", "ecs_unparent(entity)",
+                    "ecs_resource_insert(type, value)", "ecs_resource_set(type, value)",
+                    "ecs_resource_patch(type, fields)", "ecs_resource_remove(type)",
                 ],
             }))
         }
@@ -79,5 +86,36 @@ fn execute(world: &mut World, operation: &EcsOperation) -> std::result::Result<V
         EcsOperation::Get(entity, name) => read::component(world, *entity, name),
         EcsOperation::Resources(page) => read::types(world, page, true),
         EcsOperation::ResourceGet(name) => read::resource(world, name),
+        EcsOperation::Spawn(components) => write::spawn(world, components),
+        EcsOperation::Insert(entity, name, value) => write::change(
+            world,
+            Target::Component(*entity),
+            name,
+            Change::Insert(value),
+        ),
+        EcsOperation::Patch(entity, name, fields) => write::change(
+            world,
+            Target::Component(*entity),
+            name,
+            Change::Patch(fields),
+        ),
+        EcsOperation::Remove(entity, name) => {
+            write::change(world, Target::Component(*entity), name, Change::Remove)
+        }
+        EcsOperation::Despawn(entity) => write::despawn(world, *entity),
+        EcsOperation::Reparent(entity, parent) => write::reparent(world, *entity, *parent),
+        EcsOperation::Unparent(entity) => write::unparent(world, *entity),
+        EcsOperation::ResourceInsert(name, value) => {
+            write::change(world, Target::Resource, name, Change::Insert(value))
+        }
+        EcsOperation::ResourceSet(name, value) => {
+            write::change(world, Target::Resource, name, Change::Set(value))
+        }
+        EcsOperation::ResourcePatch(name, fields) => {
+            write::change(world, Target::Resource, name, Change::Patch(fields))
+        }
+        EcsOperation::ResourceRemove(name) => {
+            write::change(world, Target::Resource, name, Change::Remove)
+        }
     }
 }

@@ -1,6 +1,7 @@
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::fmt;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
@@ -20,6 +21,17 @@ pub enum EcsOperation {
     Children(EcsEntity, Page),
     Resources(Page),
     ResourceGet(String),
+    Spawn(Map<String, Value>),
+    Insert(EcsEntity, String, Value),
+    Patch(EcsEntity, String, Map<String, Value>),
+    Remove(EcsEntity, String),
+    Despawn(EcsEntity),
+    Reparent(EcsEntity, EcsEntity),
+    Unparent(EcsEntity),
+    ResourceInsert(String, Value),
+    ResourceSet(String, Value),
+    ResourcePatch(String, Map<String, Value>),
+    ResourceRemove(String),
 }
 
 #[derive(Default, Deserialize)]
@@ -89,7 +101,10 @@ impl fmt::Display for EcsError {
 impl std::error::Error for EcsError {}
 
 #[derive(Clone)]
-pub struct EcsAccess(SyncSender<EcsRequest>);
+pub struct EcsAccess {
+    requests: SyncSender<EcsRequest>,
+    wake: Arc<dyn Fn() -> bool + Send + Sync>,
+}
 
 pub struct EcsRequest {
     pub operation: EcsOperation,
@@ -109,9 +124,17 @@ impl EcsRequest {
 }
 
 impl EcsAccess {
-    pub fn channel() -> (Self, Receiver<EcsRequest>) {
-        let (sender, receiver) = mpsc::sync_channel(REQUEST_CAPACITY);
-        (Self(sender), receiver)
+    pub fn channel(
+        wake: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> (Self, Receiver<EcsRequest>) {
+        let (requests, receiver) = mpsc::sync_channel(REQUEST_CAPACITY);
+        (
+            Self {
+                requests,
+                wake: Arc::new(wake),
+            },
+            receiver,
+        )
     }
 
     pub(crate) fn call(
@@ -120,9 +143,11 @@ impl EcsAccess {
         cancel: &CancellationToken,
         deadline: Instant,
     ) -> Result<Value, EcsError> {
-        check(cancel, deadline)?;
+        let cancel = cancel.child_token();
+        let _cancel_on_return = cancel.clone().drop_guard();
+        check(&cancel, deadline)?;
         let (reply, receiver) = mpsc::sync_channel(1);
-        self.0
+        self.requests
             .try_send(EcsRequest {
                 operation,
                 cancel: cancel.clone(),
@@ -133,8 +158,11 @@ impl EcsAccess {
                 TrySendError::Full(_) => EcsError::new("ecs_queue_full", "ECS 请求队列已满"),
                 TrySendError::Disconnected(_) => closed(),
             })?;
+        if !(self.wake)() {
+            return Err(closed());
+        }
         loop {
-            check(cancel, deadline)?;
+            check(&cancel, deadline)?;
             let remaining = deadline.saturating_duration_since(Instant::now());
             match receiver.recv_timeout(remaining.min(CANCELLATION_POLL)) {
                 Ok(result) => return result,

@@ -1,6 +1,6 @@
 # Agent 自主 ECS 访问与动态 UI 构造
 
-> 当前实现已开放 `ecs_execute`、Reflect 类型发现及 World 只读访问。World 修改、派发和 Scene Factory 仍是后续目标，见[执行方案](../../../plans/agent-ecs-access/00-overview.md)。
+> 当前实现已开放 `ecs_execute`、Reflect 类型发现及 World 读取和修改。派发和 Scene Factory 仍是后续目标，见[执行方案](../../../plans/agent-ecs-access/00-overview.md)。
 
 Agentelier 的 Agent 操作目标是当前进程中的 Bevy World，而不是外部桌面应用。Agent 生成 Rhai 脚本，Rust Native API 将脚本操作转换为对 Entity、Component、Resource、Event、Message 和已注册 UI Scene 的查询与修改。
 
@@ -75,7 +75,7 @@ Agent 侧定义不依赖 Bevy 的 EcsAccess 请求契约。UI Host 持有请求�
 
 请求队列、单次操作和返回数据都必须有界。查询 API 提供明确的结果数量限制和分页，避免一次脚本扫描并返回无限量数据。主线程每帧只处理有限工作量，不在主线程运行整段 Rhai 脚本。
 
-当前通道容量为 32，AgentHost 在连续更新的 `Update` 中每次至多处理 8 个请求。`ecs_world_info()` 返回当前在 World 中生成的实体数、已登记的 ECS ID 数、Reflect 类型数和当前可用的操作。排队已满会立即报告错误；脚本等待响应时每隔至多 10 毫秒检查取消与原有脚本截止时间。
+当前通道容量为 32，AgentHost 在 `Update` 中每次至多处理 8 个请求。入队后通过应用现有的 Winit 通知唤醒主循环。`ecs_world_info()` 返回当前在 World 中生成的实体数、已登记的 ECS ID 数、Reflect 类型数和当前可用的操作。排队已满会立即报告错误；脚本等待响应时每隔至多 10 毫秒检查取消与原有脚本截止时间。
 
 Rhai Worker 等待响应时不会阻塞 Agent Runtime 的 Tokio current-thread，也不会阻塞 Bevy 主线程。正常情况下，脚本每次调用一个 Native API，主线程处理该操作，随后脚本继续执行。
 
@@ -121,18 +121,24 @@ Rhai 中用 `ecs:<bits>` 字符串持有 `EcsEntity` 引用，保留 Bevy Entity
 | API | 用途 |
 | --- | --- |
 | `ecs_spawn(components)` | 创建 Entity，并添加指定的反射 Component |
-| `ecs_insert(entity, type, value)` | 添加 Component |
+| `ecs_insert(entity, type, value)` | 插入或替换 Component |
 | `ecs_patch(entity, type, fields)` | 修改现有 Component 的指定字段 |
 | `ecs_remove(entity, type)` | 移除 Component |
 | `ecs_despawn(entity)` | 销毁 Entity |
 | `ecs_reparent(entity, parent)` | 调整 Entity 的父子关系 |
 | `ecs_unparent(entity)` | 解除父子关系 |
-| `ecs_resource_insert(type, value)` | 插入 Resource |
+| `ecs_resource_insert(type, value)` | 插入或替换 Resource |
 | `ecs_resource_set(type, value)` | 替换 Resource |
 | `ecs_resource_patch(type, fields)` | 修改 Resource 的指定字段 |
 | `ecs_resource_remove(type)` | 移除 Resource |
 
 这些操作使用 Bevy 的 Component、Resource 和 Relationship 机制。修改 `ChildOf` / `Children` 时使用 Bevy 正常的关系维护 API，不分别写入两份关系状态。
+
+`ecs_spawn` 接收类型名到初始值的映射，先完成类型解析与构造校验，再生成实体。`ecs_patch` 与 `ecs_resource_patch` 接收顶层字段映射，元组字段以字符串索引指定。校验全部字段后才写入，返回实际写入的字段名。Resource 的 `set`、`patch` 与 `remove` 要求资源当前存在。脚本输入具有大小和嵌套限制。
+
+类型结构和传输值由 Bevy Reflect 分别提供。写入使用同一类型的 `ecs_get` 或 `ecs_resource_get` 所返回的形状。带自定义序列化的类型可以有不同的结构和传输形式，例如 `Vec3` 的三个结构字段通过三项数组传输。
+
+Widgetry 托管类型和 Agentelier 业务 Resource 通过各自的公开接口修改。实体操作排除 Bevy Resource 的底层实体，避免绕过 Resource 权限和生命周期。
 
 `ecs_spawn` 面向普通 ECS Entity。它可以组合已经注册反射能力的 Component；它不是 Widgetry 复合控件的构造方式。复合控件使用后面的 Scene API。
 
