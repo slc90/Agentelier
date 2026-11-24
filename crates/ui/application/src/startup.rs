@@ -2,7 +2,6 @@ use crate::{config, diagnostics, settings, shutdown};
 use agentelier_agent_host::AgentHostPlugin;
 use agentelier_chat_ui::{MAIN_WINDOW_WIDTH, MIN_MAIN_WINDOW_WIDTH, workspace_title};
 use agentelier_controls::{AGENTELIER_THEME, AgentelierControlsPlugin};
-use agentelier_login::DataEnvironment;
 use agentelier_login_ui::{DataDirectoryReady, HomeContent, LoginUiHost, LoginUiPlugin};
 use bevy::log::LogPlugin;
 use bevy::window::{
@@ -21,7 +20,6 @@ use bevy_widgetry::window::{
     prepare_native_window, transparent_render_creation, widgetry_window,
 };
 use bevy_widgetry_path_display::display_path;
-use std::sync::{Arc, OnceLock};
 use tracing::debug;
 
 const MAIN_WINDOW_HEIGHT: f32 = 1080.0;
@@ -29,8 +27,7 @@ const MAIN_WINDOW_HEIGHT: f32 = 1080.0;
 pub fn run() -> std::process::ExitCode {
     let mut logging_ready = false;
     let mut guard: Option<LoggingGuard> = None;
-    let data_environment = Arc::new(OnceLock::new());
-    let result = run_application(&mut logging_ready, &mut guard, data_environment.clone());
+    let result = run_application(&mut logging_ready, &mut guard);
     let mut exit = match result {
         Ok(exit) => exit,
         Err(error) => {
@@ -44,18 +41,13 @@ pub fn run() -> std::process::ExitCode {
         diagnostics::logging_shutdown(&failure);
         exit = AppExit::error();
     }
-    drop(data_environment);
     match exit {
         AppExit::Success => std::process::ExitCode::SUCCESS,
         AppExit::Error(code) => std::process::ExitCode::from(code.get()),
     }
 }
 
-fn run_application(
-    logging_ready: &mut bool,
-    guard: &mut Option<LoggingGuard>,
-    data_environment: Arc<OnceLock<DataEnvironment>>,
-) -> Result<AppExit> {
+fn run_application(logging_ready: &mut bool, guard: &mut Option<LoggingGuard>) -> Result<AppExit> {
     let executable = std::env::current_exe().map_err(diagnostics::operation)?;
     let logging = AppLogging::new(executable.with_file_name("logs"))
         .map_err(|failure| failure.into_bevy_error())?;
@@ -80,11 +72,9 @@ fn run_application(
     let config = loaded.config.clone();
     let config_store = config::ConfigStore::new(loaded);
     let save_config = config_store.clone();
-    let login_ui = LoginUiPlugin::new(
-        config.data_directory.clone(),
-        data_environment,
-        move |directory| save_config.remember_data_directory(directory),
-    );
+    let login_ui = LoginUiPlugin::new(config.data_directory.clone(), move |directory| {
+        save_config.remember_data_directory(directory)
+    });
     app.insert_resource(
         WidgetryUiScale::new(config.scale_factor).map_err(|failure| failure.into_bevy_error())?,
     )

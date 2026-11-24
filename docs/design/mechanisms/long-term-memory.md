@@ -40,9 +40,9 @@ flowchart LR
 
 ## 记忆属于本次选定的数据环境
 
-应用启动后，`DataEnvironment` 提供本次运行固定且已经独占的用户选择目录。记忆使用这个目录，不使用工作目录、代码仓库、`~/.codex`、当前系统账号的默认目录或其他 Agent 的资料。
+应用启动后，`DataEnvironment` 提供用户选择的数据目录，路径在本次运行中保持固定。记忆使用这个目录，不使用工作目录、代码仓库、`~/.codex`、当前系统账号的默认目录或其他 Agent 的资料。
 
-Runtime 在现有 Tokio 运行期的阻塞任务中创建 `memory/` 并打开 `memory.sqlite`。Memory 持有单个 SQLite 连接，在事务中初始化状态表。路径或数据库错误会记录为记忆存储不可用，聊天和会话存储仍按原流程启动。正常退出时 Runtime 等待 SQLite 连接关闭，随后应用释放数据目录占用。
+Runtime 在现有 Tokio 运行期的阻塞任务中创建 `memory/` 并打开 `memory.sqlite`。Memory 持有单个 SQLite 连接，在事务中初始化状态表。路径或数据库错误会记录为记忆存储不可用，聊天和会话存储仍按原流程启动。正常退出时 Runtime 等待 SQLite 连接关闭。
 
 完整机制采用状态数据库与可读 Markdown 分层，文件目录按实际写入需要创建。
 

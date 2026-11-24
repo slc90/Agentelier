@@ -14,7 +14,7 @@ use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry_path_display::display_path;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use tracing::{debug, error, info};
 
 type RememberDirectory = Arc<dyn Fn(&Path) -> io::Result<()> + Send + Sync>;
@@ -26,20 +26,17 @@ pub struct LoginUiPlugin {
 #[derive(Clone)]
 struct StartupOptions {
     saved_directory: Option<PathBuf>,
-    environment: Arc<OnceLock<DataEnvironment>>,
     remember: RememberDirectory,
 }
 
 impl LoginUiPlugin {
     pub fn new(
         saved_directory: Option<PathBuf>,
-        environment: Arc<OnceLock<DataEnvironment>>,
         remember: impl Fn(&Path) -> io::Result<()> + Send + Sync + 'static,
     ) -> Self {
         Self {
             options: StartupOptions {
                 saved_directory,
-                environment,
                 remember: Arc::new(remember),
             },
         }
@@ -190,7 +187,7 @@ fn start_check(world: &mut World, path: PathBuf) -> Result {
                 context.acknowledge_cancel();
                 return Ok(());
             }
-            let result = match DataEnvironment::acquire(&checking_path) {
+            let result = match DataEnvironment::open(&checking_path) {
                 Err(failure) => {
                     error!(path = %display_path(&checking_path), error = %failure, "应用数据目录不可用");
                     CheckResult::Failed { title: "应用数据目录不可用", reason: failure.to_string() }
@@ -214,12 +211,8 @@ fn start_check(world: &mut World, path: PathBuf) -> Result {
                             if options.saved_directory.as_deref() != Some(checking_path.as_path()) {
                                 info!(path = %display_path(&checking_path), "已保存应用数据目录选择");
                             }
-                            if options.environment.set(environment.clone()).is_err() {
-                                CheckResult::Failed { title: "无法建立数据环境", reason: "本次运行的数据环境已建立，不能重复切换".into() }
-                            } else {
-                                debug!(path = %display_path(environment.root()), "本次数据环境已就绪并取得独占占用");
-                                CheckResult::Ready(environment)
-                            }
+                            debug!(path = %display_path(environment.root()), "本次数据环境已就绪");
+                            CheckResult::Ready(environment)
                         }
                     }
                 }

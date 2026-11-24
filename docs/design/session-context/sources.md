@@ -20,7 +20,7 @@
 | [模型目录源码](https://github.com/slc90/Agentelier/blob/main/crates/agent/llm_model/src/model.rs) | 当前目录只贯通身份、推理和图片能力，窗口元数据需要新增。 |
 | [生成请求源码](https://github.com/slc90/Agentelier/blob/main/crates/agent/llm_model/src/generation.rs) | 当前请求地址、`store=false`、完整历史、加密续接、账号校验和 32 MiB 序列化限制。 |
 | [聊天状态与发送门控源码](https://github.com/slc90/Agentelier/blob/main/crates/ui/chat_ui/src/conversation.rs) | 当前单会话投影、草稿与展开状态、UI 中的账号相等判断。 |
-| [数据目录机制](https://github.com/slc90/Agentelier/blob/main/docs/design/mechanisms/application-data.md) | 用户选择的数据根、`config/config.ron`、本次运行固定路径、目录占用与关闭释放。 |
+| [数据目录机制](https://github.com/slc90/Agentelier/blob/main/docs/design/mechanisms/application-data.md) | 用户选择的数据根、`config/config.ron`、本次运行固定路径。 |
 | [提示词快照](https://github.com/slc90/Agentelier/blob/main/docs/design/modules/prompts.md) | `prompts.json` 与 `InstructionSnapshot`；会话指令不依赖提示词库继续存在。 |
 | [聊天与 Markdown 设计](https://github.com/slc90/Agentelier/blob/main/docs/design/chat-foundation/05-ui-markdown.md) | 右侧页面的输入、阅读跟随、公开控件 API 和原生 Markdown；其中早期单轮限制以当前工具及队列设计为准。 |
 | [现有依赖配置](https://github.com/slc90/Agentelier/blob/main/Cargo.toml)与[已知问题](https://github.com/slc90/Agentelier/blob/main/docs/known_issues.md) | 复用现有依赖与平台约束。切页文字现象按已有记录处理。 |

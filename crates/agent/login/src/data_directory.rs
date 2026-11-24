@@ -1,19 +1,15 @@
 use bevy_widgetry_path_display::simplify_path;
-use std::fs::{self, File, OpenOptions, TryLockError};
+use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use tempfile::NamedTempFile;
 use winsafe::{self as win, co, prelude::*};
 
-const FILE_SHARE_READ_WRITE: u32 = 0x0000_0001 | 0x0000_0002;
 const PROBE_CONTENT: &[u8] = b"Agentelier directory access check";
 
 #[derive(Clone)]
 pub struct DataEnvironment {
     root: PathBuf,
-    _occupation: Arc<File>,
 }
 
 impl DataEnvironment {
@@ -21,31 +17,9 @@ impl DataEnvironment {
         &self.root
     }
 
-    pub fn acquire(root: &Path) -> io::Result<Self> {
-        let root = normalize_root(root)?;
-        // Denying delete sharing keeps another process from replacing the locked file.
-        let occupation = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .share_mode(FILE_SHARE_READ_WRITE)
-            .open(root.join(".agentelier.lock"))?;
-        match occupation.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "数据目录正在被另一个 Agentelier 实例使用，请关闭该实例后重试或重新选择目录",
-                ));
-            }
-            Err(TryLockError::Error(error)) => return Err(error),
-        }
-        probe_access(&root)?;
-        Ok(Self {
-            root,
-            _occupation: Arc::new(occupation),
-        })
+    pub fn open(root: &Path) -> io::Result<Self> {
+        let root = validate_data_directory(root)?;
+        Ok(Self { root })
     }
 
     pub fn open_in_explorer(&self) -> io::Result<()> {

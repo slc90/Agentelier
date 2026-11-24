@@ -115,11 +115,11 @@ flowchart TD
 
 C 区使用 Widgetry Tree 同时显示项目与单独聊天。项目定义与会话归属由 Session Store 写入，Conversation 定义命令和目录投影。界面通过 Bridge 取得保存后的目录，并在 Agent 确认打开后切换 D 区。Runtime 保留原会话仍在使用的后台工具资源，并发布跨会话的安全任务快照。[项目组织与归属](modules/session-store.md#项目组织与归属)
 
-启动界面复用 Widgetry 目录选择器，通过辅助 Job 调用 Login 检查并占用目录。配置由 application 的 ConfigStore 串行合并并完整替换提交；成功后复用同一窗口进入主界面，通过共享 AgentHost 发起账号恢复。数据环境保持到后台执行及日志收尾完成。
+启动界面复用 Widgetry 目录选择器，通过辅助 Job 调用 Login 检查目录并建立数据环境。配置由 application 的 ConfigStore 串行合并并完整替换提交。成功后复用同一窗口进入主界面，通过共享 AgentHost 发起账号恢复。数据根路径在本次运行中保持固定。
 
 Application 装配独立的设置窗口，提供当前数据目录、下次启动目录、UI Scale 和新会话默认模型设置。目录检查使用辅助 Job，成功提交后更新下次启动位置。缩放配置提交后立即更新窗口，新默认设置在创建会话时读取。关系见[数据目录与启动](mechanisms/application-data.md)。
 
-UI 使用 `bevy_widgetry_path_display::display_path` 显示路径，Application 在序列化配置和核对路径拼写时使用同库的 `simplify_path`。数据环境对外仍返回原始规范路径，目录比较与文件操作不使用显示字符串。账号凭据位于本次取得占用的数据环境，目录检查只验证目录自身的读写能力。
+UI 使用 `bevy_widgetry_path_display::display_path` 显示路径，Application 在序列化配置和核对路径拼写时使用同库的 `simplify_path`。数据环境对外仍返回原始规范路径，目录比较与文件操作不使用显示字符串。账号凭据位于本次运行的数据目录，目录检查只验证目录自身的读写能力。
 
 ## Agent 的账号、模型与执行所有者
 
@@ -179,7 +179,7 @@ Widgetry JobManager 管理目录 I/O 等应用辅助工作；账号更新、模�
 
 `application::shutdown` 暂存 AppExit，通过 `agentelier_agent_host::AgentHost` 的 begin_shutdown/is_finished/finish 停止连接与普通业务唤醒、取消模型及后台业务等待。退出协调使用自己的 Winit 通知保持事件循环推进，在 World 和接收端仍有效时非阻塞确认线程结束并显式 join。
 
-Account 完成在途更新和必要提交。Runtime 等待前台模型和长期记忆后台任务回收、Memory 关闭 SQLite 连接、Session Store 排空已接纳命令并回收存储线程，再释放 Tokio。随后宿主结束辅助 Job、刷新日志，最后释放目录占用。两类后台均结束后才重新发布 AppExit。主循环返回后保留兜底收尾。运行收尾错误影响进程退出结果，辅助任务仍执行收尾。
+Account 完成在途更新和必要提交。Runtime 等待前台模型和长期记忆后台任务回收、Memory 关闭 SQLite 连接、Session Store 排空已接纳命令并回收存储线程，再释放 Tokio。两类后台均结束后才重新发布 AppExit。主循环返回后保留兜底收尾，宿主最后刷新日志。运行收尾错误影响进程退出结果，辅助任务仍执行收尾。
 
 ```mermaid
 flowchart LR
@@ -187,7 +187,6 @@ flowchart LR
     Stop --> Agent["取消并回收模型 · Account 提交 · Tokio 结束"]
     Agent --> Jobs["辅助 Job 收尾"]
     Jobs --> Logs["刷新并关闭日志"]
-    Logs --> Data["释放数据目录占用"]
 ```
 
 所有库使用宿主统一配置的 tracing。日志只包含安全的操作标识、阶段与诊断，不泄露 Token、授权地址或模型正文。开发与 BRP 验证须保护现有登录状态，未经授权不退出、重新授权、重置凭据或更换数据环境。
