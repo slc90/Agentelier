@@ -24,3 +24,4 @@
 ## 待实施的目标设计
 
 - [原生异步工具与跨 Turn 结果交付](design/native-async-tools/README.md)：以现有 Direct 工具和会话结构为起点，说明跨 Turn 多任务、历史交付、取消、恢复与验收边界；当前实现状态仍以现有模块文档和源码为准。对应[执行方案](../plans/native-async-tools/00-overview.md)。
+- [Agent 自主 ECS 访问与动态 UI 构造](design/mechanisms/agent-ecs-access.md)：沿用现有 Rhai Runtime，通过进程内请求桥访问 Bevy World，并用已注册的 BSN Scene 动态实例化控件。对应[执行方案](../plans/agent-ecs-access/00-overview.md)。
