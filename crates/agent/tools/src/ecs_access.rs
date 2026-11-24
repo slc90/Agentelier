@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use serde_json::Value;
 use std::fmt;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
@@ -7,9 +8,61 @@ use tokio_util::sync::CancellationToken;
 const REQUEST_CAPACITY: usize = 32;
 const CANCELLATION_POLL: Duration = Duration::from_millis(10);
 
-#[derive(Clone, Copy)]
 pub enum EcsOperation {
     WorldInfo,
+    ReflectTypes(Page),
+    ReflectType(String),
+    Query(Query),
+    Exists(EcsEntity),
+    Components(EcsEntity),
+    Get(EcsEntity, String),
+    Parent(EcsEntity),
+    Children(EcsEntity, Page),
+    Resources(Page),
+    ResourceGet(String),
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Page {
+    pub limit: Option<usize>,
+    pub cursor: Option<usize>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Query {
+    pub with: Vec<String>,
+    pub without: Vec<String>,
+    pub name: Option<String>,
+    pub limit: Option<usize>,
+    pub cursor: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+pub struct EcsEntity(u64);
+
+impl EcsEntity {
+    pub fn from_bits(bits: u64) -> Self {
+        Self(bits)
+    }
+    pub fn bits(self) -> u64 {
+        self.0
+    }
+
+    pub fn parse(value: &str) -> Result<Self, EcsError> {
+        value
+            .strip_prefix("ecs:")
+            .and_then(|value| value.parse().ok())
+            .map(Self)
+            .ok_or_else(|| EcsError::new("invalid_entity", "应使用 ECS 查询返回的实体引用"))
+    }
+}
+
+impl fmt::Display for EcsEntity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "ecs:{}", self.0)
+    }
 }
 
 #[derive(Clone, Debug)]

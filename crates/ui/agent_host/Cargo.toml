@@ -10,6 +10,7 @@ agentelier_account_bridge = { path = "../../bridge/account" }
 agentelier_llm_model_bridge = { path = "../../bridge/llm_model" }
 agentelier_conversation_bridge = { path = "../../bridge/conversation" }
 bevy.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 

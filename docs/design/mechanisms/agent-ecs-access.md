@@ -1,6 +1,6 @@
 # Agent 自主 ECS 访问与动态 UI 构造
 
-> 当前实现已开放 `ecs_execute` 与 `ecs_world_info()`。Reflect 读取、World 修改、派发和 Scene Factory 仍是后续目标，见[执行方案](../../../plans/agent-ecs-access/00-overview.md)。
+> 当前实现已开放 `ecs_execute`、Reflect 类型发现及 World 只读访问。World 修改、派发和 Scene Factory 仍是后续目标，见[执行方案](../../../plans/agent-ecs-access/00-overview.md)。
 
 Agentelier 的 Agent 操作目标是当前进程中的 Bevy World，而不是外部桌面应用。Agent 生成 Rhai 脚本，Rust Native API 将脚本操作转换为对 Entity、Component、Resource、Event、Message 和已注册 UI Scene 的查询与修改。
 
@@ -90,7 +90,7 @@ Rhai Worker 等待响应时不会阻塞 Agent Runtime 的 Tokio current-thread�
 
 ## Entity 引用与通用查询
 
-Rhai 中的 Entity 使用封装后的引用值，内部保留 Bevy Entity 的完整身份，包括 generation。每次操作都会重新验证实体是否仍然存在；销毁后复用的 index 不会被误认为原实体。
+Rhai 中用 `ecs:<bits>` 字符串持有 `EcsEntity` 引用，保留 Bevy Entity 的完整身份，包括 generation。每次操作都会重新验证实体是否仍然存在；销毁后复用的 index 不会被误认为原实体。Bevy 的资源实体通过 Resource API 访问。
 
 初始 API 名称和职责建议如下，最终参数结构与返回类型在实现时按 Bevy Reflect 能力和 Rhai 值模型核定。
 
@@ -99,20 +99,22 @@ Rhai 中的 Entity 使用封装后的引用值，内部保留 Bevy Entity 的完
 | API | 用途 |
 | --- | --- |
 | `ecs_world_info()` | 获取当前 World 的基础统计和可用类型概况 |
-| `reflect_types()` | 列出已注册 Reflect 类型 |
+| `reflect_types([page])` | 分页列出已注册 Reflect 类型的完整路径 |
 | `reflect_type(name)` | 查询指定类型的结构、字段和注册能力 |
 | `ecs_query(filter)` | 按 Component 条件查询 Entity |
 | `ecs_exists(entity)` | 检查 Entity 是否仍然有效 |
 | `ecs_components(entity)` | 列出 Entity 当前拥有的 Component 类型 |
 | `ecs_get(entity, type)` | 读取支持反射的 Component 数据 |
 | `ecs_parent(entity)` | 获取父 Entity |
-| `ecs_children(entity)` | 获取子 Entity |
-| `ecs_resources()` | 列出可查询的 Resource 类型 |
+| `ecs_children(entity[, page])` | 分页获取子 Entity |
+| `ecs_resources([page])` | 分页列出当前存在且可查询的 Resource 类型 |
 | `ecs_resource_get(type)` | 读取支持反射的 Resource |
 
-`ecs_query` 使用组件类型条件，例如 `with`、`without`，并支持 `limit` 和 `cursor`。查询结果是 Entity 引用，而不是预先构造的 UI 节点。
+`ecs_query` 支持组件条件 `with`、`without` 及精确匹配 `Name` 的 `name` 条件。`with` 是 Rhai 保留字，调用时写作 `ecs_query(#{"with": ["Node"], name: "WorkspaceF"})`。分页结果通过 `items` 和 `cursor` 交付，默认 24 条，上限 128 条。继续查询时沿用原条件，将返回的 `cursor` 传回。单次查询最多扫描 4096 个实体索引，因此空页也可能带有可继续的游标。每页读取的是实时 World，实体可能在分页之间发生变化。
 
 `ecs_components` 可以报告实体实际拥有的 Component 类型；字段读取则要求类型具有相应的反射能力。`reflect_types` 反映运行时 TypeRegistry 中真正可用的类型，不代表所有 Rust 类型都能被动态操作。
+
+查询支持完整类型路径及可以唯一解析的短名。反射值通过有界的 Bevy Reflect 序列化转换为 Rhai 基本值、数组和映射。`Name` 返回名称字符串，`Entity` 返回完整引用。单次值读取最多遍历 1024 个反射值节点、输出 32 KiB，超限或无法转换时返回结构化错误。
 
 ### Entity、Component、Hierarchy 与 Resource 修改
 
