@@ -1,6 +1,6 @@
 # Agent 自主 ECS 访问与动态 UI 构造
 
-> 当前实现已开放 `ecs_execute`、Reflect 类型发现及 World 读取和修改。派发和 Scene Factory 仍是后续目标，见[执行方案](../../../plans/agent-ecs-access/00-overview.md)。
+> 当前实现已开放 `ecs_execute`、Reflect 类型发现、World 读写及 Event / Message 派发。Scene Factory 仍是后续目标，见[执行方案](../../../plans/agent-ecs-access/00-overview.md)。
 
 Agentelier 的 Agent 操作目标是当前进程中的 Bevy World，而不是外部桌面应用。Agent 生成 Rhai 脚本，Rust Native API 将脚本操作转换为对 Entity、Component、Resource、Event、Message 和已注册 UI Scene 的查询与修改。
 
@@ -161,7 +161,9 @@ ECS 数据修改和应用行为触发是两件事。某些控件和业务操作�
 | `ecs_trigger(type, payload)` | 触发已注册的 Bevy Event / Observer |
 | `ecs_write_message(type, payload)` | 写入已注册的 Bevy Message |
 
-动态派发只对明确注册了 Rust 适配器的 Event / Message 类型开放。适配器负责解析 Rhai 参数、构造真实 Rust 类型并调用 Bevy 的正常派发入口。初始适配器可以包含 Widgetry 的 `Activate`，使 Agent 能通过事件触发控件的激活行为，而不是模拟鼠标点击。
+动态派发只对明确注册了 Rust 适配器的 Event / Message 类型开放。`ecs_world_info().dispatch` 提供名称、说明及载荷字段。宿主登记 `Activate` 和 `WindowCloseRequested`，Application 登记已有的 `OpenSettings` 业务 Event。适配器负责验证参数并调用 Bevy 的正常派发入口。
+
+`Activate` 接收 `#{entity: ref}` 并检查 Widgetry 的有效禁用状态，随后触发控件 Observer。`OpenSettings` 接收空映射。`WindowCloseRequested` 接收 `#{window: ref}`，由应用已有的窗口生命周期系统处理辅助窗口关闭。
 
 `ecs_trigger` 返回时，Observer 事件已经通过其同步派发路径执行；`ecs_write_message` 返回时，Message 已写入 Bevy 的消息缓冲区，消费它的 System 仍按正常 Schedule 运行。Agent 可以在后续 ECS 查询中检查实际结果。
 
@@ -185,7 +187,7 @@ Agentelier 的 UI 构造继续使用 BSN、Scene 和 SceneList。为运行时创
 
 ## 错误、Panic 与恢复
 
-预期错误通过结构化 `EcsError` 返回给 Rhai，至少包含 `code`、`message`、`operation` 和目标 Entity / 类型信息。常见错误包括 Entity 失效、Component 不存在、类型未注册、字段不存在、字段类型不匹配、Scene 模板不存在和请求超时。Rhai 可以使用 `try/catch` 捕获错误，重新查询或调整操作。
+预期错误通过结构化 `EcsError` 返回给 Rhai。脚本可用 `try/catch` 捕获并读取 `error.code` 和 `error.message`。消息按错误类型提供目标实体、类型或字段信息，例如 Entity 失效、Component 不存在、未注册类型、字段缺失、载荷无效或请求超时。
 
 Agentelier Application 已经通过 `App::set_error_handler(diagnostics::handler)` 安装 Bevy ECS 错误处理器。Agent 发起的单次 ECS 请求在主线程执行边界内隔离意外 Panic：当前请求向 Rhai 返回 `ecs_operation_panicked`，并以 `Severity::Error` 交给现有 Handler 记录。这样不会为了一个 Agent 操作而全局吞掉所有 Panic。逃出单次请求边界的 Panic 仍按 Bevy FallbackErrorHandler 和应用现有策略处理。
 

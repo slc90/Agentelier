@@ -1,6 +1,6 @@
 use crate::{config, diagnostics, settings, shutdown, splash, tray};
 use agentelier_agent_host::AgentHostPlugin;
-use agentelier_chat_ui::{MAIN_WINDOW_WIDTH, MIN_MAIN_WINDOW_WIDTH, workspace_title};
+use agentelier_chat_ui::{MAIN_WINDOW_WIDTH, MIN_MAIN_WINDOW_WIDTH, OpenSettings, workspace_title};
 use agentelier_controls::{AGENTELIER_THEME, AgentelierControlsPlugin};
 use agentelier_login_ui::{DataDirectoryReady, HomeContent, LoginUiHost, LoginUiPlugin};
 use bevy::log::LogPlugin;
@@ -104,7 +104,11 @@ fn run_application(logging_ready: &mut bool, guard: &mut Option<LoggingGuard>) -
             config.brp_render_port,
         ));
     }
-    let host_plugin = AgentHostPlugin::default();
+    let host_plugin = AgentHostPlugin::default().with_ecs_unit_event(
+        "OpenSettings",
+        "Open Agentelier's settings through its application observer.",
+        || OpenSettings,
+    )?;
     let backend = host_plugin.host();
     app.insert_resource(config_store.clone())
         .insert_resource(agentelier_chat_ui::WorkspaceLayout::new(

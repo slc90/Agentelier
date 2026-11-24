@@ -103,17 +103,30 @@ pub struct ReceiveAgentEvents;
 #[derive(Default)]
 pub struct AgentHostPlugin {
     host: AgentHost,
+    ecs_dispatch: crate::ecs_access::dispatch::Registry,
 }
 
 impl AgentHostPlugin {
     pub fn host(&self) -> AgentHost {
         self.host.clone()
     }
+
+    pub fn with_ecs_unit_event<E: Event<Trigger<'static>: Default>>(
+        mut self,
+        name: &'static str,
+        description: &'static str,
+        event: fn() -> E,
+    ) -> Result<Self> {
+        self.ecs_dispatch
+            .register_unit_event(name, description, event)?;
+        Ok(self)
+    }
 }
 
 impl Plugin for AgentHostPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.host.clone())
+            .insert_resource(self.ecs_dispatch.clone())
             .init_resource::<HostActivity>()
             .add_message::<AccountEvent>()
             .add_message::<ModelEvent>()

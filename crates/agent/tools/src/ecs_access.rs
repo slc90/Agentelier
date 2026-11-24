@@ -32,6 +32,8 @@ pub enum EcsOperation {
     ResourceSet(String, Value),
     ResourcePatch(String, Map<String, Value>),
     ResourceRemove(String),
+    Trigger(String, Map<String, Value>),
+    WriteMessage(String, Map<String, Value>),
 }
 
 #[derive(Default, Deserialize)]

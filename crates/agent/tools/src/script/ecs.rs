@@ -243,6 +243,29 @@ pub(super) fn register(engine: &mut Engine) {
             |ctx: NativeCallContext<'_>, name: ImmutableString| {
                 call(ctx, type_name(name).map(EcsOperation::ResourceRemove))
             },
+        )
+        .register_fn(
+            "ecs_trigger",
+            |ctx: NativeCallContext<'_>, name: ImmutableString, payload: Map| {
+                call(
+                    ctx,
+                    (|| Ok(EcsOperation::Trigger(type_name(name)?, from_map(payload)?)))(),
+                )
+            },
+        )
+        .register_fn(
+            "ecs_write_message",
+            |ctx: NativeCallContext<'_>, name: ImmutableString, payload: Map| {
+                call(
+                    ctx,
+                    (|| {
+                        Ok(EcsOperation::WriteMessage(
+                            type_name(name)?,
+                            from_map(payload)?,
+                        ))
+                    })(),
+                )
+            },
         );
 }
 

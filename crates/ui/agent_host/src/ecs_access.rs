@@ -1,3 +1,4 @@
+pub(crate) mod dispatch;
 mod read;
 mod reflect_value;
 mod write;
@@ -60,6 +61,7 @@ fn execute(world: &mut World, operation: &EcsOperation) -> std::result::Result<V
                 "registered_ecs_ids": world.components().len(),
                 "reflect_types": reflected.min(MAX_WORLD_INFO_ENTRIES),
                 "reflect_types_complete": reflected <= MAX_WORLD_INFO_ENTRIES,
+                "dispatch": dispatch::overview(world),
                 "operations": [
                     "ecs_world_info()",
                     "reflect_types([#{limit, cursor}]) -> #{items, cursor}",
@@ -73,6 +75,7 @@ fn execute(world: &mut World, operation: &EcsOperation) -> std::result::Result<V
                     "ecs_reparent(entity, parent)", "ecs_unparent(entity)",
                     "ecs_resource_insert(type, value)", "ecs_resource_set(type, value)",
                     "ecs_resource_patch(type, fields)", "ecs_resource_remove(type)",
+                    "ecs_trigger(type, payload)", "ecs_write_message(type, payload)",
                 ],
             }))
         }
@@ -117,5 +120,7 @@ fn execute(world: &mut World, operation: &EcsOperation) -> std::result::Result<V
         EcsOperation::ResourceRemove(name) => {
             write::change(world, Target::Resource, name, Change::Remove)
         }
+        EcsOperation::Trigger(name, payload) => dispatch::event(world, name, payload),
+        EcsOperation::WriteMessage(name, payload) => dispatch::message(world, name, payload),
     }
 }

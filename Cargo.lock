@@ -138,6 +138,7 @@ dependencies = [
  "agentelier_conversation_bridge",
  "agentelier_llm_model_bridge",
  "bevy",
+ "bevy_widgetry",
  "serde",
  "serde_json",
  "tracing",
