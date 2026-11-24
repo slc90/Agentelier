@@ -1,8 +1,13 @@
+mod atlas;
+mod glyphs;
+mod portrait;
+
 use crate::diagnostics;
 use agentelier_login_ui::{BeginDataDirectorySetup, LoginUiHost};
 use bevy::camera::RenderTarget;
 use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
+use bevy::render::view::Msaa;
 use bevy::ui::widget::NodeImageMode;
 use bevy::window::{PrimaryWindow, RequestRedraw, WindowRef, WindowResolution};
 use bevy::winit::{WINIT_WINDOWS, WinitSettings};
@@ -37,6 +42,7 @@ struct ActiveSplash {
 struct SplashScene {
     camera: Entity,
     image: Entity,
+    glyphs: glyphs::GlyphScene,
 }
 
 enum Phase {
@@ -59,6 +65,7 @@ impl Phase {
 }
 
 pub(crate) fn install(app: &mut App) {
+    glyphs::install(app);
     app.add_plugins(SplashPlugin)
         .init_resource::<StartupSplash>()
         .add_observer(shown)
@@ -168,30 +175,43 @@ fn advance(world: &mut World, active: &mut ActiveSplash, now: Duration) -> Resul
     }
     match active.phase {
         Phase::Loading(_) => {
-            let image = world.resource::<MainWindowBackground>().0.clone();
-            if let Some(bevy::asset::LoadState::Failed(failure)) =
-                world.resource::<AssetServer>().get_load_state(image.id())
-            {
-                return Err(diagnostics::operation(failure));
+            if active.scene.is_none() {
+                let image = world.resource::<MainWindowBackground>().0.clone();
+                if let Some(bevy::asset::LoadState::Failed(failure)) =
+                    world.resource::<AssetServer>().get_load_state(image.id())
+                {
+                    return Err(diagnostics::operation(failure));
+                }
+                let Some(image_size) = world
+                    .resource::<Assets<Image>>()
+                    .get(&image)
+                    .map(Image::size)
+                else {
+                    return Ok(());
+                };
+                let size = world
+                    .get::<Window>(active.window)
+                    .ok_or_else(|| {
+                        diagnostics::operation(io::Error::other("Splash 窗口在初始化期间消失"))
+                    })?
+                    .physical_size();
+                active.scene = Some(render_scene(world, active.window, size, image, image_size)?);
             }
-            let Some(image_size) = world
-                .resource::<Assets<Image>>()
-                .get(&image)
-                .map(Image::size)
-            else {
+            let Some(scene) = active.scene.as_ref() else {
                 return Ok(());
             };
-            let size = world
-                .get::<Window>(active.window)
-                .ok_or_else(|| {
-                    diagnostics::operation(io::Error::other("Splash 窗口在初始化期间消失"))
-                })?
-                .physical_size();
-            active.scene = Some(render_scene(world, active.window, size, image, image_size));
-            Splash::ready(world, active.window).map_err(|failure| failure.into_bevy_error())?;
-            active.phase = Phase::AwaitingFirstFrame(now);
+            if scene.glyphs.ready().map_err(diagnostics::operation)? {
+                Splash::ready(world, active.window).map_err(|failure| failure.into_bevy_error())?;
+                active.phase = Phase::AwaitingFirstFrame(now);
+            }
         }
         Phase::Playing(shown_at) if now.saturating_sub(shown_at) >= PLAYBACK_DURATION => {
+            if let Some(scene) = &active.scene {
+                world
+                    .entity_mut(scene.glyphs.batch)
+                    .insert(Visibility::Hidden);
+                world.entity_mut(scene.image).insert(Visibility::Visible);
+            }
             Splash::finished(world, active.window).map_err(|failure| failure.into_bevy_error())?;
             active.phase = Phase::HandingOff(now);
             debug!("Splash 播放结束，等待主窗口呈现");
@@ -207,29 +227,41 @@ fn render_scene(
     size: UVec2,
     artwork: Handle<Image>,
     image_size: UVec2,
-) -> SplashScene {
-    let camera = world
-        .spawn((
-            Name::new("SplashCamera"),
-            Camera2d,
-            RenderTarget::Window(WindowRef::Entity(window)),
-        ))
-        .id();
+) -> Result<SplashScene> {
     let image_size = image_size.as_vec2();
     let size = size.as_vec2();
     let scale = (size / image_size).max_element();
     let crop = (size / scale).min(image_size);
     let min = (image_size - crop) * 0.5;
-    let rect = Some(Rect::from_corners(min, min + crop));
+    let crop = Rect::from_corners(min, min + crop);
+    let glyphs = glyphs::spawn(world, artwork.clone(), size.as_uvec2(), crop)?;
+    let camera = world
+        .spawn((
+            Name::new("SplashCamera"),
+            Camera2d,
+            Camera {
+                clear_color: ClearColorConfig::Custom(Color::srgb_u8(3, 19, 12)),
+                ..default()
+            },
+            RenderTarget::Window(WindowRef::Entity(window)),
+            Msaa::Off,
+            glyphs::layer(),
+        ))
+        .id();
+    let rect = Some(crop);
     let image = world
         .commands()
         .spawn_scene_with_error_handler(bsn! {
-            Name("SplashArtwork") UiTargetCamera(camera) Pickable::IGNORE
+            Name("SplashArtwork") UiTargetCamera(camera) Pickable::IGNORE Visibility::Hidden
             ImageNode { image: artwork, rect: rect, image_mode: NodeImageMode::Stretch }
             Node { width: percent(100), height: percent(100) }
         })
         .id();
-    SplashScene { camera, image }
+    Ok(SplashScene {
+        camera,
+        image,
+        glyphs,
+    })
 }
 
 fn shown(event: On<SplashShown>, mut startup: ResMut<StartupSplash>, now: Res<Time<Real>>) {
@@ -287,6 +319,7 @@ fn begin_directory_setup(world: &mut World, main: Entity) {
 
 fn cleanup(world: &mut World, active: ActiveSplash) -> Result {
     if let Some(scene) = active.scene {
+        scene.glyphs.retire(world);
         world.despawn(scene.image);
         world.despawn(scene.camera);
     }
