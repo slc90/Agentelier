@@ -3,12 +3,13 @@ use bevy::prelude::*;
 use std::{f32::consts::PI, io};
 
 const SAMPLE_WIDTH: u32 = 480;
+const HAND_CENTER: Vec2 = Vec2::new(0.600, 0.765);
 const LANDMARKS: [(Vec2, f32, u8); 11] = [
     (Vec2::new(0.678, 0.265), 0.08, 1),
     (Vec2::new(0.748, 0.233), 0.21, 2),
     (Vec2::new(0.692, 0.075), 0.27, 1),
     (Vec2::new(0.812, 0.151), 0.16, 2),
-    (Vec2::new(0.603, 0.769), 0.11, 3),
+    (HAND_CENTER, 0.11, 3),
     (Vec2::new(0.777, 0.526), 0.26, 2),
     (Vec2::new(0.505, 0.435), 0.19, 0),
     (Vec2::new(0.386, 0.655), 0.39, 0),
@@ -85,7 +86,7 @@ impl Artwork {
         let ink = ((paper - center - 0.012) * 7.3).clamp(0.0, 1.0);
         let highlight = ((center - paper - 0.016) * 7.7).clamp(0.0, 1.0);
         let face = region(uv, Vec2::new(0.715, 0.290), Vec2::new(0.109, 0.114));
-        let hand = region(uv, Vec2::new(0.608, 0.763), Vec2::new(0.075, 0.100));
+        let hand = region(uv, HAND_CENTER, Vec2::new(0.075, 0.100));
         let pale_stroke = ((center - 0.891) / 0.045).clamp(0.0, 1.0) * face.max(hand) * 1.28;
         let weight = (ink * 0.88).max(highlight * 0.80).max(pale_stroke) + edge * 0.58;
         let tone = ((center - 0.784) / 0.146).clamp(0.0, 1.0);
