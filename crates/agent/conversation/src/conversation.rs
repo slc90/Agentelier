@@ -266,7 +266,7 @@ pub enum ConversationEvent {
         cleanup_error: Option<String>,
         was_open: bool,
     },
-    Renamed {
+    MetadataSaved {
         session: SessionId,
         result: Result<crate::ArchiveEntry, String>,
     },

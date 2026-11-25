@@ -14,6 +14,7 @@ use bevy_widgetry::list_view::{WidgetryListItemId, WidgetryListModel, WidgetryLi
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::scroll_area::WidgetryScrollArea;
 use bevy_widgetry::text::WidgetryText;
+use bevy_widgetry::window::{WidgetryWindowBackground, owned_widgetry_window};
 use std::io;
 use tracing::{error, info};
 
@@ -95,6 +96,8 @@ impl ModelState {
 pub struct ChatUiHost;
 #[derive(Resource)]
 struct ModelSource(Entity);
+#[derive(Component, Clone, Default)]
+struct ModelConnectionWindow;
 #[derive(Component, Clone, Copy)]
 enum ModelAction {
     Refresh,
@@ -118,23 +121,22 @@ pub fn install(
     model_defaults: impl Fn() -> io::Result<crate::SessionModelDefaults> + Send + Sync + 'static,
 ) -> Result {
     crate::archives::install(app)?;
-    crate::projects::install(app)?;
+    crate::projects::install(app);
     app.add_plugins(agentelier_markdown::MarkdownPlugin);
     crate::reading::install(app);
+    agentelier_controls::install_owned_window_close::<With<ModelConnectionWindow>>(app);
     reasoning::install(app)?;
     app.insert_resource(crate::conversation::SessionDefaultsSource(Box::new(
         model_defaults,
     )));
     crate::conversation::install(app);
     crate::global_tasks::install(app);
-    crate::task_panel::install(app)?;
     crate::task_toast::install(app);
     crate::working_directory::install(app);
     crate::prompts::install(app)?;
     crate::mcp::install(app)?;
     crate::memory::install(app);
     crate::skills::install(app)?;
-    crate::workspace::install(app);
     app.register_widgetry_combo_box::<ModelChoice>()
         .map_err(|failure| failure.into_bevy_error())?;
     app.init_resource::<ModelState>()
@@ -161,63 +163,86 @@ fn initialize(mut commands: Commands) {
 fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
     let host = event.entity;
     commands.queue(move |world: &mut World| {
-        let state = world.resource::<ModelState>().clone();
-        let account = world.resource::<AccountState>();
         let source = world.resource::<ModelSource>().0;
-        let reasoning_source = world.resource::<ReasoningSource>().0;
-        let summary = status(&state, account);
-        let raw_text = state.text.clone().unwrap_or_default();
-        let preview_display = if raw_text.is_empty() { Display::None } else { Display::Flex };
-        let chat = world.resource::<crate::conversation::ChatState>().clone();
+        let chat = world.resource::<ChatState>();
         let content = bsn_list! {
             Name("ModelPreparation")
             Node { width: percent(100), height: percent(100), min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(PANEL_GAP) }
             Children [
-                Node { column_gap: px(PANEL_GAP), flex_wrap: FlexWrap::Wrap, row_gap: px(PANEL_GAP), flex_shrink: 0.0 }
-                Children [
-                    @action_button("刷新模型目录", "RefreshModelCatalog", ModelAction::Refresh)--
-                    @WidgetryComboBox::<ModelChoice> {
-                        @source: source,
-                        @placeholder: {WidgetryComboBoxContent::new(|| bsn_list! { Text("请选择模型") WidgetryText })},
-                        @renderer: {WidgetryListViewRenderer::new(|model: &ModelChoice| {
-                            let label = model.display_name.clone();
-                            bsn_list! { Text(label) WidgetryText }
-                        })},
-                    }
-                    Name("ModelSelector") ModelSelector
-                    Node { width: px(MODEL_SELECTOR_WIDTH), flex_shrink: 0.0 }
-                    on(select_model)--
-                    @reasoning::selector(reasoning_source)--
-                    @action_button("验证模型连接", "VerifyModelConnection", ModelAction::Verify)--
-                    @crate::prompts::entry()
-                ]--
                 crate::prompts::NormalContent
-                Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(PANEL_GAP) }
-                Children [
-                Text(summary) WidgetryText ModelStatus Name("ModelConnectionStatus")
-                TextLayout::linebreak(LineBreak::AnyCharacter)--
-                @WidgetryScrollArea {
-                    @children: {Some(Box::new(bsn_list! {
-                        Text(raw_text) WidgetryText ModelText Name("ModelConnectionText")
-                        TextLayout::linebreak(LineBreak::AnyCharacter)
-                        Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }
-                    }) as Box<dyn SceneList>)}
-                }
-                ModelTextPreview
-                Node { width: percent(100), height: px(64), flex_shrink: 0.0, display: preview_display }--
-                @crate::working_directory::panel(world.resource::<crate::working_directory::DirectoryState>())--
-                @crate::conversation::panel(&chat, account, source)
-                ]--
+                Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column }
+                Children [ @crate::conversation::panel(chat, source) ]--
                 crate::prompts::PromptWorkspace Name("PromptWorkspace")
                 Node { display: Display::None, width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column }
             ]
         };
         let archives = bsn_list! { @crate::archives::panel(world) };
-        let tasks = crate::task_panel::panel(world);
-        let layout = world.resource::<crate::WorkspaceLayout>().ratios;
         world.commands().spawn_scene_with_error_handler(bsn! {
-            @crate::workspace::scene(content, archives, tasks, layout)
-            ChildOf(host)
+            @crate::workspace::scene(content, archives) ChildOf(host)
+        });
+    });
+}
+
+pub(crate) fn connection_entry() -> impl Scene {
+    bsn! {
+        @AgentelierButton { @style: AgentelierButtonStyle::Secondary, @children: bsn_list! { Text("模型连接") WidgetryText } }
+        Name("OpenModelConnection") on(open_connection)
+    }
+}
+
+fn open_connection(_: On<Activate>, mut commands: Commands) {
+    commands.queue(|world: &mut World| {
+        if world.query_filtered::<(), With<ModelConnectionWindow>>().iter(world).next().is_some() {
+            return;
+        }
+        let state = world.resource::<ModelState>();
+        let account = world.resource::<AccountState>();
+        let source = world.resource::<ModelSource>().0;
+        let reasoning_source = world.resource::<ReasoningSource>().0;
+        let summary = status(state, account);
+        let raw_text = state.text.clone().unwrap_or_default();
+        let preview_display = if raw_text.is_empty() { Display::None } else { Display::Flex };
+        world.commands().spawn_scene_with_error_handler(bsn! {
+            ModelConnectionWindow Name("ModelConnectionWindow")
+            @owned_widgetry_window(
+                Window { title: "模型连接".into(), resolution: (790, 320).into(), resizable: false, ..default() },
+                agentelier_controls::MANAGEMENT_WINDOW_CONTROLS,
+                WidgetryWindowBackground::Theme, Default::default(),
+                bsn_list! { @agentelier_controls::padded_window_title() },
+                bsn_list! {
+                    Node { width: percent(100), flex_direction: FlexDirection::Column, padding: UiRect::all(px(PANEL_GAP)), row_gap: px(PANEL_GAP) }
+                    Children [
+                        Node { column_gap: px(PANEL_GAP), flex_wrap: FlexWrap::Wrap, row_gap: px(PANEL_GAP), flex_shrink: 0.0 }
+                        Children [
+                            @action_button("刷新模型目录", "RefreshModelCatalog", ModelAction::Refresh)--
+                            @WidgetryComboBox::<ModelChoice> {
+                                @source: source,
+                                @placeholder: {WidgetryComboBoxContent::new(|| bsn_list! { Text("请选择模型") WidgetryText })},
+                                @renderer: {WidgetryListViewRenderer::new(|model: &ModelChoice| {
+                                    let label = model.display_name.clone();
+                                    bsn_list! { Text(label) WidgetryText }
+                                })},
+                            }
+                            Name("ModelSelector") ModelSelector
+                            Node { width: px(MODEL_SELECTOR_WIDTH), flex_shrink: 0.0 }
+                            on(select_model)--
+                            @reasoning::selector(reasoning_source)--
+                            @action_button("验证模型连接", "VerifyModelConnection", ModelAction::Verify)
+                        ]--
+                        Text(summary) WidgetryText ModelStatus Name("ModelConnectionStatus")
+                        TextLayout::linebreak(LineBreak::AnyCharacter)--
+                        @WidgetryScrollArea {
+                            @children: {Some(Box::new(bsn_list! {
+                                Text(raw_text) WidgetryText ModelText Name("ModelConnectionText")
+                                TextLayout::linebreak(LineBreak::AnyCharacter)
+                                Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }
+                            }) as Box<dyn SceneList>)}
+                        }
+                        ModelTextPreview
+                        Node { width: percent(100), height: px(64), flex_shrink: 0.0, display: preview_display }
+                    ]
+                },
+            )
         });
     });
 }

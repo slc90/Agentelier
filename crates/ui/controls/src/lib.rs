@@ -11,11 +11,14 @@ pub use avatar::{
     AgentelierAvatar, AgentelierAvatarProps, AvatarCrop, AvatarPresentation, AvatarSource,
     SyncAvatars, UserAvatar,
 };
-pub use avatar_cropper::{AvatarCropper, AvatarCropperProps, AvatarCropperState};
+pub use avatar_cropper::{AvatarCropperState, avatar_cropper};
 pub use bevy_widgetry::button::WidgetryButtonLoading as AgentelierButtonLoading;
 pub use button::{AgentelierButton, AgentelierButtonProps, AgentelierButtonStyle};
 pub use theme::AGENTELIER_THEME;
-pub use window::install_owned_window_close;
+pub use window::{
+    FILE_DIALOG_WINDOW_CONTROLS, MANAGEMENT_WINDOW_CONTROLS, install_owned_window_close,
+    padded_window_title,
+};
 
 use bevy::prelude::*;
 use bevy_widgetry::button::WidgetryButtonPlugin;

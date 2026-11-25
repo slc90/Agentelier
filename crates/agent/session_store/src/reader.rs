@@ -36,6 +36,7 @@ pub(super) struct Parsed {
     pub(super) summary: SessionSummary,
     pub(super) manual_title: Option<String>,
     deleted: bool,
+    archived: bool,
     pub(super) sequence: u64,
     pub(super) file_length: u64,
     valid_length: u64,
@@ -51,6 +52,7 @@ fn placeholder(session: SessionId) -> SessionSummary {
         last_activity_ms: 0,
         last_sequence: 0,
         deleted: false,
+        archived: false,
     }
 }
 
@@ -70,6 +72,7 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
         summary: placeholder(session),
         manual_title: None,
         deleted: false,
+        archived: false,
         sequence: 0,
         file_length: metadata.len(),
         valid_length: 0,
@@ -114,6 +117,11 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
                     if parsed.initial.is_some() && target == session =>
                 {
                     parsed.deleted = true
+                }
+                RecordKind::Archived { session: target }
+                    if parsed.initial.is_some() && target == session =>
+                {
+                    parsed.archived = true
                 }
                 RecordKind::Created(initial)
                     if parsed.initial.is_none()
@@ -165,6 +173,7 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
     if let Some(initial) = &parsed.initial {
         parsed.summary = crate::journal::summarize(initial, &parsed.records, parsed.sequence).0;
         parsed.summary.deleted = parsed.deleted;
+        parsed.summary.archived = parsed.archived;
         if let Some(title) = &parsed.manual_title {
             parsed.summary.title = title.clone();
         }

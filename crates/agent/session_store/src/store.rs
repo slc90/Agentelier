@@ -32,6 +32,7 @@ pub enum RecordKind {
     Created(InitialSession),
     Renamed { session: SessionId, title: String },
     Deleted { session: SessionId },
+    Archived { session: SessionId },
     Event(SessionRecord),
 }
 
@@ -57,7 +58,7 @@ pub struct DeleteCommit {
     pub cleanup_error: Option<io::Error>,
 }
 
-pub struct RenameCommit {
+pub struct MetadataCommit {
     pub summary: agentelier_conversation::SessionSummary,
     pub summary_failure: Option<io::Error>,
 }
@@ -74,7 +75,11 @@ enum Command {
         oneshot::Sender<io::Result<Vec<u8>>>,
     ),
     Delete(SessionId, oneshot::Sender<io::Result<DeleteCommit>>),
-    Rename(SessionId, String, oneshot::Sender<io::Result<RenameCommit>>),
+    ChangeMetadata(
+        SessionId,
+        agentelier_conversation::SessionMetadataChange,
+        oneshot::Sender<io::Result<MetadataCommit>>,
+    ),
     Project(
         agentelier_conversation::ProjectChange,
         oneshot::Sender<io::Result<()>>,
@@ -201,15 +206,15 @@ impl SessionStoreClient {
             .map_err(|failure| io::Error::other(format!("无法接纳会话删除：{failure}")))?;
         Ok(result)
     }
-    pub fn rename(
+    pub fn change_metadata(
         &self,
         session: SessionId,
-        title: String,
-    ) -> io::Result<oneshot::Receiver<io::Result<RenameCommit>>> {
+        change: agentelier_conversation::SessionMetadataChange,
+    ) -> io::Result<oneshot::Receiver<io::Result<MetadataCommit>>> {
         let (reply, result) = oneshot::channel();
         self.0
-            .try_send(Command::Rename(session, title, reply))
-            .map_err(|failure| io::Error::other(format!("无法接纳会话重命名：{failure}")))?;
+            .try_send(Command::ChangeMetadata(session, change, reply))
+            .map_err(|failure| io::Error::other(format!("无法接纳会话元数据变更：{failure}")))?;
         Ok(result)
     }
     pub fn scan(&self) -> io::Result<oneshot::Receiver<io::Result<ArchiveCatalog>>> {
@@ -444,7 +449,7 @@ impl SessionStore {
                 while let Some(command) = commands.blocking_recv() {
                     match command {
                         Command::Delete(session, reply) => { let _closed = reply.send(crate::deletion::delete(&root, session, &mut writer)); }
-                        Command::Rename(session, title, reply) => { let _closed = reply.send(writer.rename(&root, session, title)); }
+                        Command::ChangeMetadata(session, change, reply) => { let _closed = reply.send(writer.change_metadata(&root, session, change)); }
                         Command::Project(change, reply) => {
                             drop(reply.send(crate::projects::apply(&root, change)));
                         }

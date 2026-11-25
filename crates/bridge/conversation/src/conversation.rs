@@ -462,7 +462,7 @@ pub enum ConversationEvent {
         cleanup_error: Option<String>,
         was_open: bool,
     },
-    Renamed {
+    MetadataSaved {
         session: SessionId,
         result: Result<ArchiveEntry, String>,
     },
@@ -488,6 +488,7 @@ pub enum ConversationEvent {
 
 #[derive(Clone)]
 pub struct ArchiveEntry {
+    pub archived: bool,
     pub id: SessionId,
     pub title: String,
     pub created_at_ms: u64,
@@ -945,13 +946,14 @@ pub fn convert(event: agentelier_conversation::ConversationEvent) -> Conversatio
             cleanup_error,
             was_open,
         },
-        agentelier_conversation::ConversationEvent::Renamed { session, result } => {
-            ConversationEvent::Renamed {
+        agentelier_conversation::ConversationEvent::MetadataSaved { session, result } => {
+            ConversationEvent::MetadataSaved {
                 session,
                 result: result.map(|entry| {
                     let summary = entry.summary;
                     ArchiveEntry {
                         id: summary.session,
+                        archived: summary.archived,
                         title: summary.title,
                         created_at_ms: summary.created_at_ms,
                         last_activity_ms: summary.last_activity_ms,
@@ -973,6 +975,7 @@ pub fn convert(event: agentelier_conversation::ConversationEvent) -> Conversatio
                     .into_iter()
                     .map(|entry| ArchiveEntry {
                         id: entry.summary.session,
+                        archived: entry.summary.archived,
                         title: entry.summary.title,
                         created_at_ms: entry.summary.created_at_ms,
                         last_activity_ms: entry.summary.last_activity_ms,

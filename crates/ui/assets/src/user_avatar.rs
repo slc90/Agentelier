@@ -76,10 +76,10 @@ impl LoadedAvatar {
         let (width, height) = ImageReader::with_format(Cursor::new(bytes.as_slice()), kind)
             .into_dimensions()
             .map_err(decode_error)?;
-        if width != height || !matches!(width, 1..=MAX_SIDE) {
+        if !matches!(width, 1..=MAX_SIDE) || !matches!(height, 1..=MAX_SIDE) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "头像必须为不超过 4096 × 4096 的方形图片",
+                "头像尺寸不能超过 4096 × 4096",
             ));
         }
         let mut reader = ImageReader::with_format(Cursor::new(bytes.as_slice()), kind);

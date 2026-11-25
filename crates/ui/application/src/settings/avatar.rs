@@ -1,8 +1,8 @@
 use super::SettingsWindow;
 use crate::config::{AvatarSettings, ConfigStore};
 use agentelier_controls::{
-    AgentelierButton, AgentelierButtonStyle, AvatarCrop, AvatarCropper, AvatarCropperState,
-    UserAvatar,
+    AgentelierAvatar, AgentelierButton, AgentelierButtonStyle, AvatarCrop, AvatarCropperState,
+    UserAvatar, avatar_cropper,
 };
 use agentelier_login_ui::DataDirectoryReady;
 use bevy::prelude::*;
@@ -14,14 +14,16 @@ use bevy_widgetry::file_dialog::{
     WidgetryFileDialog, WidgetryFileDialogMode, WidgetryFileDialogResult,
     WidgetryFileDialogResultEvent,
 };
+use bevy_widgetry::icon::WidgetryIcon;
 use bevy_widgetry::job::{JobId, JobManager, JobOptions, JobOutcome, JobRead, JobReceiver};
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
-use bevy_widgetry::slider::{WidgetrySlider, WidgetrySliderHeadless, WidgetrySliderPlugin};
+use bevy_widgetry::slider::{WidgetrySlider, WidgetrySliderPlugin};
 use bevy_widgetry::text::WidgetryText;
+use bevy_widgetry::tooltip::{TooltipContentFactory, WidgetryTooltip};
 use bevy_widgetry::window::{
-    WidgetryWindowBackground, WidgetryWindowControlsConfig, WidgetryWindowTitle,
-    owned_widgetry_window, widgetry_window_target,
+    WidgetryWindowBackground, owned_widgetry_window, widgetry_window_target,
 };
+use bevy_widgetry_asset::BuiltinIcon;
 use std::io;
 use std::path::PathBuf;
 use tracing::warn;
@@ -29,10 +31,7 @@ use tracing::warn;
 #[derive(Resource, Default)]
 struct Editor {
     directory: Option<PathBuf>,
-    applied: Option<Applied>,
     configured: bool,
-    target: Option<Entity>,
-    draft: Option<Draft>,
     pending: Option<Pending>,
     message: Option<String>,
 }
@@ -43,16 +42,10 @@ struct Applied {
     image: Handle<Image>,
 }
 
-#[derive(Clone)]
+#[derive(Component, Clone)]
 struct Draft {
-    original: Original,
+    original: AvatarOriginal,
     image: Handle<Image>,
-}
-
-#[derive(Clone)]
-enum Original {
-    Chosen(AvatarOriginal),
-    Stored(AvatarFile),
 }
 
 struct Pending {
@@ -64,12 +57,15 @@ struct Pending {
 enum Outcome {
     Restored(AvatarSettings, Box<LoadedAvatar>),
     Chosen(Entity, Box<LoadedAvatar>),
-    Saved(Applied),
+    Saved(Entity, Applied),
     Removed,
 }
 
 #[derive(Component, Clone, Default)]
-struct AvatarPicker;
+struct AvatarEditorWindow;
+
+#[derive(Component, Clone, Copy)]
+struct AvatarPicker(Entity);
 
 #[derive(Component, Clone, Default)]
 struct AvatarZoom;
@@ -82,16 +78,19 @@ enum Action {
     Choose,
     Save,
     Remove,
+    Cancel,
 }
 
 pub(super) fn install(app: &mut App) {
-    agentelier_controls::install_owned_window_close::<With<AvatarPicker>>(app);
+    agentelier_controls::install_owned_window_close::<
+        Or<(With<AvatarEditorWindow>, With<AvatarPicker>)>,
+    >(app);
     if !app.is_plugin_added::<WidgetrySliderPlugin>() {
         app.add_plugins(WidgetrySliderPlugin);
     }
     app.init_resource::<Editor>()
         .add_observer(initialize)
-        .add_observer(close_picker)
+        .add_observer(close_windows_with_settings)
         .add_systems(Update, receive)
         .add_systems(PostUpdate, sync.before(UiSystems::Content));
 }
@@ -112,27 +111,32 @@ fn initialize(event: On<DataDirectoryReady>, mut commands: Commands) {
 }
 
 pub(super) fn section() -> impl Scene {
+    let avatar_size = 88.0_f32;
+    let remove_size = 24.0_f32;
+    let remove_gap = 7.0_f32;
     bsn! {
         Node { width: percent(100), margin: UiRect::top(px(8)), flex_direction: FlexDirection::Column, row_gap: px(10), flex_shrink: 0.0 }
         Children [
             Text("用户头像") WidgetryText TextFont { font_size: bevy::text::FontSize::Px(22.0) }--
-            Node { width: percent(100), min_width: px(0), align_items: AlignItems::Center, column_gap: px(18), flex_wrap: FlexWrap::Wrap, row_gap: px(10) }
+            Node { align_items: AlignItems::Start, column_gap: px(remove_gap) }
             Children [
-                @AvatarCropper Name("SettingsAvatarCropper")--
-                Node { flex_grow: 1.0, min_width: px(220), flex_direction: FlexDirection::Column, row_gap: px(8) }
-                Children [
-                    Text("缩放") WidgetryText--
-                    @WidgetrySlider { @min: 1.0, @max: AvatarCrop::MAX_ZOOM, @value: {Some(1.0)} }
-                    AvatarZoom Name("SettingsAvatarZoom")
-                    Node { width: percent(100) }
-                    on(zoom)--
-                    Node { flex_wrap: FlexWrap::Wrap, column_gap: px(8), row_gap: px(8) }
-                    Children [
-                        @button("更换图片", "SettingsChooseAvatar", Action::Choose)--
-                        @button("保存头像", "SettingsSaveAvatar", Action::Save)--
-                        @button("移除头像", "SettingsRemoveAvatar", Action::Remove)
-                    ]
-                ]
+                @AgentelierButton {
+                    @style: AgentelierButtonStyle::Icon,
+                    @children: bsn_list! { @AgentelierAvatar { @size: avatar_size } },
+                }
+                Name("SettingsChooseAvatar") Node { width: px(avatar_size), height: px(avatar_size) }
+                template(|_| Ok(Action::Choose)) on(activate)--
+                @AgentelierButton {
+                    @style: AgentelierButtonStyle::DangerIcon,
+                    @children: bsn_list! {
+                        @WidgetryIcon { @path: {BuiltinIcon::WindowClose.path()}, @max_size: {Some(UVec2::splat(16))} }
+                        Pickable::IGNORE
+                    },
+                }
+                @WidgetryTooltip { @content: {TooltipContentFactory::new(|| bsn_list! { Text("移除头像") WidgetryText })} }
+                Name("SettingsRemoveAvatar")
+                Node { display: Display::None, width: px(remove_size), height: px(remove_size), min_height: px(0) }
+                template(|_| Ok(Action::Remove)) on(activate)
             ]--
             Text::default() WidgetryText AvatarMessage Name("SettingsAvatarFeedback")
             TextLayout::linebreak(bevy::text::LineBreak::AnyCharacter)
@@ -140,26 +144,55 @@ pub(super) fn section() -> impl Scene {
     }
 }
 
-fn button(label: &'static str, name: &'static str, action: Action) -> impl Scene {
+fn editor(draft: Draft, pixels: UVec2) -> impl Scene {
+    let cropper = avatar_cropper(draft.image.clone(), pixels, 300.0);
     bsn! {
-        @AgentelierButton {
-            @style: AgentelierButtonStyle::Secondary,
-            @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)}
-        }
+        AvatarEditorWindow Name("SettingsAvatarEditorWindow")
+        template(move |_| Ok(draft.clone()))
+        @owned_widgetry_window(
+            Window { title: "编辑头像".into(), resolution: (650, 590).into(), resizable: false, ..default() },
+            agentelier_controls::MANAGEMENT_WINDOW_CONTROLS,
+            WidgetryWindowBackground::Theme, Default::default(),
+            bsn_list! { @agentelier_controls::padded_window_title() },
+            bsn_list! {
+                Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(12), padding: UiRect::all(px(18)) }
+                Children [
+                    @cropper--
+                    Text("拖动圆形选区，调整裁剪范围") WidgetryText--
+                    @WidgetrySlider { @min: 1.0, @max: AvatarCrop::MAX_ZOOM, @value: {Some(1.0)} }
+                    AvatarZoom Name("SettingsAvatarZoom") Node { width: percent(100) } on(zoom)--
+                    Text::default() WidgetryText AvatarMessage Name("AvatarEditorFeedback")
+                    TextLayout::linebreak(bevy::text::LineBreak::AnyCharacter)--
+                    Node { justify_content: JustifyContent::End, column_gap: px(8) }
+                    Children [
+                        @button("取消", "CancelAvatarEdit", Action::Cancel, AgentelierButtonStyle::Secondary)--
+                        @button("保存", "SettingsSaveAvatar", Action::Save, AgentelierButtonStyle::Primary)
+                    ]
+                ]
+            },
+        )
+    }
+}
+
+fn button(
+    label: &'static str,
+    name: &'static str,
+    action: Action,
+    style: AgentelierButtonStyle,
+) -> impl Scene {
+    bsn! {
+        @AgentelierButton { @style: style, @children: bsn_list! { Text(label) WidgetryText } }
         template(move |_| Ok(action)) Name(name) on(activate)
     }
 }
 
 fn zoom(
     event: On<ValueChange<f32>>,
-    sliders: Query<(), With<AvatarZoom>>,
     state: Res<Editor>,
     mut croppers: Query<&mut AvatarCropperState>,
 ) {
     if state.pending.is_none()
-        && sliders.contains(event.source)
-        && let Some(target) = state.target
-        && let Ok(mut cropper) = croppers.get_mut(target)
+        && let Ok(mut cropper) = croppers.single_mut()
         && cropper.crop().zoom != event.value
     {
         cropper.set_zoom(event.value);
@@ -171,6 +204,12 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
         Action::Choose => commands.queue(open_picker),
         Action::Save => commands.queue(save),
         Action::Remove => commands.queue(remove),
+        Action::Cancel => commands.queue(|world: &mut World| {
+            if world.resource::<Editor>().pending.is_none() {
+                close_editor(world);
+                world.resource_mut::<Editor>().message = None;
+            }
+        }),
     }
     Ok(())
 }
@@ -178,21 +217,23 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
 fn open_picker(world: &mut World) -> Result {
     if world.resource::<Editor>().pending.is_some()
         || world
-            .query_filtered::<Entity, With<AvatarPicker>>()
+            .query_filtered::<(), Or<(With<AvatarEditorWindow>, With<AvatarPicker>)>>()
             .iter(world)
             .next()
             .is_some()
     {
         return Ok(());
     }
+    let settings = world
+        .query_filtered::<Entity, With<SettingsWindow>>()
+        .single(world)?;
     world.commands().spawn_scene_with_error_handler(bsn! {
-        AvatarPicker Name("SettingsAvatarPickerWindow")
+        Name("SettingsAvatarPickerWindow") template(move |_| Ok(AvatarPicker(settings)))
         @owned_widgetry_window(
-            Window { title: "选择方形头像图片".into(), resolution: (840, 580).into(), ..default() },
-            WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
-            WidgetryWindowBackground::Theme,
-            Default::default(),
-            bsn_list! { WidgetryWindowTitle WidgetryText Pickable::IGNORE },
+            Window { title: "选择头像图片".into(), resolution: (840, 580).into(), ..default() },
+            agentelier_controls::FILE_DIALOG_WINDOW_CONTROLS,
+            WidgetryWindowBackground::Theme, Default::default(),
+            bsn_list! { @agentelier_controls::padded_window_title() },
             bsn_list! {
                 @WidgetryFileDialog { @mode: WidgetryFileDialogMode::PickFile }
                 Name("SettingsAvatarPicker") Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }
@@ -203,77 +244,83 @@ fn open_picker(world: &mut World) -> Result {
     Ok(())
 }
 
-fn close_picker(
-    _event: On<Despawn<SettingsWindow>>,
-    query: Query<Entity, With<AvatarPicker>>,
-    mut commands: Commands,
-) {
-    for entity in &query {
-        commands.entity(entity).try_despawn();
-    }
-}
-
 fn chosen(event: On<WidgetryFileDialogResultEvent>, mut commands: Commands) {
     let result = event.result.clone();
     commands.queue(move |world: &mut World| -> Result {
-        let root = world
-            .query_filtered::<Entity, With<AvatarPicker>>()
-            .single(world)?;
-        if let Some(window) = widgetry_window_target(world, root) {
-            world.write_message(WindowCloseRequested { window });
-        }
-        let state = world.resource::<Editor>();
+        let (root, &AvatarPicker(settings)) =
+            world.query::<(Entity, &AvatarPicker)>().single(world)?;
+        close_window(world, root);
         if let WidgetryFileDialogResult::File(path) = result
-            && let Some(target) = state.target.filter(|_| state.pending.is_none())
+            && world.resource::<Editor>().pending.is_none()
         {
             start(world, "正在读取头像图片…", move || {
-                LoadedAvatar::read(&path).map(|loaded| Outcome::Chosen(target, Box::new(loaded)))
+                LoadedAvatar::read(&path).map(|loaded| Outcome::Chosen(settings, Box::new(loaded)))
             });
         }
         Ok(())
     });
 }
 
+fn close_windows_with_settings(
+    _: On<Despawn<SettingsWindow>>,
+    windows: Query<Entity, Or<(With<AvatarEditorWindow>, With<AvatarPicker>)>>,
+    mut commands: Commands,
+) {
+    for root in &windows {
+        commands.queue(move |world: &mut World| close_window(world, root));
+    }
+}
+
+fn close_editor(world: &mut World) {
+    if let Ok(root) = world
+        .query_filtered::<Entity, With<AvatarEditorWindow>>()
+        .single(world)
+    {
+        close_window(world, root);
+    }
+}
+
+fn close_window(world: &mut World, root: Entity) {
+    if let Some(window) = widgetry_window_target(world, root) {
+        world.write_message(WindowCloseRequested { window });
+    }
+}
+
 fn save(world: &mut World) -> Result {
     let state = world.resource::<Editor>();
-    let Some((draft, directory, crop)) = state
-        .target
-        .filter(|_| state.pending.is_none())
-        .and_then(|target| world.get::<AvatarCropperState>(target))
-        .and_then(|cropper| {
-            Some((
-                state.draft.clone()?,
-                state.directory.clone()?,
-                cropper.crop(),
-            ))
-        })
-    else {
+    if state.pending.is_some() {
+        return Ok(());
+    }
+    let Some(directory) = state.directory.clone() else {
         return Ok(());
     };
+    let Ok((root, draft)) = world.query::<(Entity, &Draft)>().single(world) else {
+        return Ok(());
+    };
+    let draft = draft.clone();
+    let crop = world.query::<&AvatarCropperState>().single(world)?.crop();
     let store = world.resource::<ConfigStore>().clone();
     start(world, "正在保存头像…", move || {
         let previous = store
             .snapshot()?
             .user_avatar
             .map(|settings| settings.original);
-        let (file, created) = match draft.original {
-            Original::Chosen(original) => (original.store(&directory)?, true),
-            Original::Stored(file) => (file, false),
-        };
+        let file = draft.original.store(&directory)?;
         let settings = AvatarSettings::new(file, crop);
         if let Err(error) = store.save_avatar(Some(settings)) {
-            if created {
-                discard(file, &directory);
-            }
+            discard(file, &directory);
             return Err(error);
         }
-        if let Some(old) = previous.filter(|old| *old != file) {
+        if let Some(old) = previous {
             discard(old, &directory);
         }
-        Ok(Outcome::Saved(Applied {
-            settings,
-            image: draft.image,
-        }))
+        Ok(Outcome::Saved(
+            root,
+            Applied {
+                settings,
+                image: draft.image,
+            },
+        ))
     });
     Ok(())
 }
@@ -395,28 +442,31 @@ fn apply_result(world: &mut World, outcome: &Outcome) {
             );
             world.resource_mut::<Editor>().message = None;
         }
-        Outcome::Chosen(target, loaded) => {
-            if world.get::<AvatarCropperState>(*target).is_none() {
-                world.resource_mut::<Editor>().message = None;
+        Outcome::Chosen(settings, loaded) => {
+            world.resource_mut::<Editor>().message = None;
+            if world.get::<SettingsWindow>(*settings).is_none() {
                 return;
             }
+            let pixels = loaded.image.size();
             let image = world
                 .resource_mut::<Assets<Image>>()
                 .add(loaded.image.clone());
-            world.resource_mut::<Editor>().draft = Some(Draft {
-                original: Original::Chosen(loaded.original.clone()),
-                image: image.clone(),
-            });
-            set_cropper(world, *target, Some(image), AvatarCrop::default());
-            world.resource_mut::<Editor>().message = None;
+            let draft = Draft {
+                original: loaded.original.clone(),
+                image,
+            };
+            world
+                .commands()
+                .spawn_scene_with_error_handler(editor(draft, pixels));
         }
-        Outcome::Saved(applied) => {
+        Outcome::Saved(root, applied) => {
             publish(world, Some(applied.clone()));
-            world.resource_mut::<Editor>().message = Some("已保存用户头像".into());
+            close_window(world, *root);
+            world.resource_mut::<Editor>().message = None;
         }
         Outcome::Removed => {
             publish(world, None);
-            world.resource_mut::<Editor>().message = Some("已恢复默认用户头像".into());
+            world.resource_mut::<Editor>().message = None;
         }
     }
 }
@@ -425,100 +475,52 @@ fn publish(world: &mut World, applied: Option<Applied>) {
     world.resource_mut::<UserAvatar>().0 = applied
         .as_ref()
         .map(|active| (active.image.clone(), active.settings.crop()));
-    {
-        let mut state = world.resource_mut::<Editor>();
-        state.configured = applied.is_some();
-        state.applied = applied;
-    }
-    reset_draft(world);
+    world.resource_mut::<Editor>().configured = applied.is_some();
 }
 
-fn reset_draft(world: &mut World) {
-    let state = world.resource::<Editor>();
-    let target = state.target;
-    let crop = state
-        .applied
-        .as_ref()
-        .map_or_else(AvatarCrop::default, |applied| applied.settings.crop());
-    let draft = state
-        .applied
-        .as_ref()
-        .filter(|_| target.is_some())
-        .map(|applied| Draft {
-            original: Original::Stored(applied.settings.original),
-            image: applied.image.clone(),
-        });
-    let image = draft.as_ref().map(|draft| draft.image.clone());
-    world.resource_mut::<Editor>().draft = draft;
-    if let Some(target) = target {
-        set_cropper(world, target, image, crop);
-    }
-}
-
-fn set_cropper(world: &mut World, target: Entity, image: Option<Handle<Image>>, crop: AvatarCrop) {
-    if let Some(mut cropper) = world.get_mut::<AvatarCropperState>(target) {
-        cropper.replace(image, crop);
-    }
-}
-
-fn sync(world: &mut World) -> Result {
-    let target = world
-        .query_filtered::<Entity, With<AvatarCropperState>>()
-        .single(world)
-        .ok();
-    if world.resource::<Editor>().target != target {
-        world.resource_mut::<Editor>().target = target;
-        reset_draft(world);
-    }
-    let Some(target) = target else {
-        return Ok(());
-    };
-    let state = world.resource::<Editor>();
-    let message = state.message.clone().unwrap_or_default();
-    let has_draft = state.draft.is_some();
+fn sync(
+    state: Res<Editor>,
+    actions: Query<(Entity, &Action, Has<InteractionDisabled>)>,
+    sliders: Query<(Entity, Has<InteractionDisabled>), With<AvatarZoom>>,
+    mut buttons: Query<&mut Node, With<Action>>,
+    mut labels: Query<(&mut Node, &mut Text), (With<AvatarMessage>, Without<Action>)>,
+    mut commands: Commands,
+) {
     let allowed = state.pending.is_none();
-    let configured = state.configured;
-    let zoom = world
-        .get::<AvatarCropperState>(target)
-        .map_or(1.0, |cropper| cropper.crop().zoom);
-    if let Ok(slider) = world
-        .query_filtered::<Entity, With<AvatarZoom>>()
-        .single(world)
-    {
-        let shown = WidgetrySliderHeadless::value(world, slider)
-            .map_err(|failure| failure.into_bevy_error())?;
-        if (shown - zoom).abs() > 0.001 {
-            WidgetrySliderHeadless::set_value(&mut world.commands(), slider, zoom);
+    for (entity, action, disabled) in &actions {
+        if matches!(action, Action::Remove)
+            && let Ok(node) = buttons.get_mut(entity)
+        {
+            node.map_unchanged(|node| &mut node.display)
+                .set_if_neq(if state.configured {
+                    Display::Flex
+                } else {
+                    Display::None
+                });
         }
-        set_enabled(world, slider, allowed && has_draft);
+        set_enabled(&mut commands, entity, allowed, disabled);
     }
-    let buttons = world
-        .query::<(Entity, &Action)>()
-        .iter(world)
-        .map(|(entity, action)| (entity, *action))
-        .collect::<Vec<_>>();
-    for (entity, action) in buttons {
-        let ready = match action {
-            Action::Choose => true,
-            Action::Save => has_draft,
-            Action::Remove => configured,
-        };
-        set_enabled(world, entity, allowed && ready);
+    for (entity, disabled) in &sliders {
+        set_enabled(&mut commands, entity, allowed, disabled);
     }
-    for mut text in world
-        .query_filtered::<&mut Text, With<AvatarMessage>>()
-        .iter_mut(world)
-    {
-        text.set_if_neq(Text(message.clone()));
+    let message = state.message.as_deref().unwrap_or_default();
+    for (node, mut label) in &mut labels {
+        node.map_unchanged(|node| &mut node.display)
+            .set_if_neq(if message.is_empty() {
+                Display::None
+            } else {
+                Display::Flex
+            });
+        if label.0 != message {
+            label.0 = message.into();
+        }
     }
-    Ok(())
 }
 
-fn set_enabled(world: &mut World, entity: Entity, enabled: bool) {
-    let mut entity = world.entity_mut(entity);
-    if enabled && entity.contains::<InteractionDisabled>() {
-        entity.remove::<InteractionDisabled>();
-    } else if !enabled && !entity.contains::<InteractionDisabled>() {
-        entity.insert(InteractionDisabled);
+fn set_enabled(commands: &mut Commands, entity: Entity, enabled: bool, disabled: bool) {
+    if enabled && disabled {
+        commands.entity(entity).remove::<InteractionDisabled>();
+    } else if !enabled && !disabled {
+        commands.entity(entity).insert(InteractionDisabled);
     }
 }

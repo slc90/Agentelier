@@ -21,8 +21,7 @@ use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{AutoSize, WidgetryReadOnlyTextField, WidgetryTextFieldHeadless};
 use bevy_widgetry::theme::WidgetryTheme;
 use bevy_widgetry::window::{
-    WidgetryWindowBackground, WidgetryWindowControlsConfig, WidgetryWindowTitle,
-    owned_widgetry_window,
+    WidgetryWindowBackground, WidgetryWindowControlsConfig, owned_widgetry_window,
 };
 
 #[derive(Resource, Reflect, Clone, Default)]
@@ -236,7 +235,7 @@ fn authorization_window() -> impl Scene {
             WidgetryWindowControlsConfig { minimize_visible: false, maximize_visible: false, ..default() },
             WidgetryWindowBackground::Theme,
             Default::default(),
-            bsn_list! { WidgetryWindowTitle WidgetryText Pickable::IGNORE },
+            bsn_list! { @agentelier_controls::padded_window_title() },
             bsn_list! {
                 Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(12), padding: UiRect::all(px(16)) }
                 Children [

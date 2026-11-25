@@ -2220,7 +2220,6 @@ dependencies = [
  "bevy_widgetry_segmented",
  "bevy_widgetry_slider",
  "bevy_widgetry_splash",
- "bevy_widgetry_splitter",
  "bevy_widgetry_text_field",
  "bevy_widgetry_theme",
  "bevy_widgetry_toggle_button",
@@ -2482,18 +2481,6 @@ dependencies = [
  "raw-window-handle",
  "winit",
  "winsafe",
-]
-
-[[package]]
-name = "bevy_widgetry_splitter"
-version = "0.1.0"
-source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
-dependencies = [
- "bevy",
- "bevy_widgetry_core",
- "bevy_widgetry_diagnostics",
- "bevy_widgetry_internal_log",
- "bevy_widgetry_theme",
 ]
 
 [[package]]

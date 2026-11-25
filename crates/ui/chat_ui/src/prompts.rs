@@ -1,5 +1,4 @@
 mod view;
-pub(crate) use view::entry;
 
 use agentelier_login_ui::DataDirectoryReady;
 use agentelier_prompts::{
@@ -107,7 +106,6 @@ enum Field {
 }
 #[derive(Component, Clone, Copy, Debug)]
 enum Action {
-    Open,
     Close,
     Library,
     Config,
@@ -181,9 +179,7 @@ fn mount(_event: On<Add<PromptWorkspace>>, mut commands: Commands) {
 pub(crate) fn snapshot(world: &World) -> io::Result<InstructionSnapshot> {
     let state = world.resource::<PromptState>();
     if !state.ready {
-        return Err(io::Error::other(
-            "提示词库尚未加载，请检查提示词管理中的状态",
-        ));
+        return Err(io::Error::other("提示词库尚未加载"));
     }
     let store = world.resource::<PromptStore>();
     store.library.resolve(&store.config)
@@ -403,13 +399,10 @@ fn activate_action(world: &mut World, action: Action) -> Result {
 }
 
 fn apply(world: &mut World, action: Action) -> Result {
-    if world.resource::<PromptState>().busy && !matches!(action, Action::Open | Action::Close) {
+    if world.resource::<PromptState>().busy && !matches!(action, Action::Close) {
         return Ok(());
     }
     match action {
-        Action::Open => {
-            world.resource_mut::<PromptState>().opened = true;
-        }
         Action::Close => {
             world.resource_mut::<PromptState>().opened = false;
         }

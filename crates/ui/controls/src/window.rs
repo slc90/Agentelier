@@ -2,7 +2,28 @@ use bevy::ecs::entity::EntityHashSet;
 use bevy::ecs::query::QueryFilter;
 use bevy::prelude::*;
 use bevy::window::{CursorSystems, RequestRedraw, WindowCloseRequested, WindowClosing};
-use bevy_widgetry::window::widgetry_window_target;
+use bevy_widgetry::text::WidgetryText;
+use bevy_widgetry::window::{
+    WidgetryWindowControlsConfig, WidgetryWindowTitle, widgetry_window_target,
+};
+
+pub const MANAGEMENT_WINDOW_CONTROLS: WidgetryWindowControlsConfig = WidgetryWindowControlsConfig {
+    minimize_visible: false,
+    maximize_visible: false,
+    close_visible: true,
+    resizable: false,
+    double_click_maximize: false,
+};
+
+pub const FILE_DIALOG_WINDOW_CONTROLS: WidgetryWindowControlsConfig =
+    WidgetryWindowControlsConfig {
+        resizable: true,
+        ..MANAGEMENT_WINDOW_CONTROLS
+    };
+
+pub fn padded_window_title() -> impl Scene {
+    bsn! { WidgetryWindowTitle WidgetryText Pickable::IGNORE Node { margin: UiRect::left(px(12)) } }
+}
 
 #[derive(Component)]
 struct OwnedWindowClosing;

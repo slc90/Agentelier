@@ -28,15 +28,13 @@ impl AvatarCrop {
             return Self::default();
         }
         let zoom = self.zoom.clamp(1.0, Self::MAX_ZOOM);
-        let margin = Vec2::splat(0.5 / zoom);
         Self {
-            center: self.center.clamp(margin, Vec2::ONE - margin),
+            center: self.center.clamp(Vec2::ZERO, Vec2::ONE),
             zoom,
         }
     }
 
-    fn area(self, image: &Image) -> Option<Rect> {
-        let size = image.size().as_vec2();
+    pub(super) fn area(self, size: Vec2) -> Option<Rect> {
         if size.min_element() < 1.0 || !self.center.is_finite() || !self.zoom.is_finite() {
             return None;
         }
@@ -114,13 +112,11 @@ impl AgentelierAvatar {
 pub(crate) fn install(app: &mut App) {
     app.init_resource::<UserAvatar>()
         .register_type::<AvatarPresentation>()
-        .register_type::<super::avatar_cropper::AvatarCropperState>()
         .add_systems(
             PostUpdate,
-            (super::avatar_cropper::sync, sync.in_set(SyncAvatars))
-                .chain()
-                .before(UiSystems::Content),
+            sync.in_set(SyncAvatars).before(UiSystems::Content),
         );
+    super::avatar_cropper::install(app);
 }
 
 fn extent(size: f32) -> Val {
@@ -168,7 +164,7 @@ fn sync(
         };
         let (image, rect) = images
             .get(preferred)
-            .and_then(|image| crop.area(image))
+            .and_then(|image| crop.area(image.size().as_vec2()))
             .map_or_else(
                 || (&defaults.default_user, None),
                 |rect| (preferred, Some(rect)),

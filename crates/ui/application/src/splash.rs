@@ -7,6 +7,7 @@ use agentelier_login_ui::{BeginDataDirectorySetup, LoginUiHost};
 use bevy::camera::RenderTarget;
 use bevy::diagnostic::FrameCount;
 use bevy::ecs::message::MessageCursor;
+use bevy::picking::{events::PointerClick, pointer::PointerButton};
 use bevy::prelude::*;
 use bevy::render::view::Msaa;
 use bevy::ui::widget::NodeImageMode;
@@ -39,6 +40,7 @@ struct ActiveSplash {
     main: Entity,
     window: Entity,
     main_ready: bool,
+    skip_requested: bool,
     scene: Option<SplashScene>,
     phase: Phase,
 }
@@ -164,6 +166,7 @@ fn start(world: &mut World, main: Entity, size: UVec2, now: Duration) -> Result<
         main,
         window,
         main_ready: false,
+        skip_requested: false,
         scene: None,
         phase: Phase::Loading(now),
     })
@@ -229,7 +232,7 @@ fn advance(world: &mut World, active: &mut ActiveSplash, now: Duration) -> Resul
             let scene = active.scene.as_ref().ok_or_else(|| {
                 diagnostics::operation(io::Error::other("Splash 播放期间缺少场景"))
             })?;
-            if elapsed < PLAYBACK_DURATION {
+            if !active.skip_requested && elapsed < PLAYBACK_DURATION {
                 scene
                     .glyphs
                     .play_at(world, elapsed.as_secs_f32())
@@ -238,16 +241,19 @@ fn advance(world: &mut World, active: &mut ActiveSplash, now: Duration) -> Resul
                 world
                     .get_entity_mut(scene.glyphs.batch)?
                     .insert(Visibility::Hidden);
-                world
-                    .get_entity_mut(scene.image)?
-                    .insert(Visibility::Visible);
+                let mut image = world.get_mut::<ImageNode>(scene.image).ok_or_else(|| {
+                    diagnostics::operation(io::Error::other("Splash 播放期间缺少背景图片"))
+                })?;
+                image.color = Color::WHITE;
                 Splash::finished(world, active.window)
                     .map_err(|failure| failure.into_bevy_error())?;
                 active.phase = Phase::HandingOff(now);
                 let update_frames = world.resource::<FrameCount>().0.wrapping_sub(first_frame);
                 debug!(
                     elapsed_ms = elapsed.as_millis(),
-                    update_frames, "Splash 播放结束，等待主窗口呈现"
+                    update_frames,
+                    skipped = active.skip_requested,
+                    "Splash 播放结束，等待主窗口呈现"
                 );
             }
         }
@@ -299,12 +305,14 @@ fn render_scene(
         ))
         .id();
     let rect = Some(crop);
+    // A transparent image keeps the full-window node pickable during playback.
     let image = world
         .commands()
         .spawn_scene_with_error_handler(bsn! {
-            Name("SplashArtwork") UiTargetCamera(camera) Pickable::IGNORE Visibility::Hidden
-            ImageNode { image: artwork, rect: rect, image_mode: NodeImageMode::Stretch }
+            Name("SplashArtwork") UiTargetCamera(camera) Pickable::default()
+            ImageNode { image: artwork, color: Color::NONE, rect: rect, image_mode: NodeImageMode::Stretch }
             Node { width: percent(100), height: percent(100) }
+            on(skip_on_click)
         })
         .id();
     Ok(SplashScene {
@@ -312,6 +320,18 @@ fn render_scene(
         image,
         glyphs,
     })
+}
+
+fn skip_on_click(event: On<PointerClick>, mut startup: ResMut<StartupSplash>) {
+    if event.button == PointerButton::Primary
+        && let StartupSplash::Active(active) = &mut *startup
+        && matches!(
+            active.phase,
+            Phase::AwaitingFirstFrame(_) | Phase::Playing { .. }
+        )
+    {
+        active.skip_requested = true;
+    }
 }
 
 fn shown(

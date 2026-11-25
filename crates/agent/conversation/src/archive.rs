@@ -384,6 +384,11 @@ pub struct InitialSession {
     pub settings: StoredSettings,
 }
 
+pub enum SessionMetadataChange {
+    Rename(String),
+    Archive,
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub session: SessionId,
@@ -392,6 +397,8 @@ pub struct SessionSummary {
     pub last_activity_ms: u64,
     pub last_sequence: u64,
     pub deleted: bool,
+    #[serde(default)]
+    pub archived: bool,
 }
 
 impl InitialSession {
@@ -435,6 +442,7 @@ impl InitialSession {
             last_activity_ms: self.created_at_ms,
             last_sequence: sequence,
             deleted: false,
+            archived: false,
         }
     }
 }

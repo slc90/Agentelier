@@ -1,5 +1,5 @@
 use crate::config::{ALLOWED_SCALE_FACTORS, ConfigStore};
-use agentelier_chat_ui::{ModelState, OpenSettings, SessionModelDefaults};
+use agentelier_chat_ui::{ModelChoice, ModelState, OpenSettings};
 use agentelier_login::validate_data_directory;
 use agentelier_login_ui::DataDirectoryReady;
 use bevy::prelude::*;
@@ -18,13 +18,11 @@ use bevy_widgetry_path_display::{display_path, simplify_path};
 use std::path::PathBuf;
 
 mod avatar;
-mod layout;
 mod view;
 
 #[derive(Resource, Default)]
 struct Settings {
     current_directory: Option<PathBuf>,
-    draft: Option<SessionModelDefaults>,
     pending_directory: Option<PendingDirectory>,
     message: Option<String>,
 }
@@ -49,9 +47,6 @@ enum DirectoryPath {
 
 #[derive(Component, Clone, Default)]
 struct SettingsMessage;
-
-#[derive(Component, Clone, Default)]
-struct DefaultsSummary;
 
 #[derive(Clone, Copy)]
 enum Field {
@@ -84,7 +79,6 @@ impl Choice {
 
 pub(crate) fn install(app: &mut App) -> Result {
     avatar::install(app);
-    layout::install(app);
     agentelier_controls::install_owned_window_close::<
         Or<(With<SettingsWindow>, With<DirectoryPicker>)>,
     >(app);
@@ -106,15 +100,12 @@ fn capture_directory(event: On<DataDirectoryReady>, mut state: ResMut<Settings>)
 fn open(
     _event: On<OpenSettings>,
     settings: Query<(), With<SettingsWindow>>,
-    config: Res<ConfigStore>,
     mut state: ResMut<Settings>,
     mut commands: Commands,
-) -> Result {
+) {
     if !settings.is_empty() || state.current_directory.is_none() {
-        return Ok(());
+        return;
     }
-    let saved = config.session_model_defaults()?;
-    state.draft = Some(saved);
     if state.pending_directory.is_none() {
         state.message = None;
     }
@@ -128,7 +119,6 @@ fn open(
     for selector in selectors {
         commands.entity(selector.source).insert(ChildOf(root));
     }
-    Ok(())
 }
 
 fn close_picker_with_settings(
@@ -151,9 +141,6 @@ fn sync(world: &mut World) -> Result {
     }
     let config = world.resource::<ConfigStore>().snapshot()?;
     let state = world.resource::<Settings>();
-    let Some(draft) = state.draft.clone() else {
-        return Ok(());
-    };
     let current = state.current_directory.clone();
     let next = config
         .data_directory
@@ -165,7 +152,7 @@ fn sync(world: &mut World) -> Result {
     let choices = [
         scale_choices(),
         model_choices(models),
-        effort_choices(models, &draft.slug),
+        effort_choices(models, &config.default_model_slug),
     ];
     let selectors = world
         .query::<(Entity, &Selector)>()
@@ -185,8 +172,8 @@ fn sync(world: &mut World) -> Result {
             options,
             |choice| match choice {
                 Choice::Scale(value) => *value == config.scale_factor,
-                Choice::Model { slug, .. } => *slug == draft.slug,
-                Choice::Effort(effort) => *effort == draft.effort,
+                Choice::Model { slug, .. } => *slug == config.default_model_slug,
+                Choice::Effort(effort) => *effort == config.default_reasoning_effort,
             },
         )?;
     }
@@ -216,21 +203,18 @@ fn sync(world: &mut World) -> Result {
             };
         }
     }
-    for mut text in world
-        .query_filtered::<&mut Text, With<SettingsMessage>>()
+    let display = if message.is_empty() {
+        Display::None
+    } else {
+        Display::Flex
+    };
+    for (mut text, node) in world
+        .query_filtered::<(&mut Text, &mut Node), With<SettingsMessage>>()
         .iter_mut(world)
     {
         text.set_if_neq(Text(message.clone()));
-    }
-    let summary = format!(
-        "已保存 {} · {}",
-        config.default_model_slug, config.default_reasoning_effort
-    );
-    for mut text in world
-        .query_filtered::<&mut Text, With<DefaultsSummary>>()
-        .iter_mut(world)
-    {
-        text.set_if_neq(Text(summary.clone()));
+        node.map_unchanged(|node| &mut node.display)
+            .set_if_neq(display);
     }
     view::set_directory_busy(world, pending_directory, next.is_some());
     Ok(())
@@ -247,9 +231,10 @@ fn model_choices(catalog: &ModelState) -> Vec<Choice> {
     catalog
         .models
         .iter()
+        .filter(|model| !model.supported_reasoning_levels.is_empty())
         .map(|model| Choice::Model {
             slug: model.slug.clone(),
-            label: format!("{} · {}", model.display_name, model.slug),
+            label: model.display_name.clone(),
         })
         .collect()
 }
@@ -330,79 +315,77 @@ fn select(
 }
 
 fn apply_choice(world: &mut World, choice: Choice) -> Result {
-    match choice {
+    let store = world.resource::<ConfigStore>();
+    let result = match choice {
         Choice::Scale(scale) => {
-            let store = world.resource::<ConfigStore>();
-            if store.snapshot()?.scale_factor != scale {
-                match store.save_scale(scale) {
-                    Ok(()) => {
-                        world
-                            .resource_mut::<WidgetryUiScale>()
-                            .set(scale)
-                            .map_err(|failure| failure.into_bevy_error())?;
-                        world.resource_mut::<Settings>().message = None;
-                    }
-                    Err(failure) => {
-                        world.resource_mut::<Settings>().message = Some(failure.to_string());
-                    }
-                }
+            if store.snapshot()?.scale_factor == scale {
+                return Ok(());
             }
+            let saved = store.save_scale(scale);
+            if saved.is_ok() {
+                world
+                    .resource_mut::<WidgetryUiScale>()
+                    .set(scale)
+                    .map_err(|failure| failure.into_bevy_error())?;
+            }
+            saved.map_err(|failure| failure.to_string())
         }
         Choice::Model { slug, .. } => {
-            let current = world.resource::<Settings>();
-            if let Some(mut draft) = current.draft.clone()
-                && draft.slug != slug
-            {
-                draft.slug = slug;
-                let message = validate_defaults(world.resource::<ModelState>(), &draft).err();
-                let mut state = world.resource_mut::<Settings>();
-                state.draft = Some(draft);
-                state.message = message;
+            let saved = store.session_model_defaults()?;
+            if saved.slug == slug {
+                return Ok(());
             }
+            let catalog = world.resource::<ModelState>();
+            model_for_slug(catalog, &slug)
+                .and_then(|model| compatible_effort(model, &saved.effort))
+                .and_then(|effort| {
+                    store
+                        .save_session_defaults(slug, effort)
+                        .map_err(|failure| failure.to_string())
+                })
         }
         Choice::Effort(effort) => {
-            let mut state = world.resource_mut::<Settings>();
-            if let Some(draft) = &mut state.draft
-                && draft.effort != effort
-            {
-                draft.effort = effort;
-                state.message = None;
+            let saved = store.session_model_defaults()?;
+            if saved.effort == effort {
+                return Ok(());
             }
+            let catalog = world.resource::<ModelState>();
+            model_for_slug(catalog, &saved.slug).and_then(|model| {
+                if !model.supported_reasoning_levels.contains(&effort) {
+                    return Err(format!("{} 不支持推理强度 {effort}", model.display_name));
+                }
+                store
+                    .save_session_defaults(saved.slug, effort)
+                    .map_err(|failure| failure.to_string())
+            })
         }
-    }
-    Ok(())
-}
-
-fn save_defaults(world: &mut World) -> Result {
-    let Some(draft) = world.resource::<Settings>().draft.clone() else {
-        return Ok(());
     };
-    let result = validate_defaults(world.resource::<ModelState>(), &draft).and_then(|()| {
-        world
-            .resource::<ConfigStore>()
-            .save_session_defaults(draft.slug, draft.effort)
-            .map_err(|failure| failure.to_string())
-    });
-    world.resource_mut::<Settings>().message = Some(match result {
-        Ok(()) => "已保存新会话默认设置".into(),
-        Err(failure) => failure,
-    });
+    world.resource_mut::<Settings>().message = result.err();
     Ok(())
 }
 
-fn validate_defaults(catalog: &ModelState, draft: &SessionModelDefaults) -> Result<(), String> {
-    let model = catalog
+fn model_for_slug<'a>(catalog: &'a ModelState, slug: &str) -> Result<&'a ModelChoice, String> {
+    catalog
         .models
         .iter()
-        .find(|model| model.slug == draft.slug)
-        .ok_or_else(|| "所选模型不在当前模型目录中".to_owned())?;
-    if !model.supported_reasoning_levels.contains(&draft.effort) {
-        return Err(format!(
-            "{} 不支持推理强度 {}，请选择支持的档位",
-            model.slug, draft.effort
-        ));
-    }
-    Ok(())
+        .find(|model| model.slug == slug)
+        .ok_or_else(|| "所选模型不在当前模型目录中".to_owned())
+}
+
+fn compatible_effort(model: &ModelChoice, current: &str) -> Result<String, String> {
+    let levels = &model.supported_reasoning_levels;
+    levels
+        .iter()
+        .find(|effort| effort.as_str() == current)
+        .or_else(|| {
+            model
+                .default_reasoning_level
+                .as_ref()
+                .filter(|effort| levels.contains(effort))
+        })
+        .or(levels.first())
+        .cloned()
+        .ok_or_else(|| format!("{} 没有可用的推理强度", model.display_name))
 }
 
 fn open_picker(world: &mut World) -> Result {

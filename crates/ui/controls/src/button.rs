@@ -23,6 +23,7 @@ pub enum AgentelierButtonStyle {
     Secondary,
     Danger,
     Icon,
+    DangerIcon,
 }
 
 #[derive(SceneComponent, Clone, Default, Reflect)]
@@ -60,7 +61,7 @@ impl AgentelierButton {
 
 impl AgentelierButtonStyle {
     fn shape(self, node: &mut Node) {
-        let icon = matches!(self, Self::Icon);
+        let icon = matches!(self, Self::Icon | Self::DangerIcon);
         node.aspect_ratio = icon.then_some(1.0);
         node.border_radius = BorderRadius::all(if icon { percent(50) } else { px(BUTTON_RADIUS) });
         node.padding = if icon {
@@ -111,6 +112,19 @@ impl AgentelierButtonStyle {
                 ),
                 ..default()
             },
+            Self::DangerIcon => {
+                let icon_surface = |background| WidgetryButtonStateColorOverrides {
+                    background: Some(background),
+                    border: Some(Color::srgb_u8(0xDE, 0x9C, 0xB2)),
+                    foreground: Some(Color::srgb_u8(0x9E, 0x37, 0x55)),
+                };
+                WidgetryButtonColorOverrides {
+                    normal: icon_surface(Color::srgb_u8(0xFF, 0xE6, 0xED)),
+                    hovered: icon_surface(Color::srgb_u8(0xFF, 0xD7, 0xE2)),
+                    pressed: icon_surface(Color::srgb_u8(0xF6, 0xC0, 0xD1)),
+                    ..default()
+                }
+            }
         }
     }
 }

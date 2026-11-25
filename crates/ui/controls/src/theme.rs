@@ -30,6 +30,11 @@ pub const AGENTELIER_THEME: WidgetryTheme = {
     theme.window.title_bar.normal.background = TOOLBAR;
     theme.window.title_bar.normal.foreground = TITLE;
     theme.window.title_bar.normal.border = BORDER;
+    // Keep the close feedback inside the curved frame at the end of the title bar.
+    theme.window.close.hovered.foreground = theme.window.close.hovered.background;
+    theme.window.close.pressed.foreground = theme.window.close.pressed.background;
+    theme.window.close.hovered.background = Color::NONE;
+    theme.window.close.pressed.background = Color::NONE;
 
     theme.text_field.editable.normal.background = INPUT;
     theme.text_field.editable.normal.border = BORDER;
@@ -63,10 +68,15 @@ pub const AGENTELIER_THEME: WidgetryTheme = {
     theme.combo_box.list.item = theme.list_view.item;
 
     theme.file_dialog.window = theme.window;
-    theme.file_dialog.body.normal.background = INPUT;
+    // Dialogs fill the window body with a square node. Let the frame paint the corners.
+    theme.file_dialog.body.normal.background = Color::NONE;
+    theme.file_dialog.body.disabled.background = Color::NONE;
     theme.file_dialog.entry.selected.background = SELECTED;
     theme.file_dialog.entry.selected.foreground = TEXT;
     theme.file_dialog.accept_button = theme.button;
+    theme.message_box.window = theme.window;
+    theme.message_box.body.normal.background = Color::NONE;
+    theme.message_box.body.disabled.background = Color::NONE;
     theme.message_box.action_button = theme.button;
     theme
 };

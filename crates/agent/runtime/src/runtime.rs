@@ -26,7 +26,7 @@ pub use memory::{MemoryReply, MemoryRequest, MemoryWorkState};
 mod memory_dialogue;
 mod model_task;
 mod recording;
-mod renaming;
+mod session_metadata;
 mod session_model;
 mod skill_creation;
 mod skill_resource;
@@ -148,12 +148,12 @@ enum Command {
         Result<crate::SkillSnapshot, agentelier_skills::Failure>,
     ),
     McpStatus(Vec<agentelier_mcp::ConnectionStatus>),
-    Rename {
+    ChangeMetadata {
         id: u64,
         session: SessionId,
-        title: String,
+        change: agentelier_conversation::SessionMetadataChange,
     },
-    Renamed(io::Result<agentelier_session_store::RenameCommit>),
+    MetadataSaved(io::Result<agentelier_session_store::MetadataCommit>),
     Scan,
     Scanned(io::Result<agentelier_session_store::ArchiveCatalog>),
     ChangeProject(u64, agentelier_conversation::ProjectChange),
@@ -370,7 +370,7 @@ impl AgentRuntime {
                         let mut records = recording::Records::new();
                         let mut pending_queue = false;
                         let mut deleting: Option<deleting::Deleting> = None;
-                        let mut renaming: Option<renaming::Renaming> = None;
+                        let mut saving_metadata: Option<session_metadata::SavingMetadata> = None;
                         let mut suspending = 0usize;
                         let mut finalizing = false;
                         let mut pending_session_model: Option<session_model::Change> = None;
@@ -547,7 +547,7 @@ impl AgentRuntime {
                                         Some(pending) => pending.wait().await,
                                         None => std::future::pending().await,
                                     }} => Command::Loaded(Box::new(result)),
-                                    result = async { match &mut renaming { Some(pending) => pending.wait().await, None => std::future::pending().await } } => Command::Renamed(result),
+                                    result = async { match &mut saving_metadata { Some(pending) => pending.wait().await, None => std::future::pending().await } } => Command::MetadataSaved(result),
                                     result = async { match &mut deleting { Some(pending) => pending.wait().await, None => std::future::pending().await } } => Command::Deleted(result),
                                     result = records.join_next(), if !records.is_empty() => match result {
                                         Some(result) => Command::Recorded(result),
@@ -845,14 +845,14 @@ impl AgentRuntime {
                                     Command::McpStatus(status) => {
                                         emit(&publish, 0, AgentEventKind::McpStatus(status))?;
                                     }
-                                    Command::Rename { id, session, title } => {
-                                        match if renaming.is_some() || deleting.is_some() { Err(io::Error::other("已有会话管理操作正在保存")) } else { renaming::Renaming::start(id, session, title, &store) } {
-                                            Ok(pending) => renaming = Some(pending),
-                                            Err(failure) => emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Renamed { session, result: Err(failure.to_string()) }))?,
+                                    Command::ChangeMetadata { id, session, change } => {
+                                        match if saving_metadata.is_some() || deleting.is_some() { Err(io::Error::other("已有会话管理操作正在保存")) } else { session_metadata::SavingMetadata::start(id, session, change, &store) } {
+                                            Ok(pending) => saving_metadata = Some(pending),
+                                            Err(failure) => emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::MetadataSaved { session, result: Err(failure.to_string()) }))?,
                                         }
                                     }
-                                    Command::Renamed(result) => {
-                                        let pending = renaming.take().ok_or(RuntimeFailure::ModelState)?;
+                                    Command::MetadataSaved(result) => {
+                                        let pending = saving_metadata.take().ok_or(RuntimeFailure::ModelState)?;
                                         let id = pending.id;
                                         emit(&publish, id, AgentEventKind::Conversation(pending.complete(result)))?;
                                         if catalog.is_none() { match store.client().scan() { Ok(reply) => catalog = Some(reply), Err(failure) => emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(failure.to_string())))? } }
@@ -907,7 +907,7 @@ impl AgentRuntime {
                                             Ok(catalog) => {
                                                 emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Projects(catalog.projects)))?;
                                                 let entries = catalog.entries;
-                                                let first = entries.first().map(|entry| entry.summary.session);
+                                                let first = entries.iter().find(|entry| !entry.summary.archived).map(|entry| entry.summary.session);
                                                 emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Archives(entries)))?;
                                                 if !catalog.task_history.is_empty() {
                                                     let history = projection.lock().map_err(|_| AccountFailure::Delivery(DeliveryFailure::Closed))?
@@ -1187,7 +1187,7 @@ impl AgentRuntime {
                                         }
                                         match request {
                                             ConversationRequest::Delete { session } => {
-                                                match if renaming.is_some() { Err(io::Error::other("名称写入尚未完成，请稍后删除")) } else { deleting::Deleting::start(id, control.clone(), session, &store) } {
+                                                match if saving_metadata.is_some() { Err(io::Error::other("名称写入尚未完成，请稍后删除")) } else { deleting::Deleting::start(id, control.clone(), session, &store) } {
                                                     Ok(pending) => { *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control); deleting = Some(pending); }
                                                     Err(failure) => { control.finished.cancel(); emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?; }
                                                 }
@@ -1521,7 +1521,7 @@ impl AgentRuntime {
                                 Err(_) => { delivery_failure = delivery_failure.or(Some(RuntimeFailure::ModelState)); }
                             }
                         }
-                        if let Some(mut pending) = renaming { let result = pending.wait().await; let id = pending.id; capture_delivery(emit(&publish, id, AgentEventKind::Conversation(pending.complete(result))), &mut delivery_failure); }
+                        if let Some(mut pending) = saving_metadata { let result = pending.wait().await; let id = pending.id; capture_delivery(emit(&publish, id, AgentEventKind::Conversation(pending.complete(result))), &mut delivery_failure); }
                         if let Some(mut pending) = deleting { let result = pending.wait().await; let id = pending.id; capture_delivery(emit(&publish, id, AgentEventKind::Conversation(pending.complete(result, &mut conversation))), &mut delivery_failure); }
                         while let Some(receipt) = task_receipts.join_next().await {
                             if let Err(failure) = receipt {
@@ -1761,11 +1761,11 @@ impl AgentRuntime {
         })
     }
 
-    pub fn rename_session(
+    pub fn change_session_metadata(
         &self,
         id: u64,
         session: SessionId,
-        title: String,
+        change: agentelier_conversation::SessionMetadataChange,
     ) -> Result<(), RuntimeFailure> {
         if self.shutdown.is_cancelled() {
             return Err(AccountFailure::Closed.into());
@@ -1773,7 +1773,11 @@ impl AgentRuntime {
         self.commands
             .as_ref()
             .ok_or(AccountFailure::Closed)?
-            .try_send(Command::Rename { id, session, title })
+            .try_send(Command::ChangeMetadata {
+                id,
+                session,
+                change,
+            })
             .map_err(|failure| match failure {
                 mpsc::error::TrySendError::Full(_) => AccountFailure::Busy,
                 mpsc::error::TrySendError::Closed(_) => AccountFailure::Closed,

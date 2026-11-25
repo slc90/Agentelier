@@ -1,8 +1,8 @@
 use crate::{agent_scenes, config, diagnostics, settings, shutdown, splash, tray};
 use agentelier_agent_host::AgentHostPlugin;
-use agentelier_chat_ui::{MAIN_WINDOW_WIDTH, MIN_MAIN_WINDOW_WIDTH, OpenSettings, workspace_title};
+use agentelier_chat_ui::{MAIN_WINDOW_WIDTH, OpenSettings, workspace_navigation};
 use agentelier_controls::{AGENTELIER_THEME, AgentelierControlsPlugin};
-use agentelier_login_ui::{DataDirectoryReady, HomeContent, LoginUiHost, LoginUiPlugin};
+use agentelier_login_ui::{HomeContent, LoginUiHost, LoginUiPlugin};
 use bevy::log::LogPlugin;
 use bevy::window::{
     ExitCondition, MonitorSelection, PrimaryWindow, WindowPosition, WindowResolution,
@@ -112,9 +112,6 @@ fn run_application(logging_ready: &mut bool, guard: &mut Option<LoggingGuard>) -
     let host_plugin = agent_scenes::register(host_plugin)?;
     let backend = host_plugin.host();
     app.insert_resource(config_store.clone())
-        .insert_resource(agentelier_chat_ui::WorkspaceLayout::new(
-            config.workspace_layout,
-        ))
         .insert_resource(AGENTELIER_THEME)
         .add_plugins((
             AppAssetPlugin,
@@ -124,12 +121,12 @@ fn run_application(logging_ready: &mut bool, guard: &mut Option<LoggingGuard>) -
             login_ui,
         ))
         .add_systems(Startup, setup)
-        .add_observer(enter_main)
         .add_observer(mount_chat);
     agentelier_chat_ui::install(&mut app, move || config_store.session_model_defaults())?;
     settings::install(&mut app)?;
     tray::install(&mut app)?;
     splash::install(&mut app);
+    crate::window_alpha::install(&mut app);
     let manager = app.world().resource::<JobManager>().clone();
     shutdown::install(&mut app);
     debug!("应用装配完成，进入主循环");
@@ -141,20 +138,11 @@ fn run_application(logging_ready: &mut bool, guard: &mut Option<LoggingGuard>) -
     Ok(exit)
 }
 
-fn enter_main(
-    _event: On<DataDirectoryReady>,
-    mut primary: Query<&mut Window, With<PrimaryWindow>>,
-) -> Result {
-    let mut window = primary.single_mut().map_err(diagnostics::operation)?;
-    window.resize_constraints.min_width = MIN_MAIN_WINDOW_WIDTH;
-    debug!("数据目录准备完成，进入主界面");
-    Ok(())
-}
-
 fn initial_window() -> Window {
     let mut window = Window {
         title: "agentelier".into(),
         visible: false,
+        resizable: false,
         resolution: WindowResolution::new(MAIN_WINDOW_WIDTH as u32, MAIN_WINDOW_HEIGHT as u32),
         position: WindowPosition::Centered(MonitorSelection::Primary),
         ..default()
@@ -179,10 +167,10 @@ fn setup(
         @widgetry_window(
             target,
             camera,
-            WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
+            WidgetryWindowControlsConfig { maximize_visible: false, resizable: false, double_click_maximize: false, ..default() },
             background,
             Default::default(),
-            bsn_list! { @workspace_title() },
+            bsn_list! { @workspace_navigation() },
             bsn_list! {
                 LoginUiHost
                 Node { width: percent(100), height: percent(100) }

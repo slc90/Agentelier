@@ -1,5 +1,5 @@
 use agentelier_controls::AgentelierButton;
-use agentelier_conversation_bridge::{ProjectId, SessionId, SessionLocation};
+use agentelier_conversation_bridge::{ProjectId, SessionLocation};
 use bevy::prelude::*;
 use bevy::text::EditableTextSystems;
 use bevy::ui::UiSystems;
@@ -103,10 +103,7 @@ struct DirectoryInput;
 #[derive(Component, Clone, Default)]
 struct DirectoryStatus;
 #[derive(Component, Clone, Copy)]
-enum DirectoryPicker {
-    NewSession(Option<ProjectId>),
-    OpenSession(SessionId),
-}
+struct DirectoryPicker(Option<ProjectId>);
 
 pub(crate) fn install(app: &mut App) {
     let (path, error) = match std::env::current_dir() {
@@ -141,7 +138,6 @@ pub(crate) fn panel(state: &DirectoryState) -> impl Scene {
         Children [
             Node { width: percent(100), column_gap: px(8), align_items: AlignItems::Center }
             Children [
-                Text("新会话工作目录") WidgetryText--
                 @WidgetryTextField { @value: {input}, @hint_text: {Some("输入已存在的绝对目录路径".into())} }
                 DirectoryInput Name("WorkingDirectoryInput") Node { flex_grow: 1.0, min_width: px(0) }--
                 @AgentelierButton { @children: {Some(Box::new(bsn_list! {Text("选择目录") WidgetryText}) as Box<dyn SceneList>)} }
@@ -155,12 +151,8 @@ pub(crate) fn panel(state: &DirectoryState) -> impl Scene {
 fn choose(_: On<Activate>, mut commands: Commands) {
     commands.queue(|world: &mut World| -> Result {
         let project = crate::projects::selected_project(world).map(|project| project.id);
-        pick(world, DirectoryPicker::NewSession(project))
+        pick(world, DirectoryPicker(project))
     });
-}
-
-pub(crate) fn choose_for_session(world: &mut World, session: SessionId) -> Result {
-    pick(world, DirectoryPicker::OpenSession(session))
 }
 
 fn pick(world: &mut World, target: DirectoryPicker) -> Result {
@@ -190,20 +182,12 @@ fn selected(event: On<WidgetryFileDialogResultEvent>, mut commands: Commands) {
     commands.queue(move |world: &mut World| -> Result {
         let target = world.get::<DirectoryPicker>(entity).copied();
         world.entity_mut(entity).despawn();
-        if let WidgetryFileDialogResult::Directory(path) = result {
-            match target {
-                Some(DirectoryPicker::NewSession(project))
-                    if project
-                        == crate::projects::selected_project(world).map(|project| project.id) =>
-                {
-                    world.resource_mut::<DirectoryState>().select_path(path);
-                    sync_fields(world)?;
-                }
-                Some(DirectoryPicker::OpenSession(session)) => {
-                    crate::conversation::set_working_directory(world, session, path)?;
-                }
-                _ => {}
-            }
+        if let Some(DirectoryPicker(project)) = target
+            && project == crate::projects::selected_project(world).map(|project| project.id)
+            && let WidgetryFileDialogResult::Directory(path) = result
+        {
+            world.resource_mut::<DirectoryState>().select_path(path);
+            sync_fields(world)?;
         }
         Ok(())
     });

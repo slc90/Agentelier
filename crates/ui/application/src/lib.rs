@@ -9,5 +9,6 @@ mod shutdown;
 mod splash;
 mod startup;
 mod tray;
+mod window_alpha;
 
 pub use startup::run;

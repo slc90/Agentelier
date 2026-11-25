@@ -19,6 +19,7 @@ flowchart TD
     MainReady["Splash::main_ready"]
     Shown["SplashShown"]
     Timeline["4.82 秒连续演出"]
+    Skip["左键单击 Splash"]
     Finished["Splash::finished"]
     Handoff["Widgetry 帧确认交接"]
     MainUI["显示 Agentelier 主窗口"]
@@ -36,6 +37,7 @@ flowchart TD
     Main --> HostReady --> MainReady
     SplashPlugin --> Scene
     Scene --> Shown --> Timeline --> Finished
+    Shown --> Skip --> Finished
     MainReady --> Handoff
     Finished --> Handoff
     Handoff --> MainUI --> BeginSetup --> Directory
@@ -83,7 +85,7 @@ application 持有 Splash 的 Camera、场景实体、字形实例数据和时�
 
 ## 主窗口背景与内容控件
 
-主窗口使用同一张浅薄荷绿背景图。左侧导航、工具栏、消息内容、代码块、输入区和后台任务区域使用独立的浅色表面。背景人物只在未被控件占据的区域中提供视觉氛围；实际文字不直接绘制在密集字符水印上。
+主窗口使用同一张浅薄荷绿背景图。Session 侧栏、工具栏、消息内容、代码块和输入区使用独立的浅色表面。背景人物只在未被控件占据的区域中提供视觉氛围；实际文字不直接绘制在密集字符水印上。
 
 主窗口的颜色体系使用浅薄荷绿和柔和鼠尾草绿作为表面，森林绿作为按钮和强调色，深绿色作为正文文字。具体控件颜色以 `docs/design/ui/visual-system.md` 为准。
 
@@ -118,7 +120,7 @@ application 在主窗口 Entity 存在后调用 `Splash::start`，获得独立 S
 
 主窗口就绪和 Splash 演出结束是两个独立条件：
 
-- `Splash::finished` 表示 4.82 秒演出已经结束。
+- 演出播完或用户左键单击 Splash 窗口时，application 显示共享背景，并调用 `Splash::finished`。
 - `Splash::main_ready` 表示主窗口基础 UI 已经挂载，可以进入窗口交接。
 
 两者可以任意先后到达。主窗口先就绪时，Splash 继续播放；演出先结束时，Splash 保持最终背景帧，等待主窗口就绪。
@@ -129,7 +131,7 @@ application 在主窗口 Entity 存在后调用 `Splash::start`，获得独立 S
 
 Widgetry 完成隐藏主窗口的有效帧确认、显示主窗口并确认显示后的新帧后，移除 Splash Window 并发送 `SplashCompleted`。
 
-application 收到 `SplashCompleted` 后通知 login_ui 开始数据目录初始化。Splash 每次进程启动都会播放，不因已经保存数据目录而跳过。
+application 收到 `SplashCompleted` 后通知 login_ui 开始数据目录初始化。Splash 在每次进程启动时出现，用户可左键单击窗口跳过剩余演出。
 
 login_ui 根据配置决定后续行为：
 

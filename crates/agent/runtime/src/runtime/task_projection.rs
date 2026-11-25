@@ -94,7 +94,7 @@ impl Projection {
                         .map(|entry| (entry.summary.session, entry.summary.title.clone())),
                 );
             }
-            ConversationEvent::Renamed {
+            ConversationEvent::MetadataSaved {
                 session,
                 result: Ok(entry),
             } => {

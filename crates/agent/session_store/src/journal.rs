@@ -116,21 +116,28 @@ impl Writer {
     pub(super) fn delete(&mut self, root: &Path, session: SessionId) -> io::Result<Commit> {
         self.append_kind(root, session, RecordKind::Deleted { session })
     }
-    pub(super) fn rename(
+    pub(super) fn change_metadata(
         &mut self,
         root: &Path,
         session: SessionId,
-        title: String,
-    ) -> io::Result<crate::RenameCommit> {
-        let title = agentelier_conversation::session_title(&title).map_err(io::Error::other)?;
-        let commit = self.append_kind(root, session, RecordKind::Renamed { session, title })?;
+        change: agentelier_conversation::SessionMetadataChange,
+    ) -> io::Result<crate::MetadataCommit> {
+        use agentelier_conversation::SessionMetadataChange;
+        let kind = match change {
+            SessionMetadataChange::Rename(title) => RecordKind::Renamed {
+                session,
+                title: agentelier_conversation::session_title(&title).map_err(io::Error::other)?,
+            },
+            SessionMetadataChange::Archive => RecordKind::Archived { session },
+        };
+        let commit = self.append_kind(root, session, kind)?;
         let summary = self
             .0
             .get(&session)
-            .ok_or_else(|| io::Error::other("名称提交后缺少会话摘要"))?
+            .ok_or_else(|| io::Error::other("元数据提交后缺少会话摘要"))?
             .summary
             .clone();
-        Ok(crate::RenameCommit {
+        Ok(crate::MetadataCommit {
             summary,
             summary_failure: commit.summary_failure,
         })
@@ -153,7 +160,9 @@ impl Writer {
         if !cursor.kind.is_user()
             && matches!(
                 kind,
-                RecordKind::Renamed { .. } | RecordKind::Deleted { .. }
+                RecordKind::Renamed { .. }
+                    | RecordKind::Deleted { .. }
+                    | RecordKind::Archived { .. }
             )
         {
             return Err(io::Error::other("普通聊天操作不能更改内部会话"));
@@ -208,6 +217,7 @@ impl Writer {
                 cursor.summary.title = title;
                 cursor.titled = true;
             }
+            RecordKind::Archived { .. } => cursor.summary.archived = true,
             RecordKind::Deleted { .. } => cursor.summary.deleted = true,
             RecordKind::Created(_) => return Err(io::Error::other("追加路径不能创建初始记录")),
         }

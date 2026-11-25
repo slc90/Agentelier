@@ -31,7 +31,6 @@ bevy_widgetry = { workspace = true, features = [
   "message_box",
   "segmented",
   "toggle_button",
-  "splitter",
   "job",
 ] }
 tracing.workspace = true

@@ -8,7 +8,7 @@ use agentelier_login_ui::AccountState;
 use bevy::{
     prelude::*,
     text::LineBreak,
-    ui::{Display, InteractionDisabled, UiSystems},
+    ui::{Display, UiSystems},
     ui_widgets::Activate,
 };
 use bevy_widgetry::scroll_area::WidgetryScrollArea;
@@ -28,13 +28,11 @@ struct State {
 }
 
 #[derive(Component, Default, Clone)]
-struct Composer;
+pub(super) struct Composer;
 #[derive(Component, Default, Clone)]
 struct Messages;
 #[derive(Component, Default, Clone)]
 struct Status;
-#[derive(Component, Default, Clone)]
-struct Send;
 #[derive(Component, Default, Clone)]
 struct Retry;
 
@@ -179,7 +177,6 @@ fn refresh(world: &mut World) -> Result {
     let render = state.rows_changed || world.get::<Children>(list).is_none();
     let busy = state.pending.is_some() || state.awaiting_catalog;
     let session = state.session.is_some();
-    let sendable = session && !busy && !state.draft.trim().is_empty();
     let status = state.status.clone();
     if render {
         let session = state.session.clone();
@@ -191,13 +188,6 @@ fn refresh(world: &mut World) -> Result {
         .single_mut(world)
     {
         text.set_if_neq(Text(status));
-    }
-    if let Ok(entity) = world.query_filtered::<Entity, With<Send>>().single(world) {
-        if sendable {
-            world.entity_mut(entity).remove::<InteractionDisabled>();
-        } else if world.get::<InteractionDisabled>(entity).is_none() {
-            world.entity_mut(entity).insert(InteractionDisabled);
-        }
     }
     if let Ok(mut button) = world
         .query_filtered::<&mut Node, With<Retry>>()
@@ -215,34 +205,32 @@ fn refresh(world: &mut World) -> Result {
     Ok(())
 }
 
-fn send(_: On<Activate>, mut commands: Commands) {
-    commands.queue(|world: &mut World| -> Result {
-        remember_draft(world)?;
-        let state = world.resource::<State>();
-        if state.pending.is_some() || state.draft.trim().is_empty() {
-            return Ok(());
+pub(super) fn submit(world: &mut World) -> Result {
+    remember_draft(world)?;
+    let state = world.resource::<State>();
+    if state.pending.is_some() || state.awaiting_catalog || state.draft.trim().is_empty() {
+        return Ok(());
+    }
+    let Some(session) = state.session.as_ref().map(|session| session.id) else {
+        return Ok(());
+    };
+    let input = state.draft.clone();
+    let result = world
+        .resource::<AgentHost>()
+        .request_memory(MemoryRequest::SendChat {
+            session,
+            input: input.clone(),
+        });
+    match result {
+        Ok(id) => {
+            let mut state = world.resource_mut::<State>();
+            state.pending = Some(id);
+            state.submitted = Some(input);
+            state.status = "正在提交记忆消息…".into();
         }
-        let Some(session) = state.session.as_ref().map(|session| session.id) else {
-            return Ok(());
-        };
-        let input = state.draft.clone();
-        let result = world
-            .resource::<AgentHost>()
-            .request_memory(MemoryRequest::SendChat {
-                session,
-                input: input.clone(),
-            });
-        match result {
-            Ok(id) => {
-                let mut state = world.resource_mut::<State>();
-                state.pending = Some(id);
-                state.submitted = Some(input);
-                state.status = "正在提交记忆消息…".into();
-            }
-            Err(failure) => world.resource_mut::<State>().status = failure.to_string(),
-        }
-        Ok(())
-    });
+        Err(failure) => world.resource_mut::<State>().status = failure.to_string(),
+    }
+    Ok(())
 }
 
 fn retry(_: On<Activate>, mut commands: Commands) {
@@ -267,14 +255,10 @@ pub(super) fn panel(world: &World) -> impl Scene + use<> {
             @WidgetryTextField {
                 @value: draft, @multiline: true,
                 @auto_size: {Some(AutoSize { min_rows: 2, max_rows: 6 })},
-                @hint_text: {Some("与助手交流长期记忆".into())},
             }
-            Composer Name("MemoryChatComposer") Node { width: percent(100), flex_shrink: 0.0 }--
-            Node { column_gap: px(8), flex_shrink: 0.0 }
-            Children [
-                @button("发送") Send Name("SendMemoryChat") InteractionDisabled on(send)--
-                @button("重试打开会话") Retry Name("RetryMemoryChat") on(retry)
-            ]
+            Composer Name("MemoryChatComposer") Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }--
+            @button("重试打开会话") Retry Name("RetryMemoryChat") on(retry)
+            Node { align_self: AlignSelf::Start }
         ]
     }
 }

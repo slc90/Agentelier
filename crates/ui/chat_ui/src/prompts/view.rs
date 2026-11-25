@@ -15,10 +15,6 @@ const EDITOR_MIN_ROWS: usize = 6;
 const EDITOR_MAX_ROWS: usize = 12;
 const PREVIEW_HEIGHT: f32 = 320.0;
 
-pub(crate) fn entry() -> impl Scene {
-    button("提示词管理", "OpenPromptManager", Action::Open, false)
-}
-
 fn button(label: &str, name: &'static str, action: Action, disabled: bool) -> impl Scene {
     let label = label.to_owned();
     (

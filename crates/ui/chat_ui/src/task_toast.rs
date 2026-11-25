@@ -11,8 +11,7 @@ use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::ui_scale::WidgetryUiScale;
 use bevy_widgetry::window::{
-    WidgetryWindowBackground, WidgetryWindowControlsConfig, WidgetryWindowTitle,
-    owned_widgetry_window,
+    WidgetryWindowBackground, WidgetryWindowControlsConfig, owned_widgetry_window,
 };
 use futures_timer::Delay;
 use std::collections::{HashSet, VecDeque};
@@ -189,7 +188,7 @@ fn scene(toast: Toast, position: WindowPosition, notification: TaskNotification)
             },
             WidgetryWindowBackground::Theme,
             Default::default(),
-            bsn_list! { WidgetryWindowTitle WidgetryText Pickable::IGNORE },
+            bsn_list! { @agentelier_controls::padded_window_title() },
             bsn_list! {
                 Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(4), padding: UiRect::all(px(12)) }
                 Children [

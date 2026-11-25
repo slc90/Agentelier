@@ -90,52 +90,6 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
     Ok(())
 }
 
-pub(crate) fn enqueue(world: &mut World) -> Result {
-    let state = world.resource::<ChatState>();
-    if !can_enqueue(state) {
-        return Ok(());
-    }
-    let session = state
-        .session
-        .as_ref()
-        .ok_or_else(|| std::io::Error::other("排队缺少会话"))?;
-    let submitted = PendingDraft {
-        id: 0,
-        text: state.draft.clone(),
-        revision: state.draft_revision,
-    };
-    let result = world
-        .resource::<AgentHost>()
-        .request_session(SessionAction::Enqueue {
-            session: session.id,
-            text: submitted.text.clone(),
-            transcript: world
-                .resource::<crate::transcription::TranscriptionState>()
-                .selection(session),
-        });
-    let mut state = world.resource_mut::<ChatState>();
-    match result {
-        Ok(id) => {
-            state.pending_inputs.push(PendingDraft { id, ..submitted });
-            tracing::info!(operation_id = id, "排队消息已提交");
-            state.input_feedback = Some("正在提交排队消息…".into());
-        }
-        Err(failure) => state.input_feedback = Some(format!("排队未提交：{failure}；草稿保留")),
-    }
-    Ok(())
-}
-pub(crate) fn can_enqueue(state: &ChatState) -> bool {
-    state.replacement.is_none()
-        && !state.draft.trim().is_empty()
-        && state
-            .session
-            .as_ref()
-            .is_some_and(|session| !session.execution_blocked)
-        && !state
-            .pending_inputs
-            .iter()
-            .any(|input| input.text == state.draft && input.revision == state.draft_revision)
-}
 pub(crate) fn receive(state: &mut ChatState, event: QueueEvent) -> Option<PendingDraft> {
     if let Some(view) = event.view
         && let Some(session) = state

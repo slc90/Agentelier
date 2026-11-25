@@ -5,15 +5,7 @@ use agentelier_conversation_bridge::{AudioAttachmentView, SessionId};
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
-use bevy::window::PrimaryWindow;
-use bevy_widgetry::file_dialog::{
-    WidgetryFileDialog, WidgetryFileDialogFilter, WidgetryFileDialogFilterId,
-    WidgetryFileDialogModality, WidgetryFileDialogMode, WidgetryFileDialogResult,
-    WidgetryFileDialogResultEvent, WidgetryFileDialogWindow,
-};
-use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
-use std::path::PathBuf;
 
 #[derive(Clone, Reflect)]
 pub struct ChatAudio {
@@ -53,14 +45,13 @@ impl ChatAudio {
 
 #[derive(Resource, Default)]
 pub(crate) struct AudioDraftState {
-    picker: Option<(Entity, SessionId)>,
     pending: Option<(u64, SessionId)>,
     feedback: Option<(SessionId, String)>,
 }
 
 impl AudioDraftState {
     pub(crate) fn busy(&self) -> bool {
-        self.picker.is_some() || self.pending.is_some()
+        self.pending.is_some()
     }
 
     pub(crate) fn host_failed(&mut self, reason: &str) {
@@ -71,7 +62,7 @@ impl AudioDraftState {
 }
 
 #[derive(Component, Clone, Default)]
-struct ChooseAudio;
+struct AudioDraftPanel;
 #[derive(Component, Clone, Default)]
 struct RemoveAudio;
 #[derive(Component, Clone, Default)]
@@ -82,12 +73,11 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(Update, synchronize);
 }
 
-pub(crate) fn panel() -> impl Scene {
+pub(crate) fn draft_panel() -> impl Scene {
     bsn! {
-        Node { width: percent(100), min_width: px(0), column_gap: px(8), row_gap: px(4), flex_wrap: FlexWrap::Wrap, flex_shrink: 0.0, align_items: AlignItems::Center }
+        AudioDraftPanel
+        Node { display: Display::None, width: percent(100), min_width: px(0), column_gap: px(8), row_gap: px(4), flex_wrap: FlexWrap::Wrap, flex_shrink: 0.0, align_items: AlignItems::Center }
         Children [
-            @AgentelierButton { @children: {Some(Box::new(bsn_list!{Text("添加音频") WidgetryText}) as Box<dyn SceneList>)} }
-            ChooseAudio Name("ChooseAudioAttachment") on(choose)--
             @AgentelierButton { @children: {Some(Box::new(bsn_list!{Text("移除附件") WidgetryText}) as Box<dyn SceneList>)} }
             RemoveAudio Name("RemoveAudioAttachment") Node { display: Display::None } on(remove)--
             Text::default() WidgetryText AudioDraftText Name("AudioDraftStatus")
@@ -105,68 +95,6 @@ pub(crate) fn card(audio: ChatAudio) -> impl Scene {
     }
 }
 
-fn choose(
-    _: On<Activate>,
-    chat: Res<ChatState>,
-    mut media: ResMut<AudioDraftState>,
-    transcription: Res<crate::transcription::TranscriptionState>,
-    primary: Single<Entity, With<PrimaryWindow>>,
-    mut commands: Commands,
-) {
-    let Some(session) = chat.session.as_ref().map(|chat| chat.id) else {
-        return;
-    };
-    if media.busy() || transcription.busy() {
-        return;
-    }
-    let mut window = WidgetryFileDialogWindow {
-        parent: Some(*primary),
-        modality: WidgetryFileDialogModality::Modal,
-        ..default()
-    };
-    window.native.title = "选择音频附件".into();
-    let picker = commands
-        .spawn_scene_with_error_handler(bsn! {
-            @WidgetryFileDialog {
-                @mode: WidgetryFileDialogMode::PickFile,
-                @window: {Some(window)},
-                @storage_scope: {Some("chat-audio-attachment".into())},
-                @filters: {vec![WidgetryFileDialogFilter {
-                    id: WidgetryFileDialogFilterId("audio".into()),
-                    label: "WAV / MP3".into(),
-                    suffixes: vec!["wav".into(), "mp3".into()],
-                    default_extension: None,
-                }]},
-            }
-            Name("AudioAttachmentPicker") on(selected)
-        })
-        .id();
-    media.picker = Some((picker, session));
-    media.feedback = None;
-}
-
-fn selected(
-    event: On<WidgetryFileDialogResultEvent>,
-    host: Res<AgentHost>,
-    mut state: ResMut<AudioDraftState>,
-    mut commands: Commands,
-) {
-    let Some((_, session)) = state.picker.filter(|(entity, _)| *entity == event.entity) else {
-        return;
-    };
-    state.picker = None;
-    commands.entity(event.entity).despawn();
-    match &event.result {
-        WidgetryFileDialogResult::File(path) => {
-            submit(&host, &mut state, session, Some(path.clone()))
-        }
-        WidgetryFileDialogResult::Cancelled => {
-            state.feedback = Some((session, "已取消选择音频".into()))
-        }
-        _ => state.feedback = Some((session, "文件选择器未返回音频文件".into())),
-    }
-}
-
 fn remove(
     _: On<Activate>,
     chat: Res<ChatState>,
@@ -179,20 +107,13 @@ fn remove(
         && !state.busy()
         && !transcription.busy()
     {
-        submit(&host, &mut state, session.id, None);
-    }
-}
-
-fn submit(
-    host: &AgentHost,
-    state: &mut AudioDraftState,
-    session: SessionId,
-    path: Option<PathBuf>,
-) {
-    state.feedback = None;
-    match host.change_audio_draft(session, path) {
-        Ok(id) => state.pending = Some((id, session)),
-        Err(failure) => state.feedback = Some((session, format!("无法处理音频附件：{failure}"))),
+        state.feedback = None;
+        match host.change_audio_draft(session.id, None) {
+            Ok(id) => state.pending = Some((id, session.id)),
+            Err(failure) => {
+                state.feedback = Some((session.id, format!("无法移除音频附件：{failure}")));
+            }
+        }
     }
 }
 
@@ -223,35 +144,21 @@ pub(crate) fn receipt(
 }
 
 fn synchronize(
-    mut media: ResMut<AudioDraftState>,
+    media: Res<AudioDraftState>,
     chat: Res<ChatState>,
     transcription: Res<crate::transcription::TranscriptionState>,
-    pickers: Query<(), With<WidgetryFileDialog>>,
+    mut panels: Query<&mut Node, (With<AudioDraftPanel>, Without<RemoveAudio>)>,
     mut texts: Query<&mut Text, With<AudioDraftText>>,
-    mut buttons: Query<
-        (
-            Entity,
-            Has<InteractionDisabled>,
-            Has<RemoveAudio>,
-            &mut Node,
-        ),
-        Or<(With<ChooseAudio>, With<RemoveAudio>)>,
-    >,
+    mut buttons: Query<(Entity, Has<InteractionDisabled>, &mut Node), With<RemoveAudio>>,
     mut commands: Commands,
 ) {
-    if let Some((entity, session)) = media.picker
-        && !pickers.contains(entity)
-    {
-        media.picker = None;
-        media.feedback = Some((session, "音频选择器已关闭".into()));
-    }
     let session = chat.session.as_ref();
     let draft = session.and_then(|session| session.audio_draft.as_ref());
     let metadata = draft
         .map(|audio| format!("随下一条直接发送的消息附上 {}", audio.label()))
         .unwrap_or_default();
     let feedback = if media.pending.is_some() {
-        "正在处理音频附件…"
+        "正在移除音频附件…"
     } else {
         media
             .feedback
@@ -264,21 +171,27 @@ fn synchronize(
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
+    let panel_display = if text.is_empty() {
+        Display::None
+    } else {
+        Display::Flex
+    };
+    for node in &mut panels {
+        node.map_unchanged(|node| &mut node.display)
+            .set_if_neq(panel_display);
+    }
     for mut output in &mut texts {
         output.set_if_neq(Text::new(&text));
     }
-    for (entity, disabled, remove, mut node) in &mut buttons {
-        if remove {
-            let display = if draft.is_some() {
-                Display::Flex
-            } else {
-                Display::None
-            };
-            if node.display != display {
-                node.display = display;
-            }
-        }
-        let next = session.is_none() || media.busy() || transcription.busy();
+    let display = if draft.is_some() {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    for (entity, disabled, node) in &mut buttons {
+        node.map_unchanged(|node| &mut node.display)
+            .set_if_neq(display);
+        let next = media.busy() || transcription.busy();
         if next && !disabled {
             commands.entity(entity).insert(InteractionDisabled);
         }

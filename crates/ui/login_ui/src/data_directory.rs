@@ -15,8 +15,7 @@ use bevy_widgetry::job::{
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::window::{
-    WidgetryModalWindow, WidgetryWindowBackground, WidgetryWindowControlsConfig,
-    WidgetryWindowTitle, owned_widgetry_window, widgetry_window_target,
+    WidgetryModalWindow, WidgetryWindowBackground, owned_widgetry_window, widgetry_window_target,
 };
 use bevy_widgetry_path_display::display_path;
 use std::io;
@@ -195,10 +194,10 @@ fn show_picker(world: &mut World) -> Result {
                 position: WindowPosition::Centered(MonitorSelection::Current),
                 ..default()
             },
-            WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
+            agentelier_controls::FILE_DIALOG_WINDOW_CONTROLS,
             WidgetryWindowBackground::Theme,
             Default::default(),
-            bsn_list! { WidgetryWindowTitle WidgetryText Pickable::IGNORE },
+            bsn_list! { @agentelier_controls::padded_window_title() },
             bsn_list! {
                 Node {
                     width: percent(100), height: percent(100),

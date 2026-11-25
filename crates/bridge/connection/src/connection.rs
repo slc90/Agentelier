@@ -97,7 +97,7 @@ pub struct Connection {
     failure: Option<BridgeFailure>,
     model: Option<u64>,
     controls: HashMap<u64, u64>,
-    renaming: HashMap<u64, SessionId>,
+    metadata_changes: HashMap<u64, SessionId>,
     deleting: HashMap<u64, SessionId>,
     queue_controls: HashMap<u64, QueueRequest>,
     reserved_queue: HashSet<u64>,
@@ -202,7 +202,7 @@ impl Connection {
             failure: None,
             model: None,
             controls: HashMap::new(),
-            renaming: HashMap::new(),
+            metadata_changes: HashMap::new(),
             deleting: HashMap::new(),
             queue_controls: HashMap::new(),
             reserved_queue: HashSet::new(),
@@ -486,22 +486,22 @@ impl Connection {
         Ok(id)
     }
 
-    pub fn rename_session(
+    pub fn change_session_metadata(
         &mut self,
         session: SessionId,
-        title: String,
+        change: agentelier_conversation_bridge::SessionMetadataChange,
     ) -> Result<u64, BridgeFailure> {
-        if self.stopping || self.failure.is_some() || !self.renaming.is_empty() {
-            return Err(BridgeFailure("当前不能接纳名称操作".into()));
+        if self.stopping || self.failure.is_some() || !self.metadata_changes.is_empty() {
+            return Err(BridgeFailure("当前不能接纳会话元数据操作".into()));
         }
         let id = self
             .operations
             .allocate()
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
         self.runtime
-            .rename_session(id, session, title)
+            .change_session_metadata(id, session, change)
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
-        self.renaming.insert(id, session);
+        self.metadata_changes.insert(id, session);
         Ok(id)
     }
     pub fn change_project(
@@ -692,12 +692,12 @@ impl Connection {
                         }
                         return Ok(Some(event));
                     }
-                    if let agentelier_conversation_bridge::ConversationEvent::Renamed {
+                    if let agentelier_conversation_bridge::ConversationEvent::MetadataSaved {
                         session,
                         ..
                     } = kind
                     {
-                        if self.renaming.remove(&event.operation_id) != Some(*session) {
+                        if self.metadata_changes.remove(&event.operation_id) != Some(*session) {
                             return self.protocol_failure();
                         }
                         return Ok(Some(event));

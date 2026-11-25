@@ -20,8 +20,7 @@ use bevy_widgetry::message_box::{
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::window::{
-    WidgetryModalWindow, WidgetryWindowBackground, WidgetryWindowControlsConfig,
-    WidgetryWindowTitle, owned_widgetry_window, widgetry_window_target,
+    WidgetryModalWindow, WidgetryWindowBackground, owned_widgetry_window, widgetry_window_target,
 };
 use std::io;
 
@@ -227,10 +226,10 @@ fn window(source: Entity) -> impl Scene {
     bsn! {
         SkillsWindow Name("SkillsWindow")
         @owned_widgetry_window(
-            Window { title: "Skill 管理".into(), resolution: (840, 570).into(), ..default() },
-            WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
+            Window { title: "Skill 管理".into(), resolution: (840, 570).into(), resizable: false, ..default() },
+            agentelier_controls::MANAGEMENT_WINDOW_CONTROLS,
             WidgetryWindowBackground::Theme, Default::default(),
-            bsn_list! { WidgetryWindowTitle WidgetryText Pickable::IGNORE },
+            bsn_list! { @agentelier_controls::padded_window_title() },
             bsn_list! {
                 Node { width: percent(100), min_height: px(0), flex_grow: 1.0, flex_direction: FlexDirection::Column, row_gap: px(10), padding: UiRect::all(px(14)) }
                 Children [
@@ -273,9 +272,9 @@ fn pick(_: On<Activate>, mut commands: Commands) {
             template(move |_| Ok(WidgetryModalWindow { parent }))
             @owned_widgetry_window(
                 Window { title: "选择 Skill 文件夹".into(), resolution: (840, 580).into(), ..default() },
-                WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
+                agentelier_controls::FILE_DIALOG_WINDOW_CONTROLS,
                 WidgetryWindowBackground::Theme, Default::default(),
-                bsn_list! { WidgetryWindowTitle WidgetryText Pickable::IGNORE },
+                bsn_list! { @agentelier_controls::padded_window_title() },
                 bsn_list! {
                     @WidgetryFileDialog { @mode: WidgetryFileDialogMode::PickDirectory }
                     Name("SkillDirectoryPicker") Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }

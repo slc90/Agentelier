@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 use bevy::asset::{AssetPath, embedded_asset, embedded_path, load_embedded_asset};
 use bevy::prelude::*;
+use bevy::shader::Shader;
 
 pub mod user_avatar;
 
@@ -29,12 +30,34 @@ impl NavigationIcon {
     pub fn path(self) -> AssetPath<'static> {
         let path = match self {
             Self::Settings => embedded_path!("assets/navigation/settings.svg"),
-            Self::Skills => embedded_path!("assets/navigation/skills.svg"),
+            Self::Skills => embedded_path!("assets/navigation/skill.svg"),
             Self::Mcp => embedded_path!("assets/navigation/mcp.svg"),
             Self::Memory => embedded_path!("assets/navigation/memory.svg"),
         };
         AssetPath::from_path_buf(path).with_source("embedded")
     }
+}
+
+#[derive(Clone, Copy)]
+pub enum SidebarIcon {
+    Add,
+    More,
+    SessionError,
+}
+
+impl SidebarIcon {
+    pub fn path(self) -> AssetPath<'static> {
+        let path = match self {
+            Self::Add => embedded_path!("assets/sidebar/add.svg"),
+            Self::More => embedded_path!("assets/sidebar/more.svg"),
+            Self::SessionError => embedded_path!("assets/sidebar/session-error.svg"),
+        };
+        AssetPath::from_path_buf(path).with_source("embedded")
+    }
+}
+
+pub fn window_alpha_shader(server: &AssetServer) -> Handle<Shader> {
+    load_embedded_asset!(server, "assets/shaders/window_alpha.wesl")
 }
 
 pub struct AppAssetPlugin;
@@ -45,9 +68,13 @@ impl Plugin for AppAssetPlugin {
         embedded_asset!(app, "assets/avatars/assistant.png");
         embedded_asset!(app, "assets/backgrounds/main-window-background.png");
         embedded_asset!(app, "assets/navigation/settings.svg");
-        embedded_asset!(app, "assets/navigation/skills.svg");
+        embedded_asset!(app, "assets/navigation/skill.svg");
         embedded_asset!(app, "assets/navigation/mcp.svg");
         embedded_asset!(app, "assets/navigation/memory.svg");
+        embedded_asset!(app, "assets/sidebar/add.svg");
+        embedded_asset!(app, "assets/sidebar/more.svg");
+        embedded_asset!(app, "assets/sidebar/session-error.svg");
+        embedded_asset!(app, "assets/shaders/window_alpha.wesl");
         let server = app.world().resource::<AssetServer>();
         let avatars = AvatarAssets {
             default_user: load_embedded_asset!(server, "assets/avatars/user.png"),

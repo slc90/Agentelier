@@ -15,15 +15,17 @@ use agentelier_conversation_bridge::{
 use agentelier_login_ui::AccountState;
 use agentelier_markdown::{MarkdownSource, MarkdownView};
 use agentelier_prompts::InstructionSnapshot;
+use bevy::camera::RenderTarget;
 use bevy::ecs::message::MessageCursor;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
 use bevy::input_focus::{InputFocus, InputFocusSystems};
 use bevy::prelude::*;
 use bevy::text::{EditableTextSystems, Justify, LineBreak};
-use bevy::ui::{InteractionDisabled, UiSystems};
+use bevy::ui::{ComputedUiTargetCamera, InteractionDisabled, UiSystems};
 use bevy::ui_widgets::Activate;
-use bevy::window::Ime;
+use bevy::window::{Ime, WindowRef};
+use bevy_app_assets::SidebarIcon;
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::scroll_area::WidgetryScrollArea;
 use bevy_widgetry::text::WidgetryText;
@@ -189,15 +191,10 @@ impl ChatSession {
 }
 
 #[derive(Clone, Reflect)]
-pub enum ChatReplacement {
-    Create {
-        slug: String,
-        effort: String,
-        project: Option<agentelier_conversation_bridge::ProjectId>,
-        #[reflect(ignore)]
-        instructions: Arc<InstructionSnapshot>,
-    },
-    Reset(SessionId),
+pub struct ChatReplacement {
+    project: Option<agentelier_conversation_bridge::ProjectId>,
+    #[reflect(ignore)]
+    instructions: Arc<InstructionSnapshot>,
 }
 
 #[derive(Clone)]
@@ -277,7 +274,7 @@ impl ChatState {
 
 #[derive(Resource, Default)]
 struct InputIntents {
-    send: bool,
+    send: Option<Entity>,
     clear_accepted: Option<PendingDraft>,
 }
 #[derive(Component, Clone, Default)]
@@ -285,23 +282,16 @@ struct Composer;
 #[derive(Component, Clone, Default)]
 struct MessageList;
 #[derive(Component, Clone, Default)]
-struct SessionSummary;
-#[derive(Component, Clone, Default)]
 struct MessageLabel;
 #[derive(Component, Clone, Default)]
-struct ChatStatus;
+struct ComposerFeedback;
 #[derive(Component, Clone, Default)]
 struct ReplacementPrompt;
 #[derive(Component, Clone, Copy)]
 enum ChatAction {
     Create,
     CreateStandalone,
-    Send,
-    Queue,
     Stop,
-    Retry,
-    Reset,
-    SetWorkingDirectory,
     ConfirmReplacement,
     KeepSession,
 }
@@ -347,37 +337,20 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(PostUpdate, update.before(UiSystems::Content));
 }
 
-pub(crate) fn panel(state: &ChatState, account: &AccountState, model_source: Entity) -> impl Scene {
+pub(crate) fn panel(state: &ChatState, model_source: Entity) -> impl Scene {
     let draft = state.draft.clone();
-    let summary = summary(state);
-    let status = status(state, account);
     bsn! {
         Name("ChatPanel")
         Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP) }
         Children [
-            Node { column_gap: px(CONTENT_GAP), row_gap: px(CONTENT_GAP), align_items: AlignItems::Center, flex_shrink: 0.0, flex_wrap: FlexWrap::Wrap }
-            BackgroundColor(MESSAGE_SURFACE) Node { padding: UiRect::all(px(CONTENT_PADDING)) }
-            Children [
-                @button("重置当前会话", "ResetChatSession", ChatAction::Reset)--
-                @button("更改会话目录", "SetSessionWorkingDirectory", ChatAction::SetWorkingDirectory)--
-                @button("排队", "QueueChatMessage", ChatAction::Queue)--
-                @button("重试最近尝试", "RetryChatTurn", ChatAction::Retry)--
-                @crate::reading::bottom_button()--
-                Text(summary) WidgetryText SessionSummary Name("ChatSessionSummary")
-            ]--
+            @crate::queue::panel()--
+            @conversation_view()--
             Node { column_gap: px(CONTENT_GAP), flex_shrink: 0.0, display: Display::None } ReplacementPrompt
             Children [
                 Text("确认后创建空白会话；原会话的记录、待办和草稿保留。") WidgetryText--
                 @button("确认新建", "ConfirmChatReplacement", ChatAction::ConfirmReplacement)--
                 @button("保留当前会话", "KeepChatSession", ChatAction::KeepSession)
             ]--
-            Text(status) WidgetryText ChatStatus Name("ChatStatus") BackgroundColor(MESSAGE_SURFACE)
-            Node { padding: UiRect::all(px(CONTENT_PADDING)) }--
-            @crate::queue::panel()--
-            @crate::audio_attachment::panel()--
-            @crate::transcription::panel(crate::transcription::Target::Draft)--
-            @crate::transcription::selection_panel()--
-            @conversation_view()--
             @chat_composer(draft, model_source)
         ]
     }
@@ -388,18 +361,22 @@ fn chat_composer(draft: String, model_source: Entity) -> impl Scene {
         Name("ChatComposerPanel") BackgroundColor(COMPOSER_SURFACE)
         Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP), flex_shrink: 0.0, padding: UiRect::all(px(CONTENT_PADDING)) }
         Children [
+            Text::default() WidgetryText ComposerFeedback Name("ChatComposerFeedback")
+            TextLayout::linebreak(LineBreak::AnyCharacter) Node { display: Display::None }--
+            @crate::audio_attachment::draft_panel()--
+            @crate::transcription::panel(crate::transcription::Target::Draft)--
+            @crate::transcription::selection_panel()--
             @WidgetryTextField {
-                @value: {draft}, @multiline: true,
+                @value: draft, @multiline: true,
                 @auto_size: {Some(AutoSize { min_rows: COMPOSER_MIN_ROWS, max_rows: COMPOSER_MAX_ROWS })},
-                @hint_text: {Some("输入消息；Enter 提交，Shift+Enter 换行".into())},
             }
-            Composer Name("ChatComposer") Node { width: percent(100), flex_shrink: 0.0 }--
-            Node { column_gap: px(CONTENT_GAP), align_items: AlignItems::Center }
+            Composer Name("ChatComposer") Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }--
+            Node { column_gap: px(CONTENT_GAP), row_gap: px(CONTENT_GAP), align_items: AlignItems::Center, flex_wrap: FlexWrap::Wrap }
             Children [
                 @crate::preparation::session_model_selector(model_source)--
-                @button("发送", "SendChatMessage", ChatAction::Send)--
                 @button("停止", "StopChatGeneration", ChatAction::Stop)
-                Node { display: Display::None }
+                Node { display: Display::None }--
+                @crate::preparation::connection_entry()
             ]
         ]
     }
@@ -427,11 +404,11 @@ pub(crate) fn project_button() -> impl Scene {
 }
 
 pub(crate) fn standalone_button() -> impl Scene {
-    button(
-        "新建单独聊天",
-        "CreateStandaloneSession",
-        ChatAction::CreateStandalone,
-    )
+    bsn! {
+        @crate::archives::reveal_button(SidebarIcon::Add)
+        Name("CreateStandaloneSession") template(|_| Ok(ChatAction::CreateStandalone))
+        on(activate) on(crate::archives::block_row_click)
+    }
 }
 
 #[derive(Default)]
@@ -522,15 +499,11 @@ fn forget_session(world: &mut World, session: SessionId) -> Result {
 
 fn button(label: &'static str, name: &'static str, action: ChatAction) -> impl Scene {
     let style = match action {
-        ChatAction::Create
-        | ChatAction::CreateStandalone
-        | ChatAction::Send
-        | ChatAction::ConfirmReplacement => AgentelierButtonStyle::Primary,
-        ChatAction::Stop | ChatAction::Reset => AgentelierButtonStyle::Danger,
-        ChatAction::Queue
-        | ChatAction::Retry
-        | ChatAction::KeepSession
-        | ChatAction::SetWorkingDirectory => AgentelierButtonStyle::Secondary,
+        ChatAction::Create | ChatAction::CreateStandalone | ChatAction::ConfirmReplacement => {
+            AgentelierButtonStyle::Primary
+        }
+        ChatAction::Stop => AgentelierButtonStyle::Danger,
+        ChatAction::KeepSession => AgentelierButtonStyle::Secondary,
     };
     let children: Box<dyn SceneList> = Box::new(bsn_list! {Text(label) WidgetryText});
     bsn! {
@@ -541,29 +514,14 @@ fn button(label: &'static str, name: &'static str, action: ChatAction) -> impl S
     }
 }
 
-fn activate(
-    event: On<Activate>,
-    actions: Query<&ChatAction>,
-    mut intents: ResMut<InputIntents>,
-    mut commands: Commands,
-) -> Result {
+fn activate(event: On<Activate>, actions: Query<&ChatAction>, mut commands: Commands) -> Result {
     match actions.get(event.entity)? {
         ChatAction::Create => commands.queue(create_session),
         ChatAction::CreateStandalone => commands.queue(|world: &mut World| -> Result {
             crate::projects::select_project(world, None)?;
             create_session(world)
         }),
-        ChatAction::Send => intents.send = true,
-        ChatAction::Queue => commands.queue(crate::queue::enqueue),
         ChatAction::Stop => commands.queue(stop),
-        ChatAction::Retry => commands.queue(retry),
-        ChatAction::Reset => commands.queue(prepare_reset),
-        ChatAction::SetWorkingDirectory => commands.queue(|world: &mut World| -> Result {
-            if let Some(session) = world.resource::<ChatState>().session.as_ref() {
-                crate::working_directory::choose_for_session(world, session.id)?;
-            }
-            Ok(())
-        }),
         ChatAction::ConfirmReplacement => commands.queue(confirm_replacement),
         ChatAction::KeepSession => commands.queue(|world: &mut World| {
             world.resource_mut::<ChatState>().replacement = None;
@@ -612,18 +570,16 @@ fn create_session(world: &mut World) -> Result {
     {
         return Ok(());
     }
-    let SessionModelDefaults { slug, effort } = (world.resource::<SessionDefaultsSource>().0)()?;
     let instructions = Arc::new(crate::prompts::snapshot(world)?);
     let project = crate::projects::selected_project(world).map(|project| project.id);
     if state.session.is_some() {
-        world.resource_mut::<ChatState>().replacement = Some(ChatReplacement::Create {
-            slug,
-            effort,
+        world.resource_mut::<ChatState>().replacement = Some(ChatReplacement {
             instructions,
             project,
         });
         return Ok(());
     }
+    let SessionModelDefaults { slug, effort } = (world.resource::<SessionDefaultsSource>().0)()?;
     let result = world
         .resource::<AgentHost>()
         .request_conversation(ConversationRequest::Create(SessionCreate {
@@ -650,56 +606,6 @@ fn create_session(world: &mut World) -> Result {
     Ok(())
 }
 
-fn prepare_reset(world: &mut World) -> Result {
-    if world.resource::<crate::ArchiveState>().loading {
-        return Ok(());
-    }
-    let state = world.resource::<ChatState>();
-    if state.operation.is_some()
-        || state.replacement.is_some()
-        || world.resource::<AgentHost>().model_busy()?
-    {
-        return Ok(());
-    }
-    let Some(session) = &state.session else {
-        return Ok(());
-    };
-    if !session.matches_account(world.resource::<AccountState>()) {
-        return Ok(());
-    }
-    let pending = ChatReplacement::Reset(session.id);
-    world.resource_mut::<ChatState>().replacement = Some(pending);
-    Ok(())
-}
-
-pub(crate) fn set_working_directory(
-    world: &mut World,
-    session: SessionId,
-    directory: std::path::PathBuf,
-) -> Result {
-    let state = world.resource::<ChatState>();
-    if state.operation.is_some()
-        || state.replacement.is_some()
-        || state
-            .session
-            .as_ref()
-            .is_none_or(|current| current.id != session)
-    {
-        return Ok(());
-    }
-    let reply = world
-        .resource::<AgentHost>()
-        .request_conversation(ConversationRequest::SetWorkingDirectory { session, directory });
-    let mut state = world.resource_mut::<ChatState>();
-    match reply {
-        Ok(operation) => {
-            state.operation = Some(operation);
-            state.error = None;
-        }
-        Err(failure) => state.error = Some(failure.to_string()),
-    }
-    Ok(())
-}
 fn confirm_replacement(world: &mut World) -> Result {
     let state = world.resource::<ChatState>();
     if state.operation.is_some() || world.resource::<AgentHost>().model_busy()? {
@@ -712,115 +618,35 @@ fn confirm_replacement(world: &mut World) -> Result {
     if !world.resource::<ModelState>().can_request(account) {
         return Ok(());
     }
-    let request = match pending {
-        ChatReplacement::Reset(session)
-            if state.session.as_ref().is_some_and(|current| {
-                current.id == session && current.matches_account(account)
-            }) =>
-        {
-            ConversationRequest::Reset { session }
-        }
-        ChatReplacement::Reset(_) => return Ok(()),
-        ChatReplacement::Create {
-            slug,
-            effort,
-            instructions,
-            project,
-        } => {
-            if project != crate::projects::selected_project(world).map(|project| project.id) {
-                let mut state = world.resource_mut::<ChatState>();
-                state.replacement = None;
-                state.error = Some("目标项目已变化，请重新发起创建".into());
-                return Ok(());
-            }
-            ConversationRequest::Create(SessionCreate {
-                slug,
-                effort,
-                instructions,
-                location: world
-                    .resource::<crate::working_directory::DirectoryState>()
-                    .location(),
-            })
-        }
-    };
-    let creating = matches!(&request, ConversationRequest::Create(_));
+    let ChatReplacement {
+        instructions,
+        project,
+    } = pending;
+    if project != crate::projects::selected_project(world).map(|project| project.id) {
+        let mut state = world.resource_mut::<ChatState>();
+        state.replacement = None;
+        state.error = Some("目标项目已变化，请重新发起创建".into());
+        return Ok(());
+    }
+    let SessionModelDefaults { slug, effort } = (world.resource::<SessionDefaultsSource>().0)()?;
+    let request = ConversationRequest::Create(SessionCreate {
+        slug,
+        effort,
+        instructions,
+        location: world
+            .resource::<crate::working_directory::DirectoryState>()
+            .location(),
+    });
     let result = world.resource::<AgentHost>().request_conversation(request);
     let mut state = world.resource_mut::<ChatState>();
     match result {
         Ok(id) => {
             state.operation = Some(id);
             state.error = None;
-            if creating {
-                crate::working_directory::submitted(world);
-            }
+            crate::working_directory::submitted(world);
         }
         Err(failure) => {
             error!(error=%failure, "替换聊天会话失败");
-            state.error = Some(failure.to_string());
-        }
-    }
-    Ok(())
-}
-
-fn can_retry(
-    state: &ChatState,
-    model: &ModelState,
-    account: &AccountState,
-    activity: &HostActivity,
-) -> bool {
-    state.operation.is_none()
-        && state.replacement.is_none()
-        && !activity.model_busy
-        && model.can_request(account)
-        && state.session.as_ref().is_some_and(|session| {
-            !session.execution_blocked
-                && session.matches_account(account)
-                && session.turn.as_ref().is_some_and(|turn| {
-                    turn.committed_steps == 0
-                        && turn.compaction_continuation.is_none()
-                        && !turn
-                            .steers
-                            .iter()
-                            .any(|input| matches!(input.state, ChatSteerState::Applied))
-                        && matches!(
-                            turn.status,
-                            ChatTurnStatus::Failed(_) | ChatTurnStatus::Cancelled
-                        )
-                })
-        })
-}
-fn retry(world: &mut World) -> Result {
-    let state = world.resource::<ChatState>();
-    if !can_retry(
-        state,
-        world.resource::<ModelState>(),
-        world.resource::<AccountState>(),
-        world.resource::<HostActivity>(),
-    ) || world.resource::<AgentHost>().model_busy()?
-    {
-        return Ok(());
-    }
-    let Some(session) = &state.session else {
-        return Ok(());
-    };
-    let Some(turn) = &session.turn else {
-        return Ok(());
-    };
-    let result = world
-        .resource::<AgentHost>()
-        .request_conversation(ConversationRequest::Retry {
-            session: session.id,
-            turn: turn.id,
-        });
-    let mut state = world.resource_mut::<ChatState>();
-    match result {
-        Ok(id) => {
-            state.operation = Some(id);
-            state.error = None;
-            info!(operation_id = id, "提交聊天重试");
-        }
-        Err(failure) => {
-            error!(error=%failure, "聊天重试提交失败");
             state.error = Some(failure.to_string());
         }
     }
@@ -1004,11 +830,20 @@ fn capture_enter(
             || matches!(event, Ime::Preedit { value, .. } if !value.is_empty())
     });
     let focus = world.resource::<InputFocus>().get();
-    let mut fields = world.query_filtered::<(Entity, &WidgetryTextFieldHeadless), With<Composer>>();
+    let mut fields = world.query_filtered::<
+        (Entity, &WidgetryTextFieldHeadless),
+        Or<(With<Composer>, With<crate::memory_chat::Composer>)>,
+    >();
     let root = fields
         .iter(world)
         .find(|(_, field)| Some(field.editor) == focus)
         .map(|(entity, _)| entity);
+    let window = root
+        .and_then(|entity| world.get::<ComputedUiTargetCamera>(entity)?.get())
+        .and_then(|camera| match world.get::<RenderTarget>(camera)? {
+            RenderTarget::Window(WindowRef::Entity(window)) => Some(*window),
+            _ => None,
+        });
     let composing = if let Some(root) = root {
         WidgetryTextFieldHeadless::editor(world, root)
             .map_err(|failure| failure.into_bevy_error())?
@@ -1030,7 +865,7 @@ fn capture_enter(
     .any(|key| pressed.pressed(*key));
     let mut send = false;
     for event in events.read_mut(&mut world.resource_mut::<Messages<KeyboardInput>>()) {
-        if root.is_none()
+        if window != Some(event.window)
             || ime_active
             || composing
             || shortcut
@@ -1048,13 +883,16 @@ fn capture_enter(
             send |= event.state == ButtonState::Pressed && !event.repeat;
         }
     }
-    world.resource_mut::<InputIntents>().send |= send;
+    if send {
+        world.resource_mut::<InputIntents>().send = root;
+    }
     Ok(())
 }
 
 fn process_input(world: &mut World) -> Result {
-    let clear = world.resource_mut::<InputIntents>().clear_accepted.take();
-    let requested = world.resource::<InputIntents>().send;
+    let mut intents = world.resource_mut::<InputIntents>();
+    let clear = intents.clear_accepted.take();
+    let requested = intents.send.take();
     let mut fields = world.query_filtered::<Entity, With<Composer>>();
     let roots: Vec<_> = fields.iter(world).collect();
     for root in roots {
@@ -1062,7 +900,7 @@ fn process_input(world: &mut World) -> Result {
             .map_err(|failure| failure.into_bevy_error())?;
         let mut editors = world.query::<Ref<bevy::text::EditableText>>();
         let changed = editors.get(world, editor)?.is_changed();
-        if !changed && clear.is_none() && !requested {
+        if !changed && clear.is_none() && requested != Some(root) {
             continue;
         }
         let mut value = WidgetryTextFieldHeadless::text(world, root)
@@ -1077,8 +915,12 @@ fn process_input(world: &mut World) -> Result {
         }
         sync_draft(world, value)?;
     }
-    if std::mem::take(&mut world.resource_mut::<InputIntents>().send) {
-        send(world)?;
+    if let Some(root) = requested {
+        if world.get::<Composer>(root).is_some() {
+            send(world)?;
+        } else if world.get::<crate::memory_chat::Composer>(root).is_some() {
+            crate::memory_chat::submit(world)?;
+        }
     }
     Ok(())
 }
@@ -1378,7 +1220,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             continue;
         }
 
-        if let ConversationEvent::Renamed { session, result } = event.kind {
+        if let ConversationEvent::MetadataSaved { session, result } = event.kind {
             crate::session_actions::complete(world, event.operation_id, session, result)?;
             continue;
         }
@@ -1615,7 +1457,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             | ConversationEvent::Queue(_)
             | ConversationEvent::ArchiveCleanup(_)
             | ConversationEvent::Deleted { .. }
-            | ConversationEvent::Renamed { .. }
+            | ConversationEvent::MetadataSaved { .. }
             | ConversationEvent::Started(_) => {}
         }
         match event.kind {
@@ -1669,7 +1511,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             | ConversationEvent::Queue(_)
             | ConversationEvent::ArchiveCleanup(_)
             | ConversationEvent::Deleted { .. }
-            | ConversationEvent::Renamed { .. }
+            | ConversationEvent::MetadataSaved { .. }
             | ConversationEvent::Started(_) => {}
         }
         if terminal {
@@ -1984,135 +1826,54 @@ pub(super) fn reconcile_list(
     Ok(())
 }
 
-fn summary(state: &ChatState) -> String {
-    state
-        .session
-        .as_ref()
-        .map(|session| {
-            format!(
-                "{} · {} · 推理：{}\n本地工作目录：{}",
-                session.display_name,
-                session.slug,
-                session.effort.as_deref().unwrap_or("服务默认"),
-                session.working_directory
-            )
-        })
-        .unwrap_or_else(|| "选择模型与推理设置后创建会话".into())
-}
-fn status(state: &ChatState, account: &AccountState) -> String {
-    let mut value = task_status(state);
-    if let Some(error) = &state.model_error {
-        value.push_str(&format!("\n模型变更未保存：{error}"));
-    }
-    if let Some(session) = &state.session {
-        value.push('\n');
-        value.push_str(&session.context);
-        if session.binding().is_some()
-            && account.model_identity().is_some()
-            && !session.matches_account(account)
-        {
-            value.push_str(
-                "\n此会话绑定了其他 Codex 账号或工作区。历史可查看，请新建会话继续聊天。",
-            );
-        }
-    }
-    if let Some(notice) = state
-        .session
-        .as_ref()
-        .and_then(|session| session.notice.as_ref())
-    {
-        value.push('\n');
-        value.push_str(notice);
-    }
-    if let Some(turn) = state
-        .session
-        .as_ref()
-        .and_then(|session| session.turn.as_ref())
-        && !turn.process_cleanup.is_empty()
-    {
-        let confirmed = turn
-            .process_cleanup
-            .iter()
-            .filter(|record| record.cleanup_confirmed)
-            .count();
-        value.push_str(&format!(
-            "\n进程清理：{confirmed}/{} 已回收；详情见会话与请求核对",
-            turn.process_cleanup.len()
-        ));
-    }
-    if let Some(feedback) = &state.input_feedback {
-        value.push('\n');
-        value.push_str(feedback);
-    }
-    value
-}
-fn task_status(state: &ChatState) -> String {
-    if state.cancelling {
-        return "正在停止…等待任务结束与回收".into();
-    }
+fn composer_feedback(state: &ChatState, account: &AccountState) -> String {
     if let Some(error) = &state.error {
         return error.clone();
     }
-    if let Some(turn) = state
-        .session
-        .as_ref()
-        .and_then(|session| session.turn.as_ref())
+    if let Some(error) = &state.model_error {
+        return format!("模型变更未保存：{error}");
+    }
+    if let Some(feedback) = &state.input_feedback {
+        return feedback.clone();
+    }
+    let Some(session) = &state.session else {
+        return String::new();
+    };
+    if session.binding().is_some()
+        && account.model_identity().is_some()
+        && !session.matches_account(account)
     {
-        return match &turn.status {
-            ChatTurnStatus::Running => format!(
-                "{} · 模型请求 {}",
-                if turn.phase == "compaction" {
-                    "正在自动压缩上下文"
-                } else if turn.phase == "tool" {
-                    "正在执行工具…"
-                } else if turn.phase == "cleanup" {
-                    "正在回收进程…"
-                } else if turn.phase == "project_context" {
-                    "正在采集项目规则…"
-                } else {
-                    "正在请求模型…"
-                },
-                turn.request_index
-            ),
+        return "此会话绑定了其他 Codex 账号或工作区。历史可查看，请新建会话继续聊天。".into();
+    }
+    if let Some(turn) = &session.turn {
+        match &turn.status {
+            ChatTurnStatus::Failed(reason) => return format!("本轮失败：{reason}"),
             ChatTurnStatus::Limited => {
-                format!("任务触限；已保留 {} 个完整步骤", turn.committed_steps)
+                return format!("任务触限，已保留 {} 个完整步骤", turn.committed_steps);
             }
-            ChatTurnStatus::Completed => "本轮已完成".into(),
-            ChatTurnStatus::Cancelled => format!(
-                "本轮已取消；保留 {} 个完整步骤，未完成响应未进入上下文",
-                turn.committed_steps
-            ),
-            ChatTurnStatus::Failed(reason) => format!(
-                "本轮失败；保留 {} 个完整步骤，未完成响应未进入上下文：{reason}",
-                turn.committed_steps
-            ),
-        };
+            _ => {}
+        }
     }
-    if state.operation.is_some() {
-        "正在接纳操作…".into()
-    } else {
-        String::new()
-    }
+    session.notice.clone().unwrap_or_default()
 }
-
 fn update(
     state: Res<ChatState>,
     model: Res<ModelState>,
     account: Res<AccountState>,
-    archives: Res<crate::ArchiveState>,
     activity: Res<HostActivity>,
-    audio: Res<crate::audio_attachment::AudioDraftState>,
     mut buttons: Query<(Entity, &ChatAction, &mut Node)>,
-    mut texts: Query<(&mut Text, Has<SessionSummary>, Has<ChatStatus>)>,
-    mut prompts: Query<&mut Node, (With<ReplacementPrompt>, Without<ChatAction>)>,
+    mut feedback: Query<(&mut Text, &mut Node), (With<ComposerFeedback>, Without<ChatAction>)>,
+    mut prompts: Query<
+        &mut Node,
+        (
+            With<ReplacementPrompt>,
+            Without<ChatAction>,
+            Without<ComposerFeedback>,
+        ),
+    >,
     mut commands: Commands,
 ) {
-    if !state.is_changed()
-        && !model.is_changed()
-        && !account.is_changed()
-        && !activity.is_changed()
-        && !archives.is_changed()
-        && !audio.is_changed()
+    if !state.is_changed() && !model.is_changed() && !account.is_changed() && !activity.is_changed()
     {
         return;
     }
@@ -2132,13 +1893,8 @@ fn update(
                 && matches!(turn.status, ChatTurnStatus::Running)
         });
     for (entity, action, mut node) in &mut buttons {
-        let visible = match action {
-            ChatAction::Send => Some(!running),
-            ChatAction::Stop => Some(running),
-            _ => None,
-        };
-        if let Some(visible) = visible {
-            let display = if visible {
+        if matches!(action, ChatAction::Stop) {
+            let display = if running {
                 Display::Flex
             } else {
                 Display::None
@@ -2146,14 +1902,7 @@ fn update(
             if node.display != display {
                 node.display = display;
             }
-        }
-        if matches!(action, ChatAction::Stop) {
             AgentelierButtonLoading::set(&mut commands, entity, state.cancelling);
-        }
-        if matches!(action, ChatAction::Send) {
-            let submitting =
-                state.operation.is_some() && !running && !state.pending_inputs.is_empty();
-            AgentelierButtonLoading::set(&mut commands, entity, submitting);
         }
         let enabled = match action {
             ChatAction::Create | ChatAction::CreateStandalone => {
@@ -2162,32 +1911,9 @@ fn update(
                     && !activity.model_busy
                     && model.can_create_session(&account)
             }
-            ChatAction::Reset => {
-                state
-                    .session
-                    .as_ref()
-                    .is_some_and(|session| session.matches_account(&account))
-                    && state.replacement.is_none()
-                    && state.operation.is_none()
-                    && !activity.model_busy
-                    && !account.runtime_failed
-            }
-            ChatAction::SetWorkingDirectory => {
-                state
-                    .session
-                    .as_ref()
-                    .is_some_and(|session| !session.execution_blocked)
-                    && state.operation.is_none()
-                    && state.replacement.is_none()
-                    && !activity.model_busy
-                    && !account.runtime_failed
-            }
             ChatAction::ConfirmReplacement | ChatAction::KeepSession => {
                 state.replacement.is_some() && state.operation.is_none() && !activity.model_busy
             }
-            ChatAction::Retry => can_retry(&state, &model, &account, &activity),
-            ChatAction::Queue => !account.runtime_failed && crate::queue::can_enqueue(&state),
-            ChatAction::Send => !audio.busy() && state.can_send(&model, &account, &activity),
             ChatAction::Stop => !state.cancelling && running,
         };
         if enabled {
@@ -2196,18 +1922,16 @@ fn update(
             commands.entity(entity).insert(InteractionDisabled);
         }
     }
-    for (mut text, is_summary, is_status) in &mut texts {
-        if is_summary {
-            let title = state
-                .session
-                .as_ref()
-                .and_then(|session| archives.entries.iter().find(|entry| entry.id == session.id))
-                .map(|entry| entry.title.as_str())
-                .unwrap_or("新会话");
-            text.set_if_neq(Text::new(format!("{title} · {}", summary(&state))));
-        } else if is_status {
-            text.set_if_neq(Text::new(status(&state, &account)));
-        }
+    let message = composer_feedback(&state, &account);
+    let display = if message.is_empty() {
+        Display::None
+    } else {
+        Display::Flex
+    };
+    for (mut text, node) in &mut feedback {
+        text.set_if_neq(Text(message.clone()));
+        node.map_unchanged(|node| &mut node.display)
+            .set_if_neq(display);
     }
 }
 

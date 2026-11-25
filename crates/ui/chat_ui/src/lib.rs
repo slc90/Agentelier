@@ -21,13 +21,11 @@ mod reading;
 mod reasoning;
 mod request_inspection;
 mod skills;
-mod task_panel;
 mod task_toast;
 mod tool_timeline;
 mod transcription;
 mod working_directory;
 mod workspace;
-mod workspace_layout;
 
 pub use conversation::{
     ChatHistoryItem, ChatMessage, ChatReplacement, ChatSession, ChatState, ChatTurn,
@@ -35,7 +33,6 @@ pub use conversation::{
 };
 pub use preparation::{ChatUiHost, ModelChoice, ModelPhase, ModelState, install};
 pub use reasoning::ReasoningSetting;
-pub use workspace::{MAIN_WINDOW_WIDTH, MIN_MAIN_WINDOW_WIDTH, OpenSettings, workspace_title};
-pub use workspace_layout::{CommitWorkspaceLayout, LayoutSide, WorkspaceLayout, WorkspaceRatios};
+pub use workspace::{MAIN_WINDOW_WIDTH, OpenSettings, workspace_navigation};
 
 mod session_actions;

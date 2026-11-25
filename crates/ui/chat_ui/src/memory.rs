@@ -14,10 +14,7 @@ use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::scroll_area::WidgetryScrollArea;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{AutoSize, WidgetryReadOnlyTextField, WidgetryTextFieldHeadless};
-use bevy_widgetry::window::{
-    WidgetryWindowBackground, WidgetryWindowControlsConfig, WidgetryWindowTitle,
-    owned_widgetry_window,
-};
+use bevy_widgetry::window::{WidgetryWindowBackground, owned_widgetry_window};
 
 const GAP: f32 = 8.0;
 
@@ -83,10 +80,10 @@ pub(super) fn open(world: &mut World) -> Result {
     world.commands().spawn_scene_with_error_handler(bsn! {
         MemoryWindow Name("MemoryManagementWindow")
         @owned_widgetry_window(
-            Window { title: "记忆管理".into(), resolution: (1030, 780).into(), ..default() },
-            WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
+            Window { title: "记忆管理".into(), resolution: (1030, 780).into(), resizable: false, ..default() },
+            agentelier_controls::MANAGEMENT_WINDOW_CONTROLS,
             WidgetryWindowBackground::Theme, Default::default(),
-            bsn_list! { WidgetryWindowTitle WidgetryText Pickable::IGNORE },
+            bsn_list! { @agentelier_controls::padded_window_title() },
             bsn_list! {
                 Node {
                     width: percent(100), min_height: px(0), flex_grow: 1.0,
@@ -96,8 +93,7 @@ pub(super) fn open(world: &mut World) -> Result {
                     Node { width: percent(100), align_items: AlignItems::Center, column_gap: px(12) }
                     Children [
                         Text("记忆摘要") WidgetryText TextFont { font_size: FontSize::Px(25.0) }--
-                        PublishedAt Name("MemoryPublishedAt") Text("") WidgetryText Node { flex_grow: 1.0 }--
-                        @button("刷新") Name("RefreshMemoryInspection") on(refresh_clicked)
+                        PublishedAt Name("MemoryPublishedAt") Text("") WidgetryText Node { flex_grow: 1.0 }
                     ]--
                     OverviewStatus Name("MemoryInspectionStatus") Text("") WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter)--
                     @WidgetryScrollArea {
@@ -120,10 +116,6 @@ pub(super) fn open(world: &mut World) -> Result {
     overview.detail_dirty = true;
     crate::memory_chat::open(world);
     Ok(())
-}
-
-fn refresh_clicked(_: On<Activate>, mut overview: ResMut<Overview>) {
-    overview.refresh_needed = true;
 }
 
 fn request_refresh(

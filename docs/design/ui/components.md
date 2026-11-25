@@ -19,7 +19,7 @@ flowchart TD
 
 `AgentelierButton` 是项目唯一的常规按钮入口。它封装 Widgetry Button 的交互行为和 Agentelier 外观规则，通过样式变体满足不同场景：
 
-- **圆形图标按钮：**B 区五个导航入口。
+- **圆形图标按钮：**主窗口标题栏的五个导航入口。
 - **普通按钮：**弹窗中的主要操作。
 - **次要按钮：**取消、返回和辅助操作。
 - **危险按钮：**删除、登出等有明确后果的操作。
@@ -41,7 +41,7 @@ flowchart TD
 
 已实现的头像由 `agentelier_controls` 持有显示尺寸、来源与裁剪参数，`bevy_app_assets` 提供默认用户及助手头像。Bevy ImageNode 渲染原图的正方形取样区域并应用圆角。使用原图归一化中心和相对于短边的缩放计算取样范围。图像等待或无法读取时，固定尺寸的区域使用默认用户头像或背景占位。
 
-设置窗口中的 `AvatarCropper` 在圆形预览中接受定位拖动，并通过 Widgetry Slider 调整缩放。保存时应用配置记录归一化偏移与缩放，Assets 在数据目录保留原图。已登录的 B 区入口与 D 区用户消息消费同一个已提交头像，预览草稿只影响设置窗口。
+头像编辑窗口在原图上显示圆形选区，支持拖动与缩放，并在旁边显示实时预览。保存时应用配置记录归一化偏移与缩放，Assets 在数据目录保留原图。标题栏登录入口和用户消息共用已提交头像。
 
 ### 组合控件
 
@@ -49,11 +49,10 @@ flowchart TD
 |---|---|---|
 | `ConversationView` | 当前 Session 消息展示、流式更新和阅读位置 | Avatar、Markdown、ScrollArea、图片和工具结果呈现 |
 | `ChatComposer` | 当前 Session 输入与模型选择 | TextField、ComboBox、AgentelierButton |
-| `SessionNavigator` | Project / Session 导航和切换 | Tree、ListView、FileDialog、AgentelierButton |
-| `GlobalTaskPanel` | 所有 Session 的只读任务状态 | ListView、Collapsible、状态图标 |
+| `SessionNavigator` | 项目与单独聊天分区、Session 状态和切换 | Tree、ListView、FileDialog、AgentelierButton |
 | `TaskToast` | 成功、失败和需要用户操作时的通知 | Widgetry Window、AgentelierButton |
 | `LoginContextMenu` | 已登录时登录按钮的右键登出菜单 | 副键输入处理、轻量 Popup |
-| `AvatarCropper` | 设置页面的头像位置和缩放调整 | 图片预览、圆形 Mask、拖动与缩放 |
+| `AvatarCropper` | 头像编辑窗口中的选区位置和缩放调整 | 图片预览、圆形 Mask、拖动与缩放 |
 
 组合控件只封装跨页面稳定复用的结构和行为。一次性标题、分隔线或单个列表行不必为了形式统一而抽象成独立控件。
 

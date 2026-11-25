@@ -37,7 +37,7 @@ mod session_model;
 mod task_actions;
 mod task_policy;
 mod tasks;
-pub use archive::ArchiveEntry;
+pub use archive::{ArchiveEntry, SessionMetadataChange};
 pub use audio::{
     AudioAttachment, AudioFormat, AudioId, AudioTranscription, MAX_AUDIO_BYTES,
     MAX_AUDIO_NAME_CHARS, MAX_SESSION_AUDIO_BYTES, TranscriptId, TranscriptionEngine,

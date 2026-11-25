@@ -30,8 +30,7 @@ use bevy_widgetry::toggle_button::{
     WidgetryToggleButton, WidgetryToggleButtonChanged, WidgetryToggleButtonPlugin,
 };
 use bevy_widgetry::window::{
-    WidgetryModalWindow, WidgetryWindowBackground, WidgetryWindowControlsConfig,
-    WidgetryWindowTitle, owned_widgetry_window, widgetry_window_target,
+    WidgetryModalWindow, WidgetryWindowBackground, owned_widgetry_window, widgetry_window_target,
 };
 use std::{io, path::PathBuf};
 use tracing::error;
@@ -255,10 +254,10 @@ pub(crate) fn open(world: &mut World) -> Result {
     world.commands().spawn_scene_with_error_handler(bsn! {
         Manager Name("McpManagerWindow")
         @owned_widgetry_window(
-            Window { title: "MCP 管理".into(), resolution: (1000, 730).into(), ..default() },
-            WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
+            Window { title: "MCP 管理".into(), resolution: (1000, 730).into(), resizable: false, ..default() },
+            agentelier_controls::MANAGEMENT_WINDOW_CONTROLS,
             WidgetryWindowBackground::Theme, Default::default(),
-            bsn_list! { WidgetryWindowTitle WidgetryText Pickable::IGNORE },
+            bsn_list! { @agentelier_controls::padded_window_title() },
             bsn_list! {
                 Content Name("McpManagerContent")
                 Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }
@@ -750,9 +749,9 @@ fn pick_path(world: &mut World, field: Field) -> Result {
         template(move |_| Ok(WidgetryModalWindow { parent }))
         @owned_widgetry_window(
             Window { title: title.into(), resolution: (840, 580).into(), ..default() },
-            WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
+            agentelier_controls::FILE_DIALOG_WINDOW_CONTROLS,
             WidgetryWindowBackground::Theme, Default::default(),
-            bsn_list! { WidgetryWindowTitle WidgetryText Pickable::IGNORE },
+            bsn_list! { @agentelier_controls::padded_window_title() },
             bsn_list! {
                 @WidgetryFileDialog { @mode: mode }
                 Name("McpPathPicker") Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }

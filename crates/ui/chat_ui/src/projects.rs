@@ -6,30 +6,21 @@ use agentelier_conversation_bridge::{
 use bevy::prelude::*;
 use bevy::text::LineBreak;
 use bevy::ui::{InteractionDisabled, UiSystems};
-use bevy::ui_widgets::{Activate, ValueChange};
-use bevy_widgetry::combo_box::{WidgetryComboBox, WidgetryComboBoxAppExt, WidgetryComboBoxContent};
+use bevy::ui_widgets::Activate;
+use bevy_app_assets::SidebarIcon;
 use bevy_widgetry::file_dialog::{
     WidgetryFileDialog, WidgetryFileDialogMode, WidgetryFileDialogResult,
     WidgetryFileDialogResultEvent,
 };
-use bevy_widgetry::list_view::{WidgetryListItemId, WidgetryListModel, WidgetryListViewRenderer};
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{WidgetryTextField, WidgetryTextFieldHeadless};
 use bevy_widgetry::window::{
-    WidgetryWindowBackground, WidgetryWindowControlsConfig, WidgetryWindowTitle,
-    owned_widgetry_window, widgetry_window_target,
+    WidgetryWindowBackground, owned_widgetry_window, widgetry_window_target,
 };
-use std::io;
-use std::path::PathBuf;
+use std::{io, path::PathBuf};
 
 const GAP: f32 = 8.0;
-
-#[derive(Clone, PartialEq, Reflect)]
-struct Choice {
-    id: Option<ProjectId>,
-    name: String,
-}
 
 #[derive(Reflect)]
 struct Save {
@@ -49,9 +40,6 @@ struct ProjectState {
     confirm_delete: bool,
     error: Option<String>,
 }
-
-#[derive(Resource)]
-struct Source(Entity);
 
 #[derive(Component, Clone, Default)]
 struct ProjectPickerWindow;
@@ -89,24 +77,11 @@ enum Action {
     Delete,
 }
 
-pub(crate) fn install(app: &mut App) -> Result {
+pub(crate) fn install(app: &mut App) {
     agentelier_controls::install_owned_window_close::<With<ProjectPickerWindow>>(app);
-    app.register_widgetry_combo_box::<Choice>()
-        .map_err(|failure| failure.into_bevy_error())?;
     app.init_resource::<ProjectState>()
         .register_type::<ProjectState>()
-        .add_systems(Startup, initialize)
         .add_systems(PostUpdate, update.before(UiSystems::Content));
-    Ok(())
-}
-
-fn initialize(mut commands: Commands) {
-    let source = commands.spawn(WidgetryListModel::<Choice>::default()).id();
-    commands.insert_resource(Source(source));
-}
-
-pub(crate) fn source(world: &World) -> Entity {
-    world.resource::<Source>().0
 }
 
 pub(crate) fn selected_project(world: &World) -> Option<&Project> {
@@ -131,26 +106,11 @@ pub(crate) fn forget_session(world: &mut World, session: SessionId) {
         .remove(&session);
 }
 
-fn choice_selector(source: Entity, hint: &'static str) -> impl Scene {
-    bsn! {
-        @WidgetryComboBox::<Choice> {
-            @source: source,
-            @placeholder: {WidgetryComboBoxContent::new(move || bsn_list! { Text(hint) WidgetryText })},
-            @renderer: {WidgetryListViewRenderer::new(|choice: &Choice| {
-                let label = choice.name.clone();
-                bsn_list! { Text(label) WidgetryText TextLayout::no_wrap() }
-            })},
-        }
-        Node { width: percent(100), flex_shrink: 0.0 }
-    }
-}
-
 pub(crate) fn panel(world: &World) -> impl Scene + use<> {
     let name = selected_name(world.resource::<ProjectState>());
     bsn! {
         Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(GAP), flex_shrink: 0.0 }
         Children [
-            @button("新建项目", "CreateProject", Action::Create)--
             ProjectCreation Name("ProjectCreation")
             Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(GAP), display: Display::None }
             Children [
@@ -192,10 +152,10 @@ pub(crate) fn panel(world: &World) -> impl Scene + use<> {
     }
 }
 
-pub(crate) fn move_selector(source: Entity) -> impl Scene {
+pub(crate) fn create_button() -> impl Scene {
     bsn! {
-        @choice_selector(source, "移动会话到…")
-        Name("MoveSessionProject") on(move_session)
+        @crate::archives::reveal_button(SidebarIcon::Add)
+        Name("CreateProject") template(|_| Ok(Action::Create)) on(activate)
     }
 }
 
@@ -225,30 +185,6 @@ pub(crate) fn select_project(world: &mut World, project: Option<ProjectId>) -> R
     state.confirm_delete = false;
     sync_name(world)?;
     crate::working_directory::sync_project(world)
-}
-
-fn move_session(
-    event: On<ValueChange<Option<WidgetryListItemId>>>,
-    sources: Res<Source>,
-    choices: Query<&WidgetryListModel<Choice>>,
-    mut commands: Commands,
-) -> Result {
-    let Some(item) = event.value else {
-        return Ok(());
-    };
-    let choice = choices
-        .get(sources.0)?
-        .get_by_id(item)
-        .ok_or_else(|| io::Error::other("项目选项已变化"))?;
-    let project = choice.id;
-    let selector = event.source;
-    commands.queue(move |world: &mut World| {
-        if let Some(session) = crate::session_actions::target(world) {
-            submit(world, ProjectChange::Move { session, project });
-        }
-        WidgetryComboBox::<Choice>::clear_selection(&mut world.commands(), selector);
-    });
-    Ok(())
 }
 
 fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands) -> Result {
@@ -325,10 +261,10 @@ fn pick_directory(world: &mut World, action: DirectoryAction) {
         ProjectPickerWindow Name("ProjectPickerWindow") template(move |_| Ok(action))
         @owned_widgetry_window(
             Window { title: "选择项目目录".into(), resolution: (840, 580).into(), ..default() },
-            WidgetryWindowControlsConfig { maximize_visible: false, ..default() },
+            agentelier_controls::FILE_DIALOG_WINDOW_CONTROLS,
             WidgetryWindowBackground::Theme,
             Default::default(),
-            bsn_list! { WidgetryWindowTitle WidgetryText Pickable::IGNORE },
+            bsn_list! { @agentelier_controls::padded_window_title() },
             bsn_list! {
                 @WidgetryFileDialog { @mode: WidgetryFileDialogMode::PickDirectory }
                 Name("ProjectDirectoryPicker") Node { width: percent(100), flex_grow: 1.0, min_height: px(0) }
@@ -429,41 +365,21 @@ pub(crate) fn catalog(world: &mut World, result: Result<ProjectCatalog, String>)
             return Ok(());
         }
     };
-    let mut choices = vec![Choice {
-        id: None,
-        name: "单独聊天".into(),
-    }];
-    choices.extend(catalog.projects.iter().map(|view| Choice {
-        id: Some(view.project.id),
-        name: view.project.name.clone(),
-    }));
     let name_changed = {
         let mut state = world.resource_mut::<ProjectState>();
         let previous_name = selected_name(&state);
         state.catalog = catalog;
-        if !choices.iter().any(|choice| choice.id == state.selected) {
+        if !state
+            .catalog
+            .projects
+            .iter()
+            .any(|project| Some(project.project.id) == state.selected)
+        {
             state.selected = None;
             state.confirm_delete = false;
         }
         previous_name != selected_name(&state)
     };
-    let source = source(world);
-    let mut model = world
-        .get_mut::<WidgetryListModel<Choice>>(source)
-        .ok_or_else(|| io::Error::other("项目列表数据源不存在"))?;
-    if model.len() != choices.len()
-        || choices
-            .iter()
-            .enumerate()
-            .any(|(index, choice)| model.get(index) != Some(choice))
-    {
-        model.clear();
-        for choice in &choices {
-            model
-                .push(choice.clone())
-                .map_err(|failure| failure.into_bevy_error())?;
-        }
-    }
     if name_changed {
         sync_name(world)?;
     }
