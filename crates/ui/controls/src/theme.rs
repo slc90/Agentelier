@@ -1,11 +1,16 @@
 use bevy::prelude::Color;
-use bevy_widgetry::theme::{WIDGETRY_LIGHT_THEME, WidgetryButtonStateColors, WidgetryTheme};
+use bevy_widgetry::theme::{
+    WIDGETRY_LIGHT_THEME, WidgetryButtonStateColors, WidgetryTheme, WidgetryWindowButtonStateColors,
+};
 
 const TOOLBAR: Color = Color::srgb_u8(0xF4, 0xFB, 0xF6);
 const NAVIGATION: Color = Color::srgb_u8(0xED, 0xF6, 0xEE);
-const INPUT: Color = Color::srgb_u8(0xF7, 0xFB, 0xF7);
-const HOVER: Color = Color::srgb_u8(0xE4, 0xF0, 0xE8);
-const SELECTED: Color = Color::srgb_u8(0xD8, 0xEB, 0xDF);
+const INPUT: Color = Color::srgba_u8(0xF7, 0xFB, 0xF7, 0x9C);
+const HOVER: Color = Color::srgba_u8(0xE4, 0xF0, 0xE8, 0xAD);
+const SELECTED: Color = Color::srgba_u8(0xD8, 0xEB, 0xDF, 0xB3);
+const TREE_PRESSED: Color = Color::srgba_u8(0xA4, 0xCE, 0xB7, 0xCF);
+const TREE_SELECTED: Color = Color::srgba_u8(0x95, 0xAD, 0x9B, 0xD9);
+const TREE_SURFACE: Color = Color::srgba_u8(0xED, 0xF6, 0xEE, 0x55);
 const BORDER: Color = Color::srgb_u8(0xB8, 0xD2, 0xC3);
 const TEXT: Color = Color::srgb_u8(0x21, 0x3D, 0x32);
 const TITLE: Color = Color::srgb_u8(0x24, 0x48, 0x3A);
@@ -18,9 +23,21 @@ const PRIMARY_PRESS: Color = Color::srgb_u8(0x19, 0x4A, 0x36);
 pub const AGENTELIER_THEME: WidgetryTheme = {
     let mut theme = WIDGETRY_LIGHT_THEME;
     theme.text.normal.foreground = TEXT;
-    theme.button.normal = button(PRIMARY, PRIMARY, PRIMARY_TEXT);
-    theme.button.hovered = button(PRIMARY_HOVER, PRIMARY_HOVER, PRIMARY_TEXT);
-    theme.button.pressed = button(PRIMARY_PRESS, PRIMARY_PRESS, PRIMARY_TEXT);
+    theme.button.normal = button(
+        Color::srgba_u8(0x23, 0x5E, 0x47, 0xDF),
+        PRIMARY,
+        PRIMARY_TEXT,
+    );
+    theme.button.hovered = button(
+        Color::srgba_u8(0x2C, 0x6C, 0x51, 0xED),
+        PRIMARY_HOVER,
+        PRIMARY_TEXT,
+    );
+    theme.button.pressed = button(
+        Color::srgba_u8(0x19, 0x4A, 0x36, 0xF3),
+        PRIMARY_PRESS,
+        PRIMARY_TEXT,
+    );
     theme.button.disabled = button(NAVIGATION, BORDER, MUTED);
 
     theme.window.frame.normal.background = TOOLBAR;
@@ -30,11 +47,20 @@ pub const AGENTELIER_THEME: WidgetryTheme = {
     theme.window.title_bar.normal.background = TOOLBAR;
     theme.window.title_bar.normal.foreground = TITLE;
     theme.window.title_bar.normal.border = BORDER;
-    // Keep the close feedback inside the curved frame at the end of the title bar.
-    theme.window.close.hovered.foreground = theme.window.close.hovered.background;
-    theme.window.close.pressed.foreground = theme.window.close.pressed.background;
-    theme.window.close.hovered.background = Color::NONE;
-    theme.window.close.pressed.background = Color::NONE;
+    let hovered = WidgetryWindowButtonStateColors {
+        background: PRIMARY_HOVER,
+        foreground: PRIMARY_TEXT,
+    };
+    let pressed = WidgetryWindowButtonStateColors {
+        background: PRIMARY_PRESS,
+        foreground: PRIMARY_TEXT,
+    };
+    theme.window.minimize.hovered = hovered;
+    theme.window.minimize.pressed = pressed;
+    theme.window.maximize.hovered = hovered;
+    theme.window.maximize.pressed = pressed;
+    theme.window.close.hovered = hovered;
+    theme.window.close.pressed = pressed;
 
     theme.text_field.editable.normal.background = INPUT;
     theme.text_field.editable.normal.border = BORDER;
@@ -61,10 +87,13 @@ pub const AGENTELIER_THEME: WidgetryTheme = {
     theme.list_view.item.hovered.background = HOVER;
     theme.list_view.item.selected.background = SELECTED;
     theme.list_view.item.selected.foreground = TEXT;
-    theme.tree.container.normal.background = NAVIGATION;
+    theme.tree.container.normal.background = TREE_SURFACE;
     theme.tree.container.focused = theme.tree.container.normal;
     theme.tree.container.focused.border = PRIMARY;
     theme.tree.item = theme.list_view.item;
+    theme.tree.item.pressed.background = TREE_PRESSED;
+    theme.tree.item.selected.background = TREE_SELECTED;
+    theme.tree.item.active_border = PRIMARY;
     theme.combo_box.list.item = theme.list_view.item;
 
     theme.file_dialog.window = theme.window;

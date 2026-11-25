@@ -103,7 +103,7 @@ impl Dialogue {
         let (control, _, _) = ModelControl::new(id);
         let mut creation = Creation::start(id, control, prepared, None, store)?;
         let commit = creation.wait().await;
-        match creation.complete(commit, &mut self.conversation) {
+        match creation.complete(commit, &mut self.conversation).0 {
             ConversationEvent::Created(view) => Ok(view),
             ConversationEvent::Rejected(reason) => Err(ConversationFailure::new(reason)),
             _ => Err(ConversationFailure::new("记忆管理会话未返回创建结果")),
@@ -178,7 +178,14 @@ impl Dialogue {
             Signal::Update(Some(event)) => {
                 let model = self.model.as_ref().ok_or(RuntimeFailure::ModelState)?;
                 model.check_instance(&self.conversation)?;
-                model_task::progress(&mut self.conversation, model.id, event, &client, &relay)
+                model_task::progress(
+                    &mut self.conversation,
+                    model.id,
+                    event,
+                    &client,
+                    &relay,
+                    None,
+                )
             }
             Signal::Update(None) => {
                 self.incoming = None;

@@ -15,6 +15,8 @@ use bevy_widgetry::scroll_area::WidgetryScrollArea;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{AutoSize, WidgetryTextField, WidgetryTextFieldHeadless};
 
+const MEMORY_MESSAGE_SURFACE: Color = Color::srgb_u8(0xF6, 0xFB, 0xF7);
+
 #[derive(Resource, Default)]
 struct State {
     session: Option<ChatSession>,
@@ -180,7 +182,13 @@ fn refresh(world: &mut World) -> Result {
     let status = state.status.clone();
     if render {
         let session = state.session.clone();
-        conversation::reconcile_list(world, list, session.as_ref(), None)?;
+        conversation::reconcile_list(
+            world,
+            list,
+            session.as_ref(),
+            conversation::TranscriptPresentation::Memory,
+            MEMORY_MESSAGE_SURFACE,
+        )?;
         world.resource_mut::<State>().rows_changed = false;
     }
     if let Ok(mut text) = world

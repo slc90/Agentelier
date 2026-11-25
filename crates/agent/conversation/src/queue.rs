@@ -32,7 +32,7 @@ impl SessionCommand {
             Self::Enqueue { id, .. } | Self::Remove { id, .. } | Self::Resume { id, .. } => *id,
         }
     }
-    fn session(&self) -> SessionId {
+    pub fn session(&self) -> SessionId {
         match self {
             Self::Enqueue { session, .. }
             | Self::Remove { session, .. }

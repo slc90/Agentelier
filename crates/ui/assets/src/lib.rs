@@ -42,6 +42,8 @@ impl NavigationIcon {
 pub enum SidebarIcon {
     Add,
     More,
+    ProjectFolder,
+    OpenProjectFolder,
     SessionError,
 }
 
@@ -50,6 +52,8 @@ impl SidebarIcon {
         let path = match self {
             Self::Add => embedded_path!("assets/sidebar/add.svg"),
             Self::More => embedded_path!("assets/sidebar/more.svg"),
+            Self::ProjectFolder => embedded_path!("assets/sidebar/project-folder.svg"),
+            Self::OpenProjectFolder => embedded_path!("assets/sidebar/project-folder-open.svg"),
             Self::SessionError => embedded_path!("assets/sidebar/session-error.svg"),
         };
         AssetPath::from_path_buf(path).with_source("embedded")
@@ -73,6 +77,8 @@ impl Plugin for AppAssetPlugin {
         embedded_asset!(app, "assets/navigation/memory.svg");
         embedded_asset!(app, "assets/sidebar/add.svg");
         embedded_asset!(app, "assets/sidebar/more.svg");
+        embedded_asset!(app, "assets/sidebar/project-folder.svg");
+        embedded_asset!(app, "assets/sidebar/project-folder-open.svg");
         embedded_asset!(app, "assets/sidebar/session-error.svg");
         embedded_asset!(app, "assets/shaders/window_alpha.wesl");
         let server = app.world().resource::<AssetServer>();

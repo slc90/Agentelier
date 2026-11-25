@@ -1,6 +1,6 @@
 # Multi-Agent v2：从单个执行任务扩展为协作 Agent 树
 
-Agentelier 当前的用户交互仍然以一个会话和一个前台用户任务为中心。Multi-Agent v2 在这个入口内部增加一组由 Root Agent 管理的独立 Agent：Root 决定是否拆分任务、创建子 Agent、分配工作、交换信息、等待结果并完成汇总。普通用户仍然只与 Root Agent 交互，不需要手动选择子 Agent，也不需要理解内部协作工具。
+Agentelier 的每个会话可独立推进一轮用户任务。多个会话可同时运行。Multi-Agent v2 在各会话内提供一组由本会话 Root Agent 管理的独立 Agent。Root 决定是否拆分任务、创建子 Agent、分配工作、交换信息、等待结果并完成汇总。用户在聊天区与当前会话的 Root Agent 交互。
 
 这不是把多个模型请求并行发出去那么简单。每个子 Agent 都有自己的身份、会话历史、执行状态和生命周期；它们又必须共享同一个用户会话的资源预算、权限边界、消息协调和最终关闭过程。因此设计把身份与运行时分开：Agent Tree 表示谁是谁、从哪里派生；Runtime 管理它是否正在运行以及实际资源；Conversation 保存业务状态；Session Store 记录可恢复的事实。
 

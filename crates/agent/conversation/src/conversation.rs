@@ -118,6 +118,10 @@ pub enum ConversationRequest {
         session: SessionId,
     },
     Create(SessionCreate),
+    CreateAndSend {
+        create: SessionCreate,
+        input: String,
+    },
     Reset {
         session: SessionId,
     },
@@ -279,6 +283,7 @@ pub enum ConversationEvent {
     GlobalTasks(crate::GlobalTasks),
     TaskNotification(crate::TaskNotification),
     Created(SessionView),
+    CreatedForSend(SessionView),
     WorkingDirectorySaved(SessionView),
     SessionModelSaved {
         session: SessionId,
@@ -323,6 +328,20 @@ pub(crate) struct ChatSession {
 pub struct PreparedSession {
     session: ChatSession,
     pub initial: crate::InitialSession,
+}
+
+impl PreparedSession {
+    pub fn check_first_input(&self, input: &str) -> Result<(), ConversationFailure> {
+        if input.trim().is_empty() {
+            return Err(ConversationFailure::new("不能发送空白消息"));
+        }
+        let history = self
+            .session
+            .history
+            .as_ref()
+            .ok_or_else(|| ConversationFailure::new("新会话缺少历史"))?;
+        self.session.check_pending_input(history, input, None)
+    }
 }
 
 #[derive(Default)]
@@ -1021,6 +1040,7 @@ impl Conversation {
                 Ok(current.view.clone())
             }
             ConversationRequest::Create(_)
+            | ConversationRequest::CreateAndSend { .. }
             | ConversationRequest::Reset { .. }
             | ConversationRequest::SetWorkingDirectory { .. }
             | ConversationRequest::Delete { .. }

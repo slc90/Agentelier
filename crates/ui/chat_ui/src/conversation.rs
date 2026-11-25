@@ -1,25 +1,24 @@
 use crate::active_input::{ChatSteer, ChatSteerState, PendingDraft};
 use crate::preparation::ModelState;
+use crate::{ArchiveState, projects::ProjectState};
 use agentelier_agent_host::{
-    AgentHost, ConversationEvent as HostConversationEvent, HostActivity, HostFailed,
-    ReceiveAgentEvents,
+    AgentHost, ConversationEvent as HostConversationEvent, HostFailed, ReceiveAgentEvents,
 };
 use agentelier_controls::{
     AgentelierAvatar, AgentelierButton, AgentelierButtonLoading, AgentelierButtonStyle,
     AvatarSource,
 };
-use agentelier_conversation_bridge::SessionId;
 use agentelier_conversation_bridge::{
     ConversationEvent, ConversationRequest, SessionCreate, SessionView, TurnStatus,
 };
+use agentelier_conversation_bridge::{ProjectId, SessionId, SessionLocation};
 use agentelier_login_ui::AccountState;
 use agentelier_markdown::{MarkdownSource, MarkdownView};
-use agentelier_prompts::InstructionSnapshot;
 use bevy::camera::RenderTarget;
 use bevy::ecs::message::MessageCursor;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
-use bevy::input_focus::{InputFocus, InputFocusSystems};
+use bevy::input_focus::{FocusCause, InputFocus, InputFocusSystems};
 use bevy::prelude::*;
 use bevy::text::{EditableTextSystems, Justify, LineBreak};
 use bevy::ui::{ComputedUiTargetCamera, InteractionDisabled, UiSystems};
@@ -35,13 +34,13 @@ use std::io;
 use std::sync::Arc;
 use tracing::{error, info};
 
-const MESSAGE_SURFACE: Color = Color::srgb_u8(0xF6, 0xFB, 0xF7);
-const COMPOSER_SURFACE: Color = Color::srgb_u8(0xF7, 0xFB, 0xF7);
+const MESSAGE_GAP: f32 = 4.0;
 const CONTENT_GAP: f32 = 12.0;
 const CONTENT_PADDING: f32 = 8.0;
 const BUTTON_HEIGHT: f32 = 40.0;
 const COMPOSER_MIN_ROWS: usize = 2;
 const COMPOSER_MAX_ROWS: usize = 6;
+const REPLY_SPINNER_SIZE: f32 = 16.0;
 
 #[derive(Clone, Reflect)]
 pub struct ChatMessage {
@@ -78,22 +77,11 @@ pub struct ChatTool {
     pub output_index: usize,
     pub call_id: String,
     pub name: String,
-    pub source: Option<String>,
     pub arguments: String,
     pub arguments_truncated: bool,
     pub status: String,
     pub output: Option<String>,
-    pub image: Option<ChatToolImage>,
     pub retained: bool,
-}
-
-#[derive(Clone, Reflect, PartialEq)]
-pub struct ChatToolImage {
-    pub digest: String,
-    pub width: u32,
-    pub height: u32,
-    pub mime: String,
-    pub exportable: bool,
 }
 #[derive(Clone, Reflect)]
 pub struct ChatProcessCleanup {
@@ -190,11 +178,10 @@ impl ChatSession {
     }
 }
 
-#[derive(Clone, Reflect)]
-pub struct ChatReplacement {
-    project: Option<agentelier_conversation_bridge::ProjectId>,
-    #[reflect(ignore)]
-    instructions: Arc<InstructionSnapshot>,
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Reflect)]
+pub(crate) enum NewChatTarget {
+    Project(ProjectId),
+    Standalone,
 }
 
 #[derive(Clone)]
@@ -215,45 +202,39 @@ pub struct ChatState {
     pub inspection_sources_expanded: bool,
     pub project_rules_expanded: bool,
     pub session: Option<ChatSession>,
+    new_chat: Option<NewChatTarget>,
     pub task_revision: Option<u64>,
     pub operation: Option<u64>,
-    pub model_change: Option<(u64, SessionId)>,
-    pub model_error: Option<String>,
     pub cancelling: bool,
-    pub replacement: Option<ChatReplacement>,
     pub draft: String,
     pub error: Option<String>,
-    pub expanded_tools: Vec<String>,
     pub draft_revision: u64,
     pub(crate) pending_inputs: Vec<PendingDraft>,
+    pub(crate) queue_controls: Vec<u64>,
     pub input_feedback: Option<String>,
 }
 
 impl ChatState {
-    fn can_send(
-        &self,
-        model: &ModelState,
-        account: &AccountState,
-        activity: &HostActivity,
-    ) -> bool {
+    pub(crate) fn draft_target(&self) -> Option<NewChatTarget> {
+        self.new_chat
+    }
+
+    fn can_send(&self, model: &ModelState, account: &AccountState) -> bool {
         self.operation.is_none()
-            && self.model_change.is_none()
-            && self.replacement.is_none()
-            && !activity.model_busy
             && model.can_request(account)
             && !self.draft.trim().is_empty()
-            && self.session.as_ref().is_some_and(|session| {
-                !session.execution_blocked
-                    && session.matches_account(account)
-                    && session
-                        .turn
-                        .as_ref()
-                        .is_none_or(|turn| !matches!(turn.status, ChatTurnStatus::Running))
-            })
+            && (self.new_chat.is_some() && model.can_create_session(account)
+                || self.session.as_ref().is_some_and(|session| {
+                    !session.execution_blocked
+                        && session.matches_account(account)
+                        && session
+                            .turn
+                            .as_ref()
+                            .is_none_or(|turn| !matches!(turn.status, ChatTurnStatus::Running))
+                }))
     }
     fn can_steer(&self, account: &AccountState) -> bool {
         !self.cancelling
-            && self.replacement.is_none()
             && !account.runtime_failed
             && account.model_unavailable_reason().is_none()
             && !self.draft.trim().is_empty()
@@ -284,16 +265,15 @@ struct MessageList;
 #[derive(Component, Clone, Default)]
 struct MessageLabel;
 #[derive(Component, Clone, Default)]
+struct ReplyWaiting;
+#[derive(Component, Clone, Default)]
 struct ComposerFeedback;
 #[derive(Component, Clone, Default)]
-struct ReplacementPrompt;
+struct SessionStatus;
 #[derive(Component, Clone, Copy)]
 enum ChatAction {
-    Create,
-    CreateStandalone,
+    NewChat(NewChatTarget),
     Stop,
-    ConfirmReplacement,
-    KeepSession,
 }
 #[derive(Component, Clone, PartialEq, Eq, Hash)]
 struct ChatRow {
@@ -307,7 +287,6 @@ struct ChatRow {
 pub(crate) fn install(app: &mut App) {
     crate::project_context::install(app);
     crate::request_inspection::install(app);
-    crate::tool_timeline::install(app);
     crate::audio_attachment::install(app);
     crate::transcription::install(app);
     crate::queue::install(app);
@@ -334,31 +313,28 @@ pub(crate) fn install(app: &mut App) {
                 .after(EditableTextSystems)
                 .before(UiSystems::PostLayout),
         )
-        .add_systems(PostUpdate, update.before(UiSystems::Content));
+        .add_systems(
+            PostUpdate,
+            (update, update_session_status).before(UiSystems::Content),
+        );
 }
 
-pub(crate) fn panel(state: &ChatState, model_source: Entity) -> impl Scene {
+pub(crate) fn panel(state: &ChatState) -> impl Scene {
     let draft = state.draft.clone();
     bsn! {
         Name("ChatPanel")
-        Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP) }
+        Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column }
         Children [
             @crate::queue::panel()--
             @conversation_view()--
-            Node { column_gap: px(CONTENT_GAP), flex_shrink: 0.0, display: Display::None } ReplacementPrompt
-            Children [
-                Text("确认后创建空白会话；原会话的记录、待办和草稿保留。") WidgetryText--
-                @button("确认新建", "ConfirmChatReplacement", ChatAction::ConfirmReplacement)--
-                @button("保留当前会话", "KeepChatSession", ChatAction::KeepSession)
-            ]--
-            @chat_composer(draft, model_source)
+            @chat_composer(draft)
         ]
     }
 }
 
-fn chat_composer(draft: String, model_source: Entity) -> impl Scene {
+fn chat_composer(draft: String) -> impl Scene {
     bsn! {
-        Name("ChatComposerPanel") BackgroundColor(COMPOSER_SURFACE)
+        Name("ChatComposerPanel")
         Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP), flex_shrink: 0.0, padding: UiRect::all(px(CONTENT_PADDING)) }
         Children [
             Text::default() WidgetryText ComposerFeedback Name("ChatComposerFeedback")
@@ -371,12 +347,14 @@ fn chat_composer(draft: String, model_source: Entity) -> impl Scene {
                 @auto_size: {Some(AutoSize { min_rows: COMPOSER_MIN_ROWS, max_rows: COMPOSER_MAX_ROWS })},
             }
             Composer Name("ChatComposer") Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }--
-            Node { column_gap: px(CONTENT_GAP), row_gap: px(CONTENT_GAP), align_items: AlignItems::Center, flex_wrap: FlexWrap::Wrap }
+            Name("ChatComposerFooter")
+            Node { display: Display::None, column_gap: px(CONTENT_GAP), align_items: AlignItems::Center }
             Children [
-                @crate::preparation::session_model_selector(model_source)--
-                @button("停止", "StopChatGeneration", ChatAction::Stop)
-                Node { display: Display::None }--
-                @crate::preparation::connection_entry()
+                Text::default() WidgetryText SessionStatus Name("ChatSessionStatus") Pickable::IGNORE
+                TextLayout::linebreak(LineBreak::AnyCharacter)
+                Node { flex_grow: 1.0, min_width: px(0) }--
+                @stop_button()
+                Node { display: Display::None }
             ]
         ]
     }
@@ -387,7 +365,7 @@ fn conversation_view() -> impl Scene {
         @WidgetryScrollArea {
             @children: {Some(Box::new(bsn_list! {
                 MessageList Name("ChatMessages")
-                Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP) }
+                Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(MESSAGE_GAP) }
             }) as Box<dyn SceneList>)}
         }
         Name("ConversationView") crate::reading::ChatReadingScroll
@@ -395,33 +373,53 @@ fn conversation_view() -> impl Scene {
     }
 }
 
-pub(crate) fn project_button() -> impl Scene {
-    button(
-        "在项目中新建会话",
-        "CreateProjectSession",
-        ChatAction::Create,
-    )
-}
-
-pub(crate) fn standalone_button() -> impl Scene {
+pub(crate) fn new_chat_button(target: NewChatTarget) -> impl Scene {
+    let name = match target {
+        NewChatTarget::Project(project) => format!("CreateProjectSession-{project}"),
+        NewChatTarget::Standalone => "CreateStandaloneSession".into(),
+    };
     bsn! {
         @crate::archives::reveal_button(SidebarIcon::Add)
-        Name("CreateStandaloneSession") template(|_| Ok(ChatAction::CreateStandalone))
+        Name(name) template(move |_| Ok(ChatAction::NewChat(target)))
         on(activate) on(crate::archives::block_row_click)
     }
 }
 
-#[derive(Default)]
-struct SessionUiState {
-    selected_request: Option<(u64, u32)>,
-    inspection_sources_expanded: bool,
-    project_rules_expanded: bool,
-    draft: String,
-    revision: u64,
-    expanded_tools: Vec<String>,
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum ChatTarget {
+    Session(SessionId),
+    Draft(NewChatTarget),
 }
+
 #[derive(Resource, Default)]
-struct SessionUiStates(std::collections::HashMap<SessionId, SessionUiState>);
+pub(super) struct SessionUiStates(HashMap<ChatTarget, ChatState>);
+
+impl SessionUiStates {
+    pub(super) fn session(&self, id: SessionId) -> Option<&ChatState> {
+        self.0.get(&ChatTarget::Session(id))
+    }
+}
+
+impl ChatState {
+    fn target(&self) -> Option<ChatTarget> {
+        self.session
+            .as_ref()
+            .map(|session| ChatTarget::Session(session.id))
+            .or_else(|| self.new_chat.map(ChatTarget::Draft))
+    }
+
+    fn owns_operation(&self, id: u64) -> bool {
+        self.operation == Some(id)
+            || self.queue_controls.contains(&id)
+            || self.pending_inputs.iter().any(|input| input.id == id)
+    }
+
+    fn clear_saved_draft(&mut self, received: PendingDraft) {
+        if self.draft_revision == received.revision && self.draft == received.text {
+            self.draft.clear();
+        }
+    }
+}
 
 fn switch_view(world: &mut World, view: SessionView) -> Result {
     let next = project(view)?;
@@ -431,52 +429,42 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
         .as_ref()
         .map(|session| session.id);
     if previous != Some(next.id) {
-        let saved = {
-            let mut state = world.resource_mut::<ChatState>();
-            let saved = SessionUiState {
-                selected_request: state.selected_request.take(),
-                inspection_sources_expanded: std::mem::take(&mut state.inspection_sources_expanded),
-                project_rules_expanded: std::mem::take(&mut state.project_rules_expanded),
-                draft: std::mem::take(&mut state.draft),
-                revision: state.draft_revision,
-                expanded_tools: std::mem::take(&mut state.expanded_tools),
-            };
-            state.pending_inputs.clear();
-            state.input_feedback = None;
-            state.model_error = None;
-            state.task_revision = None;
-            saved
-        };
-        let restored = {
-            let mut states = world.resource_mut::<SessionUiStates>();
-            if let Some(previous) = previous {
-                states.0.insert(previous, saved);
-            }
-            states.0.remove(&next.id).unwrap_or_default()
-        };
-        let roots = world
-            .query_filtered::<Entity, With<Composer>>()
-            .iter(world)
-            .collect::<Vec<_>>();
-        for root in roots {
-            WidgetryTextFieldHeadless::set_text_in_world(world, root, &restored.draft)
-                .map_err(|failure| failure.into_bevy_error())?;
-        }
-        let mut state = world.resource_mut::<ChatState>();
-        state.draft = restored.draft;
-        state.draft_revision = restored.revision;
-        state.expanded_tools = restored.expanded_tools;
-        state.project_rules_expanded = restored.project_rules_expanded;
-        state.selected_request = restored.selected_request;
-        state.inspection_sources_expanded = restored.inspection_sources_expanded;
-        crate::reading::switch(world, previous, next.id);
+        switch_draft(world, ChatTarget::Session(next.id))?;
+        crate::reading::switch(world, previous, Some(next.id));
     }
-    world.resource_mut::<ChatState>().session = Some(next);
+    let mut state = world.resource_mut::<ChatState>();
+    state.new_chat = None;
+    state.session = Some(next);
+    Ok(())
+}
+
+fn switch_draft(world: &mut World, target: ChatTarget) -> Result {
+    let mut previous = std::mem::take(&mut *world.resource_mut::<ChatState>());
+    if let Some(clear) = world.resource_mut::<InputIntents>().clear_accepted.take() {
+        previous.clear_saved_draft(clear);
+    }
+    let restored = {
+        let mut states = world.resource_mut::<SessionUiStates>();
+        if let Some(previous_target) = previous.target() {
+            states.0.insert(previous_target, previous);
+        }
+        states.0.remove(&target).unwrap_or_default()
+    };
+    let mut roots = world.query_filtered::<Entity, With<Composer>>();
+    let roots: Vec<_> = roots.iter(world).collect();
+    for root in roots {
+        WidgetryTextFieldHeadless::set_text_in_world(world, root, &restored.draft)
+            .map_err(|failure| failure.into_bevy_error())?;
+    }
+    *world.resource_mut::<ChatState>() = restored;
     Ok(())
 }
 
 fn forget_session(world: &mut World, session: SessionId) -> Result {
-    world.resource_mut::<SessionUiStates>().0.remove(&session);
+    world
+        .resource_mut::<SessionUiStates>()
+        .0
+        .remove(&ChatTarget::Session(session));
     let current = world
         .resource::<ChatState>()
         .session
@@ -497,159 +485,57 @@ fn forget_session(world: &mut World, session: SessionId) -> Result {
     Ok(())
 }
 
-fn button(label: &'static str, name: &'static str, action: ChatAction) -> impl Scene {
-    let style = match action {
-        ChatAction::Create | ChatAction::CreateStandalone | ChatAction::ConfirmReplacement => {
-            AgentelierButtonStyle::Primary
-        }
-        ChatAction::Stop => AgentelierButtonStyle::Danger,
-        ChatAction::KeepSession => AgentelierButtonStyle::Secondary,
-    };
-    let children: Box<dyn SceneList> = Box::new(bsn_list! {Text(label) WidgetryText});
+fn stop_button() -> impl Scene {
     bsn! {
-        @AgentelierButton { @style: style, @children: {Some(children)} }
-        Name(name) template(move |_| Ok(action))
+        @AgentelierButton { @style: AgentelierButtonStyle::Danger, @children: bsn_list! { Text("停止") WidgetryText } }
+        Name("StopChatGeneration") template(|_| Ok(ChatAction::Stop))
         Node { min_width: px(128), height: px(BUTTON_HEIGHT), align_self: AlignSelf::Start, flex_shrink: 0.0 }
         on(activate)
     }
 }
 
 fn activate(event: On<Activate>, actions: Query<&ChatAction>, mut commands: Commands) -> Result {
-    match actions.get(event.entity)? {
-        ChatAction::Create => commands.queue(create_session),
-        ChatAction::CreateStandalone => commands.queue(|world: &mut World| -> Result {
-            crate::projects::select_project(world, None)?;
-            create_session(world)
-        }),
-        ChatAction::Stop => commands.queue(stop),
-        ChatAction::ConfirmReplacement => commands.queue(confirm_replacement),
-        ChatAction::KeepSession => commands.queue(|world: &mut World| {
-            world.resource_mut::<ChatState>().replacement = None;
-        }),
-    }
-    Ok(())
-}
-
-pub(crate) fn choose_session_model(world: &mut World, slug: String) -> Result {
-    let state = world.resource::<ChatState>();
-    let account = world.resource::<AccountState>();
-    let Some(current) = state.session.as_ref().filter(|session| {
-        session.slug != slug && !session.execution_blocked && session.matches_account(account)
-    }) else {
-        return Ok(());
-    };
-    if state.model_change.is_some() || state.replacement.is_some() || account.runtime_failed {
-        return Ok(());
-    }
-    let session = current.id;
-    let result = world
-        .resource::<AgentHost>()
-        .change_session_model(session, slug);
-    let mut state = world.resource_mut::<ChatState>();
-    match result {
-        Ok(operation) => {
-            state.model_change = Some((operation, session));
-            state.model_error = None;
+    match *actions.get(event.entity)? {
+        ChatAction::NewChat(target) => {
+            commands.queue(move |world: &mut World| open_draft(world, target));
         }
-        Err(failure) => state.model_error = Some(failure.to_string()),
+        ChatAction::Stop => commands.queue(stop),
     }
     Ok(())
 }
 
-fn create_session(world: &mut World) -> Result {
+fn open_draft(world: &mut World, target: NewChatTarget) -> Result {
+    let state = world.resource::<ChatState>();
     if world.resource::<crate::ArchiveState>().loading {
         return Ok(());
     }
-    let state = world.resource::<ChatState>();
-    let model = world.resource::<ModelState>();
-    let account = world.resource::<AccountState>();
-    if state.operation.is_some()
-        || state.replacement.is_some()
-        || !model.can_create_session(account)
-        || world.resource::<AgentHost>().model_busy()?
+    if let NewChatTarget::Project(id) = target
+        && crate::projects::project(crate::projects::library(world), id).is_none()
     {
         return Ok(());
     }
-    let instructions = Arc::new(crate::prompts::snapshot(world)?);
-    let project = crate::projects::selected_project(world).map(|project| project.id);
-    if state.session.is_some() {
-        world.resource_mut::<ChatState>().replacement = Some(ChatReplacement {
-            instructions,
-            project,
-        });
-        return Ok(());
-    }
-    let SessionModelDefaults { slug, effort } = (world.resource::<SessionDefaultsSource>().0)()?;
-    let result = world
-        .resource::<AgentHost>()
-        .request_conversation(ConversationRequest::Create(SessionCreate {
-            slug,
-            effort,
-            instructions,
-            location: world
-                .resource::<crate::working_directory::DirectoryState>()
-                .location(),
-        }));
-    let mut state = world.resource_mut::<ChatState>();
-    match result {
-        Ok(id) => {
-            state.operation = Some(id);
-            state.error = None;
-            info!(operation_id = id, "开始创建聊天会话");
-            crate::working_directory::submitted(world);
-        }
-        Err(failure) => {
-            error!(error = %failure, "无法创建聊天会话");
-            state.error = Some(failure.to_string());
-        }
-    }
-    Ok(())
-}
-
-fn confirm_replacement(world: &mut World) -> Result {
-    let state = world.resource::<ChatState>();
-    if state.operation.is_some() || world.resource::<AgentHost>().model_busy()? {
-        return Ok(());
-    }
-    let Some(pending) = state.replacement.clone() else {
-        return Ok(());
-    };
-    let account = world.resource::<AccountState>();
-    if !world.resource::<ModelState>().can_request(account) {
-        return Ok(());
-    }
-    let ChatReplacement {
-        instructions,
-        project,
-    } = pending;
-    if project != crate::projects::selected_project(world).map(|project| project.id) {
+    if state.new_chat != Some(target) {
+        let previous = state.session.as_ref().map(|session| session.id);
+        switch_draft(world, ChatTarget::Draft(target))?;
+        crate::reading::switch(world, previous, None);
         let mut state = world.resource_mut::<ChatState>();
-        state.replacement = None;
-        state.error = Some("目标项目已变化，请重新发起创建".into());
-        return Ok(());
+        state.session = None;
+        state.new_chat = Some(target);
+        state.error = None;
+        let mut archives = world.resource_mut::<crate::ArchiveState>();
+        archives.selected = None;
+        archives.error = None;
+        crate::archives::sync_selection(world)?;
+        reconcile(world)?;
     }
-    let SessionModelDefaults { slug, effort } = (world.resource::<SessionDefaultsSource>().0)()?;
-    let request = ConversationRequest::Create(SessionCreate {
-        slug,
-        effort,
-        instructions,
-        location: world
-            .resource::<crate::working_directory::DirectoryState>()
-            .location(),
-    });
-    let result = world.resource::<AgentHost>().request_conversation(request);
-    let mut state = world.resource_mut::<ChatState>();
-    match result {
-        Ok(id) => {
-            state.operation = Some(id);
-            state.error = None;
-            crate::working_directory::submitted(world);
-        }
-        Err(failure) => {
-            error!(error=%failure, "替换聊天会话失败");
-            state.error = Some(failure.to_string());
-        }
-    }
+    let root = world
+        .query_filtered::<Entity, With<Composer>>()
+        .single(world)?;
+    let editor = WidgetryTextFieldHeadless::editor_entity(world, root)
+        .map_err(|failure| failure.into_bevy_error())?;
+    world
+        .resource_mut::<InputFocus>()
+        .set(editor, FocusCause::Navigated);
     Ok(())
 }
 
@@ -692,7 +578,8 @@ fn stop(world: &mut World) -> Result {
 }
 
 pub(crate) fn append_mcp_draft(world: &mut World, material: &str) -> Result {
-    if world.resource::<ChatState>().session.is_none() {
+    let state = world.resource::<ChatState>();
+    if state.session.is_none() && state.new_chat.is_none() {
         return Err(io::Error::other("请先打开聊天会话").into());
     }
     let root = world
@@ -738,34 +625,58 @@ fn send(world: &mut World) -> Result {
     if !state.can_send(
         world.resource::<ModelState>(),
         world.resource::<AccountState>(),
-        world.resource::<HostActivity>(),
-    ) || world.resource::<AgentHost>().model_busy()?
-    {
+    ) {
         return Ok(());
     }
-    let session = state
-        .session
-        .as_ref()
-        .ok_or_else(|| io::Error::other("发送消息缺少聊天会话"))?;
-    let audio = session.audio_draft.as_ref().map(|audio| audio.id);
-    let transcript = world
-        .resource::<crate::transcription::TranscriptionState>()
-        .selection(session);
-    let session = session.id;
     let input = state.draft.clone();
     let submitted = PendingDraft {
         id: 0,
         text: input.clone(),
         revision: state.draft_revision,
     };
-    let result = world
-        .resource::<AgentHost>()
-        .request_conversation(ConversationRequest::Send {
-            session,
+    let starting_chat = state.new_chat.is_some();
+    let request = if let Some(target) = state.new_chat {
+        let SessionModelDefaults { slug, effort } =
+            (world.resource::<SessionDefaultsSource>().0)()?;
+        let instructions = Arc::new(crate::prompts::snapshot(world)?);
+        let location = match target {
+            NewChatTarget::Project(project) => SessionLocation::InProject {
+                project,
+                directory_override: None,
+            },
+            NewChatTarget::Standalone => match std::env::current_dir() {
+                Ok(directory) => SessionLocation::Standalone(directory),
+                Err(failure) => {
+                    world.resource_mut::<ChatState>().error =
+                        Some(format!("无法读取启动工作目录：{failure}"));
+                    return Ok(());
+                }
+            },
+        };
+        ConversationRequest::CreateAndSend {
+            create: SessionCreate {
+                slug,
+                effort,
+                instructions,
+                location,
+            },
             input,
-            audio,
-            transcript,
-        });
+        }
+    } else {
+        let session = state
+            .session
+            .as_ref()
+            .ok_or_else(|| io::Error::other("发送消息缺少聊天会话"))?;
+        ConversationRequest::Send {
+            session: session.id,
+            input,
+            audio: session.audio_draft.as_ref().map(|audio| audio.id),
+            transcript: world
+                .resource::<crate::transcription::TranscriptionState>()
+                .selection(session),
+        }
+    };
+    let result = world.resource::<AgentHost>().request_conversation(request);
     let mut state = world.resource_mut::<ChatState>();
     match result {
         Ok(id) => {
@@ -773,7 +684,7 @@ fn send(world: &mut World) -> Result {
             state.pending_inputs.push(PendingDraft { id, ..submitted });
             state.input_feedback = None;
             state.error = None;
-            info!(operation_id = id, session_id = %session, "开始提交聊天消息");
+            info!(operation_id = id, starting_chat, "开始提交聊天消息");
         }
         Err(failure) => {
             error!(error = %failure, "无法提交聊天消息");
@@ -1010,18 +921,10 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
                 output_index: tool.output_index,
                 call_id: tool.call_id,
                 name: tool.name,
-                source: tool.source,
                 arguments: tool.arguments,
                 arguments_truncated: tool.arguments_truncated,
                 status: tool.status,
                 output: tool.output,
-                image: tool.image.map(|image| ChatToolImage {
-                    digest: image.digest,
-                    width: image.width,
-                    height: image.height,
-                    mime: image.mime,
-                    exportable: image.exportable,
-                }),
                 retained: tool.retained,
             })
             .collect(),
@@ -1166,37 +1069,6 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             crate::transcription::receipt(world, event.operation_id, session, result);
             continue;
         }
-        if let ConversationEvent::IdleUpdated(view) = event.kind {
-            let state = world.resource::<ChatState>();
-            if state.operation.is_none()
-                && state
-                    .session
-                    .as_ref()
-                    .is_some_and(|session| session.id == view.id)
-            {
-                world.resource_mut::<ChatState>().session = Some(project(view)?);
-                changed = true;
-            }
-            continue;
-        }
-        if let ConversationEvent::Tasks(update) = event.kind {
-            let mut state = world.resource_mut::<ChatState>();
-            if state
-                .session
-                .as_ref()
-                .is_some_and(|session| session.id == update.session)
-                && state
-                    .task_revision
-                    .is_none_or(|revision| update.revision >= revision)
-            {
-                state.task_revision = Some(update.revision);
-                if let Some(session) = &mut state.session {
-                    session.queue_paused = update.queue_paused;
-                }
-                crate::queue::reconcile(world)?;
-            }
-            continue;
-        }
         if let ConversationEvent::ArchiveCleanup(errors) = event.kind {
             world.resource_mut::<crate::ArchiveState>().cleanup_errors = errors;
             continue;
@@ -1237,164 +1109,100 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             crate::projects::saved(world, event.operation_id, result);
             continue;
         }
-        if let ConversationEvent::SessionModelSaved { session, result } = event.kind {
-            let mut state = world.resource_mut::<ChatState>();
-            if state.model_change == Some((event.operation_id, session)) {
-                state.model_change = None;
-                if state
-                    .session
-                    .as_ref()
-                    .is_some_and(|view| view.id == session)
-                {
-                    match result {
-                        Ok(view) => {
-                            state.session = Some(project(view)?);
-                            state.model_error = None;
-                        }
-                        Err(failure) => state.model_error = Some(failure),
-                    }
-                }
-            }
-            continue;
-        }
         if let ConversationEvent::Opened(view) = event.kind {
             let id = view.id;
-            let different = world
-                .resource::<ChatState>()
-                .session
-                .as_ref()
-                .is_none_or(|session| session.id != id);
-            let opening = world.resource::<crate::ArchiveState>().opening;
+            let opening = world.resource::<ArchiveState>().opening;
+            let target = ChatTarget::Session(id);
+            let current = world.resource::<ChatState>().target();
+            if event.operation_id == 0 && current.is_some() {
+                changed |= with_target(world, target, |state| {
+                    if state.operation.is_none() {
+                        state.session = Some(project(view)?);
+                    }
+                    Ok(None)
+                })?;
+                continue;
+            }
             if event.operation_id != 0 && opening != Some((event.operation_id, id)) {
                 continue;
             }
-            if event.operation_id == 0
-                && !different
-                && world.resource::<ChatState>().operation.is_some()
-            {
-                continue;
-            }
-            if event.operation_id == 0
-                && different
-                && world.resource::<ChatState>().session.is_some()
-            {
-                continue;
-            }
             switch_view(world, view)?;
-            if event.operation_id != 0 {
-                let mut state = world.resource_mut::<ChatState>();
-                state.task_revision = None;
-                state.operation = None;
-                state.replacement = None;
-                state.error = None;
-                world.resource_mut::<crate::ArchiveState>().opening = None;
-            }
-            let waiting = world.resource::<ChatState>().operation.is_some();
-            {
-                let mut state = world.resource_mut::<crate::ArchiveState>();
-                state.selected = Some(id);
-                // Account rebinding must not dismiss a failed open of another session.
-                if different || event.operation_id != 0 {
-                    state.error = None;
-                }
-                if !waiting {
-                    state.loading = false;
-                }
-            }
-            let project = crate::projects::library(world).membership.get(&id).copied();
-            crate::projects::select_project(world, project)?;
+            let mut archives = world.resource_mut::<ArchiveState>();
+            archives.selected = Some(id);
+            archives.opening = None;
+            archives.error = None;
+            archives.loading = false;
             crate::archives::reveal_selection(world)?;
             changed = true;
             continue;
         }
-        if let ConversationEvent::ArchiveFailed(reason) = event.kind {
-            let matching = world.resource::<ChatState>().operation == Some(event.operation_id);
-            if event.operation_id != 0 && !matching {
-                continue;
-            }
-            if matching {
-                world.resource_mut::<crate::ArchiveState>().opening = None;
-            }
-            if matching {
-                world.resource_mut::<ChatState>().operation = None;
-            }
-            let waiting = world.resource::<ChatState>().operation.is_some();
+        let opening = world.resource::<ArchiveState>().opening;
+        let archive_error = match &event.kind {
+            ConversationEvent::ArchiveFailed(reason)
+                if event.operation_id == 0
+                    || opening.is_some_and(|(id, _)| id == event.operation_id) =>
             {
-                let mut state = world.resource_mut::<crate::ArchiveState>();
-                state.error = Some(reason);
-                state.refreshing = false;
-                if !waiting {
-                    state.loading = false;
-                }
+                Some(reason)
             }
+            ConversationEvent::Rejected(reason)
+                if opening.is_some_and(|(id, _)| id == event.operation_id) =>
+            {
+                Some(reason)
+            }
+            _ => None,
+        };
+        if let Some(reason) = archive_error {
+            let mut archives = world.resource_mut::<ArchiveState>();
+            archives.opening = None;
+            archives.loading = false;
+            archives.error = Some(reason.clone());
             crate::archives::sync_selection(world)?;
-            changed = true;
             continue;
         }
-        if let ConversationEvent::Queue(reply) = event.kind {
-            let clear = crate::queue::receive(&mut world.resource_mut::<ChatState>(), reply);
-            if clear.is_some() {
-                world.resource_mut::<InputIntents>().clear_accepted = clear;
+        let operation_target = || {
+            let current = world.resource::<ChatState>();
+            if current.owns_operation(event.operation_id) {
+                current.target()
+            } else {
+                world
+                    .resource::<SessionUiStates>()
+                    .0
+                    .iter()
+                    .find_map(|(&target, state)| {
+                        state.owns_operation(event.operation_id).then_some(target)
+                    })
             }
-            changed = true;
-            continue;
-        }
-        if let ConversationEvent::Started(view) = event.kind {
-            if world
-                .resource::<ChatState>()
-                .session
+        };
+        let target = match &event.kind {
+            ConversationEvent::IdleUpdated(view) | ConversationEvent::Started(view) => {
+                Some(ChatTarget::Session(view.id))
+            }
+            ConversationEvent::Tasks(update) => Some(ChatTarget::Session(update.session)),
+            ConversationEvent::Queue(reply) => reply
+                .view
                 .as_ref()
-                .is_none_or(|session| session.id != view.id)
-            {
-                continue;
-            }
-            let mut state = world.resource_mut::<ChatState>();
-            state.session = Some(project(view)?);
-            state.operation = Some(event.operation_id);
-            state.cancelling = false;
-            state.error = None;
-            state.input_feedback = None;
-            info!(operation_id = event.operation_id, "排队消息已开始执行");
-            changed = true;
+                .map(|view| ChatTarget::Session(view.id))
+                .or_else(operation_target),
+            _ => operation_target(),
+        };
+        let Some(target) = target else {
             continue;
-        }
-        if let ConversationEvent::Rejected(reason) = &event.kind
-            && world.resource::<ChatState>().operation != Some(event.operation_id)
-            && world
-                .resource::<ChatState>()
-                .pending_inputs
-                .iter()
-                .any(|input| input.id == event.operation_id)
-        {
-            let mut state = world.resource_mut::<ChatState>();
-            state
-                .pending_inputs
-                .retain(|input| input.id != event.operation_id);
-            state.input_feedback = Some(format!("发送未接纳：{reason}；草稿保留"));
-            changed = true;
-            continue;
-        }
-        if let ConversationEvent::InputReceipt(receipt) = event.kind {
-            let clear =
-                crate::active_input::receipt(&mut world.resource_mut::<ChatState>(), receipt);
-            if clear.is_some() {
-                world.resource_mut::<InputIntents>().clear_accepted = clear;
-            }
-            changed = true;
-            continue;
-        }
-        if world.resource::<ChatState>().operation != Some(event.operation_id) {
-            continue;
-        }
-        changed = true;
+        };
         let terminal = event.kind.is_terminal();
-        let created = matches!(&event.kind, ConversationEvent::Created(_));
+        let created = match &event.kind {
+            ConversationEvent::Created(view) | ConversationEvent::CreatedForSend(view) => {
+                Some(view.id)
+            }
+            _ => None,
+        };
         match &event.kind {
-            ConversationEvent::Created(view) => info!(
-                operation_id = event.operation_id,
-                session_id = %view.id,
-                "聊天会话已创建"
-            ),
+            ConversationEvent::Created(view) | ConversationEvent::CreatedForSend(view) => {
+                info!(
+                    operation_id = event.operation_id,
+                    session_id = %view.id,
+                    "聊天会话已创建"
+                )
+            }
             ConversationEvent::Accepted(view) => info!(
                 operation_id = event.operation_id,
                 session_id = %view.id,
@@ -1460,73 +1268,86 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             | ConversationEvent::MetadataSaved { .. }
             | ConversationEvent::Started(_) => {}
         }
-        match event.kind {
-            ConversationEvent::Rejected(reason) => {
-                let mut state = world.resource_mut::<ChatState>();
-                state
-                    .pending_inputs
-                    .retain(|input| input.id != event.operation_id);
-                state.error = Some(reason);
-            }
-            ConversationEvent::Created(view) => {
-                let selected = view.id;
-                switch_view(world, view)?;
-                world.resource_mut::<ChatState>().replacement = None;
-                let mut archives = world.resource_mut::<crate::ArchiveState>();
-                archives.selected = Some(selected);
-                archives.loading = false;
-            }
-            ConversationEvent::Updated(view)
-            | ConversationEvent::Finished(view)
-            | ConversationEvent::WorkingDirectorySaved(view) => {
-                world.resource_mut::<ChatState>().session = Some(project(view)?);
-            }
-            ConversationEvent::Accepted(view) => {
-                let clear = {
-                    let mut state = world.resource_mut::<ChatState>();
+        let visible = with_target(world, target, |state| {
+            let id = event.operation_id;
+            let clear = match event.kind {
+                ConversationEvent::IdleUpdated(view) => {
+                    if state.operation.is_none() {
+                        state.session = Some(project(view)?);
+                    }
+                    None
+                }
+                ConversationEvent::Tasks(update) => {
+                    if state
+                        .task_revision
+                        .is_none_or(|revision| update.revision >= revision)
+                        && let Some(session) = &mut state.session
+                    {
+                        state.task_revision = Some(update.revision);
+                        session.queue_paused = update.queue_paused;
+                    }
+                    None
+                }
+                ConversationEvent::Queue(reply) => {
+                    state.queue_controls.retain(|operation| *operation != id);
+                    crate::queue::receive(state, reply)
+                }
+                ConversationEvent::Started(view) => {
+                    state.session = Some(project(view)?);
+                    state.operation = Some(id);
+                    state.cancelling = false;
+                    state.error = None;
+                    state.input_feedback = None;
+                    info!(operation_id = id, "排队消息已开始执行");
+                    None
+                }
+                ConversationEvent::InputReceipt(receipt) => {
+                    crate::active_input::receipt(state, receipt)
+                }
+                ConversationEvent::Rejected(reason) => {
+                    state.pending_inputs.retain(|input| input.id != id);
+                    if state.operation == Some(id) {
+                        state.error = Some(reason);
+                    } else {
+                        state.input_feedback = Some(format!("发送未接纳：{reason}；草稿保留"));
+                    }
+                    None
+                }
+                ConversationEvent::Created(view) | ConversationEvent::CreatedForSend(view) => {
+                    state.session = Some(project(view)?);
+                    state.new_chat = None;
+                    state.task_revision = None;
+                    None
+                }
+                ConversationEvent::Accepted(view) => {
+                    state.session = Some(project(view)?);
                     state
                         .pending_inputs
                         .iter()
-                        .position(|input| input.id == event.operation_id)
+                        .position(|input| input.id == id)
                         .map(|index| state.pending_inputs.remove(index))
-                };
-                world.resource_mut::<InputIntents>().clear_accepted = clear;
-                world.resource_mut::<ChatState>().session = Some(project(view)?);
-            }
-            ConversationEvent::Tasks(_)
-            | ConversationEvent::GlobalTasks(_)
-            | ConversationEvent::TaskNotification(_)
-            | ConversationEvent::AudioDraft { .. }
-            | ConversationEvent::AudioTranscription { .. }
-            | ConversationEvent::IdleUpdated(_)
-            | ConversationEvent::Processes(_)
-            | ConversationEvent::TaskAction(_)
-            | ConversationEvent::InputReceipt(_)
-            | ConversationEvent::Archives(_)
-            | ConversationEvent::Projects(_)
-            | ConversationEvent::ProjectSaved(_)
-            | ConversationEvent::SessionModelSaved { .. }
-            | ConversationEvent::Opened(_)
-            | ConversationEvent::ArchiveFailed(_)
-            | ConversationEvent::Queue(_)
-            | ConversationEvent::ArchiveCleanup(_)
-            | ConversationEvent::Deleted { .. }
-            | ConversationEvent::MetadataSaved { .. }
-            | ConversationEvent::Started(_) => {}
-        }
-        if terminal {
-            crate::working_directory::completed(world, created)?;
-            world.resource_mut::<ChatState>().cancelling = false;
-            world.resource_mut::<ChatState>().operation = None;
-            world.resource_mut::<crate::ArchiveState>().loading = false;
-            world.resource_mut::<crate::ArchiveState>().opening = None;
-            match world.resource::<AgentHost>().refresh_archives() {
-                Ok(()) => world.resource_mut::<crate::ArchiveState>().refreshing = true,
-                Err(failure) => {
-                    world.resource_mut::<crate::ArchiveState>().error = Some(failure.to_string())
                 }
+                ConversationEvent::Updated(view)
+                | ConversationEvent::Finished(view)
+                | ConversationEvent::WorkingDirectorySaved(view) => {
+                    state.session = Some(project(view)?);
+                    None
+                }
+                _ => None,
+            };
+            if terminal && state.operation == Some(id) {
+                state.cancelling = false;
+                state.operation = None;
             }
+            Ok(clear)
+        })?;
+        if visible && let Some(session) = created {
+            world.resource_mut::<ArchiveState>().selected = Some(session);
         }
+        if terminal || created.is_some() {
+            refresh_archives(world);
+        }
+        changed |= visible;
     }
     if let Some(reason) = failures
         .read(world.resource::<Messages<HostFailed>>())
@@ -1539,14 +1360,22 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         world
             .resource_mut::<crate::transcription::TranscriptionState>()
             .host_failed(&reason);
-        world.resource_mut::<crate::ArchiveState>().loading = false;
-        world.resource_mut::<crate::ArchiveState>().refreshing = false;
+        let mut archives = world.resource_mut::<ArchiveState>();
+        archives.loading = false;
+        archives.opening = None;
+        for state in world.resource_mut::<SessionUiStates>().0.values_mut() {
+            state.operation = None;
+            state.pending_inputs.clear();
+            state.queue_controls.clear();
+            state.cancelling = false;
+            state.error = Some(reason.clone());
+        }
         crate::session_actions::failed(world, &reason);
         crate::projects::failed(world, &reason);
         let mut state = world.resource_mut::<ChatState>();
         state.operation = None;
-        state.model_change = None;
         state.pending_inputs.clear();
+        state.queue_controls.clear();
         state.cancelling = false;
         state.error = Some(reason);
         changed = true;
@@ -1557,16 +1386,68 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
     Ok(())
 }
 
+fn with_target(
+    world: &mut World,
+    target: ChatTarget,
+    update: impl FnOnce(&mut ChatState) -> Result<Option<PendingDraft>>,
+) -> Result<bool> {
+    if world.resource::<ChatState>().target() == Some(target) {
+        let clear = update(&mut world.resource_mut::<ChatState>())?;
+        if let Some(clear) = clear {
+            world.resource_mut::<InputIntents>().clear_accepted = Some(clear);
+        }
+        return Ok(true);
+    }
+    let mut states = world.resource_mut::<SessionUiStates>();
+    if let Some(mut state) = states.0.remove(&target) {
+        let result = update(&mut state);
+        if let Ok(Some(clear)) = &result {
+            state.clear_saved_draft(clear.clone());
+        }
+        states.0.insert(state.target().unwrap_or(target), state);
+        result?;
+    }
+    Ok(false)
+}
+
 fn mount_messages(_event: On<Add<MessageList>>, mut commands: Commands) {
     commands.queue(reconcile);
+}
+
+fn refresh_archives(world: &mut World) {
+    if let Err(failure) = world.resource::<AgentHost>().refresh_archives() {
+        world.resource_mut::<crate::ArchiveState>().error = Some(failure.to_string());
+    }
 }
 
 enum RowContent {
     Plain(String),
     User(String),
-    Assistant { label: String, source: String },
-    Tool(ChatTool),
+    Assistant {
+        label: Option<String>,
+        source: Option<String>,
+    },
     Audio(crate::audio_attachment::ChatAudio),
+}
+
+pub(super) enum TranscriptPresentation {
+    Chat { operation: Option<u64> },
+    Memory,
+}
+
+fn final_reply(turn: &ChatTurn, message: &ChatMessage) -> bool {
+    match message.phase.as_deref() {
+        Some("final_answer") => true,
+        Some(_) => false,
+        None => {
+            matches!(turn.status, ChatTurnStatus::Completed)
+                && message.request_index == turn.request_index
+                && !turn
+                    .tools
+                    .iter()
+                    .any(|tool| tool.request_index == message.request_index)
+        }
+    }
 }
 
 fn reconcile(world: &mut World) -> Result {
@@ -1579,7 +1460,10 @@ fn reconcile(world: &mut World) -> Result {
             world,
             list,
             state.session.as_ref(),
-            Some(&state.expanded_tools),
+            TranscriptPresentation::Chat {
+                operation: state.operation,
+            },
+            Color::NONE,
         )?;
     }
     Ok(())
@@ -1589,7 +1473,8 @@ pub(super) fn reconcile_list(
     world: &mut World,
     list: Entity,
     session: Option<&ChatSession>,
-    expanded_tools: Option<&[String]>,
+    presentation: TranscriptPresentation,
+    message_surface: Color,
 ) -> Result {
     let mut rows = world.query::<(Entity, &ChatRow, &ChildOf)>();
     let mut existing: HashMap<_, _> = rows
@@ -1598,6 +1483,7 @@ pub(super) fn reconcile_list(
         .map(|(entity, row, _)| (row.clone(), entity))
         .collect();
     let mut desired: Vec<(ChatRow, RowContent)> = Vec::new();
+    let memory = matches!(presentation, TranscriptPresentation::Memory);
     if let Some(session) = session {
         let mut inputs = HashSet::new();
         for turn in session.previous_turns.iter().chain(session.turn.iter()) {
@@ -1628,7 +1514,10 @@ pub(super) fn reconcile_list(
                     ));
                 }
             }
-            if turn.messages.is_empty() && turn.tools.iter().all(|tool| tool.collaboration) {
+            if memory
+                && turn.messages.is_empty()
+                && turn.tools.iter().all(|tool| tool.collaboration)
+            {
                 desired.push((
                     ChatRow {
                         session: session.id,
@@ -1645,20 +1534,9 @@ pub(super) fn reconcile_list(
                 ));
             }
             let mut output = Vec::new();
-            for message in &turn.messages {
-                let accepted = turn
-                    .requests
-                    .iter()
-                    .find(|fact| fact.request == message.request_index)
-                    .and_then(|fact| fact.response_accepted)
-                    .unwrap_or(message.request_index <= turn.committed_steps);
-                let retained = if accepted {
-                    "已保留"
-                } else if matches!(turn.status, ChatTurnStatus::Running) {
-                    "接收中"
-                } else {
-                    "未纳入后续上下文"
-                };
+            for message in turn.messages.iter().filter(|message| {
+                memory || final_reply(turn, message) && !message.text.trim().is_empty()
+            }) {
                 output.push((
                     ChatRow {
                         session: session.id,
@@ -1668,29 +1546,9 @@ pub(super) fn reconcile_list(
                         item_id: Some(message.id.clone()),
                     },
                     RowContent::Assistant {
-                        label: format!(
-                            "助手 · {} · 请求 {} · {retained}",
-                            message.phase.as_deref().unwrap_or("回答"),
-                            message.request_index
-                        ),
-                        source: message.text.clone(),
+                        label: memory.then(|| memory_message_label(turn, message)),
+                        source: Some(message.text.clone()),
                     },
-                ));
-            }
-            for tool in turn
-                .tools
-                .iter()
-                .filter(|tool| expanded_tools.is_some() && !tool.collaboration)
-            {
-                output.push((
-                    ChatRow {
-                        session: session.id,
-                        turn: turn.id,
-                        request_index: tool.request_index,
-                        output_index: Some(tool.output_index),
-                        item_id: Some(tool.id.clone()),
-                    },
-                    RowContent::Tool(tool.clone()),
                 ));
             }
             for input in &turn.steers {
@@ -1711,6 +1569,32 @@ pub(super) fn reconcile_list(
                 ));
             }
             output.sort_by_key(|(key, _)| (key.request_index, key.output_index));
+            if let TranscriptPresentation::Chat { operation } = presentation {
+                // Use the same row for the waiting indicator and the first visible reply.
+                let reply_key = ChatRow {
+                    session: session.id,
+                    turn: turn.id,
+                    request_index: 0,
+                    output_index: None,
+                    item_id: Some("reply".into()),
+                };
+                if let Some((key, _)) = output
+                    .iter_mut()
+                    .find(|(_, content)| matches!(content, RowContent::Assistant { .. }))
+                {
+                    *key = reply_key;
+                } else if operation == Some(turn.operation_id)
+                    && matches!(turn.status, ChatTurnStatus::Running)
+                {
+                    output.push((
+                        reply_key,
+                        RowContent::Assistant {
+                            label: None,
+                            source: None,
+                        },
+                    ));
+                }
+            }
             desired.extend(output);
         }
     }
@@ -1720,7 +1604,6 @@ pub(super) fn reconcile_list(
             ordered.push(entity);
             match content {
                 RowContent::Audio(_) => {}
-                RowContent::Tool(tool) => crate::tool_timeline::set_tool(world, entity, tool)?,
                 RowContent::Plain(text) => {
                     world
                         .get_mut::<Text>(entity)
@@ -1742,15 +1625,36 @@ pub(super) fn reconcile_list(
                         .set_if_neq(Text(text));
                 }
                 RowContent::Assistant { label, source } => {
+                    let (waiting_display, body_display) = reply_displays(source.is_none());
+                    let source = source.unwrap_or_default();
                     let children = world
                         .get::<Children>(entity)
                         .ok_or_else(|| io::Error::other("助手消息缺少内容区域"))?
                         .to_vec();
                     for child in children {
-                        if let Some(mut markdown) = world.get_mut::<MarkdownSource>(child) {
-                            markdown.set_if_neq(MarkdownSource(source.clone()));
+                        let is_body =
+                            if let Some(mut markdown) = world.get_mut::<MarkdownSource>(child) {
+                                markdown.set_if_neq(MarkdownSource(source.clone()));
+                                true
+                            } else {
+                                false
+                            };
+                        let display = if is_body {
+                            Some(body_display)
+                        } else if world.get::<ReplyWaiting>(child).is_some() {
+                            Some(waiting_display)
+                        } else {
+                            None
+                        };
+                        if let Some(display) = display
+                            && let Some(node) = world.get_mut::<Node>(child)
+                        {
+                            node.map_unchanged(|node| &mut node.display)
+                                .set_if_neq(display);
                         }
-                        if world.get::<MessageLabel>(child).is_some() {
+                        if let Some(label) = &label
+                            && world.get::<MessageLabel>(child).is_some()
+                        {
                             world
                                 .get_mut::<Text>(child)
                                 .ok_or_else(|| io::Error::other("助手消息缺少标题"))?
@@ -1774,28 +1678,31 @@ pub(super) fn reconcile_list(
                         @crate::audio_attachment::card(audio)
                         Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
                     }).id(),
-                    RowContent::Tool(tool) => {
-                        let expanded = expanded_tools.is_some_and(|tools| tools.contains(&name));
-                        let card_key = name.clone();
-                        let session = key.session;
+                    RowContent::Assistant {label,source} => {
+                        let source_controls = label.is_some();
+                        let label = label.map(|label| bsn_list! { Text(label) WidgetryText MessageLabel });
+                        let (waiting_display, body_display) = reply_displays(source.is_none());
+                        let waiting = (!memory && key.item_id.as_deref() == Some("reply")).then(|| bsn_list! {
+                            @crate::spinner::ring(REPLY_SPINNER_SIZE) ReplyWaiting Name("ChatReplyWaiting")
+                            Node { display: waiting_display, margin: UiRect::vertical(px(4)) }
+                        });
+                        let source = source.unwrap_or_default();
                         world.commands().spawn_scene_with_error_handler(bsn! {
-                            @crate::tool_timeline::card(card_key,session,tool,expanded)
-                            Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
-                        }).id()
-                    }
-                    RowContent::Assistant {label,source} => world.commands().spawn_scene_with_error_handler(bsn! {
                         Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
-                        BackgroundColor(MESSAGE_SURFACE)
+                        BackgroundColor(message_surface)
                         Node {width:percent(100),min_width:px(0),flex_shrink:0.0,flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP),padding:UiRect::all(px(CONTENT_PADDING))}
                         Children [
                             @AgentelierAvatar { @source: AvatarSource::Assistant } Name("ChatAssistantAvatar") Node { align_self: AlignSelf::Start }--
-                            Text(label) WidgetryText MessageLabel--
-                            @MarkdownView { @source: source }
+                            {label}--
+                            {waiting}--
+                            @MarkdownView { @source: source, @source_controls: source_controls }
+                            Node { display: body_display }
                         ]
-                    }).id(),
+                        }).id()
+                    }
                     RowContent::User(text) => world.commands().spawn_scene_with_error_handler(bsn! {
                         Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
-                        BackgroundColor(MESSAGE_SURFACE)
+                        BackgroundColor(message_surface)
                         Node {width:percent(100),min_width:px(0),flex_shrink:0.0,flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP),padding:UiRect::all(px(CONTENT_PADDING))}
                         Children [
                             @AgentelierAvatar Name("ChatUserAvatar") Node { align_self: AlignSelf::End }--
@@ -1806,7 +1713,7 @@ pub(super) fn reconcile_list(
                     }).id(),
                     RowContent::Plain(text) => world.commands().spawn_scene_with_error_handler(bsn! {
                         Name(name) ChildOf(list) Text(text) WidgetryText template(move |_| Ok(key.clone()))
-                        BackgroundColor(MESSAGE_SURFACE)
+                        BackgroundColor(message_surface)
                         TextLayout::linebreak(LineBreak::AnyCharacter)
                         Node {width:percent(100),min_width:px(0),flex_shrink:0.0,padding:UiRect::all(px(CONTENT_PADDING))}
                     }).id(),
@@ -1826,15 +1733,118 @@ pub(super) fn reconcile_list(
     Ok(())
 }
 
-fn composer_feedback(state: &ChatState, account: &AccountState) -> String {
+fn reply_displays(waiting: bool) -> (Display, Display) {
+    if waiting {
+        (Display::Flex, Display::None)
+    } else {
+        (Display::None, Display::Flex)
+    }
+}
+
+fn memory_message_label(turn: &ChatTurn, message: &ChatMessage) -> String {
+    let accepted = turn
+        .requests
+        .iter()
+        .find(|fact| fact.request == message.request_index)
+        .and_then(|fact| fact.response_accepted)
+        .unwrap_or(message.request_index <= turn.committed_steps);
+    let retained = if accepted {
+        "已保留"
+    } else if matches!(turn.status, ChatTurnStatus::Running) {
+        "接收中"
+    } else {
+        "未纳入后续上下文"
+    };
+    format!(
+        "助手 · {} · 请求 {} · {retained}",
+        message.phase.as_deref().unwrap_or("回答"),
+        message.request_index
+    )
+}
+
+fn update_session_status(
+    chat: Res<ChatState>,
+    archives: Res<ArchiveState>,
+    projects: Res<ProjectState>,
+    defaults: Res<SessionDefaultsSource>,
+    models: Res<ModelState>,
+    mut labels: Query<(&mut Text, &ChildOf), With<SessionStatus>>,
+    mut nodes: Query<&mut Node>,
+) -> Result {
+    let draft = chat.draft_target();
+    for (mut label, parent) in &mut labels {
+        if draft.is_none()
+            && !chat.is_changed()
+            && !archives.is_changed()
+            && !projects.is_changed()
+            && !label.is_added()
+        {
+            continue;
+        }
+        let status = if let Some(session) = &chat.session {
+            let effort = session.effort.as_deref().unwrap_or("服务默认");
+            let path = projects.session_project(session.id).map_or_else(
+                || session.working_directory.clone(),
+                |project| bevy_widgetry_path_display::display_path(&project.directory),
+            );
+            let mut status = format!("{} {effort} · {path}", session.display_name);
+            if let Some(entry) = archives.entries.iter().find(|entry| entry.id == session.id) {
+                status.push_str(" · ");
+                status.push_str(&entry.title);
+            }
+            status
+        } else if let Some(target) = draft {
+            let SessionModelDefaults { slug, effort } = (defaults.0)()?;
+            let name = models
+                .models
+                .iter()
+                .find(|model| model.slug == slug)
+                .map_or(slug.as_str(), |model| model.display_name.as_str());
+            let mut status = format!("{name} {effort}");
+            let path = match target {
+                NewChatTarget::Project(id) => projects
+                    .project(id)
+                    .map(|project| bevy_widgetry_path_display::display_path(&project.directory)),
+                NewChatTarget::Standalone => Some(bevy_widgetry_path_display::display_path(
+                    &std::env::current_dir()?,
+                )),
+            };
+            if let Some(path) = path {
+                status.push_str(" · ");
+                status.push_str(&path);
+            }
+            status
+        } else {
+            String::new()
+        };
+        let display = if status.is_empty() {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        label.set_if_neq(Text(status));
+        if let Ok(node) = nodes.get_mut(parent.parent()) {
+            node.map_unchanged(|node| &mut node.display)
+                .set_if_neq(display);
+        }
+    }
+    Ok(())
+}
+
+fn composer_feedback(state: &ChatState, model: &ModelState, account: &AccountState) -> String {
     if let Some(error) = &state.error {
         return error.clone();
     }
-    if let Some(error) = &state.model_error {
-        return format!("模型变更未保存：{error}");
-    }
     if let Some(feedback) = &state.input_feedback {
         return feedback.clone();
+    }
+    if state.new_chat.is_some() {
+        if let Some(error) = &model.catalog_error {
+            return format!("无法读取模型目录：{error}");
+        }
+        if state.operation.is_some() {
+            return "正在创建会话…".into();
+        }
     }
     let Some(session) = &state.session else {
         return String::new();
@@ -1860,29 +1870,19 @@ fn update(
     state: Res<ChatState>,
     model: Res<ModelState>,
     account: Res<AccountState>,
-    activity: Res<HostActivity>,
-    mut buttons: Query<(Entity, &ChatAction, &mut Node)>,
+    archives: Res<ArchiveState>,
+    new_buttons: Query<(), Added<ChatAction>>,
+    mut buttons: Query<(Entity, &ChatAction, Has<InteractionDisabled>, &mut Node)>,
     mut feedback: Query<(&mut Text, &mut Node), (With<ComposerFeedback>, Without<ChatAction>)>,
-    mut prompts: Query<
-        &mut Node,
-        (
-            With<ReplacementPrompt>,
-            Without<ChatAction>,
-            Without<ComposerFeedback>,
-        ),
-    >,
     mut commands: Commands,
 ) {
-    if !state.is_changed() && !model.is_changed() && !account.is_changed() && !activity.is_changed()
+    if !state.is_changed()
+        && !model.is_changed()
+        && !account.is_changed()
+        && !archives.is_changed()
+        && new_buttons.is_empty()
     {
         return;
-    }
-    for mut node in &mut prompts {
-        node.display = if state.replacement.is_some() {
-            Display::Flex
-        } else {
-            Display::None
-        };
     }
     let running = state
         .session
@@ -1892,7 +1892,7 @@ fn update(
             state.operation == Some(turn.operation_id)
                 && matches!(turn.status, ChatTurnStatus::Running)
         });
-    for (entity, action, mut node) in &mut buttons {
+    for (entity, action, disabled, mut node) in &mut buttons {
         if matches!(action, ChatAction::Stop) {
             let display = if running {
                 Display::Flex
@@ -1905,24 +1905,16 @@ fn update(
             AgentelierButtonLoading::set(&mut commands, entity, state.cancelling);
         }
         let enabled = match action {
-            ChatAction::Create | ChatAction::CreateStandalone => {
-                state.replacement.is_none()
-                    && state.operation.is_none()
-                    && !activity.model_busy
-                    && model.can_create_session(&account)
-            }
-            ChatAction::ConfirmReplacement | ChatAction::KeepSession => {
-                state.replacement.is_some() && state.operation.is_none() && !activity.model_busy
-            }
+            ChatAction::NewChat(_) => !archives.loading,
             ChatAction::Stop => !state.cancelling && running,
         };
-        if enabled {
-            commands.entity(entity).remove::<InteractionDisabled>();
-        } else {
-            commands.entity(entity).insert(InteractionDisabled);
+        if enabled && disabled {
+            commands.entity(entity).try_remove::<InteractionDisabled>();
+        } else if !enabled && !disabled {
+            commands.entity(entity).try_insert(InteractionDisabled);
         }
     }
-    let message = composer_feedback(&state, &account);
+    let message = composer_feedback(&state, &model, &account);
     let display = if message.is_empty() {
         Display::None
     } else {

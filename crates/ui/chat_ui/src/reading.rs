@@ -53,7 +53,7 @@ struct ReadingStates(
 pub(crate) fn switch(
     world: &mut World,
     previous: Option<agentelier_conversation_bridge::SessionId>,
-    next: agentelier_conversation_bridge::SessionId,
+    next: Option<agentelier_conversation_bridge::SessionId>,
 ) {
     let old = world.resource::<ChatReading>().clone();
     let mut restored = {
@@ -61,7 +61,8 @@ pub(crate) fn switch(
         if let Some(previous) = previous {
             states.0.insert(previous, old);
         }
-        states.0.remove(&next).unwrap_or_default()
+        next.and_then(|next| states.0.remove(&next))
+            .unwrap_or_default()
     };
     restored.viewport = None;
     restored.restore = true;

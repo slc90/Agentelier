@@ -108,6 +108,7 @@ pub(super) fn progress(
     event: RunnerEvent,
     store: &SessionStoreClient,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
+    admitted: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> Result<(), RuntimeFailure> {
     match event {
         RunnerEvent::Inbox(request) => {
@@ -145,6 +146,11 @@ pub(super) fn progress(
                             Err(ConversationFailure::new("会话记录提交身份不一致"))
                         }
                     });
+                if result.is_ok()
+                    && let Some(admitted) = admitted
+                {
+                    let _closed = admitted.send(());
+                }
                 drop(reply.send(result));
             });
             Ok(())
@@ -302,7 +308,7 @@ pub(super) fn drain_progress(
 ) -> Result<(), RuntimeFailure> {
     if let Some(receiver) = incoming {
         while let Ok(event) = receiver.try_recv() {
-            progress(conversation, id, event, store, publish)?;
+            progress(conversation, id, event, store, publish, None)?;
         }
     }
     *incoming = None;
@@ -384,12 +390,12 @@ pub(super) async fn drive_idle(
     tokio::pin!(operation);
     let result = loop {
         tokio::select! { biased;
-            Some(event) = incoming.recv() => progress(conversation, 0, event, store, publish)?,
+            Some(event) = incoming.recv() => progress(conversation, 0, event, store, publish, None)?,
             result = &mut operation => break result,
         }
     };
     while let Ok(event) = incoming.try_recv() {
-        progress(conversation, 0, event, store, publish)?;
+        progress(conversation, 0, event, store, publish, None)?;
     }
     result.map_err(Into::into)
 }
@@ -454,7 +460,7 @@ pub(super) async fn stop_model(
                     Some(receiver) => receiver.recv().await,
                     None => std::future::pending().await,
                 }} => match event {
-                    Some(event) => if let Err(failure) = progress(conversation,task.id,event,&store.client(),publish) {
+                    Some(event) => if let Err(failure) = progress(conversation,task.id,event,&store.client(),publish,None) {
                         tracing::error!(error=%failure,"取消收尾时状态交付失败，继续回收任务");
                         progress_failure=progress_failure.or(Some(failure));
                     },
@@ -556,7 +562,10 @@ pub(super) fn start_queued(
         ecs_access,
     );
     control.bind_root(conversation, &view)?;
-    *shared.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control.clone());
+    shared
+        .lock()
+        .map_err(|_| RuntimeFailure::ModelState)?
+        .insert(id, control.clone());
     emit(
         publish,
         id,

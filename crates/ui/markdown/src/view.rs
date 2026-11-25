@@ -22,13 +22,30 @@ pub struct MarkdownSource(pub String);
 #[derive(SceneComponent, Default, Clone)]
 #[scene(MarkdownProps)]
 pub struct MarkdownView;
-#[derive(Default)]
 pub struct MarkdownProps {
     pub source: String,
+    pub source_controls: bool,
+}
+impl Default for MarkdownProps {
+    fn default() -> Self {
+        Self {
+            source: String::new(),
+            source_controls: true,
+        }
+    }
 }
 impl MarkdownView {
     fn scene(props: MarkdownProps) -> impl Scene {
-        crate::source::scene(props.source)
+        let content: Box<dyn Scene> = if props.source_controls {
+            Box::new(crate::source::scene(props.source))
+        } else {
+            let source = props.source;
+            Box::new(bsn! {
+                MarkdownSource(source) Name("MarkdownView")
+                Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(BLOCK_GAP), flex_shrink: 0.0 }
+            })
+        };
+        bsn! { @{content} }
     }
 }
 pub struct MarkdownPlugin;

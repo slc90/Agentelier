@@ -26,6 +26,10 @@ pub enum ConversationRequest {
         session: SessionId,
     },
     Create(SessionCreate),
+    CreateAndSend {
+        create: SessionCreate,
+        input: String,
+    },
     Reset {
         session: SessionId,
     },
@@ -472,6 +476,7 @@ pub enum ConversationEvent {
     Opened(SessionView),
     ArchiveFailed(String),
     Created(SessionView),
+    CreatedForSend(SessionView),
     WorkingDirectorySaved(SessionView),
     SessionModelSaved {
         session: SessionId,
@@ -528,6 +533,9 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
         }
         ConversationRequest::Create(create) => {
             agentelier_conversation::ConversationRequest::Create(create)
+        }
+        ConversationRequest::CreateAndSend { create, input } => {
+            agentelier_conversation::ConversationRequest::CreateAndSend { create, input }
         }
         ConversationRequest::Reset { session } => {
             agentelier_conversation::ConversationRequest::Reset { session }
@@ -1027,6 +1035,9 @@ pub fn convert(event: agentelier_conversation::ConversationEvent) -> Conversatio
         }
         agentelier_conversation::ConversationEvent::Created(session) => {
             ConversationEvent::Created(view(session))
+        }
+        agentelier_conversation::ConversationEvent::CreatedForSend(session) => {
+            ConversationEvent::CreatedForSend(view(session))
         }
         agentelier_conversation::ConversationEvent::WorkingDirectorySaved(session) => {
             ConversationEvent::WorkingDirectorySaved(view(session))

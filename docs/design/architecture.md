@@ -1,6 +1,6 @@
 # Agentelier 总体架构
 
-Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。Bevy ECS 与 Winit 管理交互和展示，独立线程的 Tokio current-thread Runtime 承载账号与模型执行。当前已实现数据目录启动与设置、Codex 浏览器登录和凭据恢复、模型连接验证、多轮流式聊天、工具执行及运行收尾。
+Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。Bevy ECS 与 Winit 管理交互和展示，独立线程的 Tokio current-thread Runtime 承载账号与模型执行。当前已实现数据目录启动与设置、Codex 浏览器登录和凭据恢复、模型目录加载、多轮流式聊天、工具执行及运行收尾。
 
 ## Workspace 与三个领域
 
@@ -117,7 +117,7 @@ Application 在启动阶段安装 Widgetry Tray。托盘就绪后，关闭主窗
 
 Assets 保存相同图案的 EXE ICO、主窗口与任务栏 PNG，以及托盘 ICO。可执行包通过 Widgetry 的图标构建依赖嵌入 EXE 资源，Application 通过 Widgetry 装配运行时图标和托盘。
 
-C 区使用 Widgetry Tree 同时显示项目与单独聊天。项目定义与会话归属由 Session Store 写入，Conversation 定义命令和目录投影。界面通过 Bridge 取得保存后的目录，并在 Agent 确认打开后切换 D 区。Runtime 保留原会话仍在使用的后台工具资源，并发布跨会话的安全任务快照。[项目组织与归属](modules/session-store.md#项目组织与归属)
+C 区使用一棵 Widgetry Tree 显示项目，末尾的内置「单独聊天」收纳无项目归属的会话。项目定义与会话归属由 Session Store 写入，Conversation 定义命令和目录投影。界面通过 Bridge 取得保存后的目录，并在 Agent 确认打开后切换 D 区。Runtime 保留原会话仍在使用的后台工具资源，并发布跨会话的安全任务快照。[项目组织与归属](modules/session-store.md#项目组织与归属)
 
 Application 启动时隐藏主窗口，在 Widgetry Splash 窗口播放由 Bevy 原生渲染的四幕字形演出，最终呈现与主窗口共用的背景。完成窗口交接后，Login UI 检查保存的目录，或在主窗口前打开独立的 Widgetry 模态目录选择器。辅助 Job 调用 Login 检查目录并建立数据环境，配置由 Application 的 ConfigStore 串行合并并完整替换提交。成功后主窗口挂载工作区，通过共享 AgentHost 发起账号恢复。数据根路径在本次运行中保持固定。启动窗口的时序见[Splash 启动演出与主窗口交接](modules/splash.md)。
 
@@ -153,7 +153,7 @@ Connection 只包装和调用对应业务转换，返回带 operation_id 的 Bri
 
 AgentHost 在建立 Connection 时把 ECS 请求发送端交给 Runtime，再传入各会话的 Rhai 执行者。`ecs_execute` 从阻塞工作线程发送有界请求，由 AgentHost 在 Bevy 主线程处理。`computer_execute` 与它共用会话脚本状态，各自拥有执行上下文。关闭应用时 Bevy 主循环持续运行至 Runtime 回收，随后释放请求接收端。详见[Agent 自主 ECS 访问与动态 UI 构造](mechanisms/agent-ecs-access.md)。
 
-命令队列容量为四，退出控制队列为一，结果队列为三十二。当前只接纳一个在途账号操作、模型操作或聊天操作；活动聊天的补充输入复用该任务，不占第二个任务槽，退出可停止当前操作；保存重试沿用同一操作 ID，全局 SessionStatus 使用保留 ID 0。满队列、通道关闭、通知失败和意外停止形成明确错误。
+命令队列容量为四，退出控制队列为一，结果队列为三十二。账号操作和模型目录请求由共享运行宿主管理。聊天执行按 Session ID 隔离，每个会话最多有一轮生成在途，多个会话可以并行。补充输入、回复和停止以会话与操作身份关联。应用退出时逐会话回收任务。保存重试沿用原操作 ID，全局 SessionStatus 使用保留 ID 0。满队列、通道关闭、通知失败和意外停止形成明确错误。
 
 结果先入队再通过 UI 提供的通知能力唤醒 Winit，ECS 非阻塞消费事件并更新自己的投影。Bridge 不依赖 Winit 或 Bevy 类型，也不把通知信号当作业务数据。
 
@@ -165,19 +165,19 @@ sequenceDiagram
     participant M as LLM Model
     participant A as Account
     participant B as 业务 Bridge
-    UI->>C: 验证模型连接
+    UI->>C: 读取模型目录
     C->>R: 操作 ID 与运行命令
     R->>M: 启动可取消任务
     M->>A: 共享凭据请求
     A-->>M: 已保存的可用凭据
-    M-->>R: 模型回复或实际失败
+    M-->>R: 模型目录或实际失败
     R-->>C: 执行事件
     C->>B: 对应业务转换
     B-->>C: 安全业务结果
     C-->>UI: 入队并唤醒 Winit
 ```
 
-执行是否真正完成以 Runtime/业务所有者的结果为准，如何展示由 Bevy 决定。连接验证在协议完成后一次性显示；聊天输出按输出项和内容段持续更新，并在合法完成后校准。UI 不把“正在取消”当作“已经结束”。
+执行是否真正完成以 Runtime 的结果为准。Bevy 收到目录后将可用条目用于会话初始化和设置。Connection 按操作 ID 合并流式快照，保留各会话的最新进度和可靠终态。UI 按会话更新展示投影，并等待运行回执确认取消完成。
 
 ## 辅助任务与整体生命周期
 
@@ -197,7 +197,7 @@ flowchart LR
 
 所有库使用宿主统一配置的 tracing。日志只包含安全的操作标识、阶段与诊断，不泄露 Token、授权地址或模型正文。开发与 BRP 验证须保护现有登录状态，未经授权不退出、重新授权、重置凭据或更换数据环境。
 
-模型准备区由 chat_ui 构造并持有 UI 投影，通过共享宿主读取目录和验证显式模型。登录主页以 HomeContent 提供内容位置，application 使用 BSN 挂载 ChatUiHost，并提供已保存的新会话默认模型和推理强度。新建请求经 Conversation Bridge 传入所需参数，由 Runtime 使用当前账号的模型目录解析为会话设置。模型目录与验证复用现有模型任务生命周期，结果按业务类型在 LLM Model Bridge 转换；同一授权内的 Token 更新保留目录和准备区，账号失效或身份变化后清除旧目录与选择。
+Chat UI 通过共享宿主自动加载并持有当前账号的模型目录投影。登录主页以 HomeContent 提供内容位置，application 使用 BSN 挂载 ChatUiHost，并提供已保存的新会话默认模型和推理强度。新建请求经 Conversation Bridge 传入所需参数，由 Runtime 使用当前账号的模型目录解析为会话设置。目录结果在 LLM Model Bridge 转换。相同身份的 Token 更新保留目录，账号失效或身份变化后清除旧目录。
 
 ## 内存聊天与流式投影
 
@@ -239,7 +239,7 @@ Connection 创建本次运行共享的 OperationSequence；普通请求与恢复
 
 ## Direct 工具往返
 
-会话创建时固定只读工具目录，请求声明与分发共用它。历史 SIWC 存档保留 developer `additional_tools` 记录供查看。Codex 的新建 `gpt-6-astra` 会话通过 WebSocket 的顶层 `tools` 声明原生异步。Runtime 随会话保存连接，Runner 在响应和工具登记持久确认后推进续接。Codex HTTP 会话使用同步契约。Tools 不依赖模型、账号、Bridge 或 Bevy。内置工具提供会话范围的 PowerShell 进程登记、标准输入、UTF-8 文件补丁、静态 PNG/JPEG 图片结果，以及通过 Rhai 执行的 Windows 桌面操作。Runtime 的会话工具工作者持有对应脚本会话，桌面调用沿用独占许可与工作者回收。编译进程序的提供者可通过 ToolRegistration 配对声明和执行器，恢复时由 Conversation 按工具来源和保存的声明重新绑定。Runner 每任务最多发送 32 次模型请求并接纳 64 次工具调用。完整响应持久确认后，Runtime 按会话许可准入各调用，最多 8 个普通执行；经登记的异步只读可并行，副作用调用按接纳顺序独占。超出单轮预算时整批写入未执行结果后触限。完整响应和逐项工具结果分别确认进入历史。原生会话在发送下一请求前等待同步调用结果，较早 Turn 的异步调用可继续执行。任务查询、有界等待及取消由 Runner 读取会话账本并响应实际保存事件，不占普通工具工作槽。Runtime 接纳会话侧控制，停止全部会暂停新派发并取消本次持有的执行。在途请求保持冻结，晚到结果先保存，并在完整响应接纳或请求结束失败后追加。正常 final 经持久确认并回收前台后释放唯一前台槽。会话保留后台执行与进程，空闲完成只保存并更新会话状态投影。用户发言或明确处理结果才续接。Conversation 在接纳候选响应和用户材料时保护未交付的结果余量，模型层冻结本次请求的开放调用和 Inline 配置。安全压缩按已确认的协议前缀替换窗口，并保留尾部调用与结果关联。失败或停止保留已确认历史，已有响应提交的任务禁用原样重试。调用和正文按任务内请求序号区分，接收中的参数仅用于展示。
+会话创建时固定只读工具目录，请求声明与分发共用它。历史 SIWC 存档保留 developer `additional_tools` 记录供查看。Codex 的新建 `gpt-6-astra` 会话通过 WebSocket 的顶层 `tools` 声明原生异步。Runtime 随会话保存连接，Runner 在响应和工具登记持久确认后推进续接。Codex HTTP 会话使用同步契约。Tools 不依赖模型、账号、Bridge 或 Bevy。内置工具提供会话范围的 PowerShell 进程登记、标准输入、UTF-8 文件补丁、静态 PNG/JPEG 图片结果，以及通过 Rhai 执行的 Windows 桌面操作。Runtime 的会话工具工作者持有对应脚本会话，桌面调用沿用独占许可与工作者回收。编译进程序的提供者可通过 ToolRegistration 配对声明和执行器，恢复时由 Conversation 按工具来源和保存的声明重新绑定。Runner 每任务最多发送 32 次模型请求并接纳 64 次工具调用。完整响应持久确认后，Runtime 按会话许可准入各调用，最多 8 个普通执行；经登记的异步只读可并行，副作用调用按接纳顺序独占。超出单轮预算时整批写入未执行结果后触限。完整响应和逐项工具结果分别确认进入历史。原生会话在发送下一请求前等待同步调用结果，较早 Turn 的异步调用可继续执行。任务查询、有界等待及取消由 Runner 读取会话账本并响应实际保存事件，不占普通工具工作槽。Runtime 接纳会话侧控制，停止全部会暂停新派发并取消本次持有的执行。在途请求保持冻结，晚到结果先保存，并在完整响应接纳或请求结束失败后追加。正常 final 经持久确认和任务回收后释放该会话的执行位置。会话保留后台执行与进程，空闲完成只保存并更新会话状态投影。用户发言或明确处理结果才续接。Conversation 在接纳候选响应和用户材料时保护未交付的结果余量，模型层冻结本次请求的开放调用和 Inline 配置。安全压缩按已确认的协议前缀替换窗口，并保留尾部调用与结果关联。失败或停止保留已确认历史，已有响应提交的任务禁用原样重试。调用和正文按任务内请求序号区分，接收中的参数仅用于展示。
 
 Steer 通过容量 8 的任务输入通道交给 Runner，由 Conversation 裁决接纳、应用和最终关门。Stop 仍走取消令牌。Connection 的容量 32 可靠结果队列承载接纳、应用和任务投影，正文快照可合并。Runtime 收尾期间持续排空事件至真实回收，UI 用草稿修订和输入身份关联回执。
 

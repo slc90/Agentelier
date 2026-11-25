@@ -4,7 +4,7 @@
 
 ```mermaid
 sequenceDiagram
-    participant App as Bevy 应用
+    participant App as 调用方
     participant Bridge as Bridge
     participant Model as Tokio 模型任务
     participant Auth as 串行认证所有者
@@ -30,13 +30,13 @@ sequenceDiagram
 
 Codex OAuth 使用 `chatgpt.com/backend-api/codex/models` 和同域的 `responses`，目录请求携带 `client_version`，Codex 请求携带 `originator: agentelier` 和 `ChatGPT-Account-Id` 工作区头。Responses 和 Codex Images 使用同一 CredentialClient。Codex 目录只显示服务标记为可见、支持文本且可由普通客户端执行的模型，并保留服务顺序。Codex Responses 添加顶层 `instructions` 字段，固定指令仍按原顺序进入 `input`。
 
-用户从当前来源的目录显式选择 slug 后独立验证。认证恢复沿 AuthenticatedRequest 的一次恢复预算执行。恢复要求取得同一主体和工作区的新 Token 版本。HTTP 401 可在输出前触发一次同源凭据恢复。Account 优先交付已有的新版本，否则启动共享续期。Codex Images 在收到成功响应之前应用同一规则。输出项或文本开始后禁止重放，请求原始字节在认证恢复期间保持固定。
+独立验证命令接收调用方提供的模型 slug。认证恢复沿 AuthenticatedRequest 的一次恢复预算执行。恢复要求取得同一主体和工作区的新 Token 版本。HTTP 401 可在输出前触发一次同源凭据恢复。Account 优先交付已有的新版本，否则启动共享续期。Codex Images 在收到成功响应之前应用同一规则。输出项或文本开始后禁止重放，请求原始字节在认证恢复期间保持固定。
 
 SSE 解析器跨 HTTP 块保留当前行和事件数据，支持 LF、CRLF、CR、多行 data 及开头 BOM，空行才派发事件。只以完成对象的 output 数组为正文权威来源，按 message/content 顺序提取 output_text；增量仅用于标记输出已经开始。未完成、失败和显式错误独立传播，EOF 没有完成事件不成功。大小和时间限制见[请求边界](#请求边界)。
 
 ModelFailure 保留分类、可取得的 HTTP 状态、结构化代码、请求标识与诊断文本。LLM Model Bridge (`agentelier_llm_model_bridge`) 将其转成自己的业务类型，应用不依赖 Agent 内部错误。日志记录操作、所选模型、耗时、状态和错误分类，不记录认证头、Token、模型正文或完整原始响应。
 
-`chat_ui::ModelState` 保存目录、当前选择、操作及安全展示结果；BSN 构造模型 ComboBox、按钮、状态区与 WidgetryScrollArea。最终正文在 PostUpdate 的 UiSystems::Content 前更新，切换设置页不取消请求，返回时按当前投影重建。请求使用本次启动时确定的数据目录。
+`chat_ui::ModelState` 保存当前账号的模型目录、操作 ID 和目录加载错误。账号可用后自动请求目录，结果用于创建会话和填充设置中的模型选项。请求使用本次启动时确定的数据目录。
 
 Runtime (`agentelier_agent_runtime`) 负责 ModelControl、Tokio 任务启动、取消及 JoinHandle 回收。会话运行资源持有可复用的连接状态，Responses 传输由 LLM Model 实现。Connection (`agentelier_bridge_connection`) 关联模型操作 ID，调用 LLM Model Bridge 转换结果并封装为 BridgeEventKind::Model。账号状态事件由 Account Bridge 独立转换；模型库依赖 Account、Prompts 和 Tools 的描述类型，不依赖 Login、Runtime 或 Bridge，也不执行工具。
 
@@ -48,9 +48,9 @@ HTTP 连接期限为 15 秒。独立目录与连接验证请求的总期限为 1
 
 ## 显式模型准备
 
-LLM Model 以 ModelRequest::Catalog 读取全部可显示模型，以 Verify 携带明确 slug、名称和可选 effort 执行固定输入验证。ModelResult 分别表达目录及验证回复；Runtime 共用一种可取消模型任务，LLM Model Bridge 转换自己的请求和结果类型，Connection 只分配并关联操作。chat_ui 独立持有目录与选择，login_ui 只依赖共享宿主的活动状态来禁用冲突的账号操作。
+LLM Model 以 ModelRequest::Catalog 读取全部可显示模型，以 Verify 携带明确 slug、名称和可选 effort 执行固定输入验证。ModelResult 分别表达目录及验证回复。Runtime 共用一种可取消模型任务，LLM Model Bridge 转换请求和结果类型，Connection 分配并关联操作。Chat UI 持有目录投影，login_ui 使用共享宿主活动状态禁用冲突的账号操作。
 
-推理能力从目录的 supported_reasoning_levels 和 default_reasoning_level 解析；畸形能力数据或与支持列表不一致的默认值作为协议失败。UI 的 ReasoningSetting 区分 ServiceDefault 与 Effort，选择不进入账号状态。Bridge 逐字段转换可选 effort，LLM Model 只在显式值存在时序列化 reasoning.effort；验证回复带回实际提交设置，UI 不从服务是否成功反推使用了哪个档位。
+推理能力从目录的 supported_reasoning_levels 和 default_reasoning_level 解析。畸形能力数据或与支持列表不一致的默认值作为协议失败。Bridge 逐字段转换可选 effort，LLM Model 在显式值存在时序列化 reasoning.effort。验证回复带回实际提交设置。
 
 聊天 GenerationRequest 额外携带固定的 InstructionSnapshot。生成前核对快照，并通过其统一 `messages()` 映射将基础覆盖及有序补充文本构造成 `developer` 输入消息，再追加 ProtocolHistory 和当前用户输入；基础与补充槽位不对应不同协议优先级。默认空配置保持原有请求行为。指令材料解析与保存归 Prompts，LLM Model 不读提示词文件，不在模型连接验证中自动注入准备区指令。
 

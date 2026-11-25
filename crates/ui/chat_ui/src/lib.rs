@@ -7,7 +7,6 @@ mod audio_attachment;
 pub use archives::{ArchiveChoice, ArchiveState};
 mod conversation;
 mod global_tasks;
-mod image_preview;
 mod mcp;
 mod mcp_materials;
 mod memory;
@@ -18,21 +17,18 @@ mod projects;
 mod prompts;
 mod queue;
 mod reading;
-mod reasoning;
 mod request_inspection;
 mod skills;
+mod spinner;
 mod task_toast;
-mod tool_timeline;
 mod transcription;
-mod working_directory;
 mod workspace;
 
 pub use conversation::{
-    ChatHistoryItem, ChatMessage, ChatReplacement, ChatSession, ChatState, ChatTurn,
-    ChatTurnStatus, SessionModelDefaults,
+    ChatHistoryItem, ChatMessage, ChatSession, ChatState, ChatTurn, ChatTurnStatus,
+    SessionModelDefaults,
 };
-pub use preparation::{ChatUiHost, ModelChoice, ModelPhase, ModelState, install};
-pub use reasoning::ReasoningSetting;
+pub use preparation::{ChatUiHost, ModelChoice, ModelState, install};
 pub use workspace::{MAIN_WINDOW_WIDTH, OpenSettings, workspace_navigation};
 
 mod session_actions;

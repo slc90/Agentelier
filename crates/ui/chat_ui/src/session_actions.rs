@@ -35,7 +35,7 @@ enum ActionView {
 }
 
 #[derive(Component, Clone, Default)]
-pub(crate) struct SessionMenu;
+pub(crate) struct SidebarMenu;
 
 #[derive(Component, Clone, Default)]
 struct RenamePanel;
@@ -78,7 +78,7 @@ pub(crate) fn more(session: SessionId) -> impl Scene {
 fn open_menu(
     event: On<Activate>,
     targets: Query<&RenameTarget>,
-    menus: Query<(Entity, &ChildOf), With<SessionMenu>>,
+    menus: Query<(Entity, &ChildOf), With<SidebarMenu>>,
     state: Res<SessionActions>,
     theme: Res<WidgetryTheme>,
     mut commands: Commands,
@@ -94,10 +94,27 @@ fn open_menu(
             return Ok(());
         }
     }
+    commands.spawn_scene_with_error_handler(bsn! {
+        @sidebar_menu(anchor, &theme, 126.0, bsn_list! {
+            @menu_item("重命名", "RenameSession", session, ActionView::Rename)--
+            @menu_item("归档", "ArchiveSession", session, ActionView::Archive)--
+            @menu_item("删除", "DeleteSession", session, ActionView::Delete)
+        })
+        Name("SessionActionsMenu")
+    });
+    Ok(())
+}
+
+pub(crate) fn sidebar_menu<Items: SceneList>(
+    anchor: Entity,
+    theme: &WidgetryTheme,
+    width: f32,
+    items: Items,
+) -> impl Scene + use<Items> {
     let background = theme.window.frame.normal.background;
     let border = theme.window.frame.normal.border;
-    commands.spawn_scene_with_error_handler(bsn! {
-        SessionMenu Name("SessionActionsMenu") ChildOf(anchor) OverrideClip GlobalZIndex(z_index::POPUP)
+    bsn! {
+        SidebarMenu ChildOf(anchor) OverrideClip GlobalZIndex(z_index::POPUP)
         Popover {
             positions: {vec![
                 PopoverPlacement { side: PopoverSide::Bottom, align: PopoverAlign::End, gap: 4.0 },
@@ -106,15 +123,10 @@ fn open_menu(
             window_margin: 8.0,
         }
         BackgroundColor(background) BorderColor::all(border)
-        Node { position_type: PositionType::Absolute, width: px(126), flex_direction: FlexDirection::Column, row_gap: px(4), padding: UiRect::all(px(4)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)) }
+        Node { position_type: PositionType::Absolute, width: px(width), flex_direction: FlexDirection::Column, row_gap: px(4), padding: UiRect::all(px(4)), border: UiRect::all(px(1)), border_radius: BorderRadius::all(px(6)) }
         on(crate::archives::block_row_click)
-        Children [
-            @menu_item("重命名", "RenameSession", session, ActionView::Rename)--
-            @menu_item("归档", "ArchiveSession", session, ActionView::Archive)--
-            @menu_item("删除", "DeleteSession", session, ActionView::Delete)
-        ]
-    });
-    Ok(())
+        Children [{items}]
+    }
 }
 
 fn menu_item(
@@ -131,7 +143,7 @@ fn menu_item(
 
 fn dismiss_menu(
     mut presses: MessageReader<PointerPress>,
-    menus: Query<(Entity, &ChildOf), With<SessionMenu>>,
+    menus: Query<(Entity, &ChildOf), With<SidebarMenu>>,
     parents: Query<&ChildOf>,
     mut commands: Commands,
 ) {
@@ -173,7 +185,9 @@ pub(crate) fn panel() -> impl Scene {
 fn action(label: &'static str, name: &'static str, action: Action) -> impl Scene {
     let style = match action {
         Action::Save => AgentelierButtonStyle::Primary,
-        Action::Edit(ActionView::Delete) | Action::ConfirmDelete => AgentelierButtonStyle::Danger,
+        Action::Edit(ActionView::Delete) | Action::ConfirmDelete => {
+            AgentelierButtonStyle::FilledDanger
+        }
         Action::Edit(_) | Action::Cancel => AgentelierButtonStyle::Secondary,
     };
     bsn! { @AgentelierButton { @style: style, @children: {Some(Box::new(bsn_list! { Text(label) WidgetryText }) as Box<dyn SceneList>)} } Name(name) template(move |_| Ok(action)) on(activate) }
@@ -181,7 +195,7 @@ fn action(label: &'static str, name: &'static str, action: Action) -> impl Scene
 fn activate(
     event: On<Activate>,
     actions: Query<(&Action, Option<&RenameTarget>)>,
-    menus: Query<Entity, With<SessionMenu>>,
+    menus: Query<Entity, With<SidebarMenu>>,
     mut commands: Commands,
 ) -> Result {
     let (&action, target) = actions.get(event.entity)?;
@@ -341,9 +355,9 @@ fn update(
     }
     for entity in inputs.iter().chain(actions.iter()) {
         if state.pending.is_some() {
-            commands.entity(entity).insert(InteractionDisabled);
+            commands.entity(entity).try_insert(InteractionDisabled);
         } else {
-            commands.entity(entity).remove::<InteractionDisabled>();
+            commands.entity(entity).try_remove::<InteractionDisabled>();
         }
     }
     for mut text in &mut texts {

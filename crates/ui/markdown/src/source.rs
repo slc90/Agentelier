@@ -57,6 +57,9 @@ pub(crate) fn scene(source: String) -> impl Scene {
 }
 
 pub(crate) fn sync(world: &mut World, root: Entity, source: &str) -> Result<Option<Entity>> {
+    if world.get::<SourceMode>(root).is_none() {
+        return Ok(Some(root));
+    }
     let Some(children) = world.get::<Children>(root) else {
         return Ok(None);
     };

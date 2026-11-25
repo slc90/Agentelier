@@ -220,7 +220,7 @@ impl Execution {
                         }
                     }
                     Some(event) => {
-                        if let Err(failure) = model_task::progress(&mut conversation, operation, event, &store, &internal_only) {
+                        if let Err(failure) = model_task::progress(&mut conversation, operation, event, &store, &internal_only, None) {
                             first_failure.get_or_insert(failure);
                             task.control.cancel.cancel();
                         }

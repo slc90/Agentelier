@@ -16,6 +16,7 @@ struct Cursor {
     length: u64,
     summary: SessionSummary,
     titled: bool,
+    renamed: bool,
     poisoned: bool,
     kind: agentelier_conversation::SessionKind,
 }
@@ -59,6 +60,7 @@ pub(super) fn summarize(
         length: 0,
         summary: initial.summary(sequence),
         titled: false,
+        renamed: false,
         poisoned: false,
         kind: initial.settings.kind,
     };
@@ -83,6 +85,7 @@ fn load_cursor(directory: &Path, session: SessionId) -> io::Result<Cursor> {
         length: parsed.file_length,
         summary: parsed.summary,
         titled: titled || parsed.manual_title.is_some(),
+        renamed: parsed.manual_title.is_some(),
         poisoned: false,
         kind: initial.settings.kind,
     })
@@ -143,6 +146,31 @@ impl Writer {
         })
     }
 
+    pub(super) fn save_generated_title(
+        &mut self,
+        root: &Path,
+        session: SessionId,
+        title: &str,
+    ) -> io::Result<Option<Commit>> {
+        let directory = crate::attachments::session_directory(root, session)?;
+        let cursor = self.cursor(&directory, session)?;
+        if !cursor.titled || cursor.renamed || cursor.summary.deleted || !cursor.kind.is_user() {
+            return Ok(None);
+        }
+        let title = agentelier_conversation::session_title(title).map_err(io::Error::other)?;
+        self.append_kind(root, session, RecordKind::Renamed { session, title })
+            .map(Some)
+    }
+
+    fn cursor(&mut self, directory: &Path, session: SessionId) -> io::Result<&mut Cursor> {
+        if let std::collections::hash_map::Entry::Vacant(entry) = self.0.entry(session) {
+            entry.insert(load_cursor(directory, session)?);
+        }
+        self.0
+            .get_mut(&session)
+            .ok_or_else(|| io::Error::other("会话写入位置未初始化"))
+    }
+
     fn append_kind(
         &mut self,
         root: &Path,
@@ -150,13 +178,7 @@ impl Writer {
         kind: RecordKind,
     ) -> io::Result<Commit> {
         let directory = crate::attachments::session_directory(root, session)?;
-        if let std::collections::hash_map::Entry::Vacant(entry) = self.0.entry(session) {
-            entry.insert(load_cursor(&directory, session)?);
-        }
-        let cursor = self
-            .0
-            .get_mut(&session)
-            .ok_or_else(|| io::Error::other("会话写入位置未初始化"))?;
+        let cursor = self.cursor(&directory, session)?;
         if !cursor.kind.is_user()
             && matches!(
                 kind,
@@ -216,6 +238,7 @@ impl Writer {
             RecordKind::Renamed { title, .. } => {
                 cursor.summary.title = title;
                 cursor.titled = true;
+                cursor.renamed = true;
             }
             RecordKind::Archived { .. } => cursor.summary.archived = true,
             RecordKind::Deleted { .. } => cursor.summary.deleted = true,

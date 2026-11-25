@@ -11,6 +11,10 @@ pub(super) struct Deleting {
     reply: oneshot::Receiver<io::Result<DeleteCommit>>,
 }
 impl Deleting {
+    pub(super) fn session(&self) -> SessionId {
+        self.session
+    }
+
     pub(super) fn start(
         id: u64,
         control: ModelControl,

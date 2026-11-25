@@ -79,7 +79,10 @@ fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands
             },
         };
         match world.resource::<AgentHost>().request_session(request) {
-            Ok(id) => tracing::info!(operation_id = id, "队列控制已提交"),
+            Ok(id) => {
+                world.resource_mut::<ChatState>().queue_controls.push(id);
+                tracing::info!(operation_id = id, "队列控制已提交");
+            }
             Err(failure) => {
                 world.resource_mut::<ChatState>().input_feedback =
                     Some(format!("队列控制未提交：{failure}"))

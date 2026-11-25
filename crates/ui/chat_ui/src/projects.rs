@@ -1,3 +1,4 @@
+use crate::session_actions::{SidebarMenu, sidebar_menu};
 use agentelier_agent_host::AgentHost;
 use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
 use agentelier_conversation_bridge::{
@@ -15,66 +16,49 @@ use bevy_widgetry::file_dialog::{
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{WidgetryTextField, WidgetryTextFieldHeadless};
+use bevy_widgetry::theme::WidgetryTheme;
 use bevy_widgetry::window::{
     WidgetryWindowBackground, owned_widgetry_window, widgetry_window_target,
 };
-use std::{io, path::PathBuf};
-
-const GAP: f32 = 8.0;
+use std::io;
 
 #[derive(Reflect)]
 struct Save {
-    operation: u64,
-    creates_project: bool,
+    id: u64,
+    menu: Option<Entity>,
 }
 
 #[derive(Resource, Default, Reflect)]
 #[reflect(Resource)]
-struct ProjectState {
+pub(crate) struct ProjectState {
     #[reflect(ignore)]
     catalog: ProjectCatalog,
-    selected: Option<ProjectId>,
     pending: Option<Save>,
-    #[reflect(ignore)]
-    create_directory: Option<PathBuf>,
-    confirm_delete: bool,
     error: Option<String>,
 }
 
 #[derive(Component, Clone, Default)]
 struct ProjectPickerWindow;
-#[derive(Component, Clone, Copy)]
-enum DirectoryAction {
-    Create,
-    Set(ProjectId),
-}
-#[derive(Component, Clone, Default)]
-struct ProjectEditor;
-#[derive(Component, Clone, Default)]
-struct ProjectConfirmation;
-#[derive(Component, Clone, Default)]
-struct ProjectName;
-#[derive(Component, Clone, Default)]
-struct ProjectPath;
 #[derive(Component, Clone, Default)]
 struct ProjectStatus;
 #[derive(Component, Clone, Default)]
-struct ProjectCreation;
-#[derive(Component, Clone, Default)]
-struct NewProjectName;
-#[derive(Component, Clone, Default)]
-struct NewProjectPath;
+struct ProjectName;
+#[derive(Component, Clone, Copy)]
+struct ProjectTarget(ProjectId);
 
 #[derive(Component, Clone, Copy)]
 enum Action {
-    Create,
-    SaveNew,
-    CancelNew,
     Rename,
-    SetDirectory,
-    AskDelete,
-    CancelDelete,
     Delete,
+    SaveName,
+    ConfirmDelete,
+    Cancel,
+}
+
+enum Menu {
+    Actions,
+    Rename(String),
+    ConfirmDelete,
 }
 
 pub(crate) fn install(app: &mut App) {
@@ -84,18 +68,27 @@ pub(crate) fn install(app: &mut App) {
         .add_systems(PostUpdate, update.before(UiSystems::Content));
 }
 
-pub(crate) fn selected_project(world: &World) -> Option<&Project> {
-    let state = world.resource::<ProjectState>();
-    state
-        .catalog
+pub(crate) fn project(catalog: &ProjectCatalog, id: ProjectId) -> Option<&Project> {
+    catalog
         .projects
         .iter()
-        .find(|view| Some(view.project.id) == state.selected)
+        .find(|view| view.project.id == id)
         .map(|view| &view.project)
 }
 
 pub(crate) fn library(world: &World) -> &ProjectCatalog {
     &world.resource::<ProjectState>().catalog
+}
+
+impl ProjectState {
+    pub(crate) fn project(&self, id: ProjectId) -> Option<&Project> {
+        project(&self.catalog, id)
+    }
+
+    pub(crate) fn session_project(&self, session: SessionId) -> Option<&Project> {
+        let id = self.catalog.membership.get(&session)?;
+        self.project(*id)
+    }
 }
 
 pub(crate) fn forget_session(world: &mut World, session: SessionId) {
@@ -106,66 +99,101 @@ pub(crate) fn forget_session(world: &mut World, session: SessionId) {
         .remove(&session);
 }
 
-pub(crate) fn panel(world: &World) -> impl Scene + use<> {
-    let name = selected_name(world.resource::<ProjectState>());
+pub(crate) fn status() -> impl Scene {
     bsn! {
-        Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(GAP), flex_shrink: 0.0 }
-        Children [
-            ProjectCreation Name("ProjectCreation")
-            Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(GAP), display: Display::None }
-            Children [
-                NewProjectPath Text::default() WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter)--
-                @WidgetryTextField { @value: {String::new()}, @hint_text: {Some("项目名称".into())} }
-                NewProjectName Name("NewProjectNameInput") Node { width: percent(100), flex_shrink: 0.0 }--
-                Node { column_gap: px(GAP), flex_wrap: FlexWrap::Wrap }
-                Children [
-                    @button("创建项目", "SaveNewProject", Action::SaveNew)--
-                    @button("取消", "CancelNewProject", Action::CancelNew)
-                ]
-            ]--
-            ProjectEditor Name("ProjectEditor")
-            Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(GAP), display: Display::None }
-            Children [
-                @crate::conversation::project_button()--
-                ProjectPath Name("ProjectDirectory") Text::default() WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter)--
-                @WidgetryTextField { @value: name, @hint_text: {Some("项目名称".into())} }
-                ProjectName Name("ProjectNameInput") Node { width: percent(100), flex_shrink: 0.0 }--
-                Node { column_gap: px(GAP), row_gap: px(GAP), flex_wrap: FlexWrap::Wrap }
-                Children [
-                    @button("保存名称", "RenameProject", Action::Rename)--
-                    @button("更改目录", "ChangeProjectDirectory", Action::SetDirectory)--
-                    @button("删除项目", "DeleteProject", Action::AskDelete)
-                ]--
-                ProjectConfirmation
-                Node { flex_direction: FlexDirection::Column, row_gap: px(GAP), display: Display::None }
-                Children [
-                    Text("项目中的会话将转为单独聊天。原文件与历史保留。") WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter)--
-                    Node { column_gap: px(GAP), row_gap: px(GAP), flex_wrap: FlexWrap::Wrap }
-                    Children [
-                        @button("确认删除", "ConfirmDeleteProject", Action::Delete)--
-                        @button("取消", "CancelDeleteProject", Action::CancelDelete)
-                    ]
-                ]
-            ]--
-            ProjectStatus Name("ProjectStatus") Text::default() WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter)
-        ]
+        ProjectStatus Name("ProjectStatus") Text::default() WidgetryText
+        TextLayout::linebreak(LineBreak::AnyCharacter) Node { display: Display::None }
     }
 }
 
 pub(crate) fn create_button() -> impl Scene {
     bsn! {
         @crate::archives::reveal_button(SidebarIcon::Add)
-        Name("CreateProject") template(|_| Ok(Action::Create)) on(activate)
+        Name("CreateProject") on(open_picker)
+    }
+}
+
+pub(crate) fn more(project: ProjectId) -> impl Scene {
+    let name = format!("ProjectMore-{project}");
+    bsn! {
+        @crate::archives::reveal_button(SidebarIcon::More)
+        Name(name) template(move |_| Ok(ProjectTarget(project)))
+        on(open_menu) on(crate::archives::block_row_click)
+    }
+}
+
+fn open_menu(
+    event: On<Activate>,
+    targets: Query<&ProjectTarget>,
+    menus: Query<(Entity, &ChildOf), With<SidebarMenu>>,
+    state: Res<ProjectState>,
+    theme: Res<WidgetryTheme>,
+    mut commands: Commands,
+) -> Result {
+    if state.pending.is_some() {
+        return Ok(());
+    }
+    let anchor = event.entity;
+    let project = targets.get(anchor)?.0;
+    for (menu, parent) in &menus {
+        commands.entity(menu).try_despawn();
+        if parent.parent() == anchor {
+            return Ok(());
+        }
+    }
+    commands.spawn_scene_with_error_handler(menu(anchor, project, Menu::Actions, &theme));
+    Ok(())
+}
+
+fn menu(
+    anchor: Entity,
+    project: ProjectId,
+    view: Menu,
+    theme: &WidgetryTheme,
+) -> impl Scene + use<> {
+    let (width, items): (f32, Box<dyn SceneList>) = match view {
+        Menu::Actions => (
+            156.0,
+            Box::new(bsn_list! {
+                @button("重命名项目", "RenameProject", Action::Rename)--
+                @button("删除项目", "DeleteProject", Action::Delete)
+            }),
+        ),
+        Menu::Rename(name) => (
+            244.0,
+            Box::new(bsn_list! {
+                @WidgetryTextField { @value: name, @multiline: false }
+                ProjectName Name("ProjectNameInput") Node { width: percent(100) }--
+                Node { width: percent(100), column_gap: px(4) }
+                Children [
+                    @button("保存名称", "SaveProjectName", Action::SaveName)
+                    Node { flex_basis: px(0), flex_grow: 1.0, min_width: px(0) }--
+                    @button("取消", "CancelProjectRename", Action::Cancel)
+                    Node { flex_basis: px(0), flex_grow: 1.0, min_width: px(0) }
+                ]
+            }),
+        ),
+        Menu::ConfirmDelete => (
+            244.0,
+            Box::new(bsn_list! {
+                Text("项目会话将移到单独聊天。文件和历史会保留。") WidgetryText
+                TextLayout::linebreak(LineBreak::AnyCharacter)--
+                @button("确认删除", "ConfirmDeleteProject", Action::ConfirmDelete)--
+                @button("取消", "CancelDeleteProject", Action::Cancel)
+            }),
+        ),
+    };
+    bsn! {
+        @sidebar_menu(anchor, theme, width, items)
+        Name("ProjectActionsMenu") template(move |_| Ok(ProjectTarget(project)))
     }
 }
 
 fn button(label: &'static str, name: &'static str, action: Action) -> impl Scene {
     let style = match action {
-        Action::Create | Action::SaveNew | Action::Rename => AgentelierButtonStyle::Primary,
-        Action::AskDelete | Action::Delete => AgentelierButtonStyle::Danger,
-        Action::CancelNew | Action::CancelDelete | Action::SetDirectory => {
-            AgentelierButtonStyle::Secondary
-        }
+        Action::SaveName => AgentelierButtonStyle::Primary,
+        Action::Delete | Action::ConfirmDelete => AgentelierButtonStyle::FilledDanger,
+        Action::Rename | Action::Cancel => AgentelierButtonStyle::Secondary,
     };
     bsn! {
         @AgentelierButton {
@@ -176,89 +204,75 @@ fn button(label: &'static str, name: &'static str, action: Action) -> impl Scene
     }
 }
 
-pub(crate) fn select_project(world: &mut World, project: Option<ProjectId>) -> Result {
-    let mut state = world.resource_mut::<ProjectState>();
-    if state.selected == project {
-        return Ok(());
-    }
-    state.selected = project;
-    state.confirm_delete = false;
-    sync_name(world)?;
-    crate::working_directory::sync_project(world)
-}
-
-fn activate(event: On<Activate>, actions: Query<&Action>, mut commands: Commands) -> Result {
+fn activate(
+    event: On<Activate>,
+    actions: Query<&Action>,
+    parents: Query<&ChildOf>,
+    menus: Query<(Entity, &ChildOf, &ProjectTarget), With<SidebarMenu>>,
+    mut commands: Commands,
+) -> Result {
     let action = *actions.get(event.entity)?;
+    let Some((entity, parent, &ProjectTarget(id))) = parents
+        .iter_ancestors(event.entity)
+        .find_map(|ancestor| menus.get(ancestor).ok())
+    else {
+        return Ok(());
+    };
+    let anchor = parent.parent();
     commands.queue(move |world: &mut World| -> Result {
         let state = world.resource::<ProjectState>();
         if state.pending.is_some() {
             return Ok(());
         }
-        let selected = state.selected;
-        match action {
-            Action::Create => pick_directory(world, DirectoryAction::Create),
-            Action::CancelNew => {
-                let mut state = world.resource_mut::<ProjectState>();
-                state.create_directory = None;
-                state.error = None;
+        let Some(project) = project(&state.catalog, id) else {
+            world.commands().entity(entity).try_despawn();
+            return Ok(());
+        };
+        let view = match action {
+            Action::Rename => Menu::Rename(project.name.clone()),
+            Action::Delete => Menu::ConfirmDelete,
+            Action::SaveName => {
+                let field = world
+                    .query_filtered::<Entity, With<ProjectName>>()
+                    .single(world)?;
+                let name = WidgetryTextFieldHeadless::text(world, field)
+                    .map_err(|failure| failure.into_bevy_error())?;
+                submit(
+                    world,
+                    ProjectChange::Rename { project: id, name },
+                    Some(entity),
+                );
+                return Ok(());
             }
-            Action::SaveNew => {
-                if let Some(directory) = state.create_directory.clone() {
-                    let field = world
-                        .query_filtered::<Entity, With<NewProjectName>>()
-                        .single(world)?;
-                    let name = WidgetryTextFieldHeadless::text(world, field)
-                        .map_err(|failure| failure.into_bevy_error())?;
-                    submit(
-                        world,
-                        ProjectChange::Create {
-                            directory,
-                            name: Some(name),
-                        },
-                    );
-                }
+            Action::ConfirmDelete => {
+                submit(world, ProjectChange::Delete { project: id }, Some(entity));
+                return Ok(());
             }
-            Action::SetDirectory => {
-                if let Some(project) = selected {
-                    pick_directory(world, DirectoryAction::Set(project));
-                }
+            Action::Cancel => {
+                world.commands().entity(entity).try_despawn();
+                world.resource_mut::<ProjectState>().error = None;
+                return Ok(());
             }
-            Action::AskDelete => world.resource_mut::<ProjectState>().confirm_delete = true,
-            Action::CancelDelete => world.resource_mut::<ProjectState>().confirm_delete = false,
-            Action::Delete => {
-                if let Some(project) = selected
-                    && state.confirm_delete
-                {
-                    submit(world, ProjectChange::Delete { project });
-                }
-            }
-            Action::Rename => {
-                if let Some(project) = selected {
-                    let field = world
-                        .query_filtered::<Entity, With<ProjectName>>()
-                        .single(world)?;
-                    let name = WidgetryTextFieldHeadless::text(world, field)
-                        .map_err(|failure| failure.into_bevy_error())?;
-                    submit(world, ProjectChange::Rename { project, name });
-                }
-            }
-        }
+        };
+        let scene = menu(anchor, id, view, world.resource::<WidgetryTheme>());
+        world.commands().entity(entity).try_despawn();
+        world.commands().spawn_scene_with_error_handler(scene);
         Ok(())
     });
     Ok(())
 }
 
-fn pick_directory(world: &mut World, action: DirectoryAction) {
-    if world
-        .query_filtered::<Entity, With<ProjectPickerWindow>>()
-        .iter(world)
-        .next()
-        .is_some()
-    {
+fn open_picker(
+    _: On<Activate>,
+    state: Res<ProjectState>,
+    pickers: Query<(), With<ProjectPickerWindow>>,
+    mut commands: Commands,
+) {
+    if state.pending.is_some() || !pickers.is_empty() {
         return;
     }
-    world.commands().spawn_scene_with_error_handler(bsn! {
-        ProjectPickerWindow Name("ProjectPickerWindow") template(move |_| Ok(action))
+    commands.spawn_scene_with_error_handler(bsn! {
+        ProjectPickerWindow Name("ProjectPickerWindow")
         @owned_widgetry_window(
             Window { title: "选择项目目录".into(), resolution: (840, 580).into(), ..default() },
             agentelier_controls::FILE_DIALOG_WINDOW_CONTROLS,
@@ -284,47 +298,28 @@ fn chosen(event: On<WidgetryFileDialogResultEvent>, mut commands: Commands) {
             .ok_or_else(|| io::Error::other("项目目录选择窗口未绑定"))?;
         world.write_message(bevy::window::WindowCloseRequested { window });
         if let WidgetryFileDialogResult::Directory(directory) = result {
-            let action = *world
-                .get::<DirectoryAction>(root)
-                .ok_or_else(|| io::Error::other("项目目录选择窗口缺少操作"))?;
-            match action {
-                DirectoryAction::Create => {
-                    let name = directory
-                        .file_name()
-                        .and_then(|value| value.to_str())
-                        .unwrap_or("项目");
-                    let field = world
-                        .query_filtered::<Entity, With<NewProjectName>>()
-                        .single(world)?;
-                    WidgetryTextFieldHeadless::set_text_in_world(world, field, name)
-                        .map_err(|failure| failure.into_bevy_error())?;
-                    let mut state = world.resource_mut::<ProjectState>();
-                    state.create_directory = Some(directory);
-                    state.confirm_delete = false;
-                    state.error = None;
-                }
-                DirectoryAction::Set(project) => {
-                    submit(world, ProjectChange::SetDirectory { project, directory });
-                }
-            }
+            submit(
+                world,
+                ProjectChange::Create {
+                    directory,
+                    name: None,
+                },
+                None,
+            );
         }
         Ok(())
     });
 }
 
-fn submit(world: &mut World, change: ProjectChange) {
+fn submit(world: &mut World, change: ProjectChange, menu: Option<Entity>) {
     if world.resource::<ProjectState>().pending.is_some() {
         return;
     }
-    let creates_project = matches!(&change, ProjectChange::Create { .. });
     let result = world.resource::<AgentHost>().change_project(change);
     let mut state = world.resource_mut::<ProjectState>();
     match result {
         Ok(id) => {
-            state.pending = Some(Save {
-                operation: id,
-                creates_project,
-            });
+            state.pending = Some(Save { id, menu });
             state.error = None;
         }
         Err(failure) => state.error = Some(failure.to_string()),
@@ -333,21 +328,20 @@ fn submit(world: &mut World, change: ProjectChange) {
 
 pub(crate) fn saved(world: &mut World, id: u64, result: Result<(), String>) {
     let mut state = world.resource_mut::<ProjectState>();
-    let Some(pending) = state
+    if state
         .pending
         .as_ref()
-        .filter(|pending| pending.operation == id)
-    else {
+        .is_none_or(|pending| pending.id != id)
+    {
         return;
-    };
-    if result.is_ok() {
-        if pending.creates_project {
-            state.create_directory = None;
-        }
-        state.confirm_delete = false;
     }
-    state.pending = None;
+    let pending = state.pending.take();
     state.error = result.err();
+    if state.error.is_none()
+        && let Some(menu) = pending.and_then(|pending| pending.menu)
+    {
+        world.commands().entity(menu).try_despawn();
+    }
 }
 
 pub(crate) fn failed(world: &mut World, reason: &str) {
@@ -365,131 +359,46 @@ pub(crate) fn catalog(world: &mut World, result: Result<ProjectCatalog, String>)
             return Ok(());
         }
     };
-    let name_changed = {
-        let mut state = world.resource_mut::<ProjectState>();
-        let previous_name = selected_name(&state);
-        state.catalog = catalog;
-        if !state
-            .catalog
-            .projects
-            .iter()
-            .any(|project| Some(project.project.id) == state.selected)
-        {
-            state.selected = None;
-            state.confirm_delete = false;
-        }
-        previous_name != selected_name(&state)
-    };
-    if name_changed {
-        sync_name(world)?;
-    }
-    crate::working_directory::sync_project(world)?;
+    world.resource_mut::<ProjectState>().catalog = catalog;
     crate::archives::rebuild_model(world)
-}
-
-fn selected_name(state: &ProjectState) -> String {
-    state
-        .catalog
-        .projects
-        .iter()
-        .find(|view| Some(view.project.id) == state.selected)
-        .map(|view| view.project.name.clone())
-        .unwrap_or_default()
-}
-
-fn sync_name(world: &mut World) -> Result {
-    let name = selected_name(world.resource::<ProjectState>());
-    let names = world
-        .query_filtered::<Entity, With<ProjectName>>()
-        .iter(world)
-        .collect::<Vec<_>>();
-    for field in names {
-        WidgetryTextFieldHeadless::set_text_in_world(world, field, &name)
-            .map_err(|failure| failure.into_bevy_error())?;
-    }
-    Ok(())
 }
 
 fn update(
     state: Res<ProjectState>,
-    mut nodes: Query<
-        (
-            &mut Node,
-            Has<ProjectEditor>,
-            Has<ProjectConfirmation>,
-            Has<ProjectCreation>,
-        ),
-        Or<(
-            With<ProjectEditor>,
-            With<ProjectConfirmation>,
-            With<ProjectCreation>,
-        )>,
-    >,
-    mut texts: Query<
-        (
-            &mut Text,
-            Has<ProjectPath>,
-            Has<ProjectStatus>,
-            Has<NewProjectPath>,
-        ),
-        Or<(With<ProjectPath>, With<ProjectStatus>, With<NewProjectPath>)>,
-    >,
+    mut status: Query<(&mut Text, &mut Node), With<ProjectStatus>>,
     actions: Query<(Entity, Has<InteractionDisabled>), With<Action>>,
     mut commands: Commands,
 ) {
-    let project = state
-        .catalog
-        .projects
-        .iter()
-        .find(|view| Some(view.project.id) == state.selected);
-    let creating = state.create_directory.is_some();
-    for (mut node, editor, confirmation, creation) in &mut nodes {
-        let visible = creation && creating
-            || !creating && (editor && project.is_some() || confirmation && state.confirm_delete);
-        let display = if visible {
-            Display::Flex
-        } else {
-            Display::None
-        };
-        if node.display != display {
-            node.display = display;
-        }
-    }
-    for (mut text, path, status, new_path) in &mut texts {
-        if path {
-            let value = project.map_or_else(String::new, |view| {
-                let path = bevy_widgetry_path_display::display_path(&view.project.directory);
+    let value = state
+        .error
+        .clone()
+        .or_else(|| state.pending.as_ref().map(|_| "正在保存项目…".to_owned()))
+        .or_else(|| state.catalog.issues.first().cloned())
+        .or_else(|| {
+            state.catalog.projects.iter().find_map(|view| {
                 view.directory_error
                     .as_ref()
-                    .map_or_else(|| path.clone(), |error| format!("{path}\n{error}"))
-            });
-            text.set_if_neq(Text(value));
-        }
-        if new_path {
-            let value = state
-                .create_directory
-                .as_deref()
-                .map(bevy_widgetry_path_display::display_path)
-                .unwrap_or_default();
-            text.set_if_neq(Text(value));
-        }
-        if status {
-            let value = state
-                .error
-                .clone()
-                .or_else(|| state.pending.as_ref().map(|_| "正在保存项目…".to_owned()))
-                .or_else(|| state.catalog.issues.first().cloned())
-                .unwrap_or_default();
-            text.set_if_neq(Text(value));
-        }
+                    .map(|error| format!("{}：{error}", view.project.name))
+            })
+        })
+        .unwrap_or_default();
+    let display = if value.is_empty() {
+        Display::None
+    } else {
+        Display::Flex
+    };
+    for (mut text, node) in &mut status {
+        text.set_if_neq(Text(value.clone()));
+        node.map_unchanged(|node| &mut node.display)
+            .set_if_neq(display);
     }
     for (entity, disabled) in &actions {
         match (state.pending.is_some(), disabled) {
             (true, false) => {
-                commands.entity(entity).insert(InteractionDisabled);
+                commands.entity(entity).try_insert(InteractionDisabled);
             }
             (false, true) => {
-                commands.entity(entity).remove::<InteractionDisabled>();
+                commands.entity(entity).try_remove::<InteractionDisabled>();
             }
             _ => {}
         }

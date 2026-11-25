@@ -47,8 +47,8 @@ flowchart TD
 
 | 控件 | 职责 | 主要组成 |
 |---|---|---|
-| `ConversationView` | 当前 Session 消息展示、流式更新和阅读位置 | Avatar、Markdown、ScrollArea、图片和工具结果呈现 |
-| `ChatComposer` | 当前 Session 输入与模型选择 | TextField、ComboBox、AgentelierButton |
+| `ConversationView` | 当前 Session 消息展示、流式更新和阅读位置 | Avatar、Markdown、ScrollArea |
+| `ChatComposer` | 当前 Session 输入与状态 | TextField、Text、AgentelierButton |
 | `SessionNavigator` | 项目与单独聊天分区、Session 状态和切换 | Tree、ListView、FileDialog、AgentelierButton |
 | `TaskToast` | 成功、失败和需要用户操作时的通知 | Widgetry Window、AgentelierButton |
 | `LoginContextMenu` | 已登录时登录按钮的右键登出菜单 | 副键输入处理、轻量 Popup |
@@ -72,7 +72,6 @@ flowchart TD
 | Window | 设置、Skill、MCP、记忆和 TaskToast |
 | MessageBox | 登录说明、确认与错误 |
 | FileDialog | Project 目录和 Skill 目录选择 |
-| Tooltip | 图标按钮辅助说明 |
 | Ui Scale | 配置驱动的应用缩放 |
 
 Widgetry Theme 管理颜色，不负责字体、尺寸、布局或动效。需要项目特化外观时，优先使用公开 Headless、Renderer、Slots、Scene 组合、ColorOverrides 和自定义交互策略。

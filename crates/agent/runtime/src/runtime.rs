@@ -11,7 +11,6 @@ use agentelier_memory::Memory;
 use agentelier_turn_runner::RunnerEvent;
 mod account_login;
 mod audio_task;
-mod background_sessions;
 mod child_runtime;
 mod creation;
 mod deleting;
@@ -26,8 +25,10 @@ pub use memory::{MemoryReply, MemoryRequest, MemoryWorkState};
 mod memory_dialogue;
 mod model_task;
 mod recording;
+mod session_execution;
 mod session_metadata;
 mod session_model;
+mod session_title;
 mod skill_creation;
 mod skill_resource;
 mod spawn_agent;
@@ -39,6 +40,7 @@ use model_task::{
     ModelJoin, ModelTask, PROGRESS_CAPACITY, TaskRequest, complete, drain_progress, progress,
     stop_model,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
@@ -159,6 +161,7 @@ enum Command {
     ChangeProject(u64, agentelier_conversation::ProjectChange),
     ChangeSessionModel(session_model::Change),
     ProjectSaved(u64, io::Result<()>),
+    TitleFinished(Result<(SessionId, io::Result<bool>), tokio::task::JoinError>),
     Deleted(io::Result<agentelier_session_store::DeleteCommit>),
     Loaded(Box<io::Result<agentelier_conversation::RestoredSession>>),
     Recorded(
@@ -197,7 +200,6 @@ enum Command {
     TaskActionFinished(u64, agentelier_conversation::TaskActionReceipt),
     ProcessesChanged,
     IdleTool(agentelier_turn_runner::ToolEvent),
-    BackgroundSession(SessionId, background_sessions::Signal),
     Conversation {
         id: u64,
         control: ModelControl,
@@ -217,7 +219,7 @@ pub struct AgentRuntime {
     memory_commands: mpsc::Sender<(u64, MemoryRequest)>,
 }
 
-type SharedModel = Arc<Mutex<Option<ModelControl>>>;
+type SharedModel = Arc<Mutex<HashMap<u64, ModelControl>>>;
 
 struct RootTurn {
     session: SessionId,
@@ -313,7 +315,7 @@ impl AgentRuntime {
                 })
         });
         let owner_credentials = credentials.clone();
-        let shared_model: SharedModel = Arc::new(Mutex::new(None));
+        let shared_model: SharedModel = Arc::default();
         let owner_model = shared_model.clone();
         let (session_commands, mut session_incoming) = mpsc::channel(SESSION_COMMAND_CAPACITY);
         let (memory_commands, mut memory_incoming) = mpsc::channel(COMMAND_CAPACITY);
@@ -359,7 +361,10 @@ impl AgentRuntime {
                         if let Ok(servers) = mcp_settings.servers() {
                             mcp_connections.configure(servers);
                         }
-                        let mut creating: Option<creation::Creation> = None;
+                        let mut creating: Option<(creation::Creation, session_execution::Owner)> = None;
+                        let mut initial_send = None;
+                        let mut title_jobs = tokio::task::JoinSet::new();
+                        let mut title_admissions = HashMap::new();
                         let mut loading: Option<loading::Loading> = None;
                         let mut catalog = Some(store.client().scan_startup().map_err(RuntimeFailure::Store)?);
                         let mut startup_catalog = true;
@@ -367,13 +372,9 @@ impl AgentRuntime {
                         let mut project_saves = std::collections::VecDeque::<(
                             u64, tokio::sync::oneshot::Receiver<io::Result<()>>,
                         )>::new();
-                        let mut records = recording::Records::new();
-                        let mut pending_queue = false;
                         let mut deleting: Option<deleting::Deleting> = None;
                         let mut saving_metadata: Option<session_metadata::SavingMetadata> = None;
                         let mut suspending = 0usize;
-                        let mut finalizing = false;
-                        let mut pending_session_model: Option<session_model::Change> = None;
                         let mut account = Account::new(owner_credentials.clone(), environment);
                         let quota_interval = std::time::Duration::from_secs(120);
                         let mut quota_tick = tokio::time::interval(quota_interval);
@@ -387,63 +388,50 @@ impl AgentRuntime {
                         let mut requesting_catalog = None;
                         let mut model_catalog: Option<(agentelier_llm_model::CodexIdentity, Vec<agentelier_llm_model::ModelInfo>)> = None;
                         let mut delivery_failure = None;
-                        let mut model: Option<ModelTask> = None;
-                        let mut stopping_root = None;
-                        let mut session_tools: Option<(SessionId, tool_jobs::SessionTools)> = None;
-                        let mut background = background_sessions::BackgroundSessions::default();
-                        let mut task_receipts = task_control::Receipts::new();
-                        let (spawn_sender, mut spawn_requests) = mpsc::channel(COMMAND_CAPACITY);
-                        let (mailbox_sender, mut mailbox_requests) = mpsc::channel(SESSION_COMMAND_CAPACITY);
-                        let mut children = spawn_agent::Children::with_configured_limits()?;
-                        let mut extensions = agentelier_memory::registrations(memory.as_ref().ok().map(Memory::client));
-                        extensions.push(spawn_agent::registration(spawn_sender, owner_credentials.clone(), data_root.join("prompts.json")));
-                        extensions.push(mailbox::registration(mailbox_sender.clone(), agentelier_conversation::DeliveryMode::QueueOnly));
-                        extensions.push(mailbox::registration(mailbox_sender.clone(), agentelier_conversation::DeliveryMode::TriggerTurn));
-                        extensions.push(wait_agent::registration(mailbox_sender.clone()));
-                        extensions.push(interrupt_agent::registration(mailbox_sender.clone()));
-                        extensions.push(list_agents::registration(mailbox_sender.clone()));
-                        extensions.push(skill_resource::registration());
                         let user_skills = agentelier_skills::UserSkills::new(data_root.join("skills"));
-                        extensions.extend(skill_creation::registrations(user_skills.clone()));
+                        let make_owner = || session_execution::Owner::new(
+                            &owner_credentials, &data_root, memory.as_ref().ok().map(Memory::client), &user_skills,
+                        );
+                        let mut owners = HashMap::from([(None, make_owner()?)]);
                         let mut skill_jobs = tokio::task::JoinSet::new();
-                        let mut conversation = Conversation::with_extensions(extensions);
                         let mut memory_dialogue = memory_dialogue::Dialogue::new(
                             owner_credentials.clone(), memory.as_ref().ok().map(Memory::client),
                             ecs_access.clone(),
                         );
-                        let mut progress_events: Option<mpsc::Receiver<RunnerEvent>> = None;
                         let execution = async {
                             if let AccountEffect::Event(event) = account.restore().await? {
                                 owner_credentials.finish_source_change()?;
                                 emit(&publish, event.operation_id, AgentEventKind::Account(event.kind))?;
                             }
                             loop {
-                                if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none()
-                                    && suspending == 0 && !pending_queue && !finalizing && pending_source.is_none()
-                                    && !runtime_shutdown.is_cancelled()
-                                    && let Some(change) = pending_session_model.take()
-                                {
-                                    let available = model_source(&account)
-                                        .and_then(|source| {
-                                            conversation.validate_model_source(source)?;
-                                            model_catalog.as_ref()
-                                                .filter(|(owner, _)| owner == source)
-                                                .map(|(_, models)| models.as_slice())
-                                                .ok_or_else(|| ConversationFailure::new("请先刷新当前账号的模型目录"))
-                                        });
-                                    let result = match available {
-                                        Ok(models) => change.save(&mut conversation, models, &store).await,
-                                        Err(failure) => Err(failure),
-                                    };
-                                    if let Err(failure) = &result {
-                                        error!(operation_id = change.id, session_id = %change.session, %failure, "会话模型保存失败");
-                                    }
-                                    emit(&publish, change.id, AgentEventKind::Conversation(ConversationEvent::SessionModelSaved {
-                                        session: change.session,
-                                        result: result.map_err(|failure| failure.to_string()),
-                                    }))?;
-                                    if model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
-                                        model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store,&ecs_access)?;
+                                for owner in owners.values_mut() {
+                                        if !owner.busy() && suspending == 0 && pending_source.is_none()
+                                            && deleting.as_ref().is_none_or(|pending| owner.conversation.session_id() != Some(pending.session()))
+                                        && !runtime_shutdown.is_cancelled()
+                                        && let Some(change) = owner.pending_model.take()
+                                    {
+                                        let available = model_source(&account)
+                                            .and_then(|source| {
+                                                owner.conversation.validate_model_source(source)?;
+                                                model_catalog.as_ref()
+                                                    .filter(|(owner, _)| owner == source)
+                                                    .map(|(_, models)| models.as_slice())
+                                                    .ok_or_else(|| ConversationFailure::new("请先刷新当前账号的模型目录"))
+                                            });
+                                        let result = match available {
+                                            Ok(models) => change.save(&mut owner.conversation, models, &store).await,
+                                            Err(failure) => Err(failure),
+                                        };
+                                        if let Err(failure) = &result {
+                                            error!(operation_id = change.id, session_id = %change.session, %failure, "会话模型保存失败");
+                                        }
+                                        emit(&publish, change.id, AgentEventKind::Conversation(ConversationEvent::SessionModelSaved {
+                                            session: change.session,
+                                            result: result.map_err(|failure| failure.to_string()),
+                                        }))?;
+                                        if model_source(&account).and_then(|source| owner.conversation.validate_model_source(source)).is_ok() {
+                                            model_task::start_queued(&mut owner.conversation,&mut owner.model,&mut owner.progress,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut owner.tools,&store,&ecs_access)?;
+                                        }
                                     }
                                 }
                                 if catalog_dirty && catalog.is_none() {
@@ -459,12 +447,11 @@ impl AgentRuntime {
                                         quota_task = Some(tokio::spawn(attempt.run()));
                                     }
                                 }
-                                let idle_work = session_tools.as_ref().map(|(_, tools)| tools.work.clone());
-                                let root_cancel = model.as_ref()
-                                    .filter(|task| task.chat && stopping_root != Some(task.id))
-                                    .map(|task| task.control.cancel.clone());
+                                let quiet_queues = owners.values().all(|owner| !owner.pending_queue);
+                                let mut event_owner = None;
                                 let command = tokio::select! { biased;
                                     _ = runtime_shutdown.cancelled() => break,
+                                    Some(command) = async { initial_send.take() }, if initial_send.is_some() => command,
                                     signal = memory_dialogue.next() => Command::MemoryDialogue(signal),
                                     Ok(()) = memory_status.changed() => Command::MemoryWork(*memory_status.borrow_and_update()),
                                     result = async {
@@ -487,12 +474,6 @@ impl AgentRuntime {
                                         quota_task = None;
                                         Command::QuotaFinished(result)
                                     },
-                                    _ = async move {
-                                        match root_cancel {
-                                            Some(cancel) => cancel.cancelled().await,
-                                            None => std::future::pending().await,
-                                        }
-                                    } => Command::RootStopping,
                                     update = account_login::next(&mut login), if login.is_some() => update,
                                     completed = async {
                                         match &mut refresh {
@@ -538,6 +519,7 @@ impl AgentRuntime {
                                             .map_err(|_| RuntimeFailure::ModelState)?;
                                         Command::AudioFinished(id, session, result)
                                     },
+                                    Some(result) = title_jobs.join_next(), if !title_jobs.is_empty() => Command::TitleFinished(result),
                                     status = mcp_connections.changed() => Command::McpStatus(status),
                                     result = async { match &mut catalog {
                                         Some(reply) => reply.await.unwrap_or_else(|_| Err(io::Error::other("会话目录读取未返回结果"))),
@@ -549,80 +531,58 @@ impl AgentRuntime {
                                     }} => Command::Loaded(Box::new(result)),
                                     result = async { match &mut saving_metadata { Some(pending) => pending.wait().await, None => std::future::pending().await } } => Command::MetadataSaved(result),
                                     result = async { match &mut deleting { Some(pending) => pending.wait().await, None => std::future::pending().await } } => Command::Deleted(result),
-                                    result = records.join_next(), if !records.is_empty() => match result {
-                                        Some(result) => Command::Recorded(result),
-                                        None => return Err(RuntimeFailure::ModelState),
-                                    },
-                                    receipt = task_receipts.join_next(), if !task_receipts.is_empty() => {
-                                        let (id, receipt) = receipt.ok_or(RuntimeFailure::ModelState)?
-                                            .map_err(|_| RuntimeFailure::ModelState)?;
-                                        Command::TaskActionFinished(id, receipt)
-                                    },
-                                    changed = async {
-                                        match session_tools.as_mut() {
-                                            Some((_, tools)) => tools.process_views.changed().await,
-                                            None => std::future::pending().await,
-                                        }
-                                    } => {
-                                        changed.map_err(|_| RuntimeFailure::ModelState)?;
-                                        Command::ProcessesChanged
-                                    },
-                                    event = async move {
-                                        match idle_work {
-                                            Some(work) => work.lock().await.next().await,
-                                            None => std::future::pending().await,
-                                        }
-                                    }, if model.is_none() && !finalizing && !pending_queue && creating.is_none() && loading.is_none() && deleting.is_none() => {
-                                        Command::IdleTool(event.ok_or(RuntimeFailure::ModelState)?)
-                                    },
-                                    (session, signal) = background.next(), if !background.is_empty() => {
-                                        Command::BackgroundSession(session, signal)
-                                    },
                                     result = async { match &mut creating {
-                                        Some(pending) => pending.wait().await,
+                                        Some((pending, _)) => pending.wait().await,
                                         None => std::future::pending().await,
                                     }} => Command::Created(result),
-                                    result = async { match &mut model {
-                                        Some(task) => (&mut task.handle).await,
-                                        None => std::future::pending().await,
-                                    }} => Command::ModelFinished(result),
-                                    Some(invocation) = spawn_requests.recv() => Command::SpawnAgent(Box::new(invocation)),
-                                    Some(command) = mailbox_requests.recv() => Command::Mailbox(command),
-                                    Some(result) = children.jobs.join_next(), if !children.jobs.is_empty() => Command::ChildFinished(result),
-                                    command = session_incoming.recv(), if !pending_queue => match command {
+                                    (owner, command) = session_execution::next(&mut owners) => {
+                                        event_owner = owner;
+                                        command?
+                                    },
+                                    command = session_incoming.recv(), if quiet_queues => match command {
                                         Some(command) => Command::Session(command),
                                         None => break,
                                     },
-                                    event = async { match &mut progress_events {
-                                        Some(receiver) => receiver.recv().await,
-                                        None => std::future::pending().await,
-                                    }} => Command::Stream(event),
                                     Some((id, request)) = memory_incoming.recv() => Command::Memory(id, request),
                                     command = incoming.recv() => match command {
                                         Some(command) => command,
                                         None => break,
                                     },
                                 };
+                                let event_owner = event_owner.or_else(|| {
+                                    let target = match &command {
+                                        Command::Deleted(_) => deleting.as_ref().map(deleting::Deleting::session),
+                                        _ => session_execution::target(&command),
+                                    };
+                                    target.filter(|session| owners.contains_key(&Some(*session)))
+                                });
+                                let deleting_target = deleting.as_ref().is_some_and(|pending| event_owner == Some(pending.session()));
+                                let owner = owners.get_mut(&event_owner).ok_or(RuntimeFailure::ModelState)?;
+                                let session_execution::Owner {
+                                    conversation, model, tools: session_tools, progress: progress_events, children,
+                                    mailbox_sender, mailbox: mailbox_requests, stopping_root, finalizing, pending_queue,
+                                    records, receipts: task_receipts, pending_model: pending_session_model, ..
+                                } = owner;
                                 match command {
                                     Command::SpawnAgent(invocation) => {
-                                        children.spawn(*invocation, &mut conversation, model.as_ref(), spawn_agent::SpawnEnvironment {
+                                        children.spawn(*invocation, conversation, model.as_ref(), spawn_agent::SpawnEnvironment {
                                             ecs_access: &ecs_access,
                                             store: &store.client(),
                                             credentials: &owner_credentials,
                                             operations: &operations,
                                             skills_root: &data_root.join("skills"),
-                                            mailbox_commands: &mailbox_sender,
+                                            mailbox_commands: mailbox_sender,
                                         }).await;
                                     }
                                     Command::Mailbox(command) => {
-                                        children.mailbox_command(command, &mut conversation, model.as_ref(), spawn_agent::SpawnEnvironment {
+                                        children.mailbox_command(command, conversation, model.as_ref(), spawn_agent::SpawnEnvironment {
                                             ecs_access: &ecs_access,
                                             store: &store.client(), credentials: &owner_credentials, operations: &operations,
-                                            skills_root: &data_root.join("skills"), mailbox_commands: &mailbox_sender,
+                                            skills_root: &data_root.join("skills"), mailbox_commands: mailbox_sender,
                                         }).await;
                                     }
                                     Command::ChildFinished(result) => {
-                                        let ready = match children.finish(result, &store.client(), &mut conversation).await {
+                                        let ready = match children.finish(result, &store.client(), conversation).await {
                                             Ok(ready) => ready,
                                             Err(failure) => {
                                                 error!(%failure, "子 Agent 回收或保存未确认");
@@ -638,22 +598,22 @@ impl AgentRuntime {
                                         };
                                         if let Some(agent) = ready
                                             && let Some(view) = conversation.current()
-                                            && let Err(failure) = children.wake_pending(&mut conversation, view.id, agent, spawn_agent::SpawnEnvironment {
+                                            && let Err(failure) = children.wake_pending(conversation, view.id, agent, spawn_agent::SpawnEnvironment {
                                                 ecs_access: &ecs_access,
                                                 store: &store.client(), credentials: &owner_credentials, operations: &operations,
-                                                skills_root: &data_root.join("skills"), mailbox_commands: &mailbox_sender,
+                                                skills_root: &data_root.join("skills"), mailbox_commands: mailbox_sender,
                                             }).await {
                                             tracing::error!(session_id = %view.id, agent_id = %agent, error = %failure, "唤醒待处理 Follow-up 失败");
                                         }
                                     }
                                     Command::RootStopping => {
                                         let task = model.as_ref().ok_or(RuntimeFailure::ModelState)?;
-                                        stopping_root = Some(task.id);
+                                        *stopping_root = Some(task.id);
                                         children.cancel_active();
                                         debug!(operation_id = task.id, "Root 停止已阻断协作准入，正在回收子 Agent");
                                     }
                                     Command::AudioDraft(id, session, path) => {
-                                        if !audio_jobs.is_empty() || !conversation.is_current(session) {
+                                        if model.is_some() || *finalizing || *pending_queue || deleting_target || !audio_jobs.is_empty() || !conversation.is_current(session) {
                                             let result = Err("会话已变化或上一次音频操作尚未结束".into());
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::AudioDraft { session, result }))?;
                                         } else {
@@ -670,7 +630,7 @@ impl AgentRuntime {
                                         emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::AudioDraft { session, result }))?;
                                     }
                                     Command::TranscribeAudio(id, session, audio) => {
-                                        let request = if audio_jobs.is_empty() {
+                                        let request = if model.is_none() && !*finalizing && !*pending_queue && !deleting_target && audio_jobs.is_empty() {
                                             conversation.prepare_transcription(session, audio)
                                         } else {
                                             Err(ConversationFailure::new("上一项音频操作尚未结束"))
@@ -861,9 +821,14 @@ impl AgentRuntime {
                                     Command::Deleted(result) => {
                                         let pending = deleting.take().ok_or(RuntimeFailure::ModelState)?;
                                         let id = pending.id;
-                                        let event = pending.complete(result, &mut conversation);
-                                        if matches!(&event, ConversationEvent::Deleted { was_open: true, .. }) && let Some((_, tools)) = session_tools.take() {
-                                            tools.join("session_deleted").await?;
+                                        let event = pending.complete(result, conversation);
+                                        if matches!(&event, ConversationEvent::Deleted { .. }) {
+                                            if let Some((_, tools)) = session_tools.take() {
+                                                tools.join("session_deleted").await?;
+                                            }
+                                            if event_owner.is_some() {
+                                                owners.remove(&event_owner);
+                                            }
                                         }
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
                                     }
@@ -888,7 +853,7 @@ impl AgentRuntime {
                                                 result: Err("当前已有模型变更等待保存，或目标会话已变化".into()),
                                             }))?;
                                         } else {
-                                            pending_session_model = Some(change);
+                                            *pending_session_model = Some(change);
                                         }
                                     }
                                     Command::ProjectSaved(id, result) => {
@@ -901,6 +866,12 @@ impl AgentRuntime {
                                         }
                                         emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::ProjectSaved(result.map_err(|failure| failure.to_string()))))?;
                                     }
+                                    Command::TitleFinished(result) => match result {
+                                        Ok((_, Ok(true))) => catalog_dirty = true,
+                                        Ok((_, Ok(false))) => {}
+                                        Ok((session, Err(failure))) => error!(session_id = %session, %failure, "自动生成的会话标题未保存，保留现有标题"),
+                                        Err(failure) => error!(%failure, "会话标题任务异常结束"),
+                                    },
                                     Command::Scanned(result) => {
                                         catalog = None;
                                         match result {
@@ -916,7 +887,7 @@ impl AgentRuntime {
                                                         emit(&publish, 0, AgentEventKind::Conversation(history))?;
                                                     }
                                                 }
-                                                if startup_catalog && conversation.current().is_none() && model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && !finalizing && !pending_queue && let Some(session) = first {
+                                                if startup_catalog && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && let Some(session) = first {
                                                         match loading::Loading::start(0, None, session, &store) {
                                                             Ok(pending) => loading = Some(pending),
                                                             Err(failure) => emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(failure.to_string())))?,
@@ -931,22 +902,17 @@ impl AgentRuntime {
                                     Command::Loaded(result) => {
                                         let pending = loading.take().ok_or(RuntimeFailure::ModelState)?;
                                         let id = pending.id;
-                                        let mut next = conversation.empty_session_owner();
-                                        let event = pending.complete(*result, &operations, &mut next, &mcp_connections);
-                                        let opened = matches!(&event, ConversationEvent::Opened(_));
-                                        if opened {
-                                            let previous = std::mem::replace(&mut conversation, next);
-                                            background.detach(previous, session_tools.take()).await?;
-                                        }
+                                        let mut next = make_owner()?;
+                                        let event = pending.complete(*result, &operations, &mut next.conversation, &mcp_connections);
+                                        let opened = next.conversation.session_id();
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
-                                        if opened {
-                                            model_task::publish_tasks(&conversation, &publish)?;
-                                            if let Some(view) = conversation.current() {
-                                                let processes = conversation.restored_processes().projection(view.id);
-                                                emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Processes(processes)))?;
-                                            }
+                                        if let Some(session) = opened {
+                                            model_task::publish_tasks(&next.conversation, &publish)?;
+                                            let processes = next.conversation.restored_processes().projection(session);
+                                            emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Processes(processes)))?;
+                                            owners.insert(Some(session), next);
                                         }
-                                        if opened && catalog.is_none() {
+                                        if opened.is_some() && catalog.is_none() {
                                             match store.client().scan() {
                                                 Ok(reply) => catalog = Some(reply),
                                                 Err(failure) => emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(failure.to_string())))?,
@@ -955,10 +921,11 @@ impl AgentRuntime {
                                     }
                                     Command::Recorded(result) => {
                                         let (pending, result) = result.map_err(|_| RuntimeFailure::ModelState)?;
-                                        let applied = recording::apply(pending, result, &mut conversation, &publish)?;
-                                        match applied.kind { recording::AppliedKind::Suspended => suspending = suspending.checked_sub(1).ok_or(RuntimeFailure::ModelState)?, recording::AppliedKind::Queue => pending_queue = false, recording::AppliedKind::Finished => finalizing = false }
-                                        if applied.failed && let Some(control) = owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.as_ref() { control.cancel.cancel(); }
-                                        if applied.failed && let Some((_, tools)) = &session_tools {
+                                        let applied = recording::apply(pending, result, conversation, &publish)?;
+                                        match applied.kind { recording::AppliedKind::Suspended => suspending = suspending.checked_sub(1).ok_or(RuntimeFailure::ModelState)?, recording::AppliedKind::Queue => *pending_queue = false, recording::AppliedKind::Finished => *finalizing = false }
+                                        if applied.failed && let Some(task) = model.as_ref() { task.control.cancel.cancel(); }
+                                        owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.retain(|_, control| !control.finished.is_cancelled());
+                                        if applied.failed && let Some((_, tools)) = session_tools.as_ref() {
                                             tools.admission.block();
                                             if let Ok(work) = tools.work.try_lock() {
                                                 work.stop_all();
@@ -967,19 +934,46 @@ impl AgentRuntime {
                                         if applied.failed && pending_source.is_some() {
                                             return Err(RuntimeFailure::Store(io::Error::other("凭据来源切换前的会话收尾保存未确认")));
                                         }
-                                        if model.is_none() && creating.is_none() && loading.is_none() && deleting.is_none() && suspending == 0 && !pending_queue && !finalizing && pending_source.is_none() && pending_session_model.is_none() && !runtime_shutdown.is_cancelled()
+                                        if model.is_none() && !deleting_target && suspending == 0 && !*pending_queue && !*finalizing && pending_source.is_none() && pending_session_model.is_none() && !runtime_shutdown.is_cancelled()
                                             && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store,&ecs_access)?;
+                                            model_task::start_queued(conversation,model,progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),session_tools,&store,&ecs_access)?;
                                         }
                                     }
                                     Command::Created(result) => {
-                                        let pending = creating.take().ok_or(RuntimeFailure::ModelState)?;
+                                        let (pending, mut next) = creating.take().ok_or(RuntimeFailure::ModelState)?;
                                         let id = pending.id;
-                                        let mut next = conversation.empty_session_owner();
-                                        let event = pending.complete(result, &mut next);
-                                        if matches!(&event, ConversationEvent::Created(_)) {
-                                            let previous = std::mem::replace(&mut conversation, next);
-                                            background.detach(previous, session_tools.take()).await?;
+                                        let control = pending.control.clone();
+                                        let (event, first) = pending.complete(result, &mut next.conversation);
+                                        if let Some(session) = next.conversation.session_id() {
+                                            owners.insert(Some(session), next);
+                                        }
+                                        if let (ConversationEvent::CreatedForSend(view), Some(first)) = (&event, first) {
+                                            if let Some(source) = &view.settings.codex
+                                                && let Some((owner, models)) = &model_catalog
+                                                && owner == source
+                                                && let Some(model) = models.iter().find(|model| model.slug == view.settings.slug)
+                                            {
+                                                let (admitted, accepted) = tokio::sync::oneshot::channel();
+                                                title_admissions.insert(id, admitted);
+                                                let session = view.id;
+                                                let request = session_title::TitleRequest {
+                                                    session,
+                                                    source: source.clone(),
+                                                    model: model.clone(),
+                                                    input: first.input.clone(),
+                                                };
+                                                let credentials = owner_credentials.clone();
+                                                let client = store.client();
+                                                let shutdown = runtime_shutdown.clone();
+                                                title_jobs.spawn(async move { (session, request.run(accepted, credentials, client, shutdown).await) });
+                                            }
+                                            initial_send = Some(Command::Conversation {
+                                                id,
+                                                control,
+                                                request: ConversationRequest::Send { session: view.id, input: first.input, audio: None, transcript: None },
+                                                steers: first.steers,
+                                                task_actions: first.task_actions,
+                                            });
                                         }
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
                                     }
@@ -988,7 +982,7 @@ impl AgentRuntime {
                                         control,
                                         request,
                                     } => {
-                                        if model.is_some() || creating.is_some() || loading.is_some() || deleting.is_some() || suspending != 0 || finalizing || pending_queue {
+                                        if model.is_some() || creating.is_some() || loading.is_some() || deleting.is_some() || suspending != 0 || *finalizing || *pending_queue {
                                             control.finished.cancel();
                                             emit(&publish,id,AgentEventKind::ModelCompleted(Err(agentelier_llm_model::ModelFailure {usage:None,response_id:None,kind:agentelier_llm_model::ModelFailureKind::Service,status:None,code:None,request_id:None,message:"当前任务正在执行，不能插入模型操作".into()})))?;
                                             continue;
@@ -997,8 +991,8 @@ impl AgentRuntime {
                                             model_catalog = None;
                                             requesting_catalog = account.codex_identity().cloned();
                                         }
-                                        *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?=Some(control.clone());
-                                        model = Some(ModelTask::start(
+                                        owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.insert(id, control.clone());
+                                        *model = Some(ModelTask::start(
                                             id,
                                             control,
                                             owner_credentials.clone(),
@@ -1009,14 +1003,15 @@ impl AgentRuntime {
                                         let task =
                                             model.take().ok_or(RuntimeFailure::ModelState)?;
                                         task.check_instance(&conversation)?;
-                                        stopping_root = None;
+                                        *stopping_root = None;
                                         if let Some(bound) = task.control.turn.get() {
                                             children.clear_wait(agentelier_conversation::AgentId::for_root(bound.session));
                                         }
                                         debug!(operation_id = task.id, "模型操作已真实结束并回收");
-                                        drain_progress(&mut conversation, task.id, &mut progress_events, &store.client(), &publish)?;
-                                        let event = complete(&mut conversation, task.id, task.chat, result)?;
-                                        if let Some(source) = requesting_catalog.take()
+                                        drain_progress(conversation, task.id, progress_events, &store.client(), &publish)?;
+                                        title_admissions.remove(&task.id);
+                                        let event = complete(conversation, task.id, task.chat, result)?;
+                                        if !task.chat && let Some(source) = requesting_catalog.take()
                                             && account.codex_identity() == Some(&source)
                                             && let AgentEventKind::ModelCompleted(Ok(ModelResult::Catalog(models))) = &event
                                         {
@@ -1024,31 +1019,32 @@ impl AgentRuntime {
                                         }
                                         if task.chat {
                                             if task.control.cancel.is_cancelled()
-                                                && let Err(failure) = children.settle_active(&store.client(), &mut conversation, Some(&mut mailbox_requests)).await
+                                                && let Err(failure) = children.settle_active(&store.client(), conversation, Some(mailbox_requests)).await
                                             {
                                                 error!(operation_id = task.id, %failure, "Root 停止后的 Agent Tree 收尾未确认");
                                                 conversation.fail_storage(failure.to_string());
                                             }
                                             if conversation.current().is_some_and(|view| view.execution_blocked)
-                                                && let Some((_, tools)) = &session_tools {
+                                                && let Some((_, tools)) = session_tools.as_ref() {
                                                 tools.admission.block();
                                                 tools.work.lock().await.stop_all();
                                             }
                                             let (state, history) = conversation.archive().ok_or(RuntimeFailure::ModelState)?;
                                             let session = state.session;
-                                            recording::submit(recording::Pending::Finished { id: task.id, session, control: task.control }, agentelier_conversation::RecordEvent::Finished { state, history }, &store, &mut records);
-                                            finalizing = true;
+                                            recording::submit(recording::Pending::Finished { id: task.id, session, control: task.control }, agentelier_conversation::RecordEvent::Finished { state, history }, &store, records);
+                                            *finalizing = true;
                                         } else {
                                             task.control.finished.cancel();
+                                            owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.remove(&task.id);
                                             capture_delivery(emit(&publish, task.id, event), &mut delivery_failure);
                                         }
-                                        if !finalizing && !pending_queue && suspending == 0 && pending_source.is_none() && pending_session_model.is_none() && delivery_failure.is_none() && !runtime_shutdown.is_cancelled()
+                                        if !*finalizing && !*pending_queue && suspending == 0 && pending_source.is_none() && pending_session_model.is_none() && delivery_failure.is_none() && !runtime_shutdown.is_cancelled()
                                             && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
-                                            model_task::start_queued(&mut conversation,&mut model,&mut progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut session_tools,&store,&ecs_access)?;
+                                            model_task::start_queued(conversation,model,progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),session_tools,&store,&ecs_access)?;
                                         }
                                     }
                                     Command::Session(command) => {
-                                        if creating.is_some() || loading.is_some() || deleting.is_some() || suspending != 0 || finalizing || (matches!(command,SessionCommand::Resume {..}) && model.is_some()) {
+                                        if creating.is_some() || loading.is_some() || deleting.is_some() || suspending != 0 || *finalizing || (matches!(command,SessionCommand::Resume {..}) && model.is_some()) {
                                             let id=command.id();
                                             emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Queue(agentelier_conversation::QueueEvent {
                                                 id,view:None,decision:agentelier_conversation::QueueDecision::Rejected("当前执行尚未回收，不能继续队列".into()),
@@ -1065,21 +1061,21 @@ impl AgentRuntime {
                                         match conversation.prepare_queue(command) {
                                             Ok(pending) => {
                                                 let event = pending.record();
-                                                recording::submit(recording::Pending::Queue(pending), event, &store, &mut records);
-                                                pending_queue = true;
+                                                recording::submit(recording::Pending::Queue(pending), event, &store, records);
+                                                *pending_queue = true;
                                             }
                                             Err(event) => emit(&publish,event.id,AgentEventKind::Conversation(ConversationEvent::Queue(*event)))?,
                                         }
                                     }
                                     Command::ProcessesChanged => {
-                                        if let Some((session, tools)) = &session_tools {
+                                        if let Some((session, tools)) = session_tools.as_ref() {
                                             let processes = tools.process_views.borrow().projection(*session);
                                             emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Processes(processes)))?;
                                         }
                                     }
                                     Command::IdleTool(event) => {
                                         let (_, tools) = session_tools.as_ref().ok_or(RuntimeFailure::ModelState)?;
-                                        if let Err(error) = model_task::drive_idle(&mut conversation, tools, agentelier_turn_runner::IdleAction::Tool(event), &store.client(), &publish).await {
+                                        if let Err(error) = model_task::drive_idle(conversation, tools, agentelier_turn_runner::IdleAction::Tool(event), &store.client(), &publish).await {
                                             tools.admission.block();
                                             tracing::error!(%error, "后台工具结果保存或归并失败");
                                             if let Some(view) = conversation.fail_storage(error.to_string()) {
@@ -1087,27 +1083,24 @@ impl AgentRuntime {
                                             }
                                         }
                                     }
-                                    Command::BackgroundSession(session, signal) => {
-                                        background.handle(session, signal, &store.client(), &publish).await?;
-                                    }
                                     Command::TaskActionFinished(id, receipt) => {
                                         model_task::publish_tasks(&conversation, &publish)?;
                                         emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::TaskAction(receipt)))?;
                                     }
                                     Command::TaskAction { id, session, action } => {
-                                        if creating.is_some() || loading.is_some() || deleting.is_some() || finalizing || suspending != 0 || pending_queue {
-                                            task_control::reject(&mut task_receipts, id, session, "会话变更或保存正在进行");
+                                        if creating.is_some() || loading.is_some() || deleting.is_some() || *finalizing || suspending != 0 || *pending_queue {
+                                            task_control::reject(task_receipts, id, session, "会话变更或保存正在进行");
                                         } else {
                                             let tools = session_tools.as_ref().filter(|(current, _)| *current == session).map(|(_, tools)| tools);
-                                            task_control::dispatch(&mut task_receipts, id, session, action, &mut conversation, model.as_ref(), tools, &store, &publish).await;
+                                            task_control::dispatch(task_receipts, id, session, action, conversation, model.as_ref(), tools, &store, &publish).await;
                                         }
                                     }
                                     Command::Stream(event) => {
                                         if let Some(RunnerEvent::Inbox(request)) = event {
                                             if model.as_ref().is_some_and(|task| task.control.cancel.is_cancelled()) {
-                                                children.settle_inbox(request, &mut conversation, model.as_ref(), &store.client()).await;
+                                                children.settle_inbox(request, conversation, model.as_ref(), &store.client()).await;
                                             } else {
-                                                children.inbox(request, &mut conversation, model.as_ref(), &store.client()).await;
+                                                children.inbox(request, conversation, model.as_ref(), &store.client()).await;
                                             }
                                         } else if let Some(event) = event {
                                             let task = model
@@ -1119,9 +1112,12 @@ impl AgentRuntime {
                                                 && let Some(bound) = task.control.turn.get() {
                                                 children.steer_wait(agentelier_conversation::AgentId::for_root(bound.session));
                                             }
-                                            progress(&mut conversation, task.id, event, &store.client(), &publish)?;
+                                            let admitted = if matches!(&event, RunnerEvent::Record(record) if matches!(&record.event, agentelier_conversation::RecordEvent::Accepted { .. })) {
+                                                title_admissions.remove(&task.id)
+                                            } else { None };
+                                            progress(conversation, task.id, event, &store.client(), &publish, admitted)?;
                                         } else {
-                                            progress_events = None;
+                                            *progress_events = None;
                                         }
                                     }
                                     Command::Conversation {
@@ -1133,23 +1129,16 @@ impl AgentRuntime {
                                     } => {
                                         let replacing = match &request {
                                             ConversationRequest::Delete { session } => conversation.current().is_some_and(|current| current.id == *session),
-                                            ConversationRequest::Create(_) | ConversationRequest::Open { .. } | ConversationRequest::Reset { .. } | ConversationRequest::SetWorkingDirectory { .. } => true,
+                                            ConversationRequest::Create(_) | ConversationRequest::CreateAndSend { .. } | ConversationRequest::Open { .. } | ConversationRequest::Reset { .. } | ConversationRequest::SetWorkingDirectory { .. } => true,
                                             _ => false,
                                         };
-                                        let can_park = matches!(&request, ConversationRequest::Open { .. } | ConversationRequest::Create(_));
-                                        if let ConversationRequest::Delete { session } = &request
-                                            && background.contains(*session)
-                                        {
-                                            control.finished.cancel();
-                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("该会话仍有后台任务或进程，结束后可删除".into())))?;
-                                            continue;
-                                        }
-                                        if replacing && children.has_active() {
+                                        let can_park = matches!(&request, ConversationRequest::Open { .. } | ConversationRequest::Create(_) | ConversationRequest::CreateAndSend { .. });
+                                        if replacing && !can_park && children.has_active() {
                                             control.finished.cancel();
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("当前会话仍有子 Agent 正在执行".into())))?;
                                             continue;
                                         }
-                                        if replacing && let Err(failure) = conversation.check_replacement() {
+                                        if replacing && !can_park && let Err(failure) = conversation.check_replacement() {
                                             control.finished.cancel();
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
                                             continue;
@@ -1164,7 +1153,7 @@ impl AgentRuntime {
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("当前会话仍有后台任务或结果正在保存".into())))?;
                                             continue;
                                         }
-                                        if replacing && !task_receipts.is_empty() {
+                                        if replacing && !can_park && !task_receipts.is_empty() {
                                             control.finished.cancel();
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("仍有任务控制正在确认结果".into())))?;
                                             continue;
@@ -1176,19 +1165,21 @@ impl AgentRuntime {
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("当前会话有未确认的执行或保存结果".into())))?;
                                             continue;
                                         }
-                                        if model.is_some() || creating.is_some() || loading.is_some() || deleting.is_some() || suspending != 0 || finalizing || pending_queue {
+                                        let session_busy = model.is_some() || *finalizing || *pending_queue;
+                                        let structural = replacing || matches!(&request, ConversationRequest::Delete { .. });
+                                        if (!can_park && session_busy) || deleting_target || (structural && (creating.is_some() || loading.is_some() || deleting.is_some())) || suspending != 0 || pending_source.is_some() {
                                             control.finished.cancel();
                                             let reason = if replacing { "任务正在回收或会话保存正在进行，暂不能替换会话" } else { "排队任务已经开始，当前发送未接纳，草稿保留" };
                                             emit(&publish,id,AgentEventKind::Conversation(ConversationEvent::Rejected(reason.into())))?;
                                             continue;
                                         }
-                                        if replacing && !matches!(&request, ConversationRequest::SetWorkingDirectory { .. }) {
-                                            children.release_idle(&mut conversation)?;
+                                        if replacing && !can_park && !matches!(&request, ConversationRequest::SetWorkingDirectory { .. }) {
+                                            children.release_idle(conversation)?;
                                         }
                                         match request {
                                             ConversationRequest::Delete { session } => {
                                                 match if saving_metadata.is_some() { Err(io::Error::other("名称写入尚未完成，请稍后删除")) } else { deleting::Deleting::start(id, control.clone(), session, &store) } {
-                                                    Ok(pending) => { *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control); deleting = Some(pending); }
+                                                    Ok(pending) => deleting = Some(pending),
                                                     Err(failure) => { control.finished.cancel(); emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?; }
                                                 }
                                             }
@@ -1198,26 +1189,8 @@ impl AgentRuntime {
                                                     emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Opened(view)))?;
                                                     continue;
                                                 }
-                                                if let Some(resident) = background.take(session) {
-                                                    let previous = std::mem::replace(&mut conversation, resident.conversation);
-                                                    let previous_tools = session_tools.replace((session, resident.tools));
-                                                    background.detach(previous, previous_tools).await?;
-                                                    let view = conversation.current().ok_or(RuntimeFailure::ModelState)?;
-                                                    control.finished.cancel();
-                                                    debug!(%session, "重新选中已保留后台资源的会话");
-                                                    emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Opened(view)))?;
-                                                    model_task::publish_tasks(&conversation, &publish)?;
-                                                    if let Some((_, tools)) = &session_tools {
-                                                        let processes = tools.process_views.borrow().projection(session);
-                                                        emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Processes(processes)))?;
-                                                    }
-                                                    continue;
-                                                }
                                                 match loading::Loading::start(id, Some(control.clone()), session, &store) {
-                                                    Ok(pending) => {
-                                                        *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control);
-                                                        loading = Some(pending);
-                                                    }
+                                                    Ok(pending) => loading = Some(pending),
                                                     Err(failure) => {
                                                         control.finished.cancel();
                                                         emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(failure.to_string())))?;
@@ -1225,7 +1198,7 @@ impl AgentRuntime {
                                                 }
                                             }
                                             ConversationRequest::SetWorkingDirectory { session, directory } => {
-                                                let result = creation::save_working_directory(id, session, &directory, &mut conversation, &store).await;
+                                                let result = creation::save_working_directory(id, session, &directory, conversation, &store).await;
                                                 control.finished.cancel();
                                                 let event = match result {
                                                     Ok(view) => ConversationEvent::WorkingDirectorySaved(view),
@@ -1233,7 +1206,7 @@ impl AgentRuntime {
                                                 };
                                                 emit(&publish, id, AgentEventKind::Conversation(event))?;
                                             }
-                                            request @ (ConversationRequest::Create(_) | ConversationRequest::Reset { .. }) => {
+                                            request @ (ConversationRequest::Create(_) | ConversationRequest::CreateAndSend { .. } | ConversationRequest::Reset { .. }) => {
                                                 let source = match model_source(&account) {
                                                     Ok(source) => source.clone(),
                                                     Err(failure) => {
@@ -1259,6 +1232,11 @@ impl AgentRuntime {
                                                     }
                                                 } else { None };
                                                 let tools = mcp_connections.registrations();
+                                                let (request, first) = match request {
+                                                    ConversationRequest::CreateAndSend { create, input } => (ConversationRequest::Create(create), Some(input)),
+                                                    request => (request, None),
+                                                };
+                                                let next = make_owner()?;
                                                 let prepared = match request {
                                                     ConversationRequest::Create(create) => async {
                                                         use agentelier_conversation::SessionLocation;
@@ -1274,16 +1252,25 @@ impl AgentRuntime {
                                                             }
                                                         };
                                                         let settings = create.resolve(source, models, directory)?;
-                                                        conversation.prepare(settings, &tools, snapshot).map(|prepared| (prepared, project))
+                                                        next.conversation.prepare(settings, &tools, snapshot).map(|prepared| (prepared, project))
                                                     }.await,
-                                                    ConversationRequest::Reset { session } => conversation.prepare_reset(session, &tools, snapshot).map(|prepared| (prepared, None)),
+                                                    ConversationRequest::Reset { session } => conversation.current()
+                                                        .filter(|view| view.id == session)
+                                                        .ok_or_else(|| ConversationFailure::new("要重置的会话已变化"))
+                                                        .and_then(|view| next.conversation.prepare(*view.settings, &tools, snapshot))
+                                                        .map(|prepared| (prepared, None)),
                                                     _ => return Err(RuntimeFailure::ModelState),
                                                 };
-                                                match prepared.and_then(|(prepared, project)| creation::Creation::start(id, control.clone(), prepared, project, &store)) {
-                                                    Ok(pending) => {
-                                                        *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)? = Some(control);
-                                                        creating = Some(pending);
+                                                let started = prepared.and_then(|(prepared, project)| {
+                                                    if let Some(input) = &first {
+                                                        prepared.check_first_input(input)?;
                                                     }
+                                                    let mut pending = creation::Creation::start(id, control.clone(), prepared, project, &store)?;
+                                                    pending.first = first.map(|input| creation::FirstMessage { input, steers, task_actions });
+                                                    Ok(pending)
+                                                });
+                                                match started {
+                                                    Ok(pending) => creating = Some((pending, next)),
                                                     Err(failure) => {
                                                         control.finished.cancel();
                                                         emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
@@ -1292,15 +1279,16 @@ impl AgentRuntime {
                                             }
                                             request @ (ConversationRequest::Send { .. } | ConversationRequest::Retry { .. } | ConversationRequest::ContinueWithoutCompaction { .. } | ConversationRequest::ProcessResults { .. }) => {
                                                 if let Err(failure) = model_source(&account).and_then(|source| conversation.validate_model_source(source)) {
+                                                    title_admissions.remove(&id);
                                                     control.finished.cancel();
                                                     emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
                                                     continue;
                                                 }
                                                 match conversation.start(id, request) {
                                                     Ok(view) => {
-                                                        let tools = tool_jobs::SessionTools::for_session(&mut session_tools, &view, &conversation, store.client(), &ecs_access);
-                                                        control.bind_root(&mut conversation, &view)?;
-                                                        *owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?=Some(control.clone());
+                                                        let tools = tool_jobs::SessionTools::for_session(session_tools, &view, &conversation, store.client(), &ecs_access);
+                                                        control.bind_root(conversation, &view)?;
+                                                        owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.insert(id, control.clone());
                                                         emit(
                                                             &publish,
                                                             id,
@@ -1310,8 +1298,8 @@ impl AgentRuntime {
                                                         )?;
                                                         let (sender, receiver) =
                                                             mpsc::channel(PROGRESS_CAPACITY);
-                                                        progress_events = Some(receiver);
-                                                        model = Some(ModelTask::start(
+                                                        *progress_events = Some(receiver);
+                                                        *model = Some(ModelTask::start(
                                                             id,
                                                             control,
                                                             owner_credentials.clone(),
@@ -1319,6 +1307,7 @@ impl AgentRuntime {
                                                         ));
                                                     }
                                                     Err(failure) => {
+                                                        title_admissions.remove(&id);
                                                         control.finished.cancel();
                                                         emit(
                                                             &publish,
@@ -1399,23 +1388,16 @@ impl AgentRuntime {
                                             }
                                             requesting_catalog = None;
                                             model_catalog = None;
+                                            title_admissions.clear();
                                             memory_dialogue.stop("account_changed", &store, &publish).await?;
-                                            if let Some(task) = &model {
-                                                task.control.cancel.cancel();
-                                            }
-                                            children.settle_active(&store.client(), &mut conversation, Some(&mut mailbox_requests)).await?;
-                                            if model.is_some() { stop_model(&mut model, &mut progress_events, &mut conversation, &store, &publish).await?; }
-                                            if let Some((session, tools)) = session_tools.take() {
-                                                let processes = tools.process_views.clone();
-                                                model_task::finish_tools(tools, "account_changed", &mut conversation, &store.client(), &publish).await?;
-                                                let update = conversation.retain_closed_processes(session, processes.borrow().clone())?;
-                                                emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Processes(update)))?;
-                                            }
-                                            background.finish("account_changed", &store.client(), &publish).await?;
-                                            if let Some(event) = conversation.suspend_queue()? {
-                                                let session = event.session();
-                                                recording::submit(recording::Pending::Suspended { session }, event, &store, &mut records);
-                                                suspending = suspending.checked_add(1).ok_or(RuntimeFailure::ModelState)?;
+                                            for owner in owners.values() { owner.cancel(); }
+                                            for owner in owners.values_mut() {
+                                                owner.stop("account_changed", &store, &publish).await?;
+                                                if let Some(event) = owner.conversation.suspend_queue()? {
+                                                    let session = event.session();
+                                                    recording::submit(recording::Pending::Suspended { session }, event, &store, &mut owner.records);
+                                                    suspending = suspending.checked_add(1).ok_or(RuntimeFailure::ModelState)?;
+                                                }
                                             }
                                         }
                                         if let Some(event) = source_event {
@@ -1426,7 +1408,7 @@ impl AgentRuntime {
                                         }
                                     }
                                 }
-                                if suspending == 0 && !pending_queue && !finalizing
+                                if suspending == 0 && owners.values().all(|owner| !owner.pending_queue && !owner.finalizing)
                                     && (refresh.is_none() || matches!(pending_source, Some(SourceSettlement::Publish(_))))
                                     && let Some(settlement) = pending_source.take()
                                 {
@@ -1464,31 +1446,10 @@ impl AgentRuntime {
                                 capture_delivery(Err(failure.into()), &mut delivery_failure);
                             }
                         }
-                        drop(spawn_requests);
-                        if let Some(task) = &model {
-                            task.control.cancel.cancel();
+                        for owner in owners.values() { owner.cancel(); }
+                        for owner in owners.values_mut() {
+                            capture_delivery(owner.stop("application_shutdown", &store, &publish).await, &mut delivery_failure);
                         }
-                        capture_delivery(
-                            children.stop(&store.client(), &mut conversation, &mut mailbox_requests).await,
-                            &mut delivery_failure,
-                        );
-                        drop(mailbox_requests);
-                        drop(children);
-                        capture_delivery(
-                            stop_model(
-                                &mut model,
-                                &mut progress_events,
-                                &mut conversation,
-                                &store,
-                                &publish,
-                            )
-                            .await,
-                            &mut delivery_failure,
-                        );
-                        if let Some((_, tools)) = session_tools.take() {
-                            capture_delivery(model_task::finish_tools(tools, "application_shutdown", &mut conversation, &store.client(), &publish).await, &mut delivery_failure);
-                        }
-                        capture_delivery(background.finish("application_shutdown", &store.client(), &publish).await, &mut delivery_failure);
                         if let Some(job) = material {
                             job.cancel.cancel();
                             if job.task.await.is_err() {
@@ -1496,6 +1457,13 @@ impl AgentRuntime {
                             }
                         }
                         while skill_jobs.join_next().await.is_some() {}
+                        while let Some(result) = title_jobs.join_next().await {
+                            match result {
+                                Ok((session, Err(failure))) => error!(session_id = %session, %failure, "关闭期间会话标题保存失败"),
+                                Err(failure) => error!(%failure, "关闭期间会话标题任务异常结束"),
+                                Ok((_, Ok(_))) => {}
+                            }
+                        }
                         while let Some(result) = image_attachments.join_next().await {
                             match result {
                                 Ok((id, Err(failure))) => error!(operation_id = id, error = %failure, "关闭期间处理生成图片附件失败"),
@@ -1515,21 +1483,30 @@ impl AgentRuntime {
                         let memory_worker_finished = if let Some(worker) = memory_worker {
                             worker.stop().await
                         } else { Ok(()) };
-                        while let Some(result) = records.join_next().await {
-                            match result {
-                                Ok((pending, result)) => capture_delivery(recording::apply(pending, result, &mut conversation, &publish).map(|_| ()), &mut delivery_failure),
-                                Err(_) => { delivery_failure = delivery_failure.or(Some(RuntimeFailure::ModelState)); }
-                            }
-                        }
                         if let Some(mut pending) = saving_metadata { let result = pending.wait().await; let id = pending.id; capture_delivery(emit(&publish, id, AgentEventKind::Conversation(pending.complete(result))), &mut delivery_failure); }
-                        if let Some(mut pending) = deleting { let result = pending.wait().await; let id = pending.id; capture_delivery(emit(&publish, id, AgentEventKind::Conversation(pending.complete(result, &mut conversation))), &mut delivery_failure); }
-                        while let Some(receipt) = task_receipts.join_next().await {
-                            if let Err(failure) = receipt {
-                                tracing::error!(%failure, "任务控制收尾失败");
-                                delivery_failure = delivery_failure.or(Some(RuntimeFailure::ModelState));
+                        if let Some(mut pending) = deleting {
+                            let result = pending.wait().await;
+                            let id = pending.id;
+                            let target = owners.get_mut(&Some(pending.session())).map(|owner| &mut owner.conversation);
+                            let mut empty = Conversation::default();
+                            let target = target.unwrap_or(&mut empty);
+                            capture_delivery(emit(&publish, id, AgentEventKind::Conversation(pending.complete(result, target))), &mut delivery_failure);
+                        }
+                        for owner in owners.values_mut() {
+                            while let Some(result) = owner.records.join_next().await {
+                                match result {
+                                    Ok((pending, result)) => capture_delivery(recording::apply(pending, result, &mut owner.conversation, &publish).map(|_| ()), &mut delivery_failure),
+                                    Err(_) => { delivery_failure = delivery_failure.or(Some(RuntimeFailure::ModelState)); }
+                                }
+                            }
+                            while let Some(receipt) = owner.receipts.join_next().await {
+                                if let Err(failure) = receipt {
+                                    tracing::error!(%failure, "任务控制收尾失败");
+                                    delivery_failure = delivery_failure.or(Some(RuntimeFailure::ModelState));
+                                }
                             }
                         }
-                        drop(conversation);
+                        drop(owners);
                         let stored = store.finish().await.map_err(RuntimeFailure::Store);
                         if stored.is_ok() {
                             debug!("会话存储已排空并关闭");
@@ -1550,7 +1527,7 @@ impl AgentRuntime {
                             capture_delivery(Err(failure.into()), &mut delivery_failure);
                         }
                         if let Some(pending) = loading && let Some(control) = pending.control { control.finished.cancel(); }
-                        let pending_saved = if let Some(mut pending) = creating {
+                        let pending_saved = if let Some((mut pending, _)) = creating {
                             let saved = pending.wait().await;
                             pending.control.finished.cancel();
                             saved.and_then(|commit| match commit.summary_failure {
@@ -1648,7 +1625,7 @@ impl AgentRuntime {
         session: SessionId,
         path: Option<PathBuf>,
     ) -> Result<(), RuntimeFailure> {
-        self.send(Command::AudioDraft(id, session, path))
+        self.submit(Command::AudioDraft(id, session, path))
     }
 
     pub fn transcribe_audio(
@@ -1657,11 +1634,11 @@ impl AgentRuntime {
         session: SessionId,
         audio: AudioId,
     ) -> Result<(), RuntimeFailure> {
-        self.send(Command::TranscribeAudio(id, session, audio))
+        self.submit(Command::TranscribeAudio(id, session, audio))
     }
 
     pub fn cancel_transcription(&self, id: u64, session: SessionId) -> Result<(), RuntimeFailure> {
-        self.send(Command::CancelTranscription(id, session))
+        self.submit(Command::CancelTranscription(id, session))
     }
 
     pub fn mcp_material(
@@ -1727,26 +1704,13 @@ impl AgentRuntime {
         request: ConversationRequest,
     ) -> Result<(), RuntimeFailure> {
         let (control, steers, task_actions) = ModelControl::new(id);
-        let replacing = matches!(
-            request,
-            ConversationRequest::Create(_)
-                | ConversationRequest::Open { .. }
-                | ConversationRequest::Reset { .. }
-                | ConversationRequest::SetWorkingDirectory { .. }
-                | ConversationRequest::Delete { .. }
-        );
-        let command = Command::Conversation {
+        self.submit(Command::Conversation {
             steers,
             task_actions,
             id,
             control,
             request,
-        };
-        if replacing {
-            self.submit(command)
-        } else {
-            self.send(command)
-        }
+        })
     }
     pub fn request_task_action(
         &self,
@@ -1803,13 +1767,13 @@ impl AgentRuntime {
         id: u64,
         change: agentelier_conversation::ProjectChange,
     ) -> Result<(), RuntimeFailure> {
-        self.send(Command::ChangeProject(id, change))
+        self.submit(Command::ChangeProject(id, change))
     }
 
-    fn active_model(&self) -> Result<Option<ModelControl>, RuntimeFailure> {
+    fn active_model(&self, operation: u64) -> Result<Option<ModelControl>, RuntimeFailure> {
         self.model
             .lock()
-            .map(|model| model.clone())
+            .map(|models| models.get(&operation).cloned())
             .map_err(|_| RuntimeFailure::ModelState)
     }
     pub fn request_session(&self, command: SessionCommand) -> Result<(), RuntimeFailure> {
@@ -1826,7 +1790,7 @@ impl AgentRuntime {
     }
 
     pub fn steer_conversation(&self, input: SteerInput) -> Result<(), RuntimeFailure> {
-        let model = self.active_model()?;
+        let model = self.active_model(input.operation_id)?;
         let control = model
             .as_ref()
             .filter(|control| {
@@ -1853,7 +1817,7 @@ impl AgentRuntime {
         turn: u64,
         operation: u64,
     ) -> Result<bool, RuntimeFailure> {
-        let model = self.active_model()?;
+        let model = self.active_model(operation)?;
         let Some(control) = model.as_ref().filter(|control| {
             control.id == operation
                 && control.matches_turn(session, turn)
@@ -1866,9 +1830,11 @@ impl AgentRuntime {
     }
     fn send(&self, command: Command) -> Result<(), RuntimeFailure> {
         if self
-            .active_model()?
-            .as_ref()
-            .is_some_and(|model| !model.finished.is_cancelled())
+            .model
+            .lock()
+            .map_err(|_| RuntimeFailure::ModelState)?
+            .values()
+            .any(|model| !model.finished.is_cancelled())
         {
             return Err(AccountFailure::Busy.into());
         }
@@ -1891,9 +1857,8 @@ impl AgentRuntime {
     }
     pub fn begin_shutdown(&mut self) {
         self.shutdown.cancel();
-        match self.active_model() {
-            Ok(Some(model)) => model.cancel.cancel(),
-            Ok(None) => {}
+        match self.model.lock() {
+            Ok(models) => models.values().for_each(|model| model.cancel.cancel()),
             Err(failure) => error!(error=%failure,"关闭时无法读取活动任务，运行线程仍将回收任务"),
         }
         self.commands = None;

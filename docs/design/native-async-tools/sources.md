@@ -33,7 +33,7 @@
 - [Runner](../../../crates/agent/turn_runner/src/runner.rs)、[Runtime](../../../crates/agent/runtime/src/runtime.rs)、[前台任务回收](../../../crates/agent/runtime/src/runtime/model_task.rs)。
 - [工具注册](../../../crates/agent/tools/src/catalog.rs)、[进程会话](../../../crates/agent/tools/src/sessions.rs)、[MCP 调用](../../../crates/agent/mcp/src/call.rs)。
 - [存储读取与记忆来源](../../../crates/agent/session_store/src/reader.rs)、[记忆提取](../../../crates/agent/memory/src/extraction.rs)。
-- [聊天事件接收](../../../crates/ui/chat_ui/src/conversation.rs)、[工具时间线](../../../crates/ui/chat_ui/src/tool_timeline.rs)、[活动输入](../../../crates/ui/chat_ui/src/active_input.rs)。
+- [聊天事件接收与请求核对](../../../crates/ui/chat_ui/src/conversation.rs)、[活动输入](../../../crates/ui/chat_ui/src/active_input.rs)。
 
 旧设计中“生成期间不能发送”以及“Turn 完成代表全部工具资源结束”等表述，不能直接当成目标行为。前者需以当前 Steer 代码核对，后者正是本次要改变的边界。
 

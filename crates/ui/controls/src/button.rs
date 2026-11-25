@@ -7,7 +7,7 @@ use bevy_widgetry::button::{
     WidgetryButton, WidgetryButtonColorOverrides, WidgetryButtonStateColorOverrides,
 };
 use bevy_widgetry::disabled::WidgetryEffectiveDisabled;
-use bevy_widgetry::theme::WidgetryTheme;
+use bevy_widgetry::theme::{WIDGETRY_LIGHT_THEME, WidgetryTheme};
 
 const BUTTON_HEIGHT: f32 = 36.0;
 const BUTTON_RADIUS: f32 = 6.0;
@@ -22,6 +22,7 @@ pub enum AgentelierButtonStyle {
     Primary,
     Secondary,
     Danger,
+    FilledDanger,
     Icon,
     DangerIcon,
 }
@@ -94,24 +95,39 @@ impl AgentelierButtonStyle {
                 ),
                 ..default()
             },
-            Self::Danger => WidgetryButtonColorOverrides {
-                normal: surface(
-                    theme.window.frame.normal.background.mix(
-                        &theme.window.close.pressed.background,
-                        DANGER_IDLE_INTENSITY,
+            Self::Danger => {
+                let danger = WIDGETRY_LIGHT_THEME.window.close;
+                WidgetryButtonColorOverrides {
+                    normal: surface(
+                        theme
+                            .window
+                            .frame
+                            .normal
+                            .background
+                            .mix(&Color::NONE, DANGER_IDLE_INTENSITY),
+                        theme.text.normal.foreground,
                     ),
-                    theme.text.normal.foreground,
-                ),
-                hovered: surface(
-                    theme.window.close.hovered.background,
-                    theme.window.close.hovered.foreground,
-                ),
-                pressed: surface(
-                    theme.window.close.pressed.background,
-                    theme.window.close.pressed.foreground,
-                ),
-                ..default()
-            },
+                    hovered: surface(Color::NONE, danger.hovered.background),
+                    pressed: surface(Color::NONE, danger.pressed.background),
+                    ..default()
+                }
+            }
+            Self::FilledDanger => {
+                let red = |background, foreground| WidgetryButtonStateColorOverrides {
+                    background: Some(background),
+                    border: Some(background),
+                    foreground: Some(foreground),
+                };
+                WidgetryButtonColorOverrides {
+                    normal: red(Color::srgb_u8(0xAA, 0x30, 0x39), Color::WHITE),
+                    hovered: red(Color::srgb_u8(0xBE, 0x36, 0x40), Color::WHITE),
+                    pressed: red(Color::srgb_u8(0x91, 0x26, 0x30), Color::WHITE),
+                    disabled: red(
+                        Color::srgb_u8(0xF4, 0xD3, 0xD4),
+                        Color::srgb_u8(0x90, 0x50, 0x55),
+                    ),
+                }
+            }
             Self::DangerIcon => {
                 let icon_surface = |background| WidgetryButtonStateColorOverrides {
                     background: Some(background),
@@ -149,7 +165,16 @@ fn update_style(
             button.style.shape(&mut node);
         }
         if button.is_changed() || theme.is_changed() {
-            WidgetryButtonColorOverrides::set(&mut commands, entity, button.style.colors(&theme));
+            let colors = button.style.colors(&theme);
+            commands.queue(move |world: &mut World| -> Result {
+                // A virtual row can be replaced before this style update is applied.
+                if world.get_entity(entity).is_err() {
+                    return Ok(());
+                }
+                WidgetryButtonColorOverrides::set_in_world(world, entity, colors)
+                    .map_err(|failure| failure.into_bevy_error())?;
+                Ok(())
+            });
         }
     }
 }

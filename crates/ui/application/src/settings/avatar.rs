@@ -19,7 +19,6 @@ use bevy_widgetry::job::{JobId, JobManager, JobOptions, JobOutcome, JobRead, Job
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::slider::{WidgetrySlider, WidgetrySliderPlugin};
 use bevy_widgetry::text::WidgetryText;
-use bevy_widgetry::tooltip::{TooltipContentFactory, WidgetryTooltip};
 use bevy_widgetry::window::{
     WidgetryWindowBackground, owned_widgetry_window, widgetry_window_target,
 };
@@ -133,7 +132,6 @@ pub(super) fn section() -> impl Scene {
                         Pickable::IGNORE
                     },
                 }
-                @WidgetryTooltip { @content: {TooltipContentFactory::new(|| bsn_list! { Text("移除头像") WidgetryText })} }
                 Name("SettingsRemoveAvatar")
                 Node { display: Display::None, width: px(remove_size), height: px(remove_size), min_height: px(0) }
                 template(|_| Ok(Action::Remove)) on(activate)

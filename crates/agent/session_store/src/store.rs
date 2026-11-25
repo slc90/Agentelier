@@ -80,6 +80,11 @@ enum Command {
         agentelier_conversation::SessionMetadataChange,
         oneshot::Sender<io::Result<MetadataCommit>>,
     ),
+    GeneratedTitle(
+        SessionId,
+        String,
+        oneshot::Sender<io::Result<Option<Commit>>>,
+    ),
     Project(
         agentelier_conversation::ProjectChange,
         oneshot::Sender<io::Result<()>>,
@@ -219,6 +224,21 @@ impl SessionStoreClient {
     }
     pub fn scan(&self) -> io::Result<oneshot::Receiver<io::Result<ArchiveCatalog>>> {
         self.scan_catalog(false)
+    }
+
+    pub async fn save_generated_title(
+        &self,
+        session: SessionId,
+        title: String,
+    ) -> io::Result<Option<Commit>> {
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::GeneratedTitle(session, title, reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("会话标题提交未返回结果"))?
     }
 
     pub fn scan_startup(&self) -> io::Result<oneshot::Receiver<io::Result<ArchiveCatalog>>> {
@@ -450,6 +470,7 @@ impl SessionStore {
                     match command {
                         Command::Delete(session, reply) => { let _closed = reply.send(crate::deletion::delete(&root, session, &mut writer)); }
                         Command::ChangeMetadata(session, change, reply) => { let _closed = reply.send(writer.change_metadata(&root, session, change)); }
+                        Command::GeneratedTitle(session, title, reply) => { let _closed = reply.send(writer.save_generated_title(&root, session, &title)); }
                         Command::Project(change, reply) => {
                             drop(reply.send(crate::projects::apply(&root, change)));
                         }
