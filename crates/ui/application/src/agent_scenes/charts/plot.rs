@@ -311,7 +311,7 @@ pub(super) fn install(app: &mut App) {
         .add_systems(PostUpdate, fit.after(UiSystems::Layout));
 }
 
-pub(super) fn mount(
+fn mount(
     world: &mut World,
     parent: Entity,
     content: Content,
@@ -406,30 +406,17 @@ fn decorate(
         };
         let mut layers = Vec::new();
         for (index, mark) in marks.iter().enumerate() {
-            let transform = Transform::default();
-            if matches!(style, Style::Line) && mark.commands.is_empty() {
-                continue;
-            }
             let (geometry, paint) = mark.geometry();
-            let path = match style {
-                Style::Line => {
-                    CanvasDocument::create_path(world, token, geometry, transform, paint)?
-                }
-                Style::Scatter
-                | Style::Area
-                | Style::Bars
-                | Style::Histogram
-                | Style::BoxPlot
-                | Style::Combined => {
-                    let id =
-                        CanvasDocument::create_layer(world, token, index + 1, &mark.legend.name)?;
-                    let path = CanvasDocument::create_path_in_layer(
-                        world, token, id, geometry, transform, paint,
-                    )?;
-                    layers.push(Layer { id, path });
-                    path
-                }
-            };
+            let id = CanvasDocument::create_layer(world, token, index + 1, &mark.legend.name)?;
+            let path = CanvasDocument::create_path_in_layer(
+                world,
+                token,
+                id,
+                geometry,
+                Transform::default(),
+                paint,
+            )?;
+            layers.push(Layer { id, path });
             world
                 .entity_mut(path)
                 .insert(Name::new(format!("ChartSeries-{index}")));

@@ -9,12 +9,14 @@ mod pie;
 mod plot;
 pub(super) mod scatter;
 
-use agentelier_agent_host::{AgentHostPlugin, EcsError};
+use agentelier_agent_host::{AgentHostPlugin, EcsError, SceneDefinition};
 use bevy::{math::DVec2, prelude::*};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, io};
 
 use axis::{Axis, AxisKind, AxisSpec, Coordinate, Range};
+
+pub(super) const LINE_CHART: &str = "agentelier.line_chart";
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -25,6 +27,7 @@ struct LineProperties {
     x_axis: AxisSpec<Coordinate>,
     y_axis: AxisSpec<f64>,
     series: Vec<LineSeries>,
+    selected_series: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -37,7 +40,7 @@ struct LineSeries {
 
 pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
     host.with_ecs_scene_factory(
-        "agentelier.line_chart",
+        LINE_CHART,
         "Display observed data as a native multi-series line chart. Null Y values break lines.",
         &[
             ("title", "Optional nonblank title."),
@@ -45,11 +48,13 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
             ("x_axis", "Required {label, unit?, range?}. range has two increasing values of the X kind. Omit range to fit observed X coordinates."),
             ("y_axis", "Required {label, unit?, range?}. range has two increasing numbers. Omit range to fit measured Y values."),
             ("series", "Required 1 to 8 named series [{name, color?, points}]. color is [R,G,B]. Each point is [x,y] and y is a number or null. Series are sorted by x, preserving input order of ties."),
+            ("selected_series", "Optional series name. Null or omitted shows all. A composition can use series_filter."),
         ],
         line,
         None,
         None,
-    )
+    )?
+    .with_conditional_ecs_scene_update(LINE_CHART, update_line)
     .and_then(scatter::register)
     .and_then(area::register)
     .and_then(bars::register)
@@ -100,15 +105,42 @@ fn line(
     parent: Entity,
     props: LineProperties,
 ) -> std::result::Result<Entity, EcsError> {
+    let selection = props.selected_series.clone();
+    let content = prepare_line(props).map_err(invalid)?;
+    let root = plot::RetainedPlot::build(world, parent, content, plot::Style::Line)?;
+    if let Err(error) = plot::RetainedPlot::select_series(world, root, selection.as_deref()) {
+        world.despawn(root);
+        return Err(construction(error));
+    }
+    Ok(root)
+}
+
+fn update_line(world: &mut World, root: Entity, props: LineProperties) -> Result<bool> {
+    let selection = props.selected_series.clone();
+    let content = prepare_line(props)?;
+    if !plot::RetainedPlot::update(world, root, &content)? {
+        return Ok(false);
+    }
+    plot::RetainedPlot::select_series(world, root, selection.as_deref())?;
+    Ok(true)
+}
+
+fn prepare_line(props: LineProperties) -> Result<plot::Content> {
     let LineProperties {
         title,
         x_kind,
         x_axis,
         y_axis,
         series,
+        selected_series,
     } = props;
-    let valid = prepare_continuous(x_kind, x_axis, y_axis, series, None).map_err(invalid)?;
-    let (x, y, series) = valid;
+    if selected_series
+        .as_ref()
+        .is_some_and(|name| !series.iter().any(|series| &series.name == name))
+    {
+        return Err(io::Error::other("selected_series 缺少对应折线系列").into());
+    }
+    let (x, y, series) = prepare_continuous(x_kind, x_axis, y_axis, series, None)?;
     let plots = series
         .into_iter()
         .map(|series| {
@@ -124,19 +156,35 @@ fn line(
             }
         })
         .collect();
-    plot::mount(
-        world,
-        parent,
-        plot::Content {
-            title,
-            x,
-            y,
-            marks: plots,
-            baseline: None,
-        },
-        plot::Style::Line,
-    )
-    .map(|plot| plot.root)
+    Ok(plot::Content {
+        title,
+        x,
+        y,
+        marks: plots,
+        baseline: None,
+    })
+}
+
+pub(super) fn validate_line_choices<'a>(
+    scene: &SceneDefinition,
+    values: impl IntoIterator<Item = &'a str>,
+    all: Option<&str>,
+) -> Result {
+    let properties: LineProperties =
+        serde_json::from_value(serde_json::Value::Object(scene.props.clone()))?;
+    let names: BTreeSet<_> = properties
+        .series
+        .iter()
+        .map(|series| series.name.as_str())
+        .collect();
+    if all.is_some_and(|name| names.contains(name))
+        || values
+            .into_iter()
+            .any(|name| Some(name) != all && !names.contains(name))
+    {
+        return Err(io::Error::other("折线筛选需要匹配系列名称，全部选项不能与系列重名").into());
+    }
+    Ok(())
 }
 
 fn prepare_continuous(

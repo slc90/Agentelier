@@ -9,7 +9,10 @@ use serde_json::{Value as Json, json};
 use std::{collections::BTreeMap, io};
 
 use super::{
-    charts::{bars, boxplot, combined, heatmap, histogram, scatter, select_series},
+    charts::{
+        LINE_CHART, bars, boxplot, combined, heatmap, histogram, scatter, select_series,
+        validate_line_choices,
+    },
     data_table,
     discrete::{DiscreteChange, DiscreteValue},
     numeric::{NumericChange, NumericValue},
@@ -101,6 +104,8 @@ pub(super) enum Binding {
     SeriesFilter {
         parameter: String,
         all: Option<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        map: BTreeMap<String, String>,
     },
     CategoryFilter {
         parameter: String,
@@ -284,7 +289,7 @@ impl Parameters {
                         return Err(parameter_error(parameter, "显隐需要布尔值"));
                     }
                 }
-                Binding::SeriesFilter { parameter, all }
+                Binding::SeriesFilter { parameter, all, .. }
                 | Binding::CategoryFilter { parameter, all } => {
                     let by_category = matches!(binding, Binding::CategoryFilter { .. });
                     let (seen, property) = if by_category {
@@ -309,10 +314,33 @@ impl Parameters {
                     else {
                         return Err(parameter_error(parameter, "图表筛选需要选择值"));
                     };
-                    let selected = (all.as_ref() != Some(current)).then_some(current);
-                    let values = options.iter().map(|option| option.value.as_str());
+                    let map = if let Binding::SeriesFilter { map, .. } = binding {
+                        Some(map)
+                    } else {
+                        None
+                    };
+                    if map.is_some_and(|map| {
+                        map.iter().any(|(value, series)| {
+                            all.as_ref() == Some(value)
+                                || all.as_ref() == Some(series)
+                                || !options.iter().any(|option| &option.value == value)
+                        })
+                    }) {
+                        return Err(parameter_error(
+                            parameter,
+                            "系列映射需要已有选项，不能映射全部选项",
+                        ));
+                    }
+                    let selected =
+                        (all.as_ref() != Some(current)).then(|| mapped_series(current, map));
+                    let values = options
+                        .iter()
+                        .map(|option| mapped_series(&option.value, map));
                     scene.props.insert(property.into(), json!(selected));
                     match scene.template.as_str() {
+                        LINE_CHART if !by_category => {
+                            validate_line_choices(scene, values, all.as_deref())?
+                        }
                         bars::TEMPLATE => {
                             bars::validate_choices(scene, values, all.as_deref(), by_category)?
                         }
@@ -704,9 +732,14 @@ fn project(
                         set_visible(world, root, *value);
                     }
                 }
-                Binding::SeriesFilter { parameter, all } if parameter == name => {
+                Binding::SeriesFilter {
+                    parameter,
+                    all,
+                    map,
+                } if parameter == name => {
                     if let Value::Choice(value) = value {
-                        let selected = (all.as_ref() != Some(value)).then_some(value.as_str());
+                        let selected =
+                            (all.as_ref() != Some(value)).then(|| mapped_series(value, Some(&map)));
                         select_series(world, root, selected)?;
                     }
                 }
@@ -749,6 +782,11 @@ fn project(
         }
     }
     Ok(())
+}
+
+fn mapped_series<'a>(value: &'a str, map: Option<&'a BTreeMap<String, String>>) -> &'a str {
+    map.and_then(|map| map.get(value))
+        .map_or(value, String::as_str)
 }
 
 fn project_input(world: &mut World, root: Entity, value: &Value) -> Result {
