@@ -82,6 +82,19 @@ impl ProtocolOutput {
 pub struct ProtocolHistory(Vec<ProtocolItem>);
 
 impl ProtocolHistory {
+    pub fn has_compaction(&self) -> bool {
+        self.0
+            .iter()
+            .any(|item| matches!(item, ProtocolItem::Compaction(_)))
+    }
+
+    pub fn assistant_ids(&self) -> Option<HashSet<&str>> {
+        assistant_ids(self.0.iter().filter_map(|item| match item {
+            ProtocolItem::Assistant { raw, .. } => Some(raw),
+            _ => None,
+        }))
+    }
+
     pub fn retire_memory_outputs(mut self, allowed: &HashSet<&str>) -> (Self, Vec<String>) {
         let retired = self
             .0
@@ -412,6 +425,16 @@ pub(crate) fn memory_read_tool(name: &str) -> bool {
         name,
         "search_memory" | "read_memory" | "read_memory_summary"
     )
+}
+
+fn assistant_ids<'a>(items: impl Iterator<Item = &'a Value>) -> Option<HashSet<&'a str>> {
+    items
+        .map(|raw| {
+            raw.get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+        })
+        .collect()
 }
 
 enum BoundaryItem<'a> {

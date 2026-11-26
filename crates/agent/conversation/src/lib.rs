@@ -24,6 +24,7 @@ pub use child_config::{
 };
 mod control;
 mod conversation;
+mod expression;
 mod mailbox;
 pub use mailbox::{
     AgentMessage, AgentMessageId, ClaimedMessage, DeliveryMode, MAX_AGENT_MESSAGE_CHARS,

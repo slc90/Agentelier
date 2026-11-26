@@ -35,6 +35,7 @@ impl std::io::Write for RequestBytes {
 
 pub struct GenerationRequest {
     pub behavior: Option<String>,
+    pub expression: Option<crate::ExpressionContext>,
     pub memory: Option<crate::MemorySnapshot>,
     pub retired_memory_outputs: Vec<String>,
     pub transcript: Option<crate::TranscriptEvidence>,
@@ -75,6 +76,8 @@ pub struct RequestProjection {
     pub tool_contract: ToolContract,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behavior: Option<BehaviorMaterial>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression: Option<crate::ExpressionMaterial>,
     #[serde(default)]
     pub skill_materials: Vec<SkillMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -214,7 +217,11 @@ impl RequestProjection {
         {
             return Err(crate::model::protocol("任务情境材料位置或摘要无效"));
         }
-        let memory_index = behavior_index + usize::from(self.behavior.is_some());
+        let expression_index = behavior_index + usize::from(self.behavior.is_some());
+        if let Some(expression) = &self.expression {
+            expression.validate(expression_index)?;
+        }
+        let memory_index = expression_index + usize::from(self.expression.is_some());
         let transcript_index = memory_index + usize::from(self.memory.is_some());
         let catalog_index = transcript_index + usize::from(self.transcript.is_some());
         if let Some(memory) = &self.memory {
@@ -327,6 +334,14 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         input.push(serde_json::json!({ "role": "developer", "content": material.text }));
         material
     });
+    let expression = generation
+        .expression
+        .map(|context| {
+            let material = crate::ExpressionMaterial::new(context, input.len())?;
+            input.push(serde_json::json!({ "role": "developer", "content": material.text }));
+            Ok::<_, ModelFailure>(material)
+        })
+        .transpose()?;
     let memory = generation
         .memory
         .map(|snapshot| {
@@ -425,6 +440,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         compaction: Some(compaction),
         tool_contract: contract,
         behavior,
+        expression,
         skill_materials,
         memory,
         retired_memory_outputs: generation.retired_memory_outputs,

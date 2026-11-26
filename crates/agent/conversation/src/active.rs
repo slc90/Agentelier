@@ -444,6 +444,22 @@ impl ActiveTurn<'_> {
             0
         };
         let behavior = crate::behavior::for_request(self.view, turn);
+        let expression = crate::expression::capture(self, turn);
+        let previous = turn
+            .requests
+            .last()
+            .and_then(|request| request.projection.expression.as_ref())
+            .map_or(0, |material| material.context.estimated_tokens());
+        self.view.context.task_material_tokens = self
+            .view
+            .context
+            .task_material_tokens
+            .saturating_sub(previous)
+            .saturating_add(
+                expression
+                    .as_ref()
+                    .map_or(0, agentelier_llm_model::ExpressionContext::estimated_tokens),
+            );
         let turn = self
             .view
             .turn
@@ -465,6 +481,7 @@ impl ActiveTurn<'_> {
             skip_compaction,
             reserved_result_bytes,
             behavior,
+            expression,
             memory: self.state.memory.as_deref().cloned(),
             retired_memory_outputs,
             transcript,

@@ -5,6 +5,7 @@ mod codex_socket;
 mod compaction;
 pub use compaction::{CompactionItem, CompactionMetadata};
 mod context;
+mod expression;
 mod generation;
 mod images;
 mod memory;
@@ -21,6 +22,9 @@ mod transcription;
 pub use transcript_material::{TranscriptEvidence, TranscriptMaterial, TranscriptReference};
 pub use transcription::{MAX_TRANSCRIPT_BYTES, transcribe_audio};
 
+pub use expression::{
+    ExpressionContext, ExpressionExcerpt, ExpressionMaterial, expression_excerpt,
+};
 pub use generation::{
     GenerationConnection, GenerationRequest, MAX_REQUEST_BYTES, PreparedGeneration,
     RecordedModelSource, RequestCompaction, RequestHistory, RequestProjection, generate, prepare,

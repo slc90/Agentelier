@@ -228,6 +228,12 @@ impl ProtocolArchive {
             .iter()
             .any(|item| matches!(item, ArchivedItem::Compaction { .. }))
     }
+    pub fn assistant_ids(&self) -> Option<HashSet<&str>> {
+        super::assistant_ids(self.items.iter().filter_map(|item| match item {
+            ArchivedItem::Assistant { raw, .. } => Some(raw),
+            _ => None,
+        }))
+    }
     pub fn validate_compaction(&self) -> Result<(), crate::ModelFailure> {
         if !self.has_compaction() {
             return Err(crate::model::protocol("压缩替换历史缺少压缩项"));

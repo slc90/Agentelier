@@ -110,12 +110,7 @@ const REPORT_GUIDANCE: &str = "Report progress, blockers, completion and deliver
 const INTENT_GUIDANCE: &str = "Adapt this request to the user's current intent and the applicable project rules. Apply the following guidance only where it fits:";
 
 pub(crate) fn for_request(view: &SessionView, turn: &TurnView) -> Option<String> {
-    view.settings
-        .instructions
-        .instructions
-        .iter()
-        .any(|instruction| instruction.slot == InstructionSlot::Origin)
-        .then_some(())?;
+    has_origin(view).then_some(())?;
     let input = turn
         .steers
         .iter()
@@ -135,6 +130,14 @@ pub(crate) fn for_request(view: &SessionView, turn: &TurnView) -> Option<String>
     }
     let guidance = guidance.join("\n");
     Some(format!("{INTENT_GUIDANCE}\n{guidance}"))
+}
+
+pub(crate) fn has_origin(view: &SessionView) -> bool {
+    view.settings
+        .instructions
+        .instructions
+        .iter()
+        .any(|instruction| instruction.slot == InstructionSlot::Origin)
 }
 
 fn contains_term(text: &str, terms: &[&str]) -> bool {

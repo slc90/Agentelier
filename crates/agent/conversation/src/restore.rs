@@ -889,6 +889,44 @@ fn replay(
                 fact.projection
                     .validate_request_materials()
                     .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+                if let Some(material) = &fact.projection.expression {
+                    let scope = &material.context;
+                    let quotes = crate::expression::references(turn);
+                    let resident = history
+                        .assistant_ids()
+                        .ok_or_else(|| ConversationFailure::new("压缩窗口不能核对公开回复身份"))?;
+                    if !initial.settings.is_origin()
+                        || !initial.settings.kind.is_user()
+                        || initial.settings.background.is_some()
+                        || !history.has_compaction()
+                        || scope.window != fact.window
+                        || scope.session != initial.session
+                        || scope.directory != working_directory
+                        || scope.excerpts.iter().any(|excerpt| {
+                            !state.previous_turns.iter().any(|prior| {
+                                prior.id.0 == excerpt.turn
+                                    && crate::expression::from_turn(
+                                        prior,
+                                        scope.window,
+                                        &working_directory,
+                                        &publications,
+                                        &resident,
+                                        fact.projection
+                                            .memory
+                                            .as_ref()
+                                            .map(|material| &material.snapshot),
+                                        &quotes,
+                                    )
+                                    .as_ref()
+                                        == Some(excerpt)
+                            })
+                        })
+                    {
+                        return Err(ConversationFailure::new(
+                            "表达摘录与压缩窗口或公开回复来源不一致",
+                        ));
+                    }
+                }
                 let skip_once = fact.projection.compaction
                     == Some(agentelier_llm_model::RequestCompaction::SkipOnce);
                 if skip_once
