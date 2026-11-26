@@ -869,6 +869,7 @@ impl ActiveTurn<'_> {
             status,
             output: None,
             image: None,
+            result_saved: false,
             retained: false,
         };
         if let Some(index) = existing {
@@ -1098,18 +1099,17 @@ impl ActiveTurn<'_> {
             _ => None,
         };
         let changed = self.confirm_task_status(call_id, execution, status, sequence)?;
-        if let Some(image) = image {
-            let tool = self
-                .view
-                .turn
-                .iter_mut()
-                .map(Box::as_mut)
-                .chain(&mut self.view.previous_turns)
-                .flat_map(|turn| &mut turn.tools)
-                .find(|tool| tool.retained && tool.call_id == call_id)
-                .ok_or_else(|| ConversationFailure::new("保存回执缺少图片调用"))?;
-            tool.image = Some(image);
-        }
+        let tool = self
+            .view
+            .turn
+            .iter_mut()
+            .map(Box::as_mut)
+            .chain(&mut self.view.previous_turns)
+            .flat_map(|turn| &mut turn.tools)
+            .find(|tool| tool.retained && tool.call_id == call_id)
+            .ok_or_else(|| ConversationFailure::new("保存回执缺少工具调用"))?;
+        tool.image = image;
+        tool.result_saved = true;
         Ok(changed)
     }
 

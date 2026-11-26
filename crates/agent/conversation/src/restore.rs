@@ -528,6 +528,7 @@ fn replay(
     let mut notices = Vec::new();
     let mut historical_processes = BTreeMap::new();
     let mut tool_images = HashMap::new();
+    let mut saved_tool_results = HashSet::new();
     let mut audio_draft: Option<crate::AudioAttachment> = None;
     let mut audio_ids = HashMap::<crate::AudioId, crate::AudioAttachment>::new();
     let mut transcriptions = Vec::<crate::AudioTranscription>::new();
@@ -1400,6 +1401,7 @@ fn replay(
                     true,
                 )?;
                 merge_tool(&mut state, incoming, &call_id);
+                saved_tool_results.insert(call_id.clone());
                 if status == ToolStatus::ExternalUnconfirmed {
                     state.task_policy.external_unconfirmed.insert(call_id);
                     state.queue_paused = true;
@@ -1817,6 +1819,7 @@ fn replay(
         .filter(|tool| tool.retained)
     {
         tool.image = tool_images.remove(&tool.call_id);
+        tool.result_saved = saved_tool_results.remove(&tool.call_id);
     }
     state.context.refresh(
         &history,

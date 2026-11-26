@@ -94,6 +94,8 @@ pub struct ToolView {
     pub status: String,
     pub output: Option<String>,
     pub image: Option<ToolImageView>,
+    pub image_generation: bool,
+    pub result_saved: bool,
     pub retained: bool,
 }
 
@@ -792,6 +794,8 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
             .tools
             .into_iter()
             .map(|tool| ToolView {
+                image_generation: tool.is_image_generation(),
+                result_saved: tool.result_saved,
                 collaboration: tool.collaboration,
                 request_index: tool.request_index,
                 id: tool.id,

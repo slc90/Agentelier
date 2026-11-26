@@ -187,7 +187,15 @@ pub struct ToolView {
     pub output: Option<String>,
     #[serde(skip)]
     pub image: Option<ToolImage>,
+    #[serde(skip)]
+    pub result_saved: bool,
     pub retained: bool,
+}
+
+impl ToolView {
+    pub fn is_image_generation(&self) -> bool {
+        self.name == agentelier_tools::GENERATE_IMAGE_TOOL
+    }
 }
 
 #[derive(Clone)]

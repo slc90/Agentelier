@@ -82,6 +82,7 @@ pub struct ChatTool {
     pub status: String,
     pub output: Option<String>,
     pub retained: bool,
+    pub(super) generated_image: Option<crate::generated_image::Artifact>,
 }
 #[derive(Clone, Reflect)]
 pub struct ChatProcessCleanup {
@@ -277,10 +278,15 @@ struct ReplyWaiting;
 #[derive(Component, Clone, Default)]
 struct ReplyBody;
 #[derive(Component, Clone, PartialEq, Eq, Hash)]
-struct ReplyTextKey {
+struct ReplyItemKey {
     request_index: u32,
     output_index: usize,
-    id: String,
+    id: ReplyItemId,
+}
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum ReplyItemId {
+    Text(String),
+    Image(String),
 }
 #[derive(Component, Clone, Default)]
 struct ComposerFeedback;
@@ -323,6 +329,7 @@ pub(crate) fn install(app: &mut App) {
                 .after(ReceiveAgentEvents)
                 .after(crate::preparation::receive),
         )
+        .add_systems(Update, crate::generated_image::receive.after(receive))
         .add_systems(
             PostUpdate,
             process_input
@@ -937,6 +944,7 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
             .tools
             .into_iter()
             .map(|tool| ChatTool {
+                generated_image: crate::generated_image::Artifact::project(&tool),
                 collaboration: tool.collaboration,
                 request_index: tool.request_index,
                 id: tool.id,
@@ -1458,7 +1466,12 @@ enum RowContent {
 
 enum ReplyContent {
     Waiting,
-    Text(Vec<(ReplyTextKey, String)>),
+    Items(Vec<(ReplyItemKey, ReplyItemContent)>),
+}
+
+enum ReplyItemContent {
+    Text(String),
+    Image(crate::generated_image::Artifact),
 }
 
 pub(super) enum TranscriptPresentation {
@@ -1482,28 +1495,45 @@ fn public_reply(turn: &ChatTurn, message: &ChatMessage) -> bool {
 }
 
 fn reply_content(turn: &ChatTurn, operation: Option<u64>) -> Option<ReplyContent> {
-    let mut messages: Vec<_> = turn
+    let mut items: Vec<_> = turn
         .messages
         .iter()
         .filter(|message| public_reply(turn, message) && !message.text.trim().is_empty())
         .map(|message| {
             (
-                ReplyTextKey {
+                ReplyItemKey {
                     request_index: message.request_index,
                     output_index: message.output_index,
-                    id: message.id.clone(),
+                    id: ReplyItemId::Text(message.id.clone()),
                 },
-                message.text.clone(),
+                ReplyItemContent::Text(message.text.clone()),
             )
         })
         .collect();
-    if messages.is_empty() {
+    let public = !items.is_empty()
+        || turn.tools.iter().any(|tool| {
+            tool.generated_image.as_ref().is_some_and(|artifact| {
+                !matches!(artifact, crate::generated_image::Artifact::Generating)
+            })
+        });
+    if !public {
         return (operation == Some(turn.operation_id)
             && matches!(turn.status, ChatTurnStatus::Running))
         .then_some(ReplyContent::Waiting);
     }
-    messages.sort_by_key(|(key, _)| (key.request_index, key.output_index));
-    Some(ReplyContent::Text(messages))
+    items.extend(turn.tools.iter().filter_map(|tool| {
+        let artifact = tool.generated_image.clone()?;
+        Some((
+            ReplyItemKey {
+                request_index: tool.request_index,
+                output_index: tool.output_index,
+                id: ReplyItemId::Image(tool.call_id.clone()),
+            },
+            ReplyItemContent::Image(artifact),
+        ))
+    }));
+    items.sort_by_key(|(key, _)| (key.request_index, key.output_index));
+    Some(ReplyContent::Items(items))
 }
 
 fn reconcile(world: &mut World) -> Result {
@@ -1668,7 +1698,7 @@ pub(super) fn reconcile_list(
                         .ok_or_else(|| io::Error::other("用户消息正文不可用"))?
                         .set_if_neq(Text(text));
                 }
-                RowContent::Reply(content) => reconcile_reply(world, entity, content)?,
+                RowContent::Reply(content) => reconcile_reply(world, entity, key.session, content)?,
                 RowContent::MemoryMessage { label, source } => {
                     let children = world
                         .get::<Children>(entity)
@@ -1703,6 +1733,7 @@ pub(super) fn reconcile_list(
                         Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
                     }).id(),
                     RowContent::Reply(content) => {
+                        let session = key.session;
                         let mut commands = world.commands();
                         let entity = commands.spawn_scene_with_error_handler(bsn! {
                             Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
@@ -1716,7 +1747,7 @@ pub(super) fn reconcile_list(
                                 Node {width:percent(100),min_width:px(0),flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP)}
                             ]
                         }).id();
-                        commands.queue(move |world: &mut World| reconcile_reply(world, entity, content));
+                        commands.queue(move |world: &mut World| reconcile_reply(world, entity, session, content));
                         entity
                     }
                     RowContent::MemoryMessage {label,source} => world.commands().spawn_scene_with_error_handler(bsn! {
@@ -1757,7 +1788,12 @@ pub(super) fn reconcile_list(
     Ok(())
 }
 
-fn reconcile_reply(world: &mut World, root: Entity, content: ReplyContent) -> Result {
+fn reconcile_reply(
+    world: &mut World,
+    root: Entity,
+    session: SessionId,
+    content: ReplyContent,
+) -> Result {
     let children = world
         .get::<Children>(root)
         .ok_or_else(|| io::Error::other("助手回复缺少子实体"))?;
@@ -1782,9 +1818,9 @@ fn reconcile_reply(world: &mut World, root: Entity, content: ReplyContent) -> Re
             .map_unchanged(|node| &mut node.display)
             .set_if_neq(display);
     }
-    let messages = match content {
+    let items = match content {
         ReplyContent::Waiting => Vec::new(),
-        ReplyContent::Text(messages) => messages,
+        ReplyContent::Items(items) => items,
     };
     let mut existing: HashMap<_, _> = world
         .get::<Children>(body)
@@ -1792,26 +1828,51 @@ fn reconcile_reply(world: &mut World, root: Entity, content: ReplyContent) -> Re
         .flat_map(|children| children.iter())
         .filter_map(|child| {
             world
-                .get::<ReplyTextKey>(child)
+                .get::<ReplyItemKey>(child)
                 .map(|key| (key.clone(), child))
         })
         .collect();
-    let mut ordered = Vec::with_capacity(messages.len());
-    for (key, source) in messages {
+    let mut ordered = Vec::with_capacity(items.len());
+    for (key, item) in items {
         let entity = if let Some(entity) = existing.remove(&key) {
-            world
-                .get_mut::<MarkdownSource>(entity)
-                .ok_or_else(|| io::Error::other("助手回复正文不可用"))?
-                .set_if_neq(MarkdownSource(source));
+            match item {
+                ReplyItemContent::Text(source) => {
+                    world
+                        .get_mut::<MarkdownSource>(entity)
+                        .ok_or_else(|| io::Error::other("助手回复正文不可用"))?
+                        .set_if_neq(MarkdownSource(source));
+                }
+                ReplyItemContent::Image(artifact) => {
+                    crate::generated_image::reconcile(world, entity, artifact)?
+                }
+            }
             entity
         } else {
-            world
-                .commands()
-                .spawn_scene_with_error_handler(bsn! {
-                @MarkdownView { @source: source, @source_controls: false }
-                    ChildOf(body) Name("ChatReplyText") template(move |_| Ok(key.clone()))
-                })
-                .id()
+            match item {
+                ReplyItemContent::Text(source) => world
+                    .commands()
+                    .spawn_scene_with_error_handler(bsn! {
+                        @MarkdownView { @source: source, @source_controls: false }
+                        ChildOf(body) Name("ChatReplyText") template(move |_| Ok(key.clone()))
+                    })
+                    .id(),
+                ReplyItemContent::Image(artifact) => {
+                    let ReplyItemId::Image(call_id) = &key.id else {
+                        return Err(io::Error::other("助手回复图片缺少调用标识").into());
+                    };
+                    let scene = crate::generated_image::card(session, call_id.clone());
+                    let mut commands = world.commands();
+                    let entity = commands
+                        .spawn_scene_with_error_handler(bsn! {
+                            @scene ChildOf(body) template(move |_| Ok(key.clone()))
+                        })
+                        .id();
+                    commands.queue(move |world: &mut World| {
+                        crate::generated_image::reconcile(world, entity, artifact)
+                    });
+                    entity
+                }
+            }
         };
         ordered.push(entity);
     }

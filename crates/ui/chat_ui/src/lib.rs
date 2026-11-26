@@ -7,6 +7,7 @@ mod audio_attachment;
 mod background_tasks;
 pub use archives::{ArchiveChoice, ArchiveState};
 mod conversation;
+mod generated_image;
 mod global_tasks;
 mod mcp;
 mod mcp_materials;

@@ -337,7 +337,7 @@ impl GeneratedImage {
         status: agentelier_tools::ToolStatus,
     ) -> bool {
         self.turn == turn
-            && tool.name == agentelier_tools::GENERATE_IMAGE_TOOL
+            && tool.is_image_generation()
             && status == agentelier_tools::ToolStatus::Succeeded
             && self.model == agentelier_tools::GENERATED_IMAGE_MODEL
             && !self.prompt.trim().is_empty()

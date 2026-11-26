@@ -4,7 +4,7 @@
 
 ## 图片：已有的原图存储，新的聊天呈现
 
-`generate_image` 已使用 Codex Images 生成 PNG/JPEG，并由 Session Store 保存不可变原件。`ToolReturned` 关联 `GeneratedImage` 和原 `call_id`。原图与给模型回看的派生图分别保存，`ToolView.image` 能表达已有图片和可导出的生成图片。当前 `agent_host` 提供 `request_image_attachment` 和 `ImageAttachmentEvent`，Runtime 已实现从受控附件读取、生成最长边 512 像素的 RGBA 预览及原图导出。缺少的主要是主聊天实际消费这些资源。
+`generate_image` 使用 Codex Images 生成 PNG 或 JPEG，由 Session Store 保存不可变原件。`ToolReturned` 关联 `GeneratedImage` 和原 `call_id`。Conversation 在保存回执后确认结果，重开时按对应记录恢复该确认。主聊天从生成图描述符请求预览，Runtime 从受控附件读取最长边不超过 512 像素的 RGBA 显示资源。原图与模型回看的派生图分别保存。
 
 ```mermaid
 sequenceDiagram
@@ -26,7 +26,7 @@ sequenceDiagram
 
 UI 使用 `Handle<Image>` 与 `ImageNode`。沿用已有最长边 512 的预览生产路径，保持实际宽高比，并按可用聊天宽度和合理预览高度缩放。显示大小与原始图片大小无关，导出的仍是服务返回的原始编码字节。加载期间保持稳定占位，错误时可读地显示预览不可用；不能把已生成但预览失败误报为生成失败。
 
-原图仍沿用单图 32 MiB、边长 4096、会话原图累计 256 MiB，以及模型派生图各自的既有预算。预览不会修改原图或派生图，也不重新调用生成接口。用户通过现有 Widgetry 文件对话框选择外部目标，沿已有 Export 路径保存原件副本；取消或目标不可写时不影响会话中的原件。资源读取按 Session 和原调用身份核对，过期回执不附到另一条消息上；行销毁时释放显示资源。
+原图仍沿用单图 32 MiB、边长 4096、会话原图累计 256 MiB，以及模型派生图各自的既有预算。资源读取按 Session 和原调用身份核对，UI 仅应用当前图片块发出的预览请求的回执，切换会话时随回复子树释放显示资源。原件另存为由第 03 项接入现有 Export 路径。
 
 原 [图片生成设计](../subscription-media/02-image-generation.md) 与原 [图片 UI 方案](../../../plans/subscription-media/07-generated-image-ui.md) 中的原图、生成状态、预览、导出与恢复规则继续有效，唯一重要改变是用户可见图片进入回复容器，而不是恢复普通工具时间线。
 
