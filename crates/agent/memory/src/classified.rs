@@ -1,6 +1,7 @@
 use crate::{
     attention::{self, Attention},
     consolidation::sha256,
+    experience::{self, Experience},
     observation::{Anchor, Category, EvidenceKind, Observation, Scope, State},
     revision::{Action, Revision, RevisionScope},
 };
@@ -22,6 +23,8 @@ pub(crate) enum Status {
     Explicit,
     Tentative,
     Supported,
+    Disputed,
+    Inactive,
     Corrected,
     Forgotten,
     Superseded,
@@ -38,6 +41,8 @@ impl Status {
             Self::Explicit => "明确陈述",
             Self::Tentative => "暂定",
             Self::Supported => "已有支持",
+            Self::Disputed => "有争议",
+            Self::Inactive => "已停用",
             Self::Corrected => "已纠正",
             Self::Forgotten => "已撤下",
             Self::Superseded => "已替代",
@@ -73,6 +78,8 @@ pub(crate) struct Entry {
     pub(crate) body: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) attention: Option<Attention>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) experience: Option<Experience>,
 }
 
 impl Entry {
@@ -151,6 +158,7 @@ pub(crate) fn inputs(
             .then_with(|| left.id.cmp(&right.id))
     });
     observations.truncate(MAX_OBSERVATIONS);
+    experience::retain_objections(connection, sessions, &mut observations)?;
     let serialized = serde_json::to_string(&observations).map_err(io::Error::other)?;
     Ok((sha256(&serialized), observations))
 }
@@ -232,6 +240,12 @@ pub(crate) fn classify(
                                     .reason
                                     .as_deref()
                                     .is_some_and(|reason| exact_match(note, reason))
+                        })
+                        || item.experience.as_ref().is_some_and(|experience| {
+                            exact_match(note, &experience.topic)
+                                || exact_match(note, &experience.method)
+                                || exact_match(note, &experience.conditions)
+                                || exact_match(note, &experience.reason)
                         }))
             })
             .or_else(|| {
@@ -243,6 +257,9 @@ pub(crate) fn classify(
         let state = match index.map(|index| notes[index].action) {
             Some(Action::Forget) => Status::Forgotten,
             Some(Action::Correct) => Status::Corrected,
+            _ if item.category == Category::ExperienceClue && item.experience.is_none() => {
+                Status::Historical
+            }
             _ if item.category == Category::AttentionClue && item.attention.is_none() => {
                 Status::Historical
             }
@@ -278,6 +295,7 @@ pub(crate) fn classify(
             supersedes,
             body,
             attention: item.attention.clone().filter(|_| index.is_none()),
+            experience: item.experience.clone().filter(|_| index.is_none()),
         });
     }
     for (index, note) in notes.iter().enumerate() {
@@ -313,6 +331,7 @@ pub(crate) fn classify(
             supersedes: None,
             body: body.clone(),
             attention: None,
+            experience: None,
         });
     }
     let mut support: BTreeMap<(&str, &str), BTreeSet<SessionId>> = BTreeMap::new();
@@ -345,6 +364,7 @@ pub(crate) fn classify(
         }
     }
     attention::apply(&mut entries, ended_attention);
+    experience::apply(&mut entries);
     entries.sort_by(|left, right| {
         right
             .at_ms
@@ -358,7 +378,10 @@ pub(crate) fn classify(
 pub(crate) fn personal_navigation(entries: &[Entry]) -> io::Result<String> {
     let mut navigation = String::new();
     for entry in entries.iter().filter(|entry| {
-        entry.state.usable() && entry.scope == Scope::Global && entry.attention.is_none()
+        entry.state.usable()
+            && entry.scope == Scope::Global
+            && entry.attention.is_none()
+            && entry.experience.is_none()
     }) {
         let (name, _, _) = entry.artifact()?;
         let body = entry.body.replace(['\r', '\n'], " ");

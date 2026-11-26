@@ -1,7 +1,8 @@
 use crate::{
     classified::{Entry, Status},
-    consolidation::sha256,
-    observation::{Anchor, Evidence, EvidenceKind, Observation, Scope},
+    observation::{
+        Anchor, Evidence, EvidenceKind, Observation, Scope, topic_identity, topic_related,
+    },
     redaction::Redactor,
 };
 use agentelier_conversation::SessionId;
@@ -167,15 +168,6 @@ impl Draft {
         }
         let topic = clean(&self.topic, TOPIC_BYTES, redactor)?;
         let question = clean(&self.question, QUESTION_BYTES, redactor)?;
-        let key = topic
-            .chars()
-            .filter(|character| character.is_alphanumeric())
-            .flat_map(char::to_lowercase)
-            .collect::<String>();
-        if key.is_empty() {
-            return None;
-        }
-        let scope_key = serde_json::to_string(scope).ok()?;
         let reason = own_interest
             .then_some(self.reason.as_deref())
             .flatten()
@@ -188,7 +180,7 @@ impl Draft {
                 anchor,
             });
         Some(Attention {
-            id: sha256(&format!("{scope_key}\n{key}")),
+            id: topic_identity(scope, &topic)?,
             topic,
             question,
             reason,
@@ -230,65 +222,7 @@ impl Attention {
         {
             return true;
         }
-        let unique = |value: &str| {
-            let mut terms = BTreeSet::new();
-            for word in value.split(|character: char| !character.is_alphanumeric()) {
-                if word.is_ascii() && word.len() >= 4 {
-                    let lower = word.to_ascii_lowercase();
-                    if !matches!(
-                        lower.as_str(),
-                        "could"
-                            | "what"
-                            | "want"
-                            | "about"
-                            | "from"
-                            | "please"
-                            | "your"
-                            | "that"
-                            | "this"
-                            | "with"
-                            | "which"
-                            | "might"
-                    ) {
-                        terms.insert(lower);
-                    }
-                } else if !word.is_ascii() {
-                    let characters = word.chars().collect::<Vec<_>>();
-                    terms.extend(characters.windows(3).map(|window| window.iter().collect()));
-                    for pair in characters.windows(2).filter(|pair| {
-                        pair.iter()
-                            .all(|character| ('一'..='鿿').contains(character))
-                    }) {
-                        let term = pair.iter().collect::<String>();
-                        if !matches!(
-                            term.as_str(),
-                            "关于"
-                                | "可以"
-                                | "需要"
-                                | "项目"
-                                | "这个"
-                                | "什么"
-                                | "继续"
-                                | "看看"
-                                | "我们"
-                        ) {
-                            terms.insert(term);
-                        }
-                    }
-                }
-            }
-            terms
-        };
-        let input_terms = unique(input);
-        unique(&self.topic)
-            .intersection(&input_terms)
-            .next()
-            .is_some()
-            || unique(&self.question)
-                .intersection(&input_terms)
-                .take(2)
-                .count()
-                == 2
+        topic_related(&self.topic, &self.question, input)
     }
 
     pub(crate) fn navigation(&self) -> String {

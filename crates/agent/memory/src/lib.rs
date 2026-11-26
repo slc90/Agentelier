@@ -4,6 +4,7 @@ compile_error!("This application supports Windows x64 only");
 mod attention;
 mod classified;
 mod consolidation;
+mod experience;
 mod extraction;
 mod observation;
 mod publication;

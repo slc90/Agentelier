@@ -3,6 +3,7 @@ use crate::{
     attention::Attention,
     classified,
     consolidation::sha256,
+    experience::{Experience, ExperienceState},
     observation::{Category, Scope},
     publication::{DETAILS, detail_name, read_checked},
     redaction::Redactor,
@@ -54,9 +55,11 @@ pub struct MemorySource {
     #[serde(skip_serializing_if = "Option::is_none")]
     state: Option<classified::Status>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    provenance: Option<classified::Provenance>,
+    provenance: Option<Box<classified::Provenance>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     attention: Option<Box<Attention>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    experience: Option<Box<Experience>>,
 }
 
 #[derive(Serialize)]
@@ -170,10 +173,20 @@ fn records(
                             .as_ref()
                             .is_none_or(|attention| !attention.related(input))
                     })
+                || entry.category == Category::ExperienceClue
+                    && input.is_some_and(|input| {
+                        entry
+                            .experience
+                            .as_ref()
+                            .is_none_or(|experience| !experience.related(input))
+                    })
             {
                 continue;
             }
-            let body = entry.body.clone();
+            let body = entry.experience.as_ref().map_or_else(
+                || entry.body.clone(),
+                |experience| format!("{}\n{}", experience.topic, entry.body),
+            );
             let detail = classified_detail(workspace, name, hash, entry, publication.clone())?;
             result.push(SearchRecord { detail, body });
         }
@@ -268,14 +281,19 @@ impl MemoryClient {
             let mut project_heading = false;
             for entry in &records {
                 let source = &entry.detail.source;
+                let experience = source.experience.as_deref();
+                if experience.is_some_and(|value| value.state != ExperienceState::Supported) {
+                    continue;
+                }
                 let global = source.scope == Some(Scope::Global);
                 let recorded_in_summary = navigation.contains(&source.record);
-                if !global || source.attention.is_some() {
+                if !global || source.attention.is_some() || experience.is_some() {
                     let label = source.category.map_or("工作摘要", Category::label);
-                    let label = source
-                        .attention
-                        .as_deref()
-                        .map_or_else(|| label.to_owned(), Attention::navigation);
+                    let label = match (source.attention.as_deref(), experience) {
+                        (Some(attention), _) => attention.navigation(),
+                        (_, Some(experience)) => experience.navigation(),
+                        _ => label.to_owned(),
+                    };
                     let line = format!(
                         "- {label} · [{}](rollout_summaries/{})\n",
                         source.session_id, source.record
@@ -568,8 +586,9 @@ fn classified_source(
         category: Some(entry.category),
         scope: Some(entry.scope),
         state: Some(entry.state),
-        provenance: Some(entry.source),
+        provenance: Some(Box::new(entry.source)),
         attention: entry.attention.map(Box::new),
+        experience: entry.experience.map(Box::new),
     })
 }
 
@@ -629,6 +648,7 @@ fn sources(connection: &Connection, record: Option<&str>) -> io::Result<Vec<Inde
                 state: None,
                 provenance: None,
                 attention: None,
+                experience: None,
             },
             scope: directory.filter(|_| directory_verified).map(PathBuf::from),
             hash,

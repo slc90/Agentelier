@@ -49,6 +49,15 @@ CREATE TABLE IF NOT EXISTS attention_boundaries (
     PRIMARY KEY (topic_id, session_id)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS experience_objections (
+    topic_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    observation TEXT NOT NULL,
+    observed_ms INTEGER NOT NULL,
+    stopped INTEGER NOT NULL CHECK (stopped IN (0, 1)),
+    PRIMARY KEY (topic_id, session_id)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS classified_publication (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     input_hash TEXT NOT NULL

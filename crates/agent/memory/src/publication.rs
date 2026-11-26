@@ -319,6 +319,11 @@ fn commit(
     }
     for id in work.deleted {
         tx.execute(
+            "DELETE FROM experience_objections WHERE session_id = ?1",
+            [&id],
+        )
+        .map_err(io::Error::other)?;
+        tx.execute(
             "DELETE FROM attention_boundaries WHERE session_id = ?1",
             [&id],
         )

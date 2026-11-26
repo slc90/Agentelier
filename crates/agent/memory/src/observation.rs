@@ -1,4 +1,4 @@
-use crate::{attention, redaction::Redactor};
+use crate::{attention, consolidation::sha256, experience, redaction::Redactor};
 use agentelier_conversation::{SessionId, TurnId};
 use agentelier_session_store::MemorySourceSnapshot;
 use agentelier_tools::ToolStatus;
@@ -89,6 +89,78 @@ pub(crate) enum Scope {
     Global,
 }
 
+pub(crate) fn topic_identity(scope: &Scope, topic: &str) -> Option<String> {
+    let key = topic
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    if key.is_empty() {
+        return None;
+    }
+    let scope = serde_json::to_string(scope).ok()?;
+    Some(sha256(&format!("{scope}\n{key}")))
+}
+
+pub(crate) fn topic_related(topic: &str, description: &str, input: &str) -> bool {
+    let unique = |value: &str| {
+        let mut terms = BTreeSet::new();
+        for word in value.split(|character: char| !character.is_alphanumeric()) {
+            if word.is_ascii() && word.len() >= 4 {
+                let lower = word.to_ascii_lowercase();
+                if !matches!(
+                    lower.as_str(),
+                    "could"
+                        | "what"
+                        | "want"
+                        | "about"
+                        | "from"
+                        | "please"
+                        | "your"
+                        | "that"
+                        | "this"
+                        | "with"
+                        | "which"
+                        | "might"
+                ) {
+                    terms.insert(lower);
+                }
+            } else if !word.is_ascii() {
+                let characters = word.chars().collect::<Vec<_>>();
+                terms.extend(characters.windows(3).map(|window| window.iter().collect()));
+                for pair in characters.windows(2).filter(|pair| {
+                    pair.iter()
+                        .all(|character| ('一'..='鿿').contains(character))
+                }) {
+                    let term = pair.iter().collect::<String>();
+                    if !matches!(
+                        term.as_str(),
+                        "关于"
+                            | "可以"
+                            | "需要"
+                            | "项目"
+                            | "这个"
+                            | "什么"
+                            | "继续"
+                            | "看看"
+                            | "我们"
+                    ) {
+                        terms.insert(term);
+                    }
+                }
+            }
+        }
+        terms
+    };
+    let input_terms = unique(input);
+    unique(topic).intersection(&input_terms).next().is_some()
+        || unique(description)
+            .intersection(&input_terms)
+            .take(2)
+            .count()
+            == 2
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum EvidenceKind {
@@ -128,6 +200,8 @@ impl Location {
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Anchor {
     pub(crate) turn: TurnId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) input: Option<TurnId>,
     pub(crate) sequence: u64,
     pub(crate) at_ms: u64,
     pub(crate) location: Location,
@@ -158,6 +232,8 @@ pub struct Observation {
     pub(crate) supersedes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) attention: Option<attention::Attention>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) experience: Option<experience::Experience>,
 }
 
 #[derive(Deserialize)]
@@ -179,6 +255,8 @@ pub(crate) struct Candidate {
     replaces: Option<usize>,
     #[serde(default)]
     attention: Option<attention::Draft>,
+    #[serde(default)]
+    experience: Option<experience::Draft>,
 }
 
 pub(crate) fn validated(
@@ -223,6 +301,11 @@ pub(crate) fn validated(
                             .attention
                             .as_ref()
                             .map(|attention| &attention.id)
+                    && older.experience.as_ref().map(|experience| &experience.id)
+                        == observation
+                            .experience
+                            .as_ref()
+                            .map(|experience| &experience.id)
             })
             .map(|older| older.id.clone());
         prior.insert((*index, category), i);
@@ -252,7 +335,8 @@ fn observation(
         || category == Category::UserPreference && kind != EvidenceKind::UserStatement
         || category == Category::OriginSelfObservation
             && (!source.origin || kind != EvidenceKind::RootExpression)
-        || kind == EvidenceKind::ToolObservation && category != Category::WorkFact
+        || kind == EvidenceKind::ToolObservation
+            && !matches!(category, Category::WorkFact | Category::ExperienceClue)
     {
         return None;
     }
@@ -266,8 +350,10 @@ fn observation(
         }
         ScopeCandidate::Context => Scope::Context,
         ScopeCandidate::Global
-            if matches!(category, Category::UserPreference | Category::AttentionClue)
-                && kind == EvidenceKind::UserStatement
+            if matches!(
+                category,
+                Category::UserPreference | Category::AttentionClue | Category::ExperienceClue
+            ) && kind == EvidenceKind::UserStatement
                 && patterns.global.is_match(&item.text) =>
         {
             Scope::Global
@@ -308,13 +394,27 @@ fn observation(
     } else {
         None
     };
-    let id = match &attention {
-        Some(attention) => serde_json::to_vec(&(
+    let experience = if category == Category::ExperienceClue {
+        Some(
+            candidate
+                .experience
+                .as_ref()?
+                .validate(item, kind, &scope, redactor)?,
+        )
+    } else {
+        None
+    };
+    let topic = attention
+        .as_ref()
+        .map(|attention| &attention.id)
+        .or_else(|| experience.as_ref().map(|experience| &experience.id));
+    let id = match topic {
+        Some(topic) => serde_json::to_vec(&(
             source.session,
             anchor.turn,
             &anchor.location,
             category,
-            &attention.id,
+            topic,
         )),
         None => serde_json::to_vec(&(source.session, anchor.turn, &anchor.location, category)),
     }
@@ -331,6 +431,7 @@ fn observation(
         state,
         supersedes: None,
         attention,
+        experience,
     })
 }
 

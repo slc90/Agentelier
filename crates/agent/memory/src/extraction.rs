@@ -132,6 +132,7 @@ impl MemoryClient {
             )?;
             if count == 1 && !observations.is_empty() {
                 crate::attention::remember_boundaries(&tx, &observations)?;
+                crate::experience::remember_objections(&tx, &observations)?;
                 merge(&tx, &claim.session, observations)?;
             }
             tx.commit()?;
@@ -230,6 +231,7 @@ fn turn_evidence(
     let anchor = |sequence, location| {
         Some(Anchor {
             turn: turn.id,
+            input: Some(turn.input_id),
             sequence,
             at_ms: source.activity_ms,
             location,
