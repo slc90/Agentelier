@@ -1,6 +1,7 @@
 /target
 /codex_data/
 /app/logs/
+/materials/
 
 # Python caches and compiled files
 __pycache__/
