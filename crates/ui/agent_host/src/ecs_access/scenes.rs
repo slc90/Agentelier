@@ -1,5 +1,5 @@
 use super::read;
-use agentelier_bridge_connection::ecs_access::{EcsEntity, EcsError};
+use agentelier_bridge_connection::ecs_access::{EcsEntity, EcsError, SceneDefinition};
 use bevy::prelude::*;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
@@ -75,6 +75,36 @@ pub(super) fn spawn(
     parent: EcsEntity,
     props: &Properties,
 ) -> Result<Value> {
+    let parent = read::entity(world, parent)?.id();
+    instance(world, name, parent, props).map(|root| json!(read::token(root)))
+}
+
+pub(super) fn validate(world: &mut World, definition: &SceneDefinition) -> Result<Value> {
+    definition.validate()?;
+    let staging = bevy_widgetry::scene::spawn_scene(
+        world,
+        bsn! {
+            Node { display: Display::None }
+        },
+    )
+    .map_err(|error| EcsError::new("scene_validation_failed", error.to_string()))?;
+    let result = mount_native_scene(world, staging, definition);
+    world.despawn(staging);
+    result.map(|_| json!(true))
+}
+
+pub fn mount_native_scene(
+    world: &mut World,
+    parent: Entity,
+    definition: &SceneDefinition,
+) -> Result<Entity> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        instance(world, &definition.template, parent, &definition.props)
+    }))
+    .map_err(|_| EcsError::new("scene_construction_failed", "Scene 构造异常终止"))?
+}
+
+fn instance(world: &mut World, name: &str, parent: Entity, props: &Properties) -> Result<Entity> {
     let factory = world
         .get_resource::<Registry>()
         .and_then(|registry| registry.0.get(name))
@@ -86,14 +116,13 @@ pub(super) fn spawn(
         })?
         .factory
         .clone();
-    let parent = read::entity(world, parent)?;
-    if !parent.contains::<Node>() {
+    if world.get::<Node>(parent).is_none() {
         return Err(EcsError::new(
             "invalid_scene_parent",
             "Scene 父实体必须是 Bevy UI Node",
         ));
     }
-    let root = factory(world, parent.id(), props)?;
+    let root = factory(world, parent, props)?;
     let owned = match owned_entities(world, root) {
         Ok(owned) => owned,
         Err(error) => {
@@ -105,7 +134,7 @@ pub(super) fn spawn(
         .get_entity_mut(root)
         .map_err(|_| EcsError::new("scene_construction_failed", "Scene 根实体在构造期间失效"))?
         .insert(Instance(owned));
-    Ok(json!(read::token(root)))
+    Ok(root)
 }
 
 pub(super) fn despawn(world: &mut World, root: EcsEntity) -> Result<Value> {

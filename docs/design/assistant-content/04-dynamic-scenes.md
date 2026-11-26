@@ -9,8 +9,11 @@ Agentelier 当前的 `ecs_execute` 在 Agent 侧执行 Rhai，通过 `EcsAccess`
 ```mermaid
 flowchart TD
     Model["Root Agent"] --> Rhai["ecs_execute / Rhai"]
-    Rhai --> Source["当前回复的产物定义"]
-    Source --> Owner["Conversation / Runtime：来源、提交与更新"]
+    Rhai --> Source["模板发现与语义参数"]
+    Model --> Publish["publish_scene"]
+    Source --> Publish
+    Publish --> Validate["AgentHost：临时构造校验"]
+    Validate --> Owner["Conversation / Runtime：来源与提交"]
     Owner --> Store["Session Store"]
     Owner --> Host["Connection / AgentHost"]
     Host --> Factory["既有 Scene Factory"]
@@ -18,7 +21,9 @@ flowchart TD
     Root --> Widget["原生 BSN / Widgetry Scene"]
 ```
 
-图表示目标业务流。普通 `ecs_execute` 仍可以按现有方式操作其他 UI 实体；只有明确登记为用户可见产物的 Scene 才进入回复及持久化流程。模型不通过搜索任意 `ChatMessage` Entity 推测自己应该挂在哪一轮回复里。为这类产物建立稳定的当前调用来源上下文和语义化创建入口；现有 Scene Factory 可继续承担 BSN 实例化，持久化产物身份与临时 `EcsEntity` 分开。
+用户会话的 Root Agent 通过 `publish_scene` 传递模板标识和 JSON Props。`scene_templates()` 继续提供发现，普通 `scene_spawn()` 继续构造当前 World 的实例。发布请求复用 EcsAccess 和同一个 Scene Factory，在临时父节点实际构造并立即清理。验证通过后，Turn Runner 把稳定产物 ID、模板标识和语义参数与来源工具结果一起提交到 `ToolReturned`。模板 `agentelier.button` 的定义包含标签和样式。
+
+确认提交后，Conversation 从来源调用投影产物，Chat UI 在回复的同一输出位置调用 Factory。切换会话销毁挂载的实体，重开时由原模板和已保存的语义参数创建新实体。恢复构造失败时在原位置显示局部错误。工具结果向模型提供产物 ID 和模板名，持久定义由会话存档保管。
 
 这一组织方式参考 Generative UI 中由模型选择已有组件并传递结构化语义数据的做法。可用模板、参数描述和实际支持的更新行为由原注册体系提供给模型。模型选择 Scene、提供结构化语义数据或编写 Rhai 行为脚本，Rust 按控件实际契约创建和更新。模板定义不是模型任意发来的 HTML，不建设通用 UI Tree DSL，不用 `ecs_spawn` 手写 Widgetry 受管理控件内部实体。正常 Runtime ECS 读写能力和已开放的操作边界不变。
 

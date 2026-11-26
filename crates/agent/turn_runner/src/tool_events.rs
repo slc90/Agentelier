@@ -733,6 +733,7 @@ async fn save_call(
     progress: &mpsc::Sender<RunnerEvent>,
     cancel: &CancellationToken,
 ) -> Result<(), ConversationFailure> {
+    let (result, published_scene) = published_scene_result(result, cancel);
     let (result, published_audio) = persist_published_audio(active, session, call_id, result).await;
     let (result, generated_image) =
         persist_generated_image(active, session, call_id, result).await?;
@@ -751,6 +752,7 @@ async fn save_call(
         let id = call_id.to_owned();
         let image_record = generated_image.clone();
         let audio_record = published_audio.clone();
+        let scene_record = published_scene.clone();
         let event = active
             .call(move |turn| {
                 Ok(RecordEvent::ToolReturned {
@@ -760,6 +762,7 @@ async fn save_call(
                     output: agentelier_llm_model::ArchivedPayload::capture(&output),
                     generated_image: image_record,
                     published_audio: audio_record,
+                    published_scene: scene_record,
                     execution,
                 })
             })
@@ -775,6 +778,7 @@ async fn save_call(
                     sequence,
                     generated_image,
                     published_audio,
+                    published_scene,
                 )
             })
             .await?
@@ -783,6 +787,33 @@ async fn save_call(
         }
     }
     publish(progress, cancel).await
+}
+
+fn published_scene_result(
+    mut result: ToolResult,
+    cancel: &CancellationToken,
+) -> (ToolResult, Option<agentelier_conversation::PublishedScene>) {
+    let ToolPayload::PublishScene(definition) = result.output else {
+        return (result, None);
+    };
+    if cancel.is_cancelled() {
+        return (
+            ToolResult::error(
+                ToolStatus::Cancelled,
+                "cancelled",
+                "任务已停止，Scene 未发布",
+            ),
+            None,
+        );
+    }
+    let id = agentelier_conversation::SessionId::new_v4();
+    result.output = serde_json::json!({"ok":true,"scene":{"id":id,"template":definition.template}})
+        .to_string()
+        .into();
+    (
+        result,
+        Some(agentelier_conversation::PublishedScene { id, definition }),
+    )
 }
 
 async fn persist_published_audio(

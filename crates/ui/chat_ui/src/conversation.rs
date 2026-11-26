@@ -84,6 +84,8 @@ pub struct ChatTool {
     pub retained: bool,
     pub(super) generated_image: Option<crate::generated_image::Artifact>,
     pub published_audio: Option<crate::audio_attachment::ChatAudio>,
+    #[reflect(ignore)]
+    pub(super) published_scene: Option<agentelier_conversation_bridge::PublishedScene>,
 }
 #[derive(Clone, Reflect)]
 pub struct ChatProcessCleanup {
@@ -292,6 +294,7 @@ enum ReplyItemId {
         call_id: String,
         attachment: SessionId,
     },
+    NativeScene(SessionId),
 }
 #[derive(Component, Clone, Default)]
 struct ComposerFeedback;
@@ -955,6 +958,7 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
             .map(|tool| ChatTool {
                 generated_image: crate::generated_image::Artifact::project(&tool),
                 published_audio: tool.published_audio.map(Into::into),
+                published_scene: tool.published_scene,
                 collaboration: tool.collaboration,
                 request_index: tool.request_index,
                 id: tool.id,
@@ -1483,6 +1487,7 @@ enum ReplyItemContent {
     Text(String),
     Image(crate::generated_image::Artifact),
     Audio(crate::audio_attachment::ChatAudio),
+    NativeScene(agentelier_conversation_bridge::PublishedScene),
 }
 
 pub(super) enum TranscriptPresentation {
@@ -1533,6 +1538,17 @@ fn reply_content(turn: &ChatTurn, operation: Option<u64>) -> Option<ReplyContent
                 },
             },
             ReplyItemContent::Audio(audio),
+        ))
+    }));
+    items.extend(turn.tools.iter().filter_map(|tool| {
+        let artifact = tool.published_scene.clone()?;
+        Some((
+            ReplyItemKey {
+                request_index: tool.request_index,
+                output_index: tool.output_index,
+                id: ReplyItemId::NativeScene(artifact.id),
+            },
+            ReplyItemContent::NativeScene(artifact),
         ))
     }));
     let public = !items.is_empty()
@@ -1870,7 +1886,7 @@ fn reconcile_reply(
                 ReplyItemContent::Image(artifact) => {
                     crate::generated_image::reconcile(world, entity, artifact)?
                 }
-                ReplyItemContent::Audio(_) => {}
+                ReplyItemContent::Audio(_) | ReplyItemContent::NativeScene(_) => {}
             }
             entity
         } else {
@@ -1905,6 +1921,19 @@ fn reconcile_reply(
                         ChildOf(body) template(move |_| Ok(key.clone()))
                     })
                     .id(),
+                ReplyItemContent::NativeScene(artifact) => {
+                    let scene = crate::native_scene::card(artifact.id);
+                    let mut commands = world.commands();
+                    let entity = commands
+                        .spawn_scene_with_error_handler(bsn! {
+                            @scene ChildOf(body) template(move |_| Ok(key.clone()))
+                        })
+                        .id();
+                    commands.queue(move |world: &mut World| {
+                        crate::native_scene::mount(world, entity, artifact)
+                    });
+                    entity
+                }
             }
         };
         ordered.push(entity);

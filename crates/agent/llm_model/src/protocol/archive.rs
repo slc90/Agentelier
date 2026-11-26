@@ -21,7 +21,9 @@ impl ArchivedPayload {
     pub fn capture(payload: &ToolPayload) -> Self {
         match payload {
             ToolPayload::Text(text) => Self::Text { text: text.clone() },
-            ToolPayload::GeneratedImage { .. } | ToolPayload::PublishAudio(_) => Self::Text {
+            ToolPayload::GeneratedImage { .. }
+            | ToolPayload::PublishAudio(_)
+            | ToolPayload::PublishScene(_) => Self::Text {
                 text: payload.summary().into(),
             },
             ToolPayload::Image { summary, image } => Self::Image {

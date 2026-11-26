@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::fmt;
 use std::sync::Arc;
@@ -8,6 +8,32 @@ use tokio_util::sync::CancellationToken;
 
 const REQUEST_CAPACITY: usize = 32;
 const CANCELLATION_POLL: Duration = Duration::from_millis(10);
+pub(crate) const MAX_SCENE_DEFINITION_BYTES: usize = 32 * 1024;
+const MAX_SCENE_TEMPLATE_BYTES: usize = 128;
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SceneDefinition {
+    pub template: String,
+    pub props: Map<String, Value>,
+}
+
+impl SceneDefinition {
+    pub fn validate(&self) -> Result<(), EcsError> {
+        if self.template.trim().is_empty() || self.template.len() > MAX_SCENE_TEMPLATE_BYTES {
+            return Err(EcsError::new(
+                "invalid_scene_template",
+                "Scene 模板名为空或过长",
+            ));
+        }
+        let bytes = serde_json::to_vec(self)
+            .map_err(|error| EcsError::new("invalid_scene_props", error.to_string()))?;
+        if bytes.len() > MAX_SCENE_DEFINITION_BYTES {
+            return Err(EcsError::new("scene_size_limit", "Scene 定义超过 32 KiB"));
+        }
+        Ok(())
+    }
+}
 
 pub enum EcsOperation {
     WorldInfo,
@@ -35,6 +61,7 @@ pub enum EcsOperation {
     Trigger(String, Map<String, Value>),
     WriteMessage(String, Map<String, Value>),
     SceneTemplates,
+    SceneValidate(SceneDefinition),
     SceneSpawn(String, EcsEntity, Map<String, Value>),
     SceneDespawn(EcsEntity),
 }

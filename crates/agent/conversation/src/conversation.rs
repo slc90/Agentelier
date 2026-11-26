@@ -190,6 +190,8 @@ pub struct ToolView {
     #[serde(skip)]
     pub published_audio: Option<crate::AudioAttachment>,
     #[serde(skip)]
+    pub published_scene: Option<crate::PublishedScene>,
+    #[serde(skip)]
     pub result_saved: bool,
     pub retained: bool,
 }

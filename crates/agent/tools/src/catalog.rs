@@ -145,6 +145,7 @@ enum Executor {
     Function(Arc<ToolExecutor>),
     CodexImage,
     PublishAudio,
+    PublishScene,
     Shell(crate::ProcessLifetime),
     Stdin,
     Computer,
@@ -345,6 +346,11 @@ impl ToolRegistration {
             Executor::PublishAudio => {
                 Box::pin(async move { execution::publish_audio(context, arguments, cancel) })
             }
+            Executor::PublishScene => Box::pin(async move {
+                let result = execution::publish_scene(context, scripts, arguments, cancel).await;
+                drop(permit);
+                result
+            }),
             Executor::Function(execute) => {
                 let execution = execute(context, arguments, cancel, origin);
                 Box::pin(async move {
@@ -413,6 +419,20 @@ impl ToolCatalog {
 
     fn builtins(image_input: Option<bool>) -> Vec<ToolRegistration> {
         vec![
+            ToolRegistration::process(
+                ToolDefinition {
+                    name: crate::PUBLISH_SCENE_TOOL.into(),
+                    mode: ToolMode::Synchronous,
+                    source: ToolSource::Builtin,
+                    strict: false,
+                    display_source: None,
+                    output_schema: None,
+                    description: "Publish one registered native Scene as a durable widget in this Root Agent reply. Use ecs_execute scene_templates() to discover names and semantic props. For a button use template agentelier.button with props containing label and style. Returns the durable artifact ID after validation and session commit.".into(),
+                    parameters: json!({"type":"object","properties":{"template":{"type":"string"},"props":{"type":"object"}},"required":["template","props"],"additionalProperties":false}),
+                },
+                Executor::PublishScene,
+                ToolAccess::Exclusive,
+            ),
             ToolRegistration::process(
                 ToolDefinition {
                     name: crate::PUBLISH_AUDIO_TOOL.into(),
@@ -597,6 +617,7 @@ impl ToolCatalog {
             .iter()
             .filter(|tool| {
                 allowed.contains(&tool.definition.name)
+                    && !matches!(tool.executor, Executor::PublishScene)
                     && !(contract.is_flat() && matches!(&tool.executor, Executor::TaskControl(_)))
                     && !(image_input == Some(false) && tool.definition.name == "view_image")
             })
@@ -655,6 +676,7 @@ impl ToolCatalog {
                     Executor::TaskControl(_)
                         | Executor::CodexImage
                         | Executor::PublishAudio
+                        | Executor::PublishScene
                         | Executor::Computer
                         | Executor::Ecs
                         | Executor::Shell(crate::ProcessLifetime::Background)

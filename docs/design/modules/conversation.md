@@ -29,6 +29,8 @@ Conversation 在 `ToolReturned` 持久确认后提供工具结果及其图片描
 
 `publish_audio` 把已确认的助手音频描述符与原调用一起写入 `ToolReturned`。Model History 记录发布结果的文本元数据，回复从原调用投影音频项。播放请求按当前 Session 查找已发送的用户音频和已保留的助手产物，读取由 Session Store 校验的原件。用户草稿和转写继续由各自的输入附件驱动。
 
+`publish_scene` 把由 AgentHost 验证过的语义 Scene 定义和稳定产物 ID 与原工具结果一起提交到 `ToolReturned`。Conversation 在收到存档回执后向当前回复提供产物，恢复时核对来源调用、当前会话及产物 ID。Chat UI 根据定义重新挂载实体。详见[动态 Scene](../assistant-content/04-dynamic-scenes.md)。
+
 ## 设置与生命周期
 
 Conversation 持有按 Session 隔离的内存 Agent Registry。新建与重置在初始存档获得确认后登记 Root，打开时由已有 Session UUID 重建同一个 Root Agent ID 和 Thread ID。重复登记同一 Root 幂等，其他身份冲突会拒绝打开。每次打开分配新的 Runtime Instance ID，Runner 的前台进度和终态必须匹配当前实例。

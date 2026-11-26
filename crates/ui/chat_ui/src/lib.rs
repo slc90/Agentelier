@@ -14,6 +14,7 @@ mod mcp;
 mod mcp_materials;
 mod memory;
 mod memory_chat;
+mod native_scene;
 mod preparation;
 mod project_context;
 mod projects;

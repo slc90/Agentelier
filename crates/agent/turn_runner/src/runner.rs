@@ -612,6 +612,7 @@ async fn run_task(
             settings.image_input,
             Arc::new(user_turn),
             request_index,
+            child.is_none(),
         ));
         jobs.boundary(active, dispatcher, progress, cancel).await?;
         let (result, next_connection) = match request_once(

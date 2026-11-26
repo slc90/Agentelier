@@ -529,6 +529,8 @@ fn replay(
     let mut historical_processes = BTreeMap::new();
     let mut tool_images = HashMap::new();
     let mut published_audio = HashMap::new();
+    let mut published_scenes = HashMap::new();
+    let mut scene_ids = std::collections::HashSet::new();
     let mut saved_tool_results = HashSet::new();
     let mut audio_draft: Option<crate::AudioAttachment> = None;
     let mut audio_ids = HashMap::<crate::AudioId, crate::AudioAttachment>::new();
@@ -1317,6 +1319,7 @@ fn replay(
                 output,
                 generated_image,
                 published_audio: audio,
+                published_scene: scene,
                 execution,
             } => {
                 if !matches!(
@@ -1391,6 +1394,16 @@ fn replay(
                     }
                     audio.validate()?;
                     published_audio.insert(call_id.clone(), audio);
+                }
+                if let Some(scene) = scene {
+                    if !initial.settings.kind.is_user()
+                        || initial.settings.background.is_some()
+                        || !scene_ids.insert(scene.id)
+                    {
+                        return Err(ConversationFailure::new("Scene 产物的会话或身份无效"));
+                    }
+                    scene.validate(tool, status)?;
+                    published_scenes.insert(call_id.clone(), scene);
                 }
                 if matches!(
                     initial
@@ -1832,6 +1845,7 @@ fn replay(
     {
         tool.image = tool_images.remove(&tool.call_id);
         tool.published_audio = published_audio.remove(&tool.call_id);
+        tool.published_scene = published_scenes.remove(&tool.call_id);
         tool.result_saved = saved_tool_results.remove(&tool.call_id);
     }
     state.context.refresh(

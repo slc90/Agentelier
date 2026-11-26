@@ -88,6 +88,28 @@ impl ScriptSession {
         self.state.lock().await.uia.close().await
     }
 
+    pub(crate) async fn validate_scene(
+        &self,
+        definition: crate::ecs_access::SceneDefinition,
+        cancel: &CancellationToken,
+    ) -> Result<(), ToolFailure> {
+        let access = self.ecs_access.clone();
+        let control = Control::new(cancel);
+        let _cancel_on_drop = control.cancel.clone().drop_guard();
+        tokio::task::spawn_blocking(move || {
+            access
+                .call(
+                    crate::ecs_access::EcsOperation::SceneValidate(definition),
+                    &control.cancel,
+                    control.deadline,
+                )
+                .map(|_| ())
+                .map_err(|error| ToolFailure::new(error.code, error.message))
+        })
+        .await
+        .map_err(worker_failure)?
+    }
+
     pub(crate) async fn run(
         &self,
         target: ScriptTarget,

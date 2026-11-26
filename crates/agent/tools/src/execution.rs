@@ -28,6 +28,7 @@ pub struct ExecutionContext {
     image_input: Option<bool>,
     user_turn: Arc<ToolUserTurn>,
     request: u32,
+    root: bool,
 }
 
 impl ExecutionContext {
@@ -36,12 +37,14 @@ impl ExecutionContext {
         image_input: Option<bool>,
         user_turn: Arc<ToolUserTurn>,
         request: u32,
+        root: bool,
     ) -> Self {
         Self {
             directory,
             image_input,
             user_turn,
             request,
+            root,
         }
     }
 
@@ -206,5 +209,62 @@ pub(crate) fn publish_audio(
             cleanup_failed: false,
         },
         Err(failure) => ToolResult::error(ToolStatus::Failed, "audio_path", &failure.to_string()),
+    }
+}
+
+pub(crate) async fn publish_scene(
+    context: &ExecutionContext,
+    scripts: &crate::ScriptSession,
+    arguments: &str,
+    cancel: &CancellationToken,
+) -> ToolResult {
+    use crate::ecs_access::{MAX_SCENE_DEFINITION_BYTES, SceneDefinition};
+
+    if !context.root || context.user_turn().memory_management || context.user_turn().background {
+        return ToolResult::error(
+            ToolStatus::NotExecuted,
+            "scene_owner",
+            "原生 Scene 由用户会话的 Root Agent 发布",
+        );
+    }
+    if cancel.is_cancelled() {
+        return ToolResult::not_executed("stopped", "任务已停止，Scene 未发布");
+    }
+    if arguments.len() > MAX_SCENE_DEFINITION_BYTES {
+        return ToolResult::error(
+            ToolStatus::Failed,
+            "scene_size_limit",
+            "Scene 定义超过 32 KiB",
+        );
+    }
+    let definition: SceneDefinition = match serde_json::from_str(arguments) {
+        Ok(definition) => definition,
+        Err(error) => {
+            return ToolResult::error(
+                ToolStatus::Failed,
+                "invalid_scene_props",
+                &error.to_string(),
+            );
+        }
+    };
+    if let Err(error) = definition.validate() {
+        return ToolResult::error(ToolStatus::Failed, error.code, &error.message);
+    }
+    match scripts.validate_scene(definition.clone(), cancel).await {
+        Ok(()) if !cancel.is_cancelled() => ToolResult {
+            status: ToolStatus::Succeeded,
+            output: crate::ToolPayload::PublishScene(Box::new(definition)),
+            cleanup_failed: false,
+        },
+        Ok(()) => ToolResult::not_executed("stopped", "任务已停止，Scene 未发布"),
+        Err(error) => ToolResult::error(
+            if cancel.is_cancelled() {
+                ToolStatus::Cancelled
+            } else {
+                ToolStatus::Failed
+            },
+            error.code,
+            &error.to_string(),
+        ),
     }
 }

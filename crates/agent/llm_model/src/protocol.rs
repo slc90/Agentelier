@@ -404,7 +404,7 @@ impl ProtocolHistory {
                 ProtocolItem::FunctionResult {call_id, output} => {
                     let body = match output {
                         ToolPayload::Text(text) => Value::String(text),
-                        ToolPayload::GeneratedImage { .. } | ToolPayload::PublishAudio(_) => Value::String(output.summary().into()),
+                        ToolPayload::GeneratedImage { .. } | ToolPayload::PublishAudio(_) | ToolPayload::PublishScene(_) => Value::String(output.summary().into()),
                         ToolPayload::Image {summary,image} => {
                             use base64::Engine;
                             let url = format!("data:{};base64,{}", image.mime(), base64::engine::general_purpose::STANDARD.encode(image.bytes()));

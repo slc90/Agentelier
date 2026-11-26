@@ -205,6 +205,8 @@ pub enum RecordEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         published_audio: Option<crate::AudioAttachment>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        published_scene: Option<crate::PublishedScene>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         execution: Option<crate::TaskExecution>,
     },
     ResultAppended {

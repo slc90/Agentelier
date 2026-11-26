@@ -399,6 +399,16 @@ impl ActiveTurn<'_> {
             }
             audio.validate()?;
         }
+        if let crate::RecordEvent::ToolReturned {
+            published_scene: Some(scene),
+            ..
+        } = event
+        {
+            if !self.view.settings.kind.is_user() || self.view.settings.background.is_some() {
+                return Err(ConversationFailure::new("Scene 产物缺少用户 Root 会话"));
+            }
+            scene.validate(tool, status)?;
+        }
         self.tasks.matching_transition(
             source,
             tool.request_index,
@@ -890,6 +900,7 @@ impl ActiveTurn<'_> {
             output: None,
             image: None,
             published_audio: None,
+            published_scene: None,
             result_saved: false,
             retained: false,
         };
@@ -1102,6 +1113,7 @@ impl ActiveTurn<'_> {
         sequence: u64,
         generated_image: Option<crate::GeneratedImage>,
         published_audio: Option<crate::AudioAttachment>,
+        published_scene: Option<crate::PublishedScene>,
     ) -> Result<bool, ConversationFailure> {
         let result = self
             .results
@@ -1132,6 +1144,7 @@ impl ActiveTurn<'_> {
             .ok_or_else(|| ConversationFailure::new("保存回执缺少工具调用"))?;
         tool.image = image;
         tool.published_audio = published_audio;
+        tool.published_scene = published_scene;
         tool.result_saved = true;
         Ok(changed)
     }
@@ -1157,9 +1170,11 @@ impl ActiveTurn<'_> {
     ) -> Result<Option<(ToolStatus, ToolPayload)>, ConversationFailure> {
         if matches!(
             result.output,
-            ToolPayload::GeneratedImage { .. } | ToolPayload::PublishAudio(_)
+            ToolPayload::GeneratedImage { .. }
+                | ToolPayload::PublishAudio(_)
+                | ToolPayload::PublishScene(_)
         ) {
-            return Err(ConversationFailure::new("媒体产物缺少存储回执"));
+            return Err(ConversationFailure::new("产物缺少会话存储处理"));
         }
         let tool = self
             .view
