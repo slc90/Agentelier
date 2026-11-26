@@ -83,6 +83,12 @@ struct CompositionPart {
     id: String,
 }
 
+pub(super) fn part_id(world: &World, entity: Entity) -> Option<&str> {
+    world
+        .get::<CompositionPart>(entity)
+        .map(|part| part.id.as_str())
+}
+
 type SceneResult<T> = std::result::Result<T, EcsError>;
 
 pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
@@ -98,7 +104,7 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         TEMPLATE,
         "Arrange registered native scenes in one reply artifact, with stable part IDs and semantic areas.",
         &[
-            ("parts", "Required 1 to 16 objects {id, area, scene, bindings?}. id is a unique stable string up to 64 bytes. area is intro, controls, content, or footer. scene is {template, props}. Bindings have kind input, text, visible, series_filter, category_filter, histogram_binning, or reset. Each except reset requires parameter. text accepts format value or square. series_filter matches scatter or bar series or box plot groups. category_filter matches bar categories or heatmap rows. Both filters accept optional all. histogram_binning matches named sample binning definitions. reset is for buttons."),
+            ("parts", "Required 1 to 16 objects {id, area, scene, bindings?}. id is a unique stable string up to 64 bytes. area is intro, controls, content, or footer. scene is {template, props}. Bindings have kind input, text, visible, series_filter, category_filter, histogram_binning, table_selection, table_field, or reset. Each except reset requires parameter. text accepts format value or square. series_filter matches scatter or bar series or box plot groups. category_filter matches bar categories or heatmap rows. Both filters accept optional all. histogram_binning selects named sample bins. table_selection binds a data table to a choice containing exactly its row IDs. table_field binds a text part to that parameter and requires source (table part ID) and field (column ID). reset is for buttons."),
             ("parameters", "Optional object keyed by parameter name. Each value is {domain, default, current?}. domain is {kind, ...}: integer/float with min,max,step; boolean; choice with options [{value,label}]; or text with max_length. A bound input takes its range/options/initial value from the parameter. Omit current on update only to retain an eligible current value."),
         ],
         build,
@@ -221,8 +227,41 @@ impl Properties {
         for part in &mut parts {
             parameters.specialize(&mut part.scene, &part.bindings)?;
         }
+        let fields = parts
+            .iter()
+            .map(|part| resolve_table_field(part, &parts))
+            .collect::<Result<Vec<_>>>()?;
+        for (part, text) in parts.iter_mut().zip(fields) {
+            if let Some(text) = text {
+                part.scene
+                    .props
+                    .insert("text".into(), serde_json::Value::String(text));
+            }
+        }
         Ok((parts, parameters))
     }
+}
+
+fn resolve_table_field(part: &Placement, parts: &[Placement]) -> Result<Option<String>> {
+    let Some((parameter, source, field)) = part.bindings.iter().find_map(|binding| match binding {
+        Binding::TableField {
+            parameter,
+            source,
+            field,
+        } => Some((parameter, source, field)),
+        _ => None,
+    }) else {
+        return Ok(None);
+    };
+    let table = parts
+        .iter()
+        .find(|table| {
+            table.id == *source && table.bindings.iter().any(|binding| {
+        matches!(binding, Binding::TableSelection { parameter: producer } if producer == parameter)
+    })
+        })
+        .ok_or_else(|| io::Error::other("table_field 来源必须是绑定同一参数的表格"))?;
+    super::data_table::initial_field(&table.scene, field).map(Some)
 }
 
 fn prepare(world: &World, root: Entity, mut props: Properties) -> Result<Properties> {
@@ -237,10 +276,12 @@ fn prepare(world: &World, root: Entity, mut props: Properties) -> Result<Propert
             .iter()
             .find(|part| part.placement.id == placement.id)
             && placement.scene != existing.placement.scene
-            && !placement
-                .bindings
-                .iter()
-                .any(|binding| matches!(binding, Binding::Input { .. }))
+            && !placement.bindings.iter().any(|binding| {
+                matches!(
+                    binding,
+                    Binding::Input { .. } | Binding::TableSelection { .. }
+                )
+            })
         {
             prepare_scene_definition(world, existing.root, &mut placement.scene)
                 .map_err(|error| part_error(&placement.id, error))?;

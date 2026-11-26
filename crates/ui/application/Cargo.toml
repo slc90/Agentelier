@@ -26,6 +26,7 @@ bevy_widgetry = { workspace = true, features = [
   "segmented",
   "slider",
   "splash",
+  "table",
   "text_field",
   "toggle_button",
   "tray",

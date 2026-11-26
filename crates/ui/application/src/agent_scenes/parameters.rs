@@ -10,6 +10,7 @@ use std::{collections::BTreeMap, io};
 
 use super::{
     charts::{bars, boxplot, heatmap, histogram, scatter, select_series},
+    data_table,
     discrete::{DiscreteChange, DiscreteValue},
     numeric::{NumericChange, NumericValue},
     text_input::TextChange,
@@ -108,6 +109,14 @@ pub(super) enum Binding {
     HistogramBinning {
         parameter: String,
     },
+    TableSelection {
+        parameter: String,
+    },
+    TableField {
+        parameter: String,
+        source: String,
+        field: String,
+    },
     Reset,
 }
 
@@ -153,10 +162,20 @@ impl BoundPart {
 
     fn input(&self) -> Option<&str> {
         self.bindings.iter().find_map(|binding| match binding {
-            Binding::Input { parameter } => Some(parameter.as_str()),
+            Binding::Input { parameter } | Binding::TableSelection { parameter } => {
+                Some(parameter.as_str())
+            }
             _ => None,
         })
     }
+}
+
+pub(super) fn controls_table(world: &World, root: Entity) -> bool {
+    world.get::<BoundPart>(root).is_some_and(|part| {
+        part.bindings
+            .iter()
+            .any(|binding| matches!(binding, Binding::TableSelection { .. }))
+    })
 }
 
 impl Parameters {
@@ -221,7 +240,9 @@ impl Parameters {
             | Binding::Text { parameter, .. }
             | Binding::SeriesFilter { parameter, .. }
             | Binding::CategoryFilter { parameter, .. }
-            | Binding::HistogramBinning { parameter } => {
+            | Binding::HistogramBinning { parameter }
+            | Binding::TableSelection { parameter }
+            | Binding::TableField { parameter, .. } => {
                 self.values.get(parameter).map(|v| &v.current)
                     == previous.values.get(parameter).map(|v| &v.current)
             }
@@ -326,6 +347,32 @@ impl Parameters {
                         scene,
                         options.iter().map(|option| option.value.as_str()),
                     )?;
+                }
+                Binding::TableSelection { parameter }
+                    if !input && scene.template == data_table::TEMPLATE =>
+                {
+                    input = true;
+                    let Parameter {
+                        domain: Domain::Choice { options },
+                        current: Value::Choice(current),
+                        ..
+                    } = self.get(parameter)?
+                    else {
+                        return Err(parameter_error(parameter, "表格选择需要行 ID 选项"));
+                    };
+                    scene.props.insert("selected_row".into(), json!(current));
+                    data_table::validate_binding(
+                        scene,
+                        options.iter().map(|option| option.value.as_str()),
+                    )?;
+                }
+                Binding::TableField { parameter, .. }
+                    if !text && scene.template == "agentelier.text" =>
+                {
+                    text = true;
+                    if !matches!(self.get(parameter)?.current, Value::Choice(_)) {
+                        return Err(parameter_error(parameter, "表格字段需要已选行"));
+                    }
                 }
                 Binding::Reset if !reset && scene.template == "agentelier.button" => reset = true,
                 _ => {
@@ -639,7 +686,9 @@ fn project(
         let bindings = part.bindings.clone();
         for binding in bindings {
             match binding {
-                Binding::Input { parameter } if parameter == name && source != Some(root) => {
+                Binding::Input { parameter } | Binding::TableSelection { parameter }
+                    if parameter == name && source != Some(root) =>
+                {
                     project_input(world, root, value)?;
                 }
                 Binding::Text { parameter, format } if parameter == name => {
@@ -673,6 +722,25 @@ fn project(
                         histogram::select(world, root, value)?;
                     }
                 }
+                Binding::TableField {
+                    parameter,
+                    source,
+                    field,
+                } if parameter == name => {
+                    if let Value::Choice(row) = value {
+                        let table = parts
+                            .iter()
+                            .copied()
+                            .find(|&entity| {
+                                super::composition::part_id(world, entity) == Some(source.as_str())
+                            })
+                            .ok_or_else(|| parameter_error(name, "字段绑定缺少来源表格"))?;
+                        let label = data_table::current_field(world, table, row, &field)?;
+                        if let Some(mut text) = world.get_mut::<Text>(root) {
+                            text.set_if_neq(Text(label));
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -703,7 +771,13 @@ fn project_input(world: &mut World, root: Entity, value: &Value) -> Result {
             }
         }
         Value::Boolean(value) => super::discrete::set_bound_boolean(world, root, *value)?,
-        Value::Choice(value) => super::discrete::set_bound_choice(world, root, value)?,
+        Value::Choice(value) => {
+            if world.get::<data_table::DataTable>(root).is_some() {
+                data_table::set_selection(world, root, Some(value))?;
+            } else {
+                super::discrete::set_bound_choice(world, root, value)?;
+            }
+        }
         Value::Text(value) => {
             let control = super::text_input::control(world, root)?;
             WidgetryTextFieldHeadless::set_text_in_world(world, control, value)
