@@ -84,10 +84,12 @@ pub enum EcsOperation {
     Trigger(String, Map<String, Value>),
     WriteMessage(String, Map<String, Value>),
     SceneTemplates,
+    WidgetState(SceneTarget, u64),
     SceneValidate {
         definition: SceneDefinition,
         target: Option<SceneTarget>,
         stored: Option<SceneStored>,
+        widget: Option<crate::widget::Candidate>,
     },
     SceneSpawn(String, EcsEntity, Map<String, Value>),
     SceneDespawn(EcsEntity),

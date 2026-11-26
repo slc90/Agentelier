@@ -2,12 +2,13 @@ use super::read;
 use agentelier_bridge_connection::ecs_access::{
     EcsEntity, EcsError, SceneDefinition, SceneStored, SceneTarget,
 };
+use agentelier_bridge_connection::widget;
 use agentelier_conversation_bridge::SceneState;
 use bevy::prelude::*;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -46,6 +47,72 @@ struct Instance {
 pub struct MountedScene {
     pub target: SceneTarget,
     pub revision: u64,
+}
+
+#[derive(Component)]
+pub struct WidgetLiveState(pub widget::State);
+
+#[derive(Default, Resource)]
+pub(crate) struct WidgetCandidates(HashMap<SceneTarget, CheckedWidget>);
+
+struct CheckedWidget {
+    owner: Entity,
+    revision: u64,
+    properties: Properties,
+    program: widget::Program,
+}
+
+pub(crate) fn prune_widget_candidates(
+    mut candidates: ResMut<WidgetCandidates>,
+    mounted: Query<&MountedScene>,
+) {
+    candidates.0.retain(|target, candidate| {
+        mounted.get(candidate.owner).is_ok_and(|mount| {
+            mount.target == *target && mount.revision.checked_add(1) == Some(candidate.revision)
+        })
+    });
+}
+
+pub fn take_widget_candidate(
+    world: &mut World,
+    root: Entity,
+    definition: &widget::Definition,
+) -> Result<Option<widget::Program>> {
+    let Some(&mount) = world.get::<MountedScene>(root) else {
+        return Ok(None);
+    };
+    let properties = serde_json::to_value(definition).map_err(invalid_props)?;
+    let mut candidates = world.resource_mut::<WidgetCandidates>();
+    let matched = candidates.0.get(&mount.target).is_some_and(|candidate| {
+        candidate.owner == root
+            && mount.revision.checked_add(1) == Some(candidate.revision)
+            && properties.as_object() == Some(&candidate.properties)
+    });
+    Ok(matched
+        .then(|| candidates.0.remove(&mount.target))
+        .flatten()
+        .map(|candidate| candidate.program))
+}
+
+fn mounted_widget(
+    world: &mut World,
+    target: SceneTarget,
+    revision: u64,
+) -> Option<(Entity, &WidgetLiveState)> {
+    world
+        .query::<(Entity, &MountedScene, &WidgetLiveState)>()
+        .iter(world)
+        .find_map(|(root, mount, state)| {
+            (mount.target == target && mount.revision == revision).then_some((root, state))
+        })
+}
+
+pub(super) fn widget_state(world: &mut World, target: SceneTarget, revision: u64) -> Result<Value> {
+    Ok(
+        mounted_widget(world, target, revision).map_or(Value::Null, |(_, snapshot)| {
+            Value::Object(snapshot.0.clone())
+        }),
+    )
 }
 
 impl Registry {
@@ -184,6 +251,7 @@ pub(super) fn validate(
     definition: &SceneDefinition,
     target: Option<SceneTarget>,
     stored: Option<&SceneStored>,
+    widget: Option<&widget::Candidate>,
 ) -> Result<Value> {
     let mut definition = definition.clone();
     if let Some(target) = target {
@@ -215,6 +283,28 @@ pub(super) fn validate(
     world.remove_resource::<SceneValidation>();
     world.despawn(staging);
     result?;
+    if let (Some(target), Some(candidate)) = (target, widget) {
+        let current = mounted_widget(world, target, candidate.expected_revision);
+        if let Some((owner, current)) = current {
+            if candidate.captured.as_ref() != Some(&current.0) {
+                return Err(EcsError::new(
+                    "widget_state_changed",
+                    "脚本控件状态在校验期间发生变化，请按当前状态重新修订",
+                ));
+            }
+            if let Some(revision) = candidate.expected_revision.checked_add(1) {
+                world.resource_mut::<WidgetCandidates>().0.insert(
+                    target,
+                    CheckedWidget {
+                        owner,
+                        revision,
+                        properties: definition.props.clone(),
+                        program: candidate.program.clone(),
+                    },
+                );
+            }
+        }
+    }
     serde_json::to_value(definition).map_err(invalid_props)
 }
 

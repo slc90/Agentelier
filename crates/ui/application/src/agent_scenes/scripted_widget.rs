@@ -3,8 +3,8 @@ mod playback;
 
 use agentelier_agent_host::{
     AgentHost, AgentHostPlugin, EcsError, MountedScene, SceneDefinition, SceneState,
-    SceneStateWrites, SceneStored, mount_scene_child, patch_native_scene, replace_scene_children,
-    validating_scene, widget,
+    SceneStateWrites, SceneStored, WidgetLiveState, mount_scene_child, patch_native_scene,
+    replace_scene_children, take_widget_candidate, validating_scene, widget,
 };
 use bevy::{prelude::*, window::PrimaryWindow};
 use bevy_widgetry::{scene::spawn_scene, text::WidgetryText};
@@ -55,7 +55,38 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         build,
         None,
         None,
-    )?.with_ecs_scene_restore(widget::TEMPLATE, restore, prepare_unmounted)
+    )?.with_ecs_scene_restore(widget::TEMPLATE, restore, prepare_unmounted)?
+      .with_conditional_ecs_scene_update(widget::TEMPLATE, revise)
+}
+
+fn revise(world: &mut World, root: Entity, definition: widget::Definition) -> Result<bool> {
+    let Some(widget) = world.get::<ScriptedWidget>(root) else {
+        return Ok(false);
+    };
+    let Load::Live(live) = &widget.load else {
+        return Ok(false);
+    };
+    let view = definition
+        .prepared
+        .as_ref()
+        .ok_or_else(|| io::Error::other("脚本控件修订缺少已检查的定义"))?;
+    let changed = view.parts != live.view.parts;
+    let (native, status) = (live.native, widget.status);
+    let Some(program) = take_widget_candidate(world, root, &definition)? else {
+        return Ok(false);
+    };
+    if changed {
+        apply_layout(world, native, &view.parts)?;
+    }
+    let snapshot = WidgetLiveState(view.state.clone());
+    let updated = Live::new(native, program, view.clone());
+    world
+        .get_mut::<ScriptedWidget>(root)
+        .ok_or_else(|| io::Error::other("脚本控件已卸载"))?
+        .load = Load::Live(Box::new(updated));
+    world.entity_mut(root).insert(snapshot);
+    feedback(world, status, None);
+    Ok(true)
 }
 
 fn restore(mut definition: widget::Definition, saved: &SceneState) -> Result<widget::Definition> {
@@ -215,14 +246,32 @@ fn mount_live(world: &mut World, root: Entity, reply: widget::Reply) -> Result<L
         world.despawn(native);
         return Err(error.into());
     }
-    Ok(Live {
-        native,
-        program: reply.program,
-        view,
-        events: VecDeque::new(),
-        pending: None,
-        clock: Clock::default(),
-    })
+    world
+        .entity_mut(root)
+        .insert(WidgetLiveState(view.state.clone()));
+    Ok(Live::new(native, reply.program, view))
+}
+
+impl Live {
+    fn new(native: Entity, program: widget::Program, view: widget::View) -> Self {
+        Self {
+            native,
+            program,
+            view,
+            events: VecDeque::new(),
+            pending: None,
+            clock: Clock::default(),
+        }
+    }
+}
+
+fn apply_layout(world: &mut World, native: Entity, parts: &[Value]) -> Result {
+    let definition = layout(parts.to_vec());
+    definition.validate()?;
+    if !patch_native_scene(world, native, &definition)? {
+        return Err(io::Error::other("脚本控件原生布局已失效").into());
+    }
+    Ok(())
 }
 
 fn run_event(
@@ -254,13 +303,7 @@ fn run_event(
             if let Some(view) = &reply.view
                 && view.parts != live.view.parts
             {
-                let definition = layout(view.parts.clone());
-                definition.validate().map_err(|error| error.to_string())?;
-                let updated = patch_native_scene(world, live.native, &definition)
-                    .map_err(|error| error.to_string())?;
-                if !updated {
-                    return Err("脚本控件原生布局已失效".to_owned());
-                }
+                apply_layout(world, live.native, &view.parts).map_err(|error| error.to_string())?;
             }
             if let Some((at, elapsed)) = reply.time {
                 live.clock.ticked(at, elapsed);
@@ -271,6 +314,11 @@ fn run_event(
                 }
                 let changed = live.view.state != view.state;
                 live.view = view;
+                if changed {
+                    world
+                        .entity_mut(root)
+                        .insert(WidgetLiveState(live.view.state.clone()));
+                }
                 let error = changed
                     .then(|| persist(world, root, &live.view.state))
                     .transpose()

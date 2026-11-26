@@ -319,12 +319,7 @@ pub(crate) async fn prepare_scene(
         _ => None,
     };
     match scripts
-        .validate_scene(
-            definition.as_ref().clone(),
-            target.map(|(target, _)| target),
-            stored,
-            cancel,
-        )
+        .validate_scene(definition.as_ref().clone(), target, stored, cancel)
         .await
     {
         Ok(checked) if !cancel.is_cancelled() => {

@@ -11,8 +11,9 @@ pub use agentelier_bridge_connection::ecs_access::{
 pub use agentelier_bridge_connection::widget;
 pub use agentelier_conversation_bridge::SceneState;
 pub use ecs_access::scenes::{
-    MountedScene, mount_native_scene, mount_scene_child, patch_native_scene,
-    prepare_scene_definition, replace_scene_children, restore_scene_definition, validating_scene,
+    MountedScene, WidgetLiveState, mount_native_scene, mount_scene_child, patch_native_scene,
+    prepare_scene_definition, replace_scene_children, restore_scene_definition,
+    take_widget_candidate, validating_scene,
 };
 pub use scene_state::{SceneSaveError, SceneStateWrites, flush_scene_state};
 

@@ -196,6 +196,7 @@ impl Plugin for AgentHostPlugin {
             .insert_resource(self.ecs_scenes.clone())
             .init_resource::<HostActivity>()
             .init_resource::<crate::SceneStateWrites>()
+            .init_resource::<crate::ecs_access::scenes::WidgetCandidates>()
             .add_message::<AccountEvent>()
             .add_message::<ModelEvent>()
             .add_message::<ConversationEvent>()
@@ -216,7 +217,14 @@ impl Plugin for AgentHostPlugin {
                     .chain()
                     .in_set(ReceiveAgentEvents),
             )
-            .add_systems(Update, crate::scene_state::update.after(ReceiveAgentEvents));
+            .add_systems(
+                Update,
+                (
+                    crate::scene_state::update,
+                    crate::ecs_access::scenes::prune_widget_candidates,
+                )
+                    .after(ReceiveAgentEvents),
+            );
     }
 }
 

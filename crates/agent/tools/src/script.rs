@@ -97,14 +97,45 @@ impl ScriptSession {
     pub(crate) async fn validate_scene(
         &self,
         mut definition: crate::ecs_access::SceneDefinition,
-        target: Option<crate::ecs_access::SceneTarget>,
+        target: Option<(crate::ecs_access::SceneTarget, u64)>,
         stored: Option<crate::ecs_access::SceneStored>,
         cancel: &CancellationToken,
     ) -> Result<crate::ecs_access::SceneDefinition, ToolFailure> {
-        if definition.template == widget::TEMPLATE {
-            widget::prepare(&mut definition, self.ecs_access.clone(), cancel).await?;
-        }
         let access = self.ecs_access.clone();
+        let candidate = if definition.template == widget::TEMPLATE {
+            let captured = if let Some((target, revision)) = target {
+                let access = access.clone();
+                let control = Control::new(cancel);
+                let _cancel_on_drop = control.cancel.clone().drop_guard();
+                let state = tokio::task::spawn_blocking(move || {
+                    access
+                        .call(
+                            crate::ecs_access::EcsOperation::WidgetState(target, revision),
+                            &control.cancel,
+                            control.deadline,
+                        )
+                        .map_err(|error| ToolFailure::new(error.code, error.message))
+                })
+                .await
+                .map_err(worker_failure)??;
+                serde_json::from_value::<Option<widget::State>>(state)
+                    .map_err(|error| ToolFailure::new("invalid_widget_state", error.to_string()))?
+            } else {
+                None
+            };
+            let state = match &captured {
+                Some(state) => Some(state.clone()),
+                None => widget::prior_state(stored.as_ref())?,
+            };
+            let program = widget::prepare(&mut definition, state, access.clone(), cancel).await?;
+            target.map(|(_, expected_revision)| widget::Candidate {
+                expected_revision,
+                captured,
+                program,
+            })
+        } else {
+            None
+        };
         let control = Control::new(cancel);
         let _cancel_on_drop = control.cancel.clone().drop_guard();
         tokio::task::spawn_blocking(move || {
@@ -112,8 +143,9 @@ impl ScriptSession {
                 .call(
                     crate::ecs_access::EcsOperation::SceneValidate {
                         definition,
-                        target,
+                        target: target.map(|(target, _)| target),
                         stored,
+                        widget: candidate,
                     },
                     &control.cancel,
                     control.deadline,

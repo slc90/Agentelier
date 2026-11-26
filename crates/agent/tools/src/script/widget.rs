@@ -34,7 +34,7 @@ pub fn decode_state(values: &State) -> Result<State, ToolFailure> {
         .map_err(|error| ToolFailure::new("invalid_widget_state", error.to_string()))
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Definition {
     pub source: String,
@@ -46,7 +46,7 @@ pub struct Definition {
     pub prepared: Option<View>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct View {
     pub parts: Vec<Value>,
@@ -56,7 +56,7 @@ pub struct View {
     pub playback: Option<Playback>,
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Playback {
     pub running: bool,
@@ -67,6 +67,12 @@ pub struct Playback {
 
 #[derive(Clone)]
 pub struct Program(Arc<Compiled>);
+
+pub struct Candidate {
+    pub expected_revision: u64,
+    pub captured: Option<State>,
+    pub program: Program,
+}
 
 struct Compiled {
     engine: Mutex<Engine>,
@@ -241,24 +247,41 @@ impl Job {
 
 pub(super) async fn prepare(
     scene: &mut SceneDefinition,
+    state: Option<State>,
     access: EcsAccess,
     cancel: &CancellationToken,
-) -> Result<(), ToolFailure> {
+) -> Result<Program, ToolFailure> {
     let mut definition: Definition = serde_json::from_value(Value::Object(scene.props.clone()))
         .map_err(|error| ToolFailure::new("invalid_scene_props", error.to_string()))?;
     definition.prepared = None;
-    let initial = evaluate(
-        Invocation::Init(Box::new(definition.clone())),
-        access,
-        cancel,
-    )
-    .await?;
+    let source = Box::new(definition.clone());
+    let invocation = match state {
+        Some(state) => Invocation::Restore(source, state),
+        None => Invocation::Init(source),
+    };
+    let initial = evaluate(invocation, access, cancel).await?;
     definition.prepared = initial.view;
     scene.props = serde_json::from_value(serde_json::to_value(definition).map_err(output_error)?)
         .map_err(output_error)?;
     scene
         .validate()
-        .map_err(|error| ToolFailure::new(error.code, error.message))
+        .map_err(|error| ToolFailure::new(error.code, error.message))?;
+    Ok(initial.program)
+}
+
+pub(super) fn prior_state(
+    stored: Option<&crate::ecs_access::SceneStored>,
+) -> Result<Option<State>, ToolFailure> {
+    let Some(stored) = stored.filter(|stored| stored.definition.template == TEMPLATE) else {
+        return Ok(None);
+    };
+    if let Some(values) = &stored.values {
+        return decode_state(values).map(Some);
+    }
+    let previous: Definition =
+        serde_json::from_value(Value::Object(stored.definition.props.clone()))
+            .map_err(|error| ToolFailure::new("invalid_widget_state", error.to_string()))?;
+    Ok(previous.prepared.map(|view| view.state))
 }
 
 async fn evaluate(
