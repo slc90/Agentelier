@@ -7,14 +7,16 @@ use bevy::{
 };
 use bevy_widgetry::{
     canvas::{
-        CanvasDocument, CanvasEditToken, CanvasLayerId, CanvasLineCap, CanvasLineJoin, CanvasPaint,
-        CanvasPath, CanvasPathCommand, CanvasPlugin, CanvasStroke, CanvasTextStyle, CanvasView,
+        CanvasDocument, CanvasEditToken, CanvasGeometry, CanvasLayerId, CanvasLineCap,
+        CanvasLineJoin, CanvasPaint, CanvasPath, CanvasPathCommand, CanvasPlugin, CanvasStroke,
+        CanvasTextStyle, CanvasView,
     },
     job::JobFailure,
     scene::spawn_scene,
     text::WidgetryText,
     theme::WidgetryTheme,
 };
+use std::io;
 
 const WIDTH: f32 = 656.0;
 const HEIGHT: f32 = 291.0;
@@ -46,31 +48,12 @@ pub(super) struct Legend {
 pub(super) struct Mark {
     pub legend: Legend,
     pub commands: Vec<CanvasPathCommand>,
-    pub width: f32,
+    pub paint: CanvasPaint,
 }
 
 impl Mark {
     pub fn geometry(&self) -> (CanvasPath, CanvasPaint) {
-        if self.commands.is_empty() {
-            return (
-                CanvasPath {
-                    commands: vec![
-                        CanvasPathCommand::MoveTo(Vec2::ZERO),
-                        CanvasPathCommand::LineTo(Vec2::X),
-                    ],
-                },
-                CanvasPaint {
-                    fill: None,
-                    ..default()
-                },
-            );
-        }
-        (
-            CanvasPath {
-                commands: self.commands.clone(),
-            },
-            stroke_paint(self.legend.color, self.width),
-        )
+        path_geometry(self.commands.clone(), self.paint)
     }
 }
 
@@ -79,24 +62,175 @@ pub(super) struct Content {
     pub x: Axis,
     pub y: Axis,
     pub marks: Vec<Mark>,
+    pub baseline: Option<Baseline>,
+}
+
+pub(super) struct Baseline {
+    pub fraction: f64,
+    pub value: f64,
+}
+
+impl Baseline {
+    fn label(&self) -> String {
+        let value = if self.value != 0.0 && !(1e-4..1e7).contains(&self.value.abs()) {
+            format!("{:e}", self.value)
+        } else {
+            self.value.to_string()
+        };
+        format!("基线 {value}")
+    }
+
+    fn geometry(&self, ink: Color) -> (CanvasPath, CanvasPaint) {
+        let mut commands = Vec::new();
+        if (0.0..=1.0).contains(&self.fraction) {
+            for dash in 0..36 {
+                let left = f64::from(dash) / 36.0;
+                let right = (f64::from(dash) + 0.58) / 36.0;
+                draw_straight(
+                    &mut commands,
+                    map(DVec2::new(left, self.fraction)),
+                    map(DVec2::new(right, self.fraction)),
+                );
+            }
+        }
+        path_geometry(commands, stroke_paint(ink, 1.4))
+    }
 }
 
 #[derive(Clone, Copy)]
 pub(super) enum Style {
     Line,
     Scatter,
+    Area,
 }
 
 pub(super) struct Rendered {
     pub root: Entity,
     pub document: Entity,
     pub layers: Vec<Layer>,
+    reference: Option<Reference>,
+}
+
+struct Reference {
+    path: Entity,
+    note: Entity,
+    ink: Color,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct Layer {
     pub id: CanvasLayerId,
     pub path: Entity,
+}
+
+#[derive(Component)]
+pub(super) struct RetainedPlot {
+    pub rendered: Rendered,
+    pub legends: Vec<Legend>,
+    title: Option<String>,
+    x: Axis,
+    y: Axis,
+}
+
+impl RetainedPlot {
+    pub fn build(
+        world: &mut World,
+        parent: Entity,
+        content: Content,
+        style: Style,
+    ) -> std::result::Result<Entity, EcsError> {
+        let title = content.title.clone();
+        let (x, y) = (content.x.clone(), content.y.clone());
+        let legends = content
+            .marks
+            .iter()
+            .map(|mark| mark.legend.clone())
+            .collect();
+        let rendered = mount(world, parent, content, style)?;
+        let root = rendered.root;
+        world.entity_mut(root).insert(Self {
+            rendered,
+            title,
+            x,
+            y,
+            legends,
+        });
+        Ok(root)
+    }
+
+    pub fn get(world: &World, root: Entity) -> Result<&Self> {
+        world
+            .get::<Self>(root)
+            .ok_or_else(|| io::Error::other("图表缺少绘图状态").into())
+    }
+
+    pub fn update(world: &mut World, root: Entity, content: &Content) -> Result<bool> {
+        let chart = Self::get(world, root)?;
+        let rendered = &chart.rendered;
+        if (chart.title.as_ref(), &chart.x, &chart.y)
+            != (content.title.as_ref(), &content.x, &content.y)
+            || !chart
+                .legends
+                .iter()
+                .eq(content.marks.iter().map(|mark| &mark.legend))
+            || rendered.reference.is_some() != content.baseline.is_some()
+        {
+            return Ok(false);
+        }
+        let document = rendered.document;
+        let mut changed = Vec::new();
+        for (layer, mark) in rendered.layers.iter().zip(&content.marks) {
+            let (path, paint) = mark.geometry();
+            keep_change(world, &mut changed, layer.path, path, paint)?;
+        }
+        let note = if let Some((reference, baseline)) =
+            rendered.reference.as_ref().zip(content.baseline.as_ref())
+        {
+            let (path, paint) = baseline.geometry(reference.ink);
+            keep_change(world, &mut changed, reference.path, path, paint)?;
+            Some((reference.note, baseline.label()))
+        } else {
+            None
+        };
+        if !changed.is_empty() {
+            CanvasDocument::edit(world, document, |world, token| {
+                for (entity, path, paint) in changed {
+                    CanvasDocument::update_path(
+                        world,
+                        token,
+                        entity,
+                        path,
+                        Transform::default(),
+                        paint,
+                    )?;
+                }
+                Ok(())
+            })?;
+        }
+        if let Some((entity, label)) = note
+            && let Some(mut text) = world.get_mut::<Text>(entity)
+        {
+            text.set_if_neq(Text(label));
+        }
+        Ok(true)
+    }
+}
+
+fn keep_change(
+    world: &World,
+    changed: &mut Vec<(Entity, CanvasPath, CanvasPaint)>,
+    entity: Entity,
+    path: CanvasPath,
+    paint: CanvasPaint,
+) -> Result {
+    let Some(CanvasGeometry::Path(previous)) = world.get::<CanvasGeometry>(entity) else {
+        return Err(io::Error::other("图表缺少已挂载的绘图路径").into());
+    };
+    if previous != &path || world.get::<CanvasPaint>(entity) != Some(&paint) {
+        path.validate(&Transform::default(), &paint)?;
+        changed.push((entity, path, paint));
+    }
+    Ok(())
 }
 
 pub(super) fn palette(index: usize) -> Color {
@@ -125,6 +259,7 @@ pub(super) fn mount(
     let name = match style {
         Style::Line => "NativeLineChart",
         Style::Scatter => "NativeScatterChart",
+        Style::Area => "NativeAreaChart",
     };
     let root = spawn_scene(world, bsn! {
         ChildOf(parent) Name(name)
@@ -144,7 +279,13 @@ fn decorate(
     content: Content,
     style: Style,
 ) -> std::result::Result<Rendered, EcsError> {
-    let Content { title, x, y, marks } = content;
+    let Content {
+        title,
+        x,
+        y,
+        marks,
+        baseline,
+    } = content;
     let document = spawn_scene(
         world,
         bsn! { ChildOf(root) Name("ChartDocument") template(|_| Ok(CanvasDocument)) },
@@ -154,18 +295,29 @@ fn decorate(
     let ink = theme.text.normal.foreground;
     let grid = theme.text_field.editable.normal.border;
     CanvasDocument::set_history_capacity(world, document, 0).map_err(construction)?;
-    let layers = CanvasDocument::edit(world, document, |world, token| {
+    let (layers, reference) = CanvasDocument::edit(world, document, |world, token| {
         axes(world, token, &x, &y, ink, grid)?;
+        let reference = if let Some(baseline) = &baseline {
+            let (path, paint) = baseline.geometry(ink);
+            let entity =
+                CanvasDocument::create_path(world, token, path, Transform::default(), paint)?;
+            world.entity_mut(entity).insert(Name::new("ChartBaseline"));
+            Some(entity)
+        } else {
+            None
+        };
         let mut layers = Vec::new();
         for (index, mark) in marks.iter().enumerate() {
-            let (geometry, paint) = mark.geometry();
             let transform = Transform::default();
+            if matches!(style, Style::Line) && mark.commands.is_empty() {
+                continue;
+            }
+            let (geometry, paint) = mark.geometry();
             let path = match style {
-                Style::Line if mark.commands.is_empty() => continue,
                 Style::Line => {
                     CanvasDocument::create_path(world, token, geometry, transform, paint)?
                 }
-                Style::Scatter => {
+                Style::Scatter | Style::Area => {
                     let id =
                         CanvasDocument::create_layer(world, token, index + 1, &mark.legend.name)?;
                     let path = CanvasDocument::create_path_in_layer(
@@ -179,7 +331,7 @@ fn decorate(
                 .entity_mut(path)
                 .insert(Name::new(format!("ChartSeries-{index}")));
         }
-        Ok(layers)
+        Ok((layers, reference))
     })
     .map_err(construction)?;
     let y_name = y.name;
@@ -211,10 +363,21 @@ fn decorate(
             @legend
         ]
     }).map_err(construction)?;
+    let reference = if let Some((path, baseline)) = reference.zip(baseline) {
+        let caption = baseline.label();
+        let note = spawn_scene(world, bsn! {
+            ChildOf(root) Name("ChartBaselineLabel")
+            Text(caption) WidgetryText TextLayout::linebreak(bevy::text::LineBreak::WordOrCharacter)
+        }).map_err(construction)?;
+        Some(Reference { path, note, ink })
+    } else {
+        None
+    };
     Ok(Rendered {
         root,
         document,
         layers,
+        reference,
     })
 }
 
@@ -223,6 +386,7 @@ fn legend(item: Legend, style: Style) -> impl Scene {
     let (width, height) = match style {
         Style::Line => (18., 3.),
         Style::Scatter => (8., 8.),
+        Style::Area => (18., 8.),
     };
     bsn! {
         Node { min_width: px(0), max_width: percent(100), align_items: AlignItems::Center, column_gap: px(6), overflow: Overflow::clip_x() }
@@ -337,7 +501,7 @@ fn stroke(
     )
 }
 
-fn stroke_paint(color: Color, width: f32) -> CanvasPaint {
+pub(super) fn stroke_paint(color: Color, width: f32) -> CanvasPaint {
     CanvasPaint {
         fill: None,
         stroke: Some(CanvasStroke {
@@ -348,6 +512,27 @@ fn stroke_paint(color: Color, width: f32) -> CanvasPaint {
         }),
         ..default()
     }
+}
+
+fn path_geometry(
+    commands: Vec<CanvasPathCommand>,
+    paint: CanvasPaint,
+) -> (CanvasPath, CanvasPaint) {
+    if commands.is_empty() {
+        return (
+            CanvasPath {
+                commands: vec![
+                    CanvasPathCommand::MoveTo(Vec2::ZERO),
+                    CanvasPathCommand::LineTo(Vec2::X),
+                ],
+            },
+            CanvasPaint {
+                fill: None,
+                ..default()
+            },
+        );
+    }
+    (CanvasPath { commands }, paint)
 }
 
 fn draw_straight(commands: &mut Vec<CanvasPathCommand>, from: Vec2, to: Vec2) {
@@ -385,6 +570,69 @@ pub(super) fn append_line(commands: &mut Vec<CanvasPathCommand>, points: &[DVec2
             previous = None;
         }
     }
+}
+
+pub(super) fn append_polygon(commands: &mut Vec<CanvasPathCommand>, mut points: Vec<DVec2>) {
+    for (axis, edge, retain_higher) in [
+        (0, 0.0, true),
+        (0, 1.0, false),
+        (1, 0.0, true),
+        (1, 1.0, false),
+    ] {
+        let input = std::mem::take(&mut points);
+        let inside = |point: DVec2| {
+            if retain_higher {
+                point[axis] >= edge
+            } else {
+                point[axis] <= edge
+            }
+        };
+        let Some(&last) = input.last() else { return };
+        let mut from = last;
+        for to in input {
+            if inside(from) != inside(to) {
+                points.push(intersection(from, to, axis, edge));
+            }
+            if inside(to) {
+                points.push(to);
+            }
+            from = to;
+        }
+    }
+    let mut points: Vec<_> = points.into_iter().map(map).collect();
+    points.dedup();
+    if points.first() == points.last() {
+        points.pop();
+    }
+    let [first, remaining @ ..] = points.as_slice() else {
+        return;
+    };
+    let area = remaining
+        .windows(2)
+        .map(|pair| {
+            (pair[0] - *first)
+                .as_dvec2()
+                .perp_dot((pair[1] - *first).as_dvec2())
+        })
+        .sum::<f64>();
+    if area.abs() > 0.00001 {
+        commands.push(CanvasPathCommand::MoveTo(*first));
+        commands.extend(remaining.iter().copied().map(CanvasPathCommand::LineTo));
+        commands.push(CanvasPathCommand::Close);
+    }
+}
+
+pub(super) fn intersection(from: DVec2, to: DVec2, axis: usize, edge: f64) -> DVec2 {
+    let scale = from[axis]
+        .abs()
+        .max(to[axis].abs())
+        .max(edge.abs())
+        .max(1.0);
+    let start = from[axis] / scale;
+    let t = ((edge / scale - start) / (to[axis] / scale - start)).clamp(0.0, 1.0);
+    let mut point = from * (1.0 - t) + to * t;
+    point[axis] = edge;
+    point
 }
 
 fn clip_line(from: DVec2, to: DVec2) -> Option<(DVec2, DVec2)> {

@@ -1,11 +1,11 @@
 use super::{
     axis::{Axis, AxisKind, AxisSpec, Range},
     invalid,
-    plot::{self, Content, Legend, Mark, Rendered, Style},
+    plot::{self, Content, Legend, Mark, RetainedPlot, Style},
 };
 use agentelier_agent_host::{AgentHostPlugin, EcsError, SceneDefinition};
 use bevy::{math::DVec2, prelude::*};
-use bevy_widgetry::canvas::{CanvasDocument, CanvasGeometry, CanvasPaint, CanvasPathCommand};
+use bevy_widgetry::canvas::{CanvasDocument, CanvasPathCommand};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, io};
 
@@ -28,15 +28,6 @@ struct Series {
     color: Option<[u8; 3]>,
     radius: Option<f32>,
     points: Vec<[Option<f64>; 2]>,
-}
-
-#[derive(Component)]
-struct Scatter {
-    plot: Rendered,
-    title: Option<String>,
-    x: Axis,
-    y: Axis,
-    legends: Vec<Legend>,
 }
 
 pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
@@ -64,22 +55,7 @@ fn build(
 ) -> std::result::Result<Entity, EcsError> {
     let selected = properties.selected_series.clone();
     let content = prepare(properties).map_err(invalid)?;
-    let title = content.title.clone();
-    let (x, y) = (content.x.clone(), content.y.clone());
-    let legends = content
-        .marks
-        .iter()
-        .map(|mark| mark.legend.clone())
-        .collect();
-    let plot = plot::mount(world, parent, content, Style::Scatter)?;
-    let root = plot.root;
-    world.entity_mut(root).insert(Scatter {
-        plot,
-        title,
-        x,
-        y,
-        legends,
-    });
+    let root = RetainedPlot::build(world, parent, content, Style::Scatter)?;
     if let Err(error) = filter(world, root, selected.as_deref()) {
         world.despawn(root);
         return Err(super::construction(error));
@@ -90,41 +66,8 @@ fn build(
 fn update(world: &mut World, root: Entity, properties: Properties) -> Result<bool> {
     let selected = properties.selected_series.clone();
     let content = prepare(properties)?;
-    let chart = chart(world, root)?;
-    if (chart.title.as_ref(), &chart.x, &chart.y)
-        != (content.title.as_ref(), &content.x, &content.y)
-        || !chart
-            .legends
-            .iter()
-            .eq(content.marks.iter().map(|mark| &mark.legend))
-    {
+    if !RetainedPlot::update(world, root, &content)? {
         return Ok(false);
-    }
-    let document = chart.plot.document;
-    let mut changed = Vec::new();
-    for (layer, mark) in chart.plot.layers.iter().zip(&content.marks) {
-        let (path, paint) = mark.geometry();
-        if !matches!(world.get::<CanvasGeometry>(layer.path), Some(CanvasGeometry::Path(current)) if current == &path)
-            || world.get::<CanvasPaint>(layer.path) != Some(&paint)
-        {
-            path.validate(&Transform::default(), &paint)?;
-            changed.push((layer.path, path, paint));
-        }
-    }
-    if !changed.is_empty() {
-        CanvasDocument::edit(world, document, |world, token| {
-            for (entity, path, paint) in changed {
-                CanvasDocument::update_path(
-                    world,
-                    token,
-                    entity,
-                    path,
-                    Transform::default(),
-                    paint,
-                )?;
-            }
-            Ok(())
-        })?;
     }
     filter(world, root, selected.as_deref())?;
     Ok(true)
@@ -182,19 +125,26 @@ fn prepare(properties: Properties) -> Result<Content> {
                     ]);
                 }
             }
+            let color = series
+                .color
+                .map_or_else(|| plot::palette(index), |[r, g, b]| Color::srgb_u8(r, g, b));
             Mark {
                 legend: Legend {
                     name: series.name,
-                    color: series
-                        .color
-                        .map_or_else(|| plot::palette(index), |[r, g, b]| Color::srgb_u8(r, g, b)),
+                    color,
                 },
                 commands,
-                width: 2.0 * series.radius.unwrap_or(4.0),
+                paint: plot::stroke_paint(color, 2.0 * series.radius.unwrap_or(4.0)),
             }
         })
         .collect();
-    Ok(Content { title, x, y, marks })
+    Ok(Content {
+        title,
+        x,
+        y,
+        marks,
+        baseline: None,
+    })
 }
 
 fn position(point: &[Option<f64>; 2]) -> Option<DVec2> {
@@ -231,10 +181,10 @@ pub(in crate::agent_scenes) fn filter(
     root: Entity,
     selected: Option<&str>,
 ) -> Result {
-    let chart = chart(world, root)?;
-    let document = chart.plot.document;
+    let chart = RetainedPlot::get(world, root)?;
+    let document = chart.rendered.document;
     let visibility: Vec<_> = chart
-        .plot
+        .rendered
         .layers
         .iter()
         .zip(&chart.legends)
@@ -247,10 +197,4 @@ pub(in crate::agent_scenes) fn filter(
         Ok(())
     })?;
     Ok(())
-}
-
-fn chart(world: &World, root: Entity) -> Result<&Scatter> {
-    world
-        .get::<Scatter>(root)
-        .ok_or_else(|| io::Error::other("散点图缺少绘图状态").into())
 }

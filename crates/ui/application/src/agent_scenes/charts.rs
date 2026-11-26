@@ -1,3 +1,4 @@
+mod area;
 mod axis;
 mod plot;
 pub(super) mod scatter;
@@ -44,6 +45,7 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         None,
     )
     .and_then(scatter::register)
+    .and_then(area::register)
 }
 
 pub(super) fn install(app: &mut App) {
@@ -53,6 +55,16 @@ pub(super) fn install(app: &mut App) {
 struct Series {
     legend: plot::Legend,
     points: Vec<(f64, Option<f64>)>,
+}
+
+impl Series {
+    fn runs(&self, x: Range, y: Range) -> impl Iterator<Item = Vec<DVec2>> + '_ {
+        self.points.split(|(_, y)| y.is_none()).map(move |run| {
+            run.iter()
+                .filter_map(|(x0, y0)| y0.map(|y0| DVec2::new(x.fraction(*x0), y.fraction(y0))))
+                .collect()
+        })
+    }
 }
 
 fn line(
@@ -67,25 +79,19 @@ fn line(
         y_axis,
         series,
     } = props;
-    let valid = prepare(x_kind, x_axis, y_axis, series).map_err(invalid)?;
+    let valid = prepare_continuous(x_kind, x_axis, y_axis, series, None).map_err(invalid)?;
     let (x, y, series) = valid;
     let plots = series
         .into_iter()
         .map(|series| {
             let mut commands = Vec::new();
-            for run in series.points.split(|(_, y)| y.is_none()) {
-                let points: Vec<DVec2> = run
-                    .iter()
-                    .filter_map(|(x0, y0)| {
-                        y0.map(|y0| DVec2::new(x.range.fraction(*x0), y.range.fraction(y0)))
-                    })
-                    .collect();
+            for points in series.runs(x.range, y.range) {
                 plot::append_line(&mut commands, &points);
             }
             plot::Mark {
+                paint: plot::stroke_paint(series.legend.color, plot::LINE_WIDTH),
                 legend: series.legend,
                 commands,
-                width: plot::LINE_WIDTH,
             }
         })
         .collect();
@@ -97,17 +103,19 @@ fn line(
             x,
             y,
             marks: plots,
+            baseline: None,
         },
         plot::Style::Line,
     )
     .map(|plot| plot.root)
 }
 
-fn prepare(
+fn prepare_continuous(
     kind: AxisKind,
     x_spec: AxisSpec<Coordinate>,
     y_spec: AxisSpec<f64>,
     series: Vec<LineSeries>,
+    baseline: Option<f64>,
 ) -> Result<(Axis, Axis, Vec<Series>)> {
     if !(1..=plot::PALETTE.len()).contains(&series.len()) {
         return Err(io::Error::other("series 必须包含 1 至 8 个观测序列").into());
@@ -151,7 +159,7 @@ fn prepare(
     let x_range = Range::new(range, values().map(|(x, _)| x), kind)?;
     let y_range = Range::new(
         y_spec.range,
-        values().filter_map(|(_, y)| y),
+        values().filter_map(|(_, y)| y).chain(baseline),
         AxisKind::Number,
     )?;
     if values().any(|(x, y)| {
