@@ -1,10 +1,7 @@
-use bevy::input::mouse::MouseScrollPixelsPerLine;
-use bevy::picking::events::PointerScroll;
+use agentelier_controls::forward_vertical_scroll;
 use bevy::prelude::*;
 use bevy::text::{FontSource, LineBreak, LineHeight};
-use bevy::ui::{OverflowAxis, ScrollPosition};
 use bevy::ui_widgets::Activate;
-use bevy::ui_widgets::ScrollArea;
 use bevy_widgetry::scroll_area::{ScrollAxis, WidgetryScrollArea};
 use bevy_widgetry::text::{
     WidgetryText, WidgetryTextColorOverrides, WidgetryTextStateColorOverrides,
@@ -55,30 +52,6 @@ fn copy_code(event: On<Activate>, mut commands: Commands) {
 
 fn height(text: &str) -> f32 {
     text.split('\n').count() as f32 * CODE_LINE_HEIGHT + SCROLLBAR_SPACE
-}
-
-// Bevy's horizontal ScrollArea consumes both axes, so forward the vertical delta before it stops propagation.
-pub(crate) fn forward_vertical(
-    event: On<PointerScroll>,
-    parents: Query<&ChildOf>,
-    mut areas: Query<(&Node, &ComputedNode, &mut ScrollPosition), With<ScrollArea>>,
-    conversion: Res<MouseScrollPixelsPerLine>,
-) {
-    let delta = event.to_pixels(&conversion).y;
-    if delta == 0.0 {
-        return;
-    }
-    for ancestor in parents.iter_ancestors(event.entity) {
-        if let Ok((node, computed, mut position)) = areas.get_mut(ancestor)
-            && node.overflow.y == OverflowAxis::Scroll
-        {
-            let maximum = ((computed.content_size.y - computed.size.y)
-                * computed.inverse_scale_factor)
-                .max(0.0);
-            position.0.y = (position.0.y - delta).clamp(0.0, maximum);
-            break;
-        }
-    }
 }
 
 pub(crate) fn update(world: &mut World, root: Entity, text: &str) -> Result {
@@ -133,7 +106,7 @@ pub(crate) fn scene(language: &str, text: &str) -> Box<dyn Scene> {
             Children [Text(label) WidgetryText-- @crate::source::copy_button("复制代码", "MarkdownCopyCode") on(copy_code)]--
             @WidgetryScrollArea {
                 @axis: ScrollAxis::Horizontal,
-                @content: {Some(Box::new(bsn! { on(forward_vertical) }) as Box<dyn Scene>)},
+                @content: {Some(Box::new(bsn! { on(forward_vertical_scroll) }) as Box<dyn Scene>)},
                 @children: {Some(Box::new(bsn_list! {
                     Text(text) CodeText Name("MarkdownCodeText")
                     @WidgetryText {

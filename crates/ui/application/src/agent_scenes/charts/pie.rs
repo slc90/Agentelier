@@ -218,7 +218,7 @@ fn draw(
                     } else {
                         direction((start + end) * 0.5) * 73.0
                     };
-                    labels.push((percentage(value, sum), point, contrast(*color)));
+                    labels.push((percentage(value, sum), point, plot::contrast(*color)));
                 }
             }
             start = end;
@@ -265,16 +265,6 @@ fn direction(angle: f64) -> Vec2 {
     Vec2::new(angle.cos() as f32, angle.sin() as f32)
 }
 
-fn contrast(color: Color) -> Color {
-    let color = color.to_linear();
-    let luminance = 0.2126 * color.red + 0.7152 * color.green + 0.0722 * color.blue;
-    if luminance > 0.179 {
-        Color::BLACK
-    } else {
-        Color::WHITE
-    }
-}
-
 fn label_is_valid(label: &str, limit: usize) -> bool {
     !label.trim().is_empty()
         && label.len() <= limit
@@ -282,14 +272,11 @@ fn label_is_valid(label: &str, limit: usize) -> bool {
 }
 
 fn amount(value: f64, unit: Option<&str>) -> String {
-    let value = if value == 0.0 {
-        "0".into()
-    } else if (1e-4..1e7).contains(&value) {
-        value.to_string()
-    } else {
-        format!("{value:e}")
-    };
-    unit.map_or_else(|| value.clone(), |unit| format!("{value} {unit}"))
+    let label = plot::display_number(value);
+    match unit {
+        Some(unit) => format!("{label} {unit}"),
+        None => label,
+    }
 }
 
 fn percentage(value: f64, sum: f64) -> String {

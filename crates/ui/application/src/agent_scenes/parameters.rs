@@ -9,7 +9,7 @@ use serde_json::{Value as Json, json};
 use std::{collections::BTreeMap, io};
 
 use super::{
-    charts::{bars, scatter, select_series},
+    charts::{bars, heatmap, scatter, select_series},
     discrete::{DiscreteChange, DiscreteValue},
     numeric::{NumericChange, NumericValue},
     text_input::TextChange,
@@ -262,7 +262,12 @@ impl Parameters {
                 | Binding::CategoryFilter { parameter, all } => {
                     let by_category = matches!(binding, Binding::CategoryFilter { .. });
                     let (seen, property) = if by_category {
-                        (&mut category_filter, "selected_category")
+                        let property = if scene.template == heatmap::TEMPLATE {
+                            "selected_row"
+                        } else {
+                            "selected_category"
+                        };
+                        (&mut category_filter, property)
                     } else {
                         (&mut series_filter, "selected_series")
                     };
@@ -284,6 +289,9 @@ impl Parameters {
                     match scene.template.as_str() {
                         bars::TEMPLATE => {
                             bars::validate_choices(scene, values, all.as_deref(), by_category)?
+                        }
+                        heatmap::TEMPLATE if by_category => {
+                            heatmap::validate_choices(scene, values, all.as_deref())?
                         }
                         scatter::TEMPLATE if !by_category => {
                             scatter::validate_choices(scene, values, all.as_deref())?
@@ -625,7 +633,11 @@ fn project(
                 Binding::CategoryFilter { parameter, all } if parameter == name => {
                     if let Value::Choice(value) = value {
                         let selected = (all.as_ref() != Some(value)).then_some(value.as_str());
-                        bars::filter_category(world, root, selected)?;
+                        if world.get::<heatmap::Heatmap>(root).is_some() {
+                            heatmap::filter_row(world, root, selected)?;
+                        } else {
+                            bars::filter_category(world, root, selected)?;
+                        }
                     }
                 }
                 _ => {}

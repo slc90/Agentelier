@@ -73,12 +73,7 @@ pub(super) struct Baseline {
 
 impl Baseline {
     fn label(&self) -> String {
-        let value = if self.value != 0.0 && !(1e-4..1e7).contains(&self.value.abs()) {
-            format!("{:e}", self.value)
-        } else {
-            self.value.to_string()
-        };
-        format!("基线 {value}")
+        format!("基线 {}", display_number(self.value))
     }
 
     fn geometry(&self, ink: Color) -> (CanvasPath, CanvasPaint) {
@@ -264,6 +259,26 @@ fn keep_change(
 pub(super) fn palette(index: usize) -> Color {
     let [r, g, b] = PALETTE[index % PALETTE.len()];
     Color::srgb_u8(r, g, b)
+}
+
+pub(super) fn contrast(color: Color) -> Color {
+    let color = color.to_linear();
+    let luminance = 0.2126 * color.red + 0.7152 * color.green + 0.0722 * color.blue;
+    if luminance > 0.179 {
+        Color::BLACK
+    } else {
+        Color::WHITE
+    }
+}
+
+pub(super) fn display_number(value: f64) -> String {
+    if value == 0.0 {
+        "0".into()
+    } else if (1e-4..1e7).contains(&value.abs()) {
+        value.to_string()
+    } else {
+        format!("{value:e}")
+    }
 }
 
 pub(super) fn install(app: &mut App) {

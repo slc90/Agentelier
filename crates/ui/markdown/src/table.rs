@@ -82,7 +82,7 @@ pub(crate) fn scene(table: &Table) -> Box<dyn Scene> {
     Box::new(bsn! {
         @WidgetryScrollArea {
             @axis: ScrollAxis::Horizontal,
-            @content: {Some(Box::new(bsn! { on(crate::code::forward_vertical) }) as Box<dyn Scene>)},
+            @content: {Some(Box::new(bsn! { on(agentelier_controls::forward_vertical_scroll) }) as Box<dyn Scene>)},
             @children: {Some(Box::new(bsn_list! {
                 TableGrid Name("MarkdownTableGrid")
                 Node { display: Display::Grid, width: percent(100), min_width: px(minimum), flex_shrink: 0.0, align_self: AlignSelf::Start, grid_template_columns: tracks }

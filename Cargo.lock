@@ -327,6 +327,7 @@ dependencies = [
 name = "agentelier_markdown"
 version = "0.1.0"
 dependencies = [
+ "agentelier_controls",
  "bevy",
  "bevy_widgetry",
  "latex-rust",

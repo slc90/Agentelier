@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agentelier_controls = { path = "../controls" }
 bevy.workspace = true
 bevy_widgetry = { workspace = true, features = [
   "button",

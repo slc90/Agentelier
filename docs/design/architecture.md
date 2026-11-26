@@ -46,6 +46,7 @@ flowchart TD
     UI --> Login
     App --> ChatUI["UI · chat_ui"]
     ChatUI --> Markdown["UI · markdown"]
+    Markdown --> Controls
     ChatUI --> UI
     ChatUI --> Controls
     UI --> Controls

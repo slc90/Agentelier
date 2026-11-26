@@ -4,6 +4,7 @@ compile_error!("This application supports Windows x64 only");
 mod avatar;
 mod avatar_cropper;
 mod button;
+mod scroll;
 mod theme;
 mod window;
 
@@ -14,6 +15,7 @@ pub use avatar::{
 pub use avatar_cropper::{AvatarCropperState, avatar_cropper};
 pub use bevy_widgetry::button::WidgetryButtonLoading as AgentelierButtonLoading;
 pub use button::{AgentelierButton, AgentelierButtonProps, AgentelierButtonStyle};
+pub use scroll::forward_vertical_scroll;
 pub use theme::AGENTELIER_THEME;
 pub use window::{
     FILE_DIALOG_WINDOW_CONTROLS, MANAGEMENT_WINDOW_CONTROLS, install_owned_window_close,

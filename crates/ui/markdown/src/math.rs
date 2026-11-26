@@ -82,7 +82,7 @@ pub(crate) fn scene(formula: Formula) -> impl Scene {
             @WidgetryScrollArea {
                 @axis: ScrollAxis::Horizontal,
                 @scrollbar_thickness: SCROLLBAR_SPACE,
-                @content: {Some(Box::new(bsn! { on(crate::code::forward_vertical) }) as Box<dyn Scene>)},
+                @content: {Some(Box::new(bsn! { on(agentelier_controls::forward_vertical_scroll) }) as Box<dyn Scene>)},
                 @children: {Some(Box::new(bsn_list! {
                     Name("MarkdownFormulaImage") FormulaPart::Image
                     ImageNode { image_mode: NodeImageMode::Stretch, color: Color::NONE }
