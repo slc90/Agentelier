@@ -192,6 +192,7 @@ impl Bars {
                 let mut paint = plot::stroke_paint(color, 1.4);
                 paint.fill = Some(color.with_alpha(0.76).into());
                 Mark {
+                    symbol: plot::LegendSymbol::Column,
                     legend: Legend {
                         name: series.name.clone(),
                         color,

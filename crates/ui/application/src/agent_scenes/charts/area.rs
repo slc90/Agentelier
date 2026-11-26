@@ -79,6 +79,7 @@ fn prepare(props: Properties) -> Result<Content> {
                 append_area(&mut commands, &run, fraction);
             }
             Mark {
+                symbol: plot::LegendSymbol::Fill,
                 paint: CanvasPaint {
                     fill: Some(series.legend.color.with_alpha(0.42).into()),
                     ..default()
@@ -100,7 +101,7 @@ fn prepare(props: Properties) -> Result<Content> {
     })
 }
 
-fn append_area(commands: &mut Vec<CanvasPathCommand>, points: &[DVec2], baseline: f64) {
+pub(super) fn append_area(commands: &mut Vec<CanvasPathCommand>, points: &[DVec2], baseline: f64) {
     let [first, ..] = points else { return };
     let mut lobe = vec![*first];
     for pair in points.windows(2) {

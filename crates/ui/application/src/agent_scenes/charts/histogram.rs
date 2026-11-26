@@ -235,6 +235,7 @@ impl Prepared {
         let mut paint = plot::stroke_paint(color, 1.4);
         paint.fill = Some(color.with_alpha(0.66).into());
         let mark = Mark {
+            symbol: plot::LegendSymbol::Column,
             legend: Legend {
                 name: "分布".into(),
                 color,

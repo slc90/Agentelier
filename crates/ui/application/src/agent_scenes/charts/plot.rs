@@ -47,8 +47,29 @@ pub(super) struct Legend {
 
 pub(super) struct Mark {
     pub legend: Legend,
+    pub symbol: LegendSymbol,
     pub commands: Vec<CanvasPathCommand>,
     pub paint: CanvasPaint,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum LegendSymbol {
+    Line,
+    Point,
+    Fill,
+    Column,
+}
+
+impl LegendSymbol {
+    fn scene(self, item: Legend) -> impl Scene {
+        let (width, height, radius) = match self {
+            Self::Line => (18., 3., BorderRadius::MAX),
+            Self::Point => (8., 8., BorderRadius::MAX),
+            Self::Fill => (18., 8., BorderRadius::all(px(2))),
+            Self::Column => (11., 11., BorderRadius::all(px(2))),
+        };
+        legend_swatch(item, width, height, radius)
+    }
 }
 
 impl Mark {
@@ -101,6 +122,7 @@ pub(super) enum Style {
     Bars,
     Histogram,
     BoxPlot,
+    Combined,
 }
 
 pub(super) struct Rendered {
@@ -125,7 +147,7 @@ pub(super) struct Layer {
 #[derive(Component)]
 pub(super) struct RetainedPlot {
     pub rendered: Rendered,
-    pub legends: Vec<Legend>,
+    legends: Vec<(Legend, LegendSymbol)>,
     title: Option<String>,
     x: Axis,
     y: Axis,
@@ -143,7 +165,7 @@ impl RetainedPlot {
         let legends = content
             .marks
             .iter()
-            .map(|mark| mark.legend.clone())
+            .map(|mark| (mark.legend.clone(), mark.symbol))
             .collect();
         let rendered = mount(world, parent, content, style)?;
         let root = rendered.root;
@@ -172,7 +194,7 @@ impl RetainedPlot {
             .layers
             .iter()
             .zip(&chart.legends)
-            .filter_map(|(layer, legend)| {
+            .filter_map(|(layer, (legend, _))| {
                 let visible = selected.is_none_or(|name| name == legend.name);
                 let current = layers.iter().find(|entry| entry.id() == layer.id)?;
                 (visible != current.visible()).then_some((layer.id, visible))
@@ -197,7 +219,8 @@ impl RetainedPlot {
             || !chart
                 .legends
                 .iter()
-                .eq(content.marks.iter().map(|mark| &mark.legend))
+                .map(|(legend, symbol)| (legend, *symbol))
+                .eq(content.marks.iter().map(|mark| (&mark.legend, mark.symbol)))
             || rendered.reference.is_some() != content.baseline.is_some()
         {
             return Ok(false);
@@ -301,6 +324,7 @@ pub(super) fn mount(
         Style::Bars => "NativeBarChart",
         Style::Histogram => "NativeHistogram",
         Style::BoxPlot => "NativeBoxPlot",
+        Style::Combined => "NativeCombinedChart",
     };
     let root = root(world, parent, name, content.title.as_deref())?;
     let result = decorate(world, root, content, style);
@@ -391,7 +415,12 @@ fn decorate(
                 Style::Line => {
                     CanvasDocument::create_path(world, token, geometry, transform, paint)?
                 }
-                Style::Scatter | Style::Area | Style::Bars | Style::Histogram | Style::BoxPlot => {
+                Style::Scatter
+                | Style::Area
+                | Style::Bars
+                | Style::Histogram
+                | Style::BoxPlot
+                | Style::Combined => {
                     let id =
                         CanvasDocument::create_layer(world, token, index + 1, &mark.legend.name)?;
                     let path = CanvasDocument::create_path_in_layer(
@@ -411,15 +440,9 @@ fn decorate(
     let y_name = y.name;
     let x_name = x.name;
     let title = title.map(heading);
-    let (legend_width, legend_height) = match style {
-        Style::Line => (18., 3.),
-        Style::Scatter => (8., 8.),
-        Style::Area => (18., 8.),
-        Style::Bars | Style::Histogram | Style::BoxPlot => (11., 11.),
-    };
     let legend: Vec<_> = marks
         .into_iter()
-        .map(|mark| legend(mark.legend, legend_width, legend_height))
+        .map(|mark| mark.symbol.scene(mark.legend))
         .collect();
     let legend = bevy::scene::RelatedScenes::<Children>::new(legend);
     let legend = (!matches!(style, Style::Histogram)).then(|| {
@@ -459,11 +482,15 @@ fn decorate(
 }
 
 pub(super) fn legend(item: Legend, width: f32, height: f32) -> impl Scene {
+    legend_swatch(item, width, height, BorderRadius::MAX)
+}
+
+fn legend_swatch(item: Legend, width: f32, height: f32, radius: BorderRadius) -> impl Scene {
     let Legend { name, color } = item;
     bsn! {
         Node { min_width: px(0), max_width: percent(100), align_items: AlignItems::Center, column_gap: px(6), overflow: Overflow::clip_x() }
         Children [
-            Node { width: px(width), height: px(height), flex_shrink: 0.0, border_radius: BorderRadius::MAX }
+            Node { width: px(width), height: px(height), flex_shrink: 0.0, border_radius: radius }
             BackgroundColor(color)--
             Text(name) WidgetryText TextLayout::linebreak(bevy::text::LineBreak::NoWrap)
             Node { min_width: px(0) }
@@ -627,6 +654,14 @@ fn draw_straight(commands: &mut Vec<CanvasPathCommand>, from: Vec2, to: Vec2) {
 
 pub(super) fn map(normalized: DVec2) -> Vec2 {
     BOTTOM_LEFT + normalized.as_vec2() * (TOP_RIGHT - BOTTOM_LEFT)
+}
+
+pub(super) fn append_marker(commands: &mut Vec<CanvasPathCommand>, normalized: DVec2) {
+    if (0.0..=1.0).contains(&normalized.x) && (0.0..=1.0).contains(&normalized.y) {
+        let at = map(normalized);
+        let half = Vec2::new(0.01, 0.0);
+        draw_straight(commands, at - half, at + half);
+    }
 }
 
 pub(super) fn append_line(commands: &mut Vec<CanvasPathCommand>, points: &[DVec2]) {

@@ -5,7 +5,6 @@ use super::{
 };
 use agentelier_agent_host::{AgentHostPlugin, EcsError, SceneDefinition};
 use bevy::{math::DVec2, prelude::*};
-use bevy_widgetry::canvas::CanvasPathCommand;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, io};
 
@@ -116,19 +115,13 @@ fn prepare(properties: Properties) -> Result<Content> {
             let mut commands = Vec::new();
             for point in series.points.iter().filter_map(position) {
                 let normal = DVec2::new(x_range.fraction(point.x), y_range.fraction(point.y));
-                if (0.0..=1.0).contains(&normal.x) && (0.0..=1.0).contains(&normal.y) {
-                    let at = plot::map(normal);
-                    // A tiny round-capped segment puts the marker center at the exact observation.
-                    commands.extend([
-                        CanvasPathCommand::MoveTo(at - Vec2::new(0.01, 0.0)),
-                        CanvasPathCommand::LineTo(at + Vec2::new(0.01, 0.0)),
-                    ]);
-                }
+                plot::append_marker(&mut commands, normal);
             }
             let color = series
                 .color
                 .map_or_else(|| plot::palette(index), |[r, g, b]| Color::srgb_u8(r, g, b));
             Mark {
+                symbol: plot::LegendSymbol::Point,
                 legend: Legend {
                     name: series.name,
                     color,

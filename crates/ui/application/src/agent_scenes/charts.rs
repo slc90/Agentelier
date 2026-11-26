@@ -2,6 +2,7 @@ mod area;
 mod axis;
 pub(super) mod bars;
 pub(super) mod boxplot;
+pub(super) mod combined;
 pub(super) mod heatmap;
 pub(super) mod histogram;
 mod pie;
@@ -56,6 +57,7 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
     .and_then(heatmap::register)
     .and_then(histogram::register)
     .and_then(boxplot::register)
+    .and_then(combined::register)
 }
 
 pub(super) fn install(app: &mut App) {
@@ -77,12 +79,20 @@ struct Series {
 
 impl Series {
     fn runs(&self, x: Range, y: Range) -> impl Iterator<Item = Vec<DVec2>> + '_ {
-        self.points.split(|(_, y)| y.is_none()).map(move |run| {
-            run.iter()
-                .filter_map(|(x0, y0)| y0.map(|y0| DVec2::new(x.fraction(*x0), y.fraction(y0))))
-                .collect()
-        })
+        observed_runs(&self.points, x, y)
     }
+}
+
+fn observed_runs(
+    points: &[(f64, Option<f64>)],
+    x: Range,
+    y: Range,
+) -> impl Iterator<Item = Vec<DVec2>> + '_ {
+    points.split(|(_, y)| y.is_none()).map(move |run| {
+        run.iter()
+            .filter_map(|(x0, y0)| y0.map(|y0| DVec2::new(x.fraction(*x0), y.fraction(y0))))
+            .collect()
+    })
 }
 
 fn line(
@@ -109,6 +119,7 @@ fn line(
             plot::Mark {
                 paint: plot::stroke_paint(series.legend.color, plot::LINE_WIDTH),
                 legend: series.legend,
+                symbol: plot::LegendSymbol::Line,
                 commands,
             }
         })
@@ -148,12 +159,7 @@ fn prepare_continuous(
         {
             return Err(io::Error::other("各序列需要唯一的非空名称和至少一个观测点").into());
         }
-        let mut points = series
-            .points
-            .into_iter()
-            .map(|(x, y)| Ok((kind.value(x)?, y.filter(|y| y.is_finite()))))
-            .collect::<Result<Vec<_>>>()?;
-        points.sort_by(|(a, _), (b, _)| a.total_cmp(b));
+        let points = sorted_points(kind, series.points)?;
         let color = series
             .color
             .map_or_else(|| plot::palette(index), |[r, g, b]| Color::srgb_u8(r, g, b));
@@ -188,6 +194,18 @@ fn prepare_continuous(
     let x = Axis::new(x_spec.label, x_spec.unit, x_range, kind, 5)?;
     let y = Axis::new(y_spec.label, y_spec.unit, y_range, AxisKind::Number, 5)?;
     Ok((x, y, materialized))
+}
+
+fn sorted_points(
+    kind: AxisKind,
+    points: Vec<(Coordinate, Option<f64>)>,
+) -> Result<Vec<(f64, Option<f64>)>> {
+    let mut points = points
+        .into_iter()
+        .map(|(x, y)| Ok((kind.value(x)?, y.filter(|y| y.is_finite()))))
+        .collect::<Result<Vec<_>>>()?;
+    points.sort_by(|(a, _), (b, _)| a.total_cmp(b));
+    Ok(points)
 }
 
 fn invalid(error: impl std::fmt::Display) -> EcsError {

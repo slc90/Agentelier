@@ -212,6 +212,7 @@ fn prepare(props: Properties) -> Result<Prepared> {
             let mut paint = plot::stroke_paint(group.legend.color, 1.9);
             paint.fill = Some(group.legend.color.with_alpha(0.38).into());
             Mark {
+                symbol: plot::LegendSymbol::Column,
                 legend: group.legend,
                 commands,
                 paint,
