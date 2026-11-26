@@ -275,6 +275,14 @@ struct MessageLabel;
 #[derive(Component, Clone, Default)]
 struct ReplyWaiting;
 #[derive(Component, Clone, Default)]
+struct ReplyBody;
+#[derive(Component, Clone, PartialEq, Eq, Hash)]
+struct ReplyTextKey {
+    request_index: u32,
+    output_index: usize,
+    id: String,
+}
+#[derive(Component, Clone, Default)]
 struct ComposerFeedback;
 #[derive(Component, Clone, Default)]
 struct SessionStatus;
@@ -1443,11 +1451,14 @@ fn refresh_archives(world: &mut World) {
 enum RowContent {
     Plain(String),
     User(String),
-    Assistant {
-        label: Option<String>,
-        source: Option<String>,
-    },
+    Reply(ReplyContent),
+    MemoryMessage { label: String, source: String },
     Audio(crate::audio_attachment::ChatAudio),
+}
+
+enum ReplyContent {
+    Waiting,
+    Text(Vec<(ReplyTextKey, String)>),
 }
 
 pub(super) enum TranscriptPresentation {
@@ -1455,9 +1466,9 @@ pub(super) enum TranscriptPresentation {
     Memory,
 }
 
-fn final_reply(turn: &ChatTurn, message: &ChatMessage) -> bool {
+fn public_reply(turn: &ChatTurn, message: &ChatMessage) -> bool {
     match message.phase.as_deref() {
-        Some("final_answer") => true,
+        Some("commentary" | "final_answer") => true,
         Some(_) => false,
         None => {
             matches!(turn.status, ChatTurnStatus::Completed)
@@ -1468,6 +1479,31 @@ fn final_reply(turn: &ChatTurn, message: &ChatMessage) -> bool {
                     .any(|tool| tool.request_index == message.request_index)
         }
     }
+}
+
+fn reply_content(turn: &ChatTurn, operation: Option<u64>) -> Option<ReplyContent> {
+    let mut messages: Vec<_> = turn
+        .messages
+        .iter()
+        .filter(|message| public_reply(turn, message) && !message.text.trim().is_empty())
+        .map(|message| {
+            (
+                ReplyTextKey {
+                    request_index: message.request_index,
+                    output_index: message.output_index,
+                    id: message.id.clone(),
+                },
+                message.text.clone(),
+            )
+        })
+        .collect();
+    if messages.is_empty() {
+        return (operation == Some(turn.operation_id)
+            && matches!(turn.status, ChatTurnStatus::Running))
+        .then_some(ReplyContent::Waiting);
+    }
+    messages.sort_by_key(|(key, _)| (key.request_index, key.output_index));
+    Some(ReplyContent::Text(messages))
 }
 
 fn reconcile(world: &mut World) -> Result {
@@ -1554,21 +1590,35 @@ pub(super) fn reconcile_list(
                 ));
             }
             let mut output = Vec::new();
-            for message in turn.messages.iter().filter(|message| {
-                memory || final_reply(turn, message) && !message.text.trim().is_empty()
-            }) {
-                output.push((
+            if memory {
+                output.extend(turn.messages.iter().map(|message| {
+                    (
+                        ChatRow {
+                            session: session.id,
+                            turn: turn.id,
+                            request_index: message.request_index,
+                            output_index: Some(message.output_index),
+                            item_id: Some(message.id.clone()),
+                        },
+                        RowContent::MemoryMessage {
+                            label: memory_message_label(turn, message),
+                            source: message.text.clone(),
+                        },
+                    )
+                }));
+            } else if let TranscriptPresentation::Chat { operation } = presentation
+                && let Some(content) = reply_content(turn, operation)
+            {
+                // A Turn owns one reply position before its supplemental user rows.
+                desired.push((
                     ChatRow {
                         session: session.id,
                         turn: turn.id,
-                        request_index: message.request_index,
-                        output_index: Some(message.output_index),
-                        item_id: Some(message.id.clone()),
+                        request_index: 0,
+                        output_index: None,
+                        item_id: Some("reply".into()),
                     },
-                    RowContent::Assistant {
-                        label: memory.then(|| memory_message_label(turn, message)),
-                        source: Some(message.text.clone()),
-                    },
+                    RowContent::Reply(content),
                 ));
             }
             for input in &turn.steers {
@@ -1589,32 +1639,6 @@ pub(super) fn reconcile_list(
                 ));
             }
             output.sort_by_key(|(key, _)| (key.request_index, key.output_index));
-            if let TranscriptPresentation::Chat { operation } = presentation {
-                // Use the same row for the waiting indicator and the first visible reply.
-                let reply_key = ChatRow {
-                    session: session.id,
-                    turn: turn.id,
-                    request_index: 0,
-                    output_index: None,
-                    item_id: Some("reply".into()),
-                };
-                if let Some((key, _)) = output
-                    .iter_mut()
-                    .find(|(_, content)| matches!(content, RowContent::Assistant { .. }))
-                {
-                    *key = reply_key;
-                } else if operation == Some(turn.operation_id)
-                    && matches!(turn.status, ChatTurnStatus::Running)
-                {
-                    output.push((
-                        reply_key,
-                        RowContent::Assistant {
-                            label: None,
-                            source: None,
-                        },
-                    ));
-                }
-            }
             desired.extend(output);
         }
     }
@@ -1644,37 +1668,17 @@ pub(super) fn reconcile_list(
                         .ok_or_else(|| io::Error::other("用户消息正文不可用"))?
                         .set_if_neq(Text(text));
                 }
-                RowContent::Assistant { label, source } => {
-                    let (waiting_display, body_display) = reply_displays(source.is_none());
-                    let source = source.unwrap_or_default();
+                RowContent::Reply(content) => reconcile_reply(world, entity, content)?,
+                RowContent::MemoryMessage { label, source } => {
                     let children = world
                         .get::<Children>(entity)
                         .ok_or_else(|| io::Error::other("助手消息缺少内容区域"))?
                         .to_vec();
                     for child in children {
-                        let is_body =
-                            if let Some(mut markdown) = world.get_mut::<MarkdownSource>(child) {
-                                markdown.set_if_neq(MarkdownSource(source.clone()));
-                                true
-                            } else {
-                                false
-                            };
-                        let display = if is_body {
-                            Some(body_display)
-                        } else if world.get::<ReplyWaiting>(child).is_some() {
-                            Some(waiting_display)
-                        } else {
-                            None
-                        };
-                        if let Some(display) = display
-                            && let Some(node) = world.get_mut::<Node>(child)
-                        {
-                            node.map_unchanged(|node| &mut node.display)
-                                .set_if_neq(display);
+                        if let Some(mut markdown) = world.get_mut::<MarkdownSource>(child) {
+                            markdown.set_if_neq(MarkdownSource(source.clone()));
                         }
-                        if let Some(label) = &label
-                            && world.get::<MessageLabel>(child).is_some()
-                        {
+                        if world.get::<MessageLabel>(child).is_some() {
                             world
                                 .get_mut::<Text>(child)
                                 .ok_or_else(|| io::Error::other("助手消息缺少标题"))?
@@ -1698,28 +1702,33 @@ pub(super) fn reconcile_list(
                         @crate::audio_attachment::card(audio)
                         Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
                     }).id(),
-                    RowContent::Assistant {label,source} => {
-                        let source_controls = label.is_some();
-                        let label = label.map(|label| bsn_list! { Text(label) WidgetryText MessageLabel });
-                        let (waiting_display, body_display) = reply_displays(source.is_none());
-                        let waiting = (!memory && key.item_id.as_deref() == Some("reply")).then(|| bsn_list! {
-                            @crate::spinner::ring(REPLY_SPINNER_SIZE) ReplyWaiting Name("ChatReplyWaiting")
-                            Node { display: waiting_display, margin: UiRect::vertical(px(4)) }
-                        });
-                        let source = source.unwrap_or_default();
-                        world.commands().spawn_scene_with_error_handler(bsn! {
+                    RowContent::Reply(content) => {
+                        let mut commands = world.commands();
+                        let entity = commands.spawn_scene_with_error_handler(bsn! {
+                            Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
+                            BackgroundColor(message_surface)
+                            Node {width:percent(100),min_width:px(0),flex_shrink:0.0,flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP),padding:UiRect::all(px(CONTENT_PADDING))}
+                            Children [
+                                @AgentelierAvatar { @source: AvatarSource::Assistant } Name("ChatAssistantAvatar") Node { align_self: AlignSelf::Start }--
+                                @crate::spinner::ring(REPLY_SPINNER_SIZE) ReplyWaiting Name("ChatReplyWaiting")
+                                Node { margin: UiRect::vertical(px(4)) }--
+                                ReplyBody Name("ChatReplyBody")
+                                Node {width:percent(100),min_width:px(0),flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP)}
+                            ]
+                        }).id();
+                        commands.queue(move |world: &mut World| reconcile_reply(world, entity, content));
+                        entity
+                    }
+                    RowContent::MemoryMessage {label,source} => world.commands().spawn_scene_with_error_handler(bsn! {
                         Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
                         BackgroundColor(message_surface)
                         Node {width:percent(100),min_width:px(0),flex_shrink:0.0,flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP),padding:UiRect::all(px(CONTENT_PADDING))}
                         Children [
                             @AgentelierAvatar { @source: AvatarSource::Assistant } Name("ChatAssistantAvatar") Node { align_self: AlignSelf::Start }--
-                            {label}--
-                            {waiting}--
-                            @MarkdownView { @source: source, @source_controls: source_controls }
-                            Node { display: body_display }
+                            Text(label) WidgetryText MessageLabel--
+                            @MarkdownView { @source: source, @source_controls: true }
                         ]
-                        }).id()
-                    }
+                    }).id(),
                     RowContent::User(text) => world.commands().spawn_scene_with_error_handler(bsn! {
                         Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
                         BackgroundColor(message_surface)
@@ -1744,20 +1753,82 @@ pub(super) fn reconcile_list(
     for entity in existing.into_values() {
         world.entity_mut(entity).despawn();
     }
-    let unchanged = world
-        .get::<Children>(list)
-        .is_some_and(|children| children.iter().eq(ordered.iter().copied()));
-    if !unchanged {
-        world.commands().entity(list).replace_children(&ordered);
-    }
+    order_children(world, list, &ordered);
     Ok(())
 }
 
-fn reply_displays(waiting: bool) -> (Display, Display) {
-    if waiting {
-        (Display::Flex, Display::None)
-    } else {
-        (Display::None, Display::Flex)
+fn reconcile_reply(world: &mut World, root: Entity, content: ReplyContent) -> Result {
+    let children = world
+        .get::<Children>(root)
+        .ok_or_else(|| io::Error::other("助手回复缺少子实体"))?;
+    let waiting = children
+        .iter()
+        .find(|child| world.get::<ReplyWaiting>(*child).is_some())
+        .ok_or_else(|| io::Error::other("助手回复缺少等待控件"))?;
+    let body = children
+        .iter()
+        .find(|child| world.get::<ReplyBody>(*child).is_some())
+        .ok_or_else(|| io::Error::other("助手回复缺少内容区域"))?;
+    let is_waiting = matches!(content, ReplyContent::Waiting);
+    for (entity, visible) in [(waiting, is_waiting), (body, !is_waiting)] {
+        let display = if visible {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        world
+            .get_mut::<Node>(entity)
+            .ok_or_else(|| io::Error::other("助手回复布局不可用"))?
+            .map_unchanged(|node| &mut node.display)
+            .set_if_neq(display);
+    }
+    let messages = match content {
+        ReplyContent::Waiting => Vec::new(),
+        ReplyContent::Text(messages) => messages,
+    };
+    let mut existing: HashMap<_, _> = world
+        .get::<Children>(body)
+        .into_iter()
+        .flat_map(|children| children.iter())
+        .filter_map(|child| {
+            world
+                .get::<ReplyTextKey>(child)
+                .map(|key| (key.clone(), child))
+        })
+        .collect();
+    let mut ordered = Vec::with_capacity(messages.len());
+    for (key, source) in messages {
+        let entity = if let Some(entity) = existing.remove(&key) {
+            world
+                .get_mut::<MarkdownSource>(entity)
+                .ok_or_else(|| io::Error::other("助手回复正文不可用"))?
+                .set_if_neq(MarkdownSource(source));
+            entity
+        } else {
+            world
+                .commands()
+                .spawn_scene_with_error_handler(bsn! {
+                @MarkdownView { @source: source, @source_controls: false }
+                    ChildOf(body) Name("ChatReplyText") template(move |_| Ok(key.clone()))
+                })
+                .id()
+        };
+        ordered.push(entity);
+    }
+    for entity in existing.into_values() {
+        world.entity_mut(entity).despawn();
+    }
+    order_children(world, body, &ordered);
+    Ok(())
+}
+
+fn order_children(world: &mut World, parent: Entity, ordered: &[Entity]) {
+    let current = world
+        .get::<Children>(parent)
+        .into_iter()
+        .flat_map(|children| children.iter());
+    if !current.eq(ordered.iter().copied()) {
+        world.commands().entity(parent).replace_children(ordered);
     }
 }
 
