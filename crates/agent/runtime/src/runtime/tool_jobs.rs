@@ -1,3 +1,4 @@
+use agentelier_conversation::ProcessLedger;
 use agentelier_llm_model::FunctionCall;
 use agentelier_tools::{
     ExecutionContext, ProcessSessions, ScriptSession, ToolAccess, ToolAdmission, ToolCatalog,
@@ -11,7 +12,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{Id, JoinSet};
 use tokio_util::sync::CancellationToken;
 
@@ -23,7 +24,7 @@ pub(super) struct SessionTools {
         Arc<tokio::sync::Mutex<agentelier_llm_model::GenerationConnection>>,
     pub(super) admission: ToolAdmission,
     pub(super) processes: Arc<ProcessSessions>,
-    pub(super) process_views: tokio::sync::watch::Receiver<agentelier_conversation::ProcessLedger>,
+    pub(super) process_views: watch::Receiver<ProcessLedger>,
     pub(super) dispatcher: ToolDispatcher,
     pub(super) work: Arc<tokio::sync::Mutex<ToolWork>>,
     worker: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<RetainedResults>>>>,
@@ -50,8 +51,7 @@ impl SessionTools {
         let admission = ToolAdmission::default();
         admission.pause(view.task_policy.background_paused);
         admission.external_unconfirmed(!view.task_policy.external_unconfirmed.is_empty());
-        let (update, process_views) =
-            tokio::sync::watch::channel(conversation.restored_processes());
+        let (update, process_views) = watch::channel(conversation.restored_processes());
         let journal: agentelier_tools::SaveProcessFact = Arc::new(move |fact| {
             let store = store.clone();
             let update = update.clone();
@@ -80,6 +80,7 @@ impl SessionTools {
             commands,
             events,
             processes.clone(),
+            process_views.clone(),
             admission.clone(),
             ecs_access.clone(),
         ));
@@ -134,6 +135,7 @@ struct Execution {
     events: mpsc::UnboundedSender<ToolEvent>,
     identities: HashMap<Id, JobIdentity>,
     processes: Arc<ProcessSessions>,
+    process_views: watch::Receiver<ProcessLedger>,
     scripts: ScriptSession,
     admission: ToolAdmission,
     ordinary: Option<Arc<JobOrder>>,
@@ -143,6 +145,8 @@ struct Execution {
 impl Execution {
     fn enqueue(&mut self, batch: ToolBatch) {
         let serial = batch.catalog.contract().is_flat();
+        let controls_finished = CancellationToken::new();
+        let control_guard = Arc::new(controls_finished.clone().drop_guard());
         for ToolJobRequest {
             call,
             admission: admission_stop,
@@ -150,12 +154,13 @@ impl Execution {
             execution,
         } in batch.calls
         {
-            let policy = batch.catalog.access(&call.name);
-            let policy = match (policy, call.mode()) {
+            let mode = call.mode();
+            let policy = match (batch.catalog.access(&call.name), mode) {
                 (ToolAccess::SharedRead, ToolMode::Synchronous) => ToolAccess::Exclusive,
-                _ => policy,
+                (policy, _) => policy,
             };
-            let order = if policy == ToolAccess::ProcessControl {
+            let process_control = policy == ToolAccess::ProcessControl;
+            let order = if process_control {
                 &mut self.controls
             } else {
                 &mut self.ordinary
@@ -172,7 +177,7 @@ impl Execution {
             });
             let previous = order.replace(next.clone());
             let following = OrderSignal(next.released.clone());
-            let (admitted, finished) = if serial && policy != ToolAccess::ProcessControl {
+            let (admitted, finished) = if serial && !process_control {
                 (None, Some(following))
             } else {
                 (Some(following), None)
@@ -193,19 +198,25 @@ impl Execution {
                 admitted,
                 execution,
                 authorization: batch.authorization.clone(),
+                process_block: (!process_control && mode == ToolMode::Synchronous).then(|| {
+                    ProcessBlock {
+                        views: self.process_views.clone(),
+                        controls_finished: controls_finished.clone(),
+                    }
+                }),
             };
             let admission = self.admission.clone();
             let processes = self.processes.clone();
             let scripts = self.scripts.clone();
             let events = self.events.clone();
-            let handle = self.calls.spawn(job.run(
-                admission,
-                processes,
-                scripts,
-                admission_stop,
-                stop,
-                events,
-            ));
+            let control = process_control.then(|| control_guard.clone());
+            let handle = self.calls.spawn(async move {
+                let result = job
+                    .run(admission, processes, scripts, admission_stop, stop, events)
+                    .await;
+                drop(control);
+                result
+            });
             self.identities.insert(handle.id(), identity);
         }
     }
@@ -282,6 +293,47 @@ struct Job {
     admitted: Option<OrderSignal>,
     execution: Option<agentelier_conversation::TaskExecution>,
     authorization: ToolAuthorization,
+    process_block: Option<ProcessBlock>,
+}
+
+struct ProcessBlock {
+    views: watch::Receiver<ProcessLedger>,
+    controls_finished: CancellationToken,
+}
+
+impl ProcessBlock {
+    async fn wait(block: Option<Self>) -> ToolResult {
+        let Some(Self {
+            mut views,
+            controls_finished,
+        }) = block
+        else {
+            return std::future::pending().await;
+        };
+        // A control in the same batch can release the permit without another model request.
+        controls_finished.cancelled().await;
+        loop {
+            let process_id = views
+                .borrow_and_update()
+                .views()
+                .find(|process| process.holds_exclusive_permit())
+                .map(|process| process.session_id.clone());
+            if let Some(id) = process_id {
+                return ToolResult::not_executed(
+                    "process_holds_exclusive_permit",
+                    &format!(
+                        "进程 {id} 仍持有独占许可，此调用未执行。可用 write_stdin 和该 session_id 检查或终止进程，许可释放后重新调用。"
+                    ),
+                );
+            }
+            if views.changed().await.is_err() {
+                return ToolResult::not_executed(
+                    "process_state_unavailable",
+                    "进程状态通道已关闭，此调用未执行",
+                );
+            }
+        }
+    }
 }
 
 struct RunningJob<'a> {
@@ -317,12 +369,15 @@ impl Job {
                 )
             }
         };
+        let process_block = ProcessBlock::wait(self.process_block);
+        tokio::pin!(process_block);
         let mut previous = self.previous.as_deref();
         while let Some(order) = previous {
             tokio::select! { biased;
                 _ = cancel.cancelled() => return skipped(),
                 _ = admission_stop.cancelled() => return skipped(),
                 _ = order.released.cancelled() => {}
+                result = &mut process_block => return result,
             }
             previous = order.previous.as_deref();
         }
@@ -333,6 +388,7 @@ impl Job {
             biased;
             _ = cancel.cancelled() => None,
             permit = admission.acquire(self.policy, &admission_stop) => permit,
+            result = &mut process_block => return result,
         };
         let Some(permit) = permit else {
             return skipped();
@@ -438,6 +494,7 @@ async fn run(
     mut incoming: mpsc::Receiver<ToolCommand>,
     events: mpsc::UnboundedSender<ToolEvent>,
     processes: Arc<ProcessSessions>,
+    process_views: watch::Receiver<ProcessLedger>,
     admission: ToolAdmission,
     ecs_access: EcsAccess,
 ) -> RetainedResults {
@@ -446,6 +503,7 @@ async fn run(
         events,
         identities: HashMap::new(),
         processes,
+        process_views,
         scripts: ScriptSession::new(ecs_access),
         admission,
         ordinary: None,

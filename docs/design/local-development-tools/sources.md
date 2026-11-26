@@ -9,7 +9,7 @@
 | --- | --- |
 | [工具目录](https://github.com/slc90/Agentelier/blob/main/crates/agent/tools/src/catalog.rs) | 固定登记四个本地开发工具，工具名称与执行实现配对。 |
 | [工具执行](https://github.com/slc90/Agentelier/blob/main/crates/agent/tools/src/execution.rs) | 64 KiB 参数与文字结果限制、类型化图片结果及四工具分发。 |
-| [任务循环](https://github.com/slc90/Agentelier/blob/main/crates/agent/turn_runner/src/runner.rs) | 当前 32 次模型请求、64 次工具调用预算；串行批次、Steer 和停止边界。 |
+| [任务循环](https://github.com/slc90/Agentelier/blob/main/crates/agent/turn_runner/src/runner.rs) | 当前 64 次工具调用预算；串行批次、Steer 和停止边界。 |
 | [会话设置与工具投影](https://github.com/slc90/Agentelier/blob/main/crates/agent/conversation/src/conversation.rs) | 会话设置快照、固定工具目录、当前展示记录的结构。 |
 | [活动任务记录](https://github.com/slc90/Agentelier/blob/main/crates/agent/conversation/src/active.rs) | tool_result 保存真实载荷和安全展示摘要，seal 从结果表封闭历史。 |
 | [协议历史](https://github.com/slc90/Agentelier/blob/main/crates/agent/llm_model/src/protocol.rs) | FunctionResult 保存类型化载荷，文本和图片数组按 call_id 封闭并重放。 |

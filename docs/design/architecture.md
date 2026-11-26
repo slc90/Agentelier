@@ -105,6 +105,8 @@ flowchart TD
 
 图中为内部 Crate 的直接依赖。UI 库另依赖 Bevy、Widgetry 及路径转换库；Login 直接依赖只使用标准库的 `bevy_widgetry_path_display`，复用 Shell 路径前缀简化。application 按配置安装 BRP Runtime。Agent 与 Bridge 不依赖 Bevy，不访问 Entity、Component 或 World，也不安装日志 Subscriber。
 
+`app/Cargo.toml` 通过 `[package.metadata.bevy_brp].apps` 登记 `agentelier` 二进制，BRP MCP 据此发现入口，Bevy 与 BRP 的实际装配仍由 application 负责。
+
 ## UI 管理交互与通用宿主
 
 `application` 建立可执行文件旁的日志，读取 `config/config.ron`，装配窗口、Asset、缩放与可选 BRP。BRP 的 Main World 和 Render World 端口独立配置。透明窗口在 Bevy UI 绘制后、转换到 DX12 交换链前调整半透明像素，让 Windows 桌面以 8 位 sRGB 预乘格式合成。`agent_host` 是唯一 Connection 所有者和接收者，按业务将账号、模型与聊天事件分发到独立 ECS 消息通道，运行错误另行广播；`login_ui` 在宿主接收后消费自己的业务消息，通过 BSN 组合界面，持有面向交互的账号与目录状态；Widgetry 控件自身的状态遵循其公开契约。
@@ -239,7 +241,7 @@ Connection 创建本次运行共享的 OperationSequence；普通请求与恢复
 
 ## Direct 工具往返
 
-会话创建时固定只读工具目录，请求声明与分发共用它。历史 SIWC 存档保留 developer `additional_tools` 记录供查看。Codex 的新建 `gpt-6-astra` 会话通过 WebSocket 的顶层 `tools` 声明原生异步。Runtime 随会话保存连接，Runner 在响应和工具登记持久确认后推进续接。Codex HTTP 会话使用同步契约。Tools 不依赖模型、账号、Bridge 或 Bevy。内置工具提供会话范围的 PowerShell 进程登记、标准输入、UTF-8 文件补丁、静态 PNG/JPEG 图片结果，以及通过 Rhai 执行的 Windows 桌面操作。Runtime 的会话工具工作者持有对应脚本会话，桌面调用沿用独占许可与工作者回收。编译进程序的提供者可通过 ToolRegistration 配对声明和执行器，恢复时由 Conversation 按工具来源和保存的声明重新绑定。Runner 每任务最多发送 32 次模型请求并接纳 64 次工具调用。完整响应持久确认后，Runtime 按会话许可准入各调用，最多 8 个普通执行；经登记的异步只读可并行，副作用调用按接纳顺序独占。超出单轮预算时整批写入未执行结果后触限。完整响应和逐项工具结果分别确认进入历史。原生会话在发送下一请求前等待同步调用结果，较早 Turn 的异步调用可继续执行。任务查询、有界等待及取消由 Runner 读取会话账本并响应实际保存事件，不占普通工具工作槽。Runtime 接纳会话侧控制，停止全部会暂停新派发并取消本次持有的执行。在途请求保持冻结，晚到结果先保存，并在完整响应接纳或请求结束失败后追加。正常 final 经持久确认和任务回收后释放该会话的执行位置。会话保留后台执行与进程，空闲完成只保存并更新会话状态投影。用户发言或明确处理结果才续接。Conversation 在接纳候选响应和用户材料时保护未交付的结果余量，模型层冻结本次请求的开放调用和 Inline 配置。安全压缩按已确认的协议前缀替换窗口，并保留尾部调用与结果关联。失败或停止保留已确认历史，已有响应提交的任务禁用原样重试。调用和正文按任务内请求序号区分，接收中的参数仅用于展示。
+会话创建时固定只读工具目录，请求声明与分发共用它。历史 SIWC 存档保留 developer `additional_tools` 记录供查看。Codex 的新建 `gpt-6-astra` 会话通过 WebSocket 的顶层 `tools` 声明原生异步。Runtime 随会话保存连接，Runner 在响应和工具登记持久确认后推进续接。Codex HTTP 会话使用同步契约。Tools 不依赖模型、账号、Bridge 或 Bevy。内置工具提供会话范围的独占与显式后台 PowerShell 进程登记、进程诊断与标准输入、UTF-8 文件补丁、静态 PNG/JPEG 图片结果，以及通过 Rhai 执行的 Windows 桌面操作。Runtime 的会话工具工作者持有对应脚本会话，桌面调用沿用独占许可与工作者回收。编译进程序的提供者可通过 ToolRegistration 配对声明和执行器，恢复时由 Conversation 按工具来源和保存的声明重新绑定。Runner 根据任务进展继续发送模型请求，每任务最多接纳 64 次工具调用。完整响应持久确认后，Runtime 按会话许可准入各调用，最多 8 个普通执行；经登记的异步只读可并行，副作用调用按接纳顺序独占。超出单轮预算时整批写入未执行结果后触限。完整响应和逐项工具结果分别确认进入历史。原生会话在发送下一请求前等待同步调用结果，较早 Turn 的异步调用可继续执行。任务查询、有界等待及取消由 Runner 读取会话账本并响应实际保存事件，不占普通工具工作槽。Runtime 接纳会话侧控制，停止全部会暂停新派发并取消本次持有的执行。在途请求保持冻结，晚到结果先保存，并在完整响应接纳或请求结束失败后追加。正常 final 经持久确认和任务回收后释放该会话的执行位置。会话保留后台执行与进程，空闲完成只保存并更新会话状态投影。用户发言或明确处理结果才续接。Conversation 在接纳候选响应和用户材料时保护未交付的结果余量，模型层冻结本次请求的开放调用和 Inline 配置。安全压缩按已确认的协议前缀替换窗口，并保留尾部调用与结果关联。失败或停止保留已确认历史，已有响应提交的任务禁用原样重试。调用和正文按任务内请求序号区分，接收中的参数仅用于展示。
 
 Steer 通过容量 8 的任务输入通道交给 Runner，由 Conversation 裁决接纳、应用和最终关门。Stop 仍走取消令牌。Connection 的容量 32 可靠结果队列承载接纳、应用和任务投影，正文快照可合并。Runtime 收尾期间持续排空事件至真实回收，UI 用草稿修订和输入身份关联回执。
 
@@ -271,7 +273,7 @@ Runtime 持有会话许可、进程表和独立工具句柄。Tools 的 sessions
 
 补丁由 Tools 的 patch 模块按解析、准备与文件提交拆分。全补丁完成精确匹配、路径冲突和资源预算校验后才写入；已有 UTF-8 BOM 与统一行尾保留。单文件通过同目录临时文件替换，跨文件不回滚，动作日志区分目标写入、源删除、目录创建及临时文件清理。blocking 模块始终等待工作线程，Stop 和 15 秒期限仅停止后续动作，当前提交取得真实结果后才返回。工具详情保存有界动作报告，卡片概括文件完成数量；凭据与完整文件内容不进入日志。
 
-图片读取、解码、方向校正、等比缩放和编码由 Tools 的 image 模块在可等待的阻塞工作中完成。ToolPayload 区分 Text 与共享不可变 ImagePayload；ActiveTurn 的结果表保存真实载荷，ToolView、Bridge 和 UI 只保留文字摘要，封闭步骤不再从展示字符串重建协议。ProtocolHistory 按共享对象身份计算 16 MiB 会话图片预算，重置时随历史释放。LLM Model 将图片结果转换为 input_text/input_image 内容数组、正确 MIME 的 data URL 与 high 细节，并在发送前以有界序列化确认完整请求不超过 32 MiB。目录中可选 input_modalities 经 Bridge/UI 固定为会话的图片能力三态，未知允许真实请求验证，明确不支持则返回工具能力错误。
+图片读取、解码、方向校正、等比缩放和编码由 Tools 的 image 模块在可等待的阻塞工作中完成。ToolPayload 区分 Text 与共享不可变 ImagePayload；ActiveTurn 的结果表保存真实载荷，ToolView、Bridge 和 UI 只保留文字摘要，封闭步骤不再从展示字符串重建协议。ProtocolHistory 按共享对象身份计算 16 MiB 会话图片预算，重置时随历史释放。LLM Model 将图片结果转换为 input_text/input_image 内容数组、正确 MIME 的 data URL 与 high 细节，并在发送前冻结完整请求字节。模型上下文与图片各自使用对应的预算。目录中可选 input_modalities 经 Bridge/UI 固定为会话的图片能力三态，未知允许真实请求验证，明确不支持则返回工具能力错误。
 
 ## Skills 目录
 

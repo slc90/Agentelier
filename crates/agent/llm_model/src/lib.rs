@@ -26,8 +26,8 @@ pub use expression::{
     ExpressionContext, ExpressionExcerpt, ExpressionMaterial, expression_excerpt,
 };
 pub use generation::{
-    GenerationConnection, GenerationRequest, MAX_REQUEST_BYTES, PreparedGeneration,
-    RecordedModelSource, RequestCompaction, RequestHistory, RequestProjection, generate, prepare,
+    GenerationConnection, GenerationRequest, PreparedGeneration, RecordedModelSource,
+    RequestCompaction, RequestHistory, RequestProjection, generate, prepare,
 };
 pub use memory::{
     MAX_MEMORY_SUMMARY_BYTES, MemoryMaterial, MemoryReference, MemoryScope, MemorySnapshot,
@@ -44,4 +44,4 @@ pub use model::{
     select_agent_model, select_session_model, task_catalog, task_model,
 };
 
-pub use protocol::{estimated_text_tokens, result_token_budget, result_tokens, result_wire_bytes};
+pub use protocol::{estimated_text_tokens, result_token_budget, result_tokens};

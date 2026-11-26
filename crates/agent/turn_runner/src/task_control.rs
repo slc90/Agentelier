@@ -54,11 +54,8 @@ pub(super) async fn control(
                     None => turn.task_page(list.history_offset),
                 };
                 let blocker = processes.iter().find(|process| {
-                    matches!(
-                        process.phase,
-                        agentelier_tools::ProcessPhase::Running
-                            | agentelier_tools::ProcessPhase::CleanupUnconfirmed
-                    )
+                    process.holds_exclusive_permit()
+                        || process.phase == agentelier_tools::ProcessPhase::CleanupUnconfirmed
                 });
                 page.blocked_by_process = blocker.map(|process| process.session_id.clone());
                 for report in &mut page.tasks {

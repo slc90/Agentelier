@@ -1196,6 +1196,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 Some(ChatTarget::Session(view.id))
             }
             ConversationEvent::Tasks(update) => Some(ChatTarget::Session(update.session)),
+            ConversationEvent::InputReceipt(receipt) => Some(ChatTarget::Session(receipt.session)),
             ConversationEvent::Queue(reply) => reply
                 .view
                 .as_ref()

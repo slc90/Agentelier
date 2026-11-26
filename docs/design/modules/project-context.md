@@ -26,7 +26,7 @@ Conversation Bridge 显式转换状态、路径、摘要和来源正文；UI 不
 
 ## 请求准备和持久发布
 
-ActiveTurn 拥有发布和协议历史。首次取得规则生成类型化 ProjectItem，空快照只保存来源事实。Runner 确认 ProjectPublished 后安装候选历史，再经模型层 prepare 完成同一份请求的组装、有界序列化及安全摘要；确认 RequestPrepared 后才调用 generate。网络及认证恢复只使用冻结字节，不重新构造请求。完整请求上限为 32 MiB，来源链上限为 32 KiB。
+ActiveTurn 拥有发布和协议历史。首次取得规则生成类型化 ProjectItem，空快照只保存来源事实。Runner 确认 ProjectPublished 后安装候选历史，再经模型层 prepare 完成同一份请求的组装、冻结字节及安全摘要；确认 RequestPrepared 后才调用 generate。网络及认证恢复只使用冻结字节，不重新构造请求。项目规则来源链上限为 32 KiB。
 
 项目全文只保存在发布事件中，后续准备记录以发布身份引用材料，包含窗口、Turn 内请求序号、基础摘要、有序协议类型、载荷字节数与 SHA-256。自动项目项独立于普通 User，即使用户粘贴同名标题也不改变类型。完整原始输出、reasoning 和工具结果的对应关系保持不变。项目项和 user 角色包装参与 token 估算，来源存档不另行重复计量。
 

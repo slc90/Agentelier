@@ -1,6 +1,8 @@
 use crate::execution::{ToolFailure, ToolResult, ToolStatus};
 use crate::process::{PROCESS_POLL, Process, arguments};
-use crate::{ProcessChange, ProcessFact, ProcessOrigin, SaveProcessFact, ToolAdmission};
+use crate::{
+    ProcessChange, ProcessFact, ProcessLifetime, ProcessOrigin, SaveProcessFact, ToolAdmission,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -53,13 +55,13 @@ struct ProcessEntry {
 enum ProcessState {
     Running {
         process: Box<Process>,
-        _lease: OwnedRwLockWriteGuard<()>,
+        _lease: Option<OwnedRwLockWriteGuard<()>>,
     },
     Exited(ToolResult),
     Unconfirmed {
         _result: ToolResult,
         _process: Option<Box<Process>>,
-        _lease: OwnedRwLockWriteGuard<()>,
+        _lease: Option<OwnedRwLockWriteGuard<()>>,
     },
     Consumed,
 }
@@ -119,6 +121,7 @@ impl ProcessSessions {
         cancel: &CancellationToken,
         lease: OwnedRwLockWriteGuard<()>,
         origin: ProcessOrigin,
+        lifetime: ProcessLifetime,
     ) -> ToolResult {
         let input: ExecArguments = match arguments(text, &["cmd", "workdir", "yield_time_ms"]) {
             Ok(value) => value,
@@ -162,15 +165,22 @@ impl ProcessSessions {
             self.admission.block();
         }
         if !completed {
+            let mut launch_lease = Some(lease);
             let entry = Arc::new(ProcessEntry {
                 state: Mutex::new(ProcessState::Running {
                     process: Box::new(process),
-                    _lease: lease,
+                    _lease: if lifetime == ProcessLifetime::Exclusive {
+                        launch_lease.take()
+                    } else {
+                        None
+                    },
                 }),
                 terminate: CancellationToken::new(),
                 origin,
             });
-            if let Err(error) = save(&self.save, &entry, &id, ProcessChange::Started).await {
+            if let Err(error) =
+                save(&self.save, &entry, &id, ProcessChange::Started { lifetime }).await
+            {
                 let mut locked = entry.state.lock().await;
                 let _cleanup = reap_entry(
                     &entry,
@@ -234,6 +244,7 @@ impl ProcessSessions {
                     self.save.clone(),
                 )),
             );
+            drop(launch_lease);
         }
         result
     }

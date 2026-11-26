@@ -437,12 +437,9 @@ impl ActiveTurn<'_> {
             .map(|tool| tool.call_id.as_str())
             .collect();
         let (context, retired_memory_outputs) = context.retire_memory_outputs(&allowed);
-        let reserved_result_bytes = if context.has_open_calls() || skip_compaction {
-            self.check_result_capacity(&context, 0, &Default::default(), false)?
-                .wire_reserve()
-        } else {
-            0
-        };
+        if context.has_open_calls() || skip_compaction {
+            self.check_result_capacity(&context, &Default::default(), false)?;
+        }
         let behavior = crate::behavior::for_request(self.view, turn);
         let expression = crate::expression::capture(self, turn);
         let previous = turn
@@ -479,7 +476,6 @@ impl ActiveTurn<'_> {
         Ok(GenerationRequest {
             history_position: self.history.position(),
             skip_compaction,
-            reserved_result_bytes,
             behavior,
             expression,
             memory: self.state.memory.as_deref().cloned(),
@@ -513,6 +509,13 @@ impl ActiveTurn<'_> {
             .as_mut()
             .ok_or(ConversationFailure::new("活动任务缺少轮次"))?;
         match event {
+            StreamEvent::Retrying => {
+                turn.messages
+                    .retain(|message| message.request_index != turn.request_index);
+                turn.tools
+                    .retain(|tool| tool.retained || tool.request_index != turn.request_index);
+                turn.phase = TaskPhase::RequestingModel;
+            }
             StreamEvent::Sending | StreamEvent::ResponseReceived { .. } => {
                 let fact = turn
                     .requests
@@ -772,13 +775,7 @@ impl ActiveTurn<'_> {
         {
             history = history.with_user(text);
         }
-        let fixed = turn
-            .requests
-            .last()
-            .and_then(|request| request.projection.fixed_bytes)
-            .unwrap_or_default();
-        self.check_result_capacity(&history, fixed, &Default::default(), false)?;
-        Ok(())
+        self.check_result_capacity(&history, &Default::default(), false)
     }
 
     pub fn reject_unsafe_compaction(
@@ -807,7 +804,7 @@ impl ActiveTurn<'_> {
         {
             return Ok(false);
         }
-        if !skip_once && turn.request_index < crate::MAX_TURN_REQUESTS {
+        if !skip_once {
             turn.compaction_continuation = Some(crate::CompactionContinuation {
                 request: turn.request_index,
                 input: turn.input_id,
@@ -821,12 +818,12 @@ impl ActiveTurn<'_> {
         self.state.continuation
     }
 
-    pub fn spent_budget(&self) -> Result<(u32, usize), ConversationFailure> {
+    pub fn execution_counts(&self) -> Result<(u32, usize), ConversationFailure> {
         let turn = self
             .view
             .turn
             .as_ref()
-            .ok_or_else(|| ConversationFailure::new("预算缺少活动任务"))?;
+            .ok_or_else(|| ConversationFailure::new("执行计数缺少活动任务"))?;
         Ok((
             turn.request_index,
             turn.tools.iter().filter(|tool| tool.retained).count(),
@@ -967,12 +964,7 @@ impl ActiveTurn<'_> {
                     .map(|call| call.call_id.as_str())
                     .collect()
             };
-            self.check_result_capacity(
-                &candidate,
-                request.projection.fixed_bytes.unwrap_or_default(),
-                &rejected,
-                compacted,
-            )?;
+            self.check_result_capacity(&candidate, &rejected, compacted)?;
         }
         let turn = self
             .view

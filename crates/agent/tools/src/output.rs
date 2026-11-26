@@ -1,5 +1,6 @@
 use std::io;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::task::JoinHandle;
 
@@ -8,6 +9,7 @@ const READ_CHUNK_BYTES: usize = 8192;
 
 #[derive(Default)]
 pub(crate) struct Capture {
+    pub(crate) last_activity: Option<Instant>,
     head: String,
     head_complete: bool,
     tail: String,
@@ -24,6 +26,13 @@ fn boundary(text: &str, limit: usize) -> usize {
 }
 
 impl Capture {
+    pub(crate) fn clear_delivered(&mut self) {
+        *self = Self {
+            last_activity: self.last_activity,
+            ..Self::default()
+        };
+    }
+
     fn push(&mut self, text: &str) {
         let prefix = if self.head_complete {
             0
@@ -88,6 +97,9 @@ async fn read(mut pipe: impl AsyncRead + Unpin, output: Arc<Mutex<Capture>>) -> 
         let mut capture = output
             .lock()
             .map_err(|_| io::Error::other("输出缓冲状态损坏"))?;
+        if length != 0 {
+            capture.last_activity = Some(Instant::now());
+        }
         while consumed < pending.len() {
             match std::str::from_utf8(&pending[consumed..]) {
                 Ok(text) => {

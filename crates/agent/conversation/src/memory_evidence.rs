@@ -192,7 +192,7 @@ pub fn memory_evidence(
             RecordEvent::Process { fact } => {
                 let source = sources.entry(fact.origin.turn).or_default();
                 match fact.change {
-                    ProcessChange::Started => {
+                    ProcessChange::Started { .. } => {
                         source
                             .processes
                             .insert(fact.session_id, ProcessEvidence::Running);

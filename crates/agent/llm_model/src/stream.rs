@@ -95,6 +95,7 @@ pub struct GenerationResult {
 }
 pub enum StreamEvent {
     Sending,
+    Retrying,
     ResponseReceived {
         status: u16,
     },

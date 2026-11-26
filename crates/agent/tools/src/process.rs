@@ -9,7 +9,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio_util::sync::CancellationToken;
 use win32job::{ExtendedLimitInfo, Job};
@@ -18,6 +18,7 @@ use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 const REAP_DEADLINE: Duration = Duration::from_secs(10);
 pub(crate) const PROCESS_POLL: Duration = Duration::from_millis(40);
 const RESULT_STREAM_BYTES: usize = 16 * 1024;
+const DIAGNOSTIC_PROCESS_IDS: usize = 64;
 
 pub(crate) fn powershell_path() -> io::Result<PathBuf> {
     std::env::var_os("PATH")
@@ -83,6 +84,7 @@ pub(crate) fn arguments<T: serde::de::DeserializeOwned>(
 pub(crate) struct Process {
     pub(crate) child: Box<dyn ChildWrapper>,
     monitor: Arc<Job>,
+    started_at: Instant,
     pub(crate) stdout: Reader,
     pub(crate) stderr: Reader,
     pub(crate) directory: PathBuf,
@@ -134,6 +136,7 @@ impl Process {
             .wrap(CreationFlags(CREATE_NO_WINDOW))
             .wrap(JobMonitor(monitor.clone()))
             .wrap(JobObject);
+        let started_at = Instant::now();
         let mut child = command.spawn().map_err(|error| {
             ToolFailure::new("spawn_failed", format!("无法启动 PowerShell 7：{error}"))
         })?;
@@ -152,6 +155,7 @@ impl Process {
             discarded_total: 0,
             child,
             monitor,
+            started_at,
             stdout: Reader::start(stdout),
             stderr: Reader::start(stderr),
             directory,
@@ -206,6 +210,35 @@ impl Process {
         }
     }
 
+    fn diagnostics(&self, last_output: Option<Instant>) -> serde_json::Value {
+        let accounting = self.monitor.query_basic_and_io_accounting_info().map_or_else(
+            |error| json!({"error": error.to_string()}),
+            |info| json!({
+                "active_processes":info.active_processes,
+                "cpu_ms":milliseconds(info.total_user_time.saturating_add(info.total_kernel_time)),
+                "read_operations":info.read_operation_count,
+                "write_operations":info.write_operation_count,
+                "other_io_operations":info.other_operation_count,
+                "read_bytes":info.read_transfer_count,
+                "write_bytes":info.write_transfer_count
+            }),
+        );
+        let members = self.monitor.query_process_id_list().map_or_else(
+            |error| json!({"error": error.to_string()}),
+            |mut pids| {
+                let truncated = pids.len() > DIAGNOSTIC_PROCESS_IDS;
+                pids.truncate(DIAGNOSTIC_PROCESS_IDS);
+                json!({"pids":pids,"truncated":truncated})
+            },
+        );
+        json!({
+            "elapsed_ms":milliseconds(self.started_at.elapsed()),
+            "last_output_age_ms":last_output.map(|activity| milliseconds(activity.elapsed())),
+            "accounting":accounting,
+            "members":members
+        })
+    }
+
     pub(crate) fn result(
         &mut self,
         status: ToolStatus,
@@ -227,6 +260,8 @@ impl Process {
             result.cleanup_failed = cleanup_failed;
             return result;
         };
+        let diagnostics = (!completed && !cleanup_failed)
+            .then(|| self.diagnostics(stdout.last_activity.max(stderr.last_activity)));
         let mut limit = RESULT_STREAM_BYTES;
         loop {
             let (out, out_discarded, out_replaced) = stdout.text(limit);
@@ -238,12 +273,12 @@ impl Process {
                 "cleanup_confirmed":completed && !cleanup_failed,
                 "stdout":out,"stderr":err,"truncated":out_discarded + err_discarded > 0,
                 "discarded_bytes":out_discarded + err_discarded,"discarded_bytes_total":self.discarded_total + out_discarded + err_discarded,"decoding_replaced":out_replaced || err_replaced,
-                "input":input,"error":failure
+                "input":input,"error":failure,"diagnostics":diagnostics
             }}).to_string();
             if output.len() <= MAX_TOOL_BODY_BYTES {
                 self.discarded_total += out_discarded + err_discarded;
-                *stdout = Default::default();
-                *stderr = Default::default();
+                stdout.clear_delivered();
+                stderr.clear_delivered();
                 return ToolResult {
                     status,
                     output: output.into(),
@@ -262,4 +297,8 @@ impl Process {
             limit /= 2;
         }
     }
+}
+
+fn milliseconds(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }

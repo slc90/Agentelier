@@ -20,10 +20,30 @@ pub struct ProcessFact {
     pub change: ProcessChange,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessLifetime {
+    #[default]
+    Exclusive,
+    Background,
+}
+
+impl ProcessLifetime {
+    pub fn tool_name(self) -> &'static str {
+        match self {
+            Self::Exclusive => "exec_command",
+            Self::Background => "start_background_process",
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProcessChange {
-    Started,
+    Started {
+        #[serde(default)]
+        lifetime: ProcessLifetime,
+    },
     Exited {
         status: ToolStatus,
         cleanup_confirmed: bool,
@@ -69,6 +89,7 @@ pub struct ProcessView {
     pub session_id: String,
     pub origin: ProcessOrigin,
     pub phase: ProcessPhase,
+    pub lifetime: ProcessLifetime,
     pub exit_code: Option<i64>,
     pub truncated: bool,
     pub decoding_replaced: bool,
@@ -76,11 +97,12 @@ pub struct ProcessView {
 }
 
 impl ProcessView {
-    pub fn registered(fact: &ProcessFact) -> Self {
+    pub fn registered(fact: &ProcessFact, lifetime: ProcessLifetime) -> Self {
         Self {
             origin: fact.origin.clone(),
             session_id: fact.session_id.clone(),
             phase: ProcessPhase::Running,
+            lifetime,
             exit_code: None,
             truncated: false,
             decoding_replaced: false,
@@ -90,7 +112,7 @@ impl ProcessView {
 
     pub fn apply(&mut self, change: &ProcessChange) {
         match change {
-            ProcessChange::Started => {}
+            ProcessChange::Started { .. } => {}
             ProcessChange::Exited {
                 cleanup_confirmed,
                 output,
@@ -113,6 +135,10 @@ impl ProcessView {
                 self.readable = false;
             }
         }
+    }
+
+    pub fn holds_exclusive_permit(&self) -> bool {
+        self.phase == ProcessPhase::Running && self.lifetime == ProcessLifetime::Exclusive
     }
 }
 

@@ -144,7 +144,7 @@ type ToolExecutor = dyn for<'a> Fn(
 enum Executor {
     Function(Arc<ToolExecutor>),
     CodexImage,
-    Shell,
+    Shell(crate::ProcessLifetime),
     Stdin,
     Computer,
     Ecs,
@@ -166,7 +166,7 @@ impl ToolRegistration {
         }
         let mut legacy = self.definition.clone();
         legacy.description = match self.executor {
-            Executor::Shell => legacy
+            Executor::Shell(crate::ProcessLifetime::Exclusive) => legacy
                 .description
                 .replace(SHELL_LIFETIME, LEGACY_SHELL_LIFETIME),
             Executor::Stdin => legacy
@@ -183,8 +183,15 @@ impl ToolRegistration {
         saved: &ToolDefinition,
         original_directory: &std::path::Path,
     ) -> Option<ToolDefinition> {
-        if self.can_rebind(saved) {
-            return Some(saved.clone());
+        let mut normalized = saved.clone();
+        if matches!(saved.source, ToolSource::Builtin) && saved.name == "view_image" {
+            normalized.description =
+                normalized
+                    .description
+                    .replacen(" and 32 MiB serialized model request", "", 1);
+        }
+        if self.can_rebind(&normalized) {
+            return Some(normalized);
         }
         if !matches!(saved.source, ToolSource::Builtin) {
             return None;
@@ -205,7 +212,6 @@ impl ToolRegistration {
             ),
             _ => return None,
         };
-        let mut normalized = saved.clone();
         normalized.description = normalized.description.replacen(&old, current, 1);
         self.can_rebind(&normalized).then_some(normalized)
     }
@@ -275,7 +281,7 @@ impl ToolRegistration {
         origin: crate::ProcessOrigin,
     ) -> ToolExecution<'a> {
         match &self.executor {
-            Executor::Shell => Box::pin(async move {
+            Executor::Shell(lifetime) => Box::pin(async move {
                 let Some(lease) = permit.exclusive.take() else {
                     return ToolResult::error(
                         crate::ToolStatus::Unconfirmed,
@@ -290,6 +296,7 @@ impl ToolRegistration {
                         cancel,
                         lease,
                         origin,
+                        *lifetime,
                     )
                     .await;
                 drop(permit);
@@ -371,6 +378,35 @@ pub struct ToolCatalog {
 }
 
 impl ToolCatalog {
+    fn shell(lifetime: crate::ProcessLifetime) -> ToolRegistration {
+        let (mode, purpose) = match lifetime {
+            crate::ProcessLifetime::Exclusive => (ToolMode::Asynchronous, SHELL_LIFETIME),
+            crate::ProcessLifetime::Background => (
+                ToolMode::Synchronous,
+                "Start a long-lived process such as a development server or watcher. Once the running process is registered and this call returns its session_id, later tools can run alongside it. Use write_stdin to inspect output and activity or to terminate it. A flat synchronous turn still reaps its processes when it ends. Use exec_command for work that must stay exclusive until the process exits.",
+            ),
+        };
+        ToolRegistration::process(
+            ToolDefinition {
+                name: lifetime.tool_name().into(),
+                mode,
+                source: ToolSource::Builtin,
+                strict: true,
+                display_source: None,
+                output_schema: None,
+                description: format!(
+                    "Execute PowerShell 7 using UTF-8 pipes and no profile. workdir null uses the session working directory; relative values resolve there. yield_time_ms null waits 10000 ms; 0..30000 is allowed. {purpose} Runs with current-user access, without a sandbox or PTY."
+                ),
+                parameters: json!({"type":"object","properties":{
+                    "cmd":{"type":"string"},"workdir":{"type":["string","null"]},
+                    "yield_time_ms":{"type":["integer","null"],"minimum":0,"maximum":30000}
+                },"required":["cmd","workdir","yield_time_ms"],"additionalProperties":false}),
+            },
+            Executor::Shell(lifetime),
+            ToolAccess::Exclusive,
+        )
+    }
+
     fn builtins(image_input: Option<bool>) -> Vec<ToolRegistration> {
         vec![
             ToolRegistration {
@@ -392,7 +428,7 @@ impl ToolCatalog {
                 strict: true,
                 display_source: None,
                 output_schema: None,
-                description: format!("Read one existing local static PNG or JPEG and return its actual image content to the model, with safe metadata. Required JSON: {{\"path\":\"image.png\"}}. Relative paths resolve in the session working directory; absolute paths use local Windows rules. Detects format from bytes, not extension. Does not capture screenshots, click, edit, generate or OCR images. At most 10 MiB input, 25 million pixels, longest sent edge 2048 px (proportional resize), 4 MiB encoded result, 16 MiB retained images per session and 32 MiB serialized model request. Immutable image bytes remain in history even if the original file changes or is deleted; use a new call to read new content. Model image capability from catalog: {}. Errors preserve existing history, without changing model or account.", match image_input { Some(true)=>"supported", Some(false)=>"unsupported", None=>"unknown; actual request determines support" }),
+                description: format!("Read one existing local static PNG or JPEG and return its actual image content to the model, with safe metadata. Required JSON: {{\"path\":\"image.png\"}}. Relative paths resolve in the session working directory; absolute paths use local Windows rules. Detects format from bytes, not extension. Does not capture screenshots, click, edit, generate or OCR images. At most 10 MiB input, 25 million pixels, longest sent edge 2048 px (proportional resize), 4 MiB encoded result, 16 MiB retained images per session. Immutable image bytes remain in history even if the original file changes or is deleted; use a new call to read new content. Model image capability from catalog: {}. Errors preserve existing history, without changing model or account.", match image_input { Some(true)=>"supported", Some(false)=>"unsupported", None=>"unknown; actual request determines support" }),
                 parameters: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
             }, move |context, arguments, cancel| Box::pin(execution::image(context, arguments, cancel, image_input))).shared_read(),
             ToolRegistration::new(ToolDefinition {
@@ -405,19 +441,8 @@ impl ToolCatalog {
                 description: "Modify UTF-8 text using a JSON object with required patch and workdir (string or null). Null workdir uses the session working directory; relative workdir resolves there. Paths may be absolute or relative to workdir. Example: {\"patch\":\"*** Begin Patch\\n*** Add File: hello.txt\\n+hello\\n*** End Patch\\n\",\"workdir\":null}. Supports *** Add File:, *** Delete File:, *** Update File:, optional *** Move to: immediately after Update, @@ or @@ exact-anchor, context lines prefixed by space, - removals, + additions, and *** End of File after a chunk. Context must match exactly and uniquely. Read changed files before retrying. At most 64 actions, 8 MiB per file, 32 MiB prepared text. Preserves existing UTF-8 BOM and uniform LF/CRLF; new files use LF without BOM. Validates the whole patch before writing. Commits files separately, with actual action and temporary-file reports; errors or Stop preserve completed changes and never roll back. Does not overwrite existing add/move destinations.".into(),
                 parameters: json!({"type":"object","properties":{"patch":{"type":"string"},"workdir":{"type":["string","null"]}},"required":["patch","workdir"],"additionalProperties":false}),
             }, patch).text_result(),
-            ToolRegistration::process(ToolDefinition {
-                name: "exec_command".into(),
-                mode: ToolMode::Asynchronous,
-                source: ToolSource::Builtin,
-                strict: true,
-                display_source: None,
-                output_schema: None,
-                description: format!("Execute PowerShell 7 using UTF-8 pipes and no profile. workdir null uses the session working directory; relative values resolve there. yield_time_ms null waits 10000 ms; 0..30000 is allowed. {SHELL_LIFETIME} Runs with current-user access, without a sandbox or PTY."),
-                parameters: json!({"type":"object","properties":{
-                    "cmd":{"type":"string"},"workdir":{"type":["string","null"]},
-                    "yield_time_ms":{"type":["integer","null"],"minimum":0,"maximum":30000}
-                },"required":["cmd","workdir","yield_time_ms"],"additionalProperties":false}),
-            }, Executor::Shell, ToolAccess::Exclusive),
+            Self::shell(crate::ProcessLifetime::Exclusive),
+            Self::shell(crate::ProcessLifetime::Background),
             ToolRegistration::process(ToolDefinition {
                 name: "write_stdin".into(),
                 mode: ToolMode::Synchronous,
@@ -613,6 +638,7 @@ impl ToolCatalog {
                         | Executor::CodexImage
                         | Executor::Computer
                         | Executor::Ecs
+                        | Executor::Shell(crate::ProcessLifetime::Background)
                 )
                 && !seen.contains(&tool.definition.name)
         }) {

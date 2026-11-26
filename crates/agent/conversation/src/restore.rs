@@ -338,7 +338,10 @@ fn remember_process(
     output: &ArchivedPayload,
     turn: crate::TurnId,
 ) {
-    if !matches!(tool.name.as_str(), "exec_command" | "write_stdin") {
+    if !matches!(
+        tool.name.as_str(),
+        "exec_command" | "start_background_process" | "write_stdin"
+    ) {
         return;
     }
     let ArchivedPayload::Text { text } = output else {
@@ -784,7 +787,7 @@ fn replay(
                 entry.outcome = outcome;
             }
             RecordEvent::Process { fact } => {
-                if matches!(fact.change, agentelier_tools::ProcessChange::Started)
+                if let agentelier_tools::ProcessChange::Started { lifetime } = &fact.change
                     && !state
                         .turn
                         .iter()
@@ -795,7 +798,7 @@ fn replay(
                                 && turn.tools.iter().any(|tool| {
                                     tool.retained
                                         && tool.call_id == fact.origin.call_id
-                                        && tool.name == "exec_command"
+                                        && tool.name == lifetime.tool_name()
                                 })
                         })
                 {
@@ -1136,7 +1139,6 @@ fn replay(
                     || next.transcript != old.transcript
                     || next.request_index != source.request
                     || source.input_retained != retained_input
-                    || source.request >= crate::MAX_TURN_REQUESTS
                     || !pending.0.is_empty()
                 {
                     return Err(ConversationFailure::new("压缩继续与失败请求或原输入不一致"));

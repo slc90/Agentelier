@@ -18,7 +18,7 @@
 | [会话身份与账号同步源码](https://github.com/slc90/Agentelier/blob/main/crates/agent/conversation/src/conversation.rs) | 当前 Session 使用进程内计数，设置含 `account_subject`，账号变化清除内存会话。本阶段改为持久身份和任务级执行身份。 |
 | [协议历史源码](https://github.com/slc90/Agentelier/blob/main/crates/agent/llm_model/src/protocol.rs) | 原始助手与 reasoning 项、call/result 配对、类型化图片载荷；UI 摘要不是请求权威。 |
 | [模型目录源码](https://github.com/slc90/Agentelier/blob/main/crates/agent/llm_model/src/model.rs) | 当前目录只贯通身份、推理和图片能力，窗口元数据需要新增。 |
-| [生成请求源码](https://github.com/slc90/Agentelier/blob/main/crates/agent/llm_model/src/generation.rs) | 当前请求地址、`store=false`、完整历史、加密续接、账号校验和 32 MiB 序列化限制。 |
+| [生成请求源码](https://github.com/slc90/Agentelier/blob/main/crates/agent/llm_model/src/generation.rs) | 当前请求地址、`store=false`、完整历史、加密续接、账号校验和冻结的请求序列化。 |
 | [聊天状态与发送门控源码](https://github.com/slc90/Agentelier/blob/main/crates/ui/chat_ui/src/conversation.rs) | 当前单会话投影、草稿与展开状态、UI 中的账号相等判断。 |
 | [数据目录机制](https://github.com/slc90/Agentelier/blob/main/docs/design/mechanisms/application-data.md) | 用户选择的数据根、`config/config.ron`、本次运行固定路径。 |
 | [提示词快照](https://github.com/slc90/Agentelier/blob/main/docs/design/modules/prompts.md) | `prompts.json` 与 `InstructionSnapshot`；会话指令不依赖提示词库继续存在。 |

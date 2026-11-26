@@ -85,6 +85,9 @@ impl AuthenticatedRequest {
     pub fn mark_output_started(&mut self) {
         self.output_started = true;
     }
+    pub fn reset_output_for_retry(&mut self) {
+        self.output_started = false;
+    }
     pub fn begin_recovery(&mut self, status: u16) -> Option<CredentialVersion> {
         if status != 401 || self.recovery_used || self.output_started {
             return None;

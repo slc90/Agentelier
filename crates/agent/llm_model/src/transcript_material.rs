@@ -88,13 +88,6 @@ impl TranscriptEvidence {
         estimated_text_tokens(ROLE).saturating_add(estimated_text_tokens(&self.content))
     }
 
-    pub fn wire_bytes(&self) -> usize {
-        serde_json::json!({"role": ROLE, "content": self.content})
-            .to_string()
-            .len()
-            + 1
-    }
-
     pub(crate) fn insert(self, input: &mut Vec<serde_json::Value>) -> TranscriptMaterial {
         let input_index = input.len();
         input.push(serde_json::json!({"role": ROLE, "content": self.content}));

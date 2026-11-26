@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::{error::Error, fmt};
 
 pub use uuid::Uuid as SessionId;
-pub const MAX_TURN_REQUESTS: u32 = 32;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TurnId(pub u64);
 
@@ -1164,12 +1163,8 @@ impl Conversation {
             .ok_or_else(|| ConversationFailure::new("失败请求已变化，不能使用原压缩继续操作"))?;
         let source = turn
             .compaction_continuation
-            .filter(|source| {
-                source.request == failed_request
-                    && source.input == turn.input_id
-                    && failed_request < MAX_TURN_REQUESTS
-            })
-            .ok_or_else(|| ConversationFailure::new("压缩继续操作已用完或超出本轮请求预算"))?;
+            .filter(|source| source.request == failed_request && source.input == turn.input_id)
+            .ok_or_else(|| ConversationFailure::new("压缩继续操作已用完或来源已变化"))?;
         let history = current
             .history
             .as_ref()
@@ -1188,19 +1183,7 @@ impl Conversation {
             &current.view.settings.instructions,
             current.tools.definitions(),
         )?;
-        let fixed = turn
-            .requests
-            .last()
-            .and_then(|request| request.projection.fixed_bytes)
-            .unwrap_or_default();
-        crate::result_budget::ResultHeadroom::default().ensure(
-            &context,
-            fixed.saturating_add(
-                history
-                    .input_wire_bytes()
-                    .map_err(crate::result_budget::model_error)?,
-            ),
-        )?;
+        crate::result_budget::ResultHeadroom::default().ensure(&context)?;
         turn.status = TurnStatus::Running;
         turn.operation_id = operation;
         turn.compaction_continuation = None;

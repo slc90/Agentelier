@@ -352,6 +352,7 @@ impl Scope {
 fn task_name(tool: &str) -> String {
     match tool {
         "exec_command" => "运行 PowerShell",
+        "start_background_process" => "启动后台 PowerShell",
         "view_image" => "读取图片",
         "generate_image" => "生成图片",
         "apply_patch" => "修改文件",

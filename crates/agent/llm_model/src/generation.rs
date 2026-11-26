@@ -15,23 +15,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 
 pub(super) const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-pub const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
-
-struct RequestBytes(Vec<u8>);
-impl std::io::Write for RequestBytes {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if bytes.len() > MAX_REQUEST_BYTES.saturating_sub(self.0.len()) {
-            return Err(std::io::Error::other(
-                "完整模型请求超过 32 MiB，历史保持不变",
-            ));
-        }
-        self.0.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
+const OVERLOAD_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
 
 pub struct GenerationRequest {
     pub behavior: Option<String>,
@@ -44,7 +28,6 @@ pub struct GenerationRequest {
     pub slug: String,
     pub compact_threshold: u64,
     pub skip_compaction: bool,
-    pub reserved_result_bytes: usize,
     pub effort: Option<String>,
     pub context: ProtocolHistory,
     pub history_position: usize,
@@ -367,7 +350,6 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         });
         input.push(serde_json::json!({"role":"developer", "content":catalog}));
     }
-    let history_bytes = generation.context.input_wire_bytes()?;
     input.extend(generation.context.into_input());
     for skill in generation.selected_skills {
         skill
@@ -406,18 +388,8 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     if contract == ToolContract::CodexWebSocket {
         payload["type"] = serde_json::json!("response.create");
     }
-    let mut body = RequestBytes(Vec::new());
-    serde_json::to_writer(&mut body, &payload).map_err(|error| {
-        ModelFailure::new(
-            ModelFailureKind::Protocol,
-            format!("模型请求大小或序列化失败：{error}"),
-        )
-    })?;
-    if generation.reserved_result_bytes > MAX_REQUEST_BYTES.saturating_sub(body.0.len()) {
-        return Err(crate::model::protocol(
-            "需保留待交付工具结果的请求空间，当前请求无法发送",
-        ));
-    }
+    let body = serde_json::to_vec(&payload)
+        .map_err(|error| crate::model::protocol(&format!("模型请求序列化失败：{error}")))?;
     for item in payload["input"].as_array().into_iter().flatten() {
         if let Some(content) = item.get("output").and_then(serde_json::Value::as_array) {
             for image in content.iter().filter(|part| part["type"] == "input_image") {
@@ -448,12 +420,12 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         history: Some(history),
         items,
         base_hashes,
-        payload_hash: format!("{:x}", Sha256::digest(&body.0)),
-        payload_bytes: body.0.len(),
-        fixed_bytes: Some(body.0.len().saturating_sub(history_bytes)),
+        payload_hash: format!("{:x}", Sha256::digest(&body)),
+        payload_bytes: body.len(),
+        fixed_bytes: None,
     };
     Ok(PreparedGeneration {
-        body: body.0,
+        body,
         projection,
         tools: generation.tools,
     })
@@ -541,6 +513,7 @@ async fn generate_inner(
         "开始流式模型请求"
     );
     let mut request = AuthenticatedRequest::new(&current);
+    let mut overload_delays = OVERLOAD_RETRY_DELAYS.into_iter();
     loop {
         identity.validate(&current).map_err(|failure| {
             ModelFailure::new(ModelFailureKind::Authentication, failure.to_string())
@@ -582,7 +555,22 @@ async fn generate_inner(
                 return Ok((result, connection));
             }
             Err(failure) => {
-                if let Some(replacement) =
+                if failure.code.as_deref() == Some("server_is_overloaded")
+                    && let Some(delay) = overload_delays.next()
+                {
+                    tracing::warn!(
+                        request_id = failure.request_id.as_deref(),
+                        remaining_retries = overload_delays.len(),
+                        ?delay,
+                        "模型服务过载，等待后重试同一请求"
+                    );
+                    progress
+                        .send(StreamEvent::Retrying)
+                        .await
+                        .map_err(|_| crate::model::protocol("模型进度接收端已关闭"))?;
+                    request.reset_output_for_retry();
+                    tokio::time::sleep(delay).await;
+                } else if let Some(replacement) =
                     recover(&credentials, &mut request, &current, &failure).await?
                 {
                     current = replacement;

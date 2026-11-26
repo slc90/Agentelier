@@ -62,7 +62,7 @@ SSE 和 WebSocket 共享 Responses 事件解析。函数参数增量只更新展
 
 历史允许完整响应和工具结果分开追加，并用原始调用身份校验结果的唯一性。准备请求时固定持久历史的位置、实际覆盖项和所含结果的 `call_id`。这些材料和已序列化的请求字节随本次请求保持固定。只有接纳本次完整合法响应才确认其中的结果已经用于成功请求。继续发送前需收齐同步调用的结果，开放的异步调用可以跨请求和 Turn。
 
-图片 data URL 由协议适配根据不可变载荷的实际 MIME 与编码生成，detail 固定 high。完整请求通过 32 MiB 有界 Writer 序列化，预算计入 Base64、工具声明、指令与全部历史；超限为任务协议错误，不裁剪历史。HTTP 与全量 WebSocket 请求使用冻结字节。WebSocket 续接从同一输入取新增项并保持内容数组原样。DEBUG 只保留 call_id、MIME、尺寸、摘要、字节数和结构检查，禁止完整 Base64 或请求正文。
+图片 data URL 由协议适配根据不可变载荷的实际 MIME 与编码生成，detail 固定 high。完整请求序列化后冻结字节，保留 Base64、工具声明、指令和当前工作上下文。上下文按模型 token 窗口及压缩策略管理，图片继续受编码预算约束。HTTP 与全量 WebSocket 请求使用冻结字节。WebSocket 续接从同一输入取新增项并保持内容数组原样。DEBUG 只保留 call_id、MIME、尺寸、摘要、字节数和结构检查，禁止完整 Base64 或请求正文。
 
 模型目录仅在实际 input_modalities 是非空字符串数组时取得明确图片能力，包含 image 为支持，不包含为不支持；缺失或无法解释为未知。该可选信息经 Bridge 和 UI 进入会话固定设置；未知不被推断为支持或拒绝。服务真实拒绝仍沿既有 HTTP 类别与请求标识返回，不自动换模型、账号或协议。
 
@@ -84,7 +84,7 @@ Turn Runner 首次请求前通过 CredentialClient 获取 ExecutionIdentity，�
 
 目录解析 context_window、max_context_window、effective_context_window_percent、auto_compact_token_limit 和实际提供的 comp_hash。优先 context_window，缺失再用 max；有效比例默认 95%，自动阈值为显式值与完整窗口 90% 的较小值。只有阈值时保留未知容量；非法、零值或矛盾字段形成真实协议错误，不按 slug 猜测窗口。每个任务用当前账号重读固定 slug 的目录，核对推理能力；缺窗口和阈值时在普通请求前失败，保留输入与历史。
 
-完成与失败流事件保存实际 response usage，含输入、输出、总数、缓存输入、reasoning 输出及原始 usage；HTTP 失败中提供的合法用量也交给任务。缺失保持未知，畸形细项或不一致总数明确失败。服务端使用量与完整请求 32 MiB 字节限制、图片编码预算分别处理，缓存输入不从窗口计量中减去。
+完成与失败流事件保存实际 response usage，含输入、输出、总数、缓存输入、reasoning 输出及原始 usage；HTTP 失败中提供的合法用量也交给任务。缺失保持未知，畸形细项或不一致总数明确失败。服务端使用量与图片编码预算分别处理，缓存输入仍计入窗口用量。
 
 ProtocolHistory 按内容估算新增项，不累计 transport ID 或外层 JSON/Base64 转义成本。文字采用粗略字节启发式，图片与加密 reasoning 使用各自的近似规则；这些值始终标为估算，不宣称 tokenizer 精度或解密后的原文。规则依据 [Codex 模型能力](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs)与 [ContextManager](https://github.com/openai/codex/blob/main/codex-rs/core/src/context_manager/history.rs)。
 
@@ -100,13 +100,13 @@ Responses 流允许 compaction 与助手、reasoning、function_call 混排，�
 
 ## 项目指令请求记录
 
-模型层 prepare 是唯一请求构造入口，输出私有冻结字节和 RequestProjection（工具契约、基础摘要、有序协议类型、载荷大小与 SHA-256）。generate 仅消费 PreparedGeneration，认证恢复使用同一字节。类型化项目项序列化为 user，基础保持 developer，完整请求保留 32 MiB 有界序列化。冻结时还有开放调用，则把预留结果的协议字节和继续余量一并纳入发送前检查。
+模型层 prepare 是唯一请求构造入口，输出私有冻结字节和 RequestProjection（工具契约、基础摘要、有序协议类型、载荷大小与 SHA-256）。generate 仅消费 PreparedGeneration，认证恢复使用同一字节。服务返回 `server_is_overloaded` 时，同一冻结请求最多退避重试两次。重试清理当前尝试的流式预览，已有工具结果留在历史，Stop 可以取消等待。类型化项目项序列化为 user，基础保持 developer。冻结时还有开放调用，发送前检查预留结果与继续所需的上下文和图片余量。
 
 generate 在进入发送阶段后发布 Sending，HTTP 收到响应头后发布实际状态，WebSocket 成功发送后记录已升级的传输状态。Runner 将这些事实交回运行时，Conversation 按当前 Turn 合并并生成待持久化的请求记录。HTTP 认证重发复用原始字节。WebSocket 在重新认证并建立新连接后使用同一冻结载荷的全量输入。
 
 ## Skills 调度材料
 
-普通任务的 Skills 目录由 Runner 取得，Conversation 按当前 Turn 提供给 GenerationRequest。模型层不读取磁盘：固定 developer 指令之后、原始协议历史之前，每次请求只加入一份允许隐式调用的技能摘要。目录和原始工具结果分开保存，RequestProjection 记录其角色、input 索引、文本和摘要；有界序列化、请求准备持久确认及认证冻结字节重发沿用原有边界。Skill 目录不注册新 Tool，也不自动执行脚本或建立 MCP 连接。
+普通任务的 Skills 目录由 Runner 取得，Conversation 按当前 Turn 提供给 GenerationRequest。模型层不读取磁盘：固定 developer 指令之后、原始协议历史之前，每次请求只加入一份允许隐式调用的技能摘要。目录和原始工具结果分开保存，RequestProjection 记录其角色、input 索引、文本和摘要；请求准备持久确认及认证恢复沿用相同的冻结字节。Skill 目录不注册新 Tool，也不自动执行脚本或建立 MCP 连接。
 
 显式 `$name` 的选中正文由 Skills 在任务启动时完整读取并由 Conversation 固定。GenerationRequest 携带已确定材料；模型层验证其正文摘要，然后在完整原始协议历史后按输入顺序注入独立 user 项。每个 SkillMaterial 保存来源路径、角色、input 索引、包装正文和摘要。正文不写回 ProtocolHistory，同一任务的多次准备引用相同快照，认证重发完全复用 PreparedGeneration 字节。
 

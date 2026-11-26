@@ -12,14 +12,16 @@ impl ProcessLedger {
     pub fn apply(&mut self, fact: &ProcessFact, sequence: u64) -> Result<(), ConversationFailure> {
         let failure = || ConversationFailure::new("进程事实与已登记的来源或状态不一致");
         match &fact.change {
-            ProcessChange::Started => {
+            ProcessChange::Started { lifetime } => {
                 if self.views.contains_key(&fact.session_id)
                     || uuid::Uuid::parse_str(&fact.session_id).is_err()
                 {
                     return Err(failure());
                 }
-                self.views
-                    .insert(fact.session_id.clone(), ProcessView::registered(fact));
+                self.views.insert(
+                    fact.session_id.clone(),
+                    ProcessView::registered(fact, *lifetime),
+                );
             }
             change => {
                 let view = self
@@ -30,7 +32,7 @@ impl ProcessLedger {
                 let valid = match change {
                     ProcessChange::Exited { .. } => view.phase == ProcessPhase::Running,
                     ProcessChange::Consumed => view.phase == ProcessPhase::Exited && view.readable,
-                    ProcessChange::Started => false,
+                    ProcessChange::Started { .. } => false,
                 };
                 if !valid {
                     return Err(failure());

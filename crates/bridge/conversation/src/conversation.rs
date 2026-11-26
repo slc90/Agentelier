@@ -167,6 +167,7 @@ pub enum InputDecision {
 }
 pub struct InputReceipt {
     pub id: u64,
+    pub session: SessionId,
     pub decision: InputDecision,
 }
 #[derive(Clone)]
@@ -1041,6 +1042,7 @@ pub fn convert(event: agentelier_conversation::ConversationEvent) -> Conversatio
         agentelier_conversation::ConversationEvent::InputReceipt(receipt) => {
             ConversationEvent::InputReceipt(InputReceipt {
                 id: receipt.id,
+                session: receipt.session,
                 decision: match receipt.decision {
                     agentelier_conversation::InputDecision::Accepted => InputDecision::Accepted,
                     agentelier_conversation::InputDecision::Applied => InputDecision::Applied,

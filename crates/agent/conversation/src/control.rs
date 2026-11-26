@@ -29,5 +29,6 @@ pub enum InputDecision {
 }
 pub struct InputReceipt {
     pub id: u64,
+    pub session: SessionId,
     pub decision: InputDecision,
 }

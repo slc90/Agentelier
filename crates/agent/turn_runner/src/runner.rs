@@ -8,7 +8,7 @@ use crate::{
 use agentelier_account::{CredentialClient, ExecutionIdentity};
 use agentelier_conversation::RecordEvent;
 use agentelier_conversation::{
-    ConversationFailure, InputDecision, MAX_TURN_REQUESTS, SteerInput, TurnMemory, TurnStatus,
+    ConversationFailure, InputDecision, SteerInput, TurnMemory, TurnStatus,
 };
 use agentelier_llm_model::{
     GenerationConnection, GenerationResult, ModelFailure, ModelFailureKind,
@@ -136,6 +136,7 @@ async fn apply_stream_event(
     let progress = matches!(
         event,
         agentelier_llm_model::StreamEvent::Sending
+            | agentelier_llm_model::StreamEvent::Retrying
             | agentelier_llm_model::StreamEvent::ResponseReceived { .. }
     );
     match active
@@ -520,8 +521,8 @@ async fn run_task(
         return Ok(TurnStatus::Failed(failure.to_string()));
     }
     let catalog = active.call(|turn| Ok(turn.catalog())).await?;
-    let (mut requests_used, mut tools_used) = active.call(|turn| turn.spent_budget()).await?;
-    while requests_used < MAX_TURN_REQUESTS {
+    let (mut request_index, mut tools_used) = active.call(|turn| turn.execution_counts()).await?;
+    loop {
         jobs.boundary(active, dispatcher, progress, cancel).await?;
         control::drain(active, steers, progress).await?;
         jobs.stop_admission_for_steer(active).await?;
@@ -572,10 +573,10 @@ async fn run_task(
                     state: turn.stored_state(),
                     history: turn.archive(),
                 };
-                Ok(Some((ids, event)))
+                Ok(Some((ids, turn.session_id(), event)))
             })
             .await?;
-        if let Some((ids, event)) = applied {
+        if let Some((ids, session, event)) = applied {
             let sequence = active.record(event).await?;
             active
                 .call(move |mut turn| {
@@ -584,11 +585,13 @@ async fn run_task(
                 })
                 .await?;
             for id in ids {
-                control::receipt(progress, id, InputDecision::Applied).await?;
+                control::receipt(progress, id, session, InputDecision::Applied).await?;
             }
         }
         active.apply_inbox().await?;
-        requests_used += 1;
+        request_index = request_index
+            .checked_add(1)
+            .ok_or_else(|| ConversationFailure::new("模型请求序号已耗尽"))?;
         if let (Some(client), Some(view)) = (&memory, &memory_view)
             && let Some(reason) = client.view_withdrawal(view.clone()).await
         {
@@ -608,7 +611,7 @@ async fn run_task(
             settings.working_directory.clone(),
             settings.image_input,
             Arc::new(user_turn),
-            requests_used,
+            request_index,
         ));
         jobs.boundary(active, dispatcher, progress, cancel).await?;
         let (result, next_connection) = match request_once(
@@ -651,7 +654,7 @@ async fn run_task(
             Ok(Some(accepted)) => accepted,
             Ok(None) => {
                 let source = context.user_turn();
-                tracing::warn!(session = %source.session, turn = source.turn, request = requests_used,
+                tracing::warn!(session = %source.session, turn = source.turn, request = request_index,
                     "拒绝在冻结边界不允许的压缩响应");
                 return Ok(TurnStatus::Failed(
                     "压缩响应越过开放调用或本次请求禁止压缩，已保留原历史".into(),
@@ -723,7 +726,6 @@ async fn run_task(
             return Ok(TurnStatus::Limited);
         }
     }
-    Ok(TurnStatus::Limited)
 }
 
 async fn checkpoint_response(

@@ -35,7 +35,8 @@ pub use payload::{
 };
 mod process_facts;
 pub use process_facts::{
-    ProcessChange, ProcessFact, ProcessOrigin, ProcessPhase, ProcessView, SaveProcessFact,
+    ProcessChange, ProcessFact, ProcessLifetime, ProcessOrigin, ProcessPhase, ProcessView,
+    SaveProcessFact,
 };
 pub use sessions::{
     CleanupReport, MAX_PROCESS_SESSIONS, ProcessCleanup, ProcessScope, ProcessSessions,

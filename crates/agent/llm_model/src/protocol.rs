@@ -5,7 +5,7 @@ mod archive;
 mod estimate;
 pub use archive::{ArchivedPayload, ProtocolArchive};
 pub use estimate::text_tokens as estimated_text_tokens;
-pub use estimate::{result_token_budget, result_tokens, result_wire_bytes};
+pub use estimate::{result_token_budget, result_tokens};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HistoryAppend {
