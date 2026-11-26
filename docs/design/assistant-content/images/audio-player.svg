@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="164" viewBox="0 0 760 164" role="img" aria-labelledby="title desc">
+  <title id="title">回复内的紧凑音频播放器</title>
+  <desc id="desc">左侧圆形播放按钮，中间由真实音频幅度生成的波形示意，深绿色表示已播放部分，右侧显示总时长。图中波形仅示意布局。</desc>
+  <rect width="760" height="164" rx="12" fill="#edf6ee"/>
+  <rect x="20" y="26" width="720" height="112" rx="10" fill="#f6fbf7" stroke="#b8d2c3"/>
+  <circle cx="68" cy="82" r="25" fill="#235e47"/>
+  <path d="M62 70 L62 94 L80 82 Z" fill="#eef8ef"/>
+  <g fill="none" stroke-linecap="round" stroke-width="6">
+    <path d="M113 79v6 M127 74v16 M141 70v24 M155 64v36 M169 54v56 M183 61v42 M197 72v20 M211 76v12 M225 69v26 M239 64v36 M253 53v58 M267 44v76 M281 58v48 M295 71v22 M309 77v10 M323 75v14 M337 71v22 M351 66v32" stroke="#235e47"/>
+    <path d="M365 61v42 M379 52v60 M393 63v38 M407 73v18 M421 77v10 M435 69v26 M449 55v54 M463 48v68 M477 57v50 M491 71v22 M505 76v12 M519 75v14 M533 68v28 M547 57v50 M561 65v34 M575 73v18 M589 78v8 M603 80v4" stroke="#b8d2c3"/>
+  </g>
+  <text x="698" y="89" text-anchor="end" font-family="sans-serif" font-size="25" fill="#213d32">0:12</text>
+</svg>
