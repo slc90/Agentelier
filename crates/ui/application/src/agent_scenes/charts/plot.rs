@@ -100,6 +100,7 @@ pub(super) enum Style {
     Area,
     Bars,
     Histogram,
+    BoxPlot,
 }
 
 pub(super) struct Rendered {
@@ -299,6 +300,7 @@ pub(super) fn mount(
         Style::Area => "NativeAreaChart",
         Style::Bars => "NativeBarChart",
         Style::Histogram => "NativeHistogram",
+        Style::BoxPlot => "NativeBoxPlot",
     };
     let root = root(world, parent, name, content.title.as_deref())?;
     let result = decorate(world, root, content, style);
@@ -389,7 +391,7 @@ fn decorate(
                 Style::Line => {
                     CanvasDocument::create_path(world, token, geometry, transform, paint)?
                 }
-                Style::Scatter | Style::Area | Style::Bars | Style::Histogram => {
+                Style::Scatter | Style::Area | Style::Bars | Style::Histogram | Style::BoxPlot => {
                     let id =
                         CanvasDocument::create_layer(world, token, index + 1, &mark.legend.name)?;
                     let path = CanvasDocument::create_path_in_layer(
@@ -413,7 +415,7 @@ fn decorate(
         Style::Line => (18., 3.),
         Style::Scatter => (8., 8.),
         Style::Area => (18., 8.),
-        Style::Bars | Style::Histogram => (11., 11.),
+        Style::Bars | Style::Histogram | Style::BoxPlot => (11., 11.),
     };
     let legend: Vec<_> = marks
         .into_iter()

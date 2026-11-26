@@ -9,7 +9,7 @@ use serde_json::{Value as Json, json};
 use std::{collections::BTreeMap, io};
 
 use super::{
-    charts::{bars, heatmap, histogram, scatter, select_series},
+    charts::{bars, boxplot, heatmap, histogram, scatter, select_series},
     discrete::{DiscreteChange, DiscreteValue},
     numeric::{NumericChange, NumericValue},
     text_input::TextChange,
@@ -300,6 +300,9 @@ impl Parameters {
                         }
                         scatter::TEMPLATE if !by_category => {
                             scatter::validate_choices(scene, values, all.as_deref())?
+                        }
+                        boxplot::TEMPLATE if !by_category => {
+                            boxplot::validate_choices(scene, values, all.as_deref())?
                         }
                         _ => return Err(parameter_error(parameter, "图表模板不支持该筛选")),
                     }

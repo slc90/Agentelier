@@ -1,6 +1,7 @@
 mod area;
 mod axis;
 pub(super) mod bars;
+pub(super) mod boxplot;
 pub(super) mod heatmap;
 pub(super) mod histogram;
 mod pie;
@@ -54,6 +55,7 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
     .and_then(pie::register)
     .and_then(heatmap::register)
     .and_then(histogram::register)
+    .and_then(boxplot::register)
 }
 
 pub(super) fn install(app: &mut App) {
@@ -61,7 +63,11 @@ pub(super) fn install(app: &mut App) {
 }
 
 pub(super) fn select_series(world: &mut World, root: Entity, selected: Option<&str>) -> Result {
-    plot::RetainedPlot::select_series(world, root, selected)
+    plot::RetainedPlot::select_series(world, root, selected)?;
+    if world.get::<boxplot::BoxPlot>(root).is_some() {
+        boxplot::select_detail(world, root, selected)?;
+    }
+    Ok(())
 }
 
 struct Series {
