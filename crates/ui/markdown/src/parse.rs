@@ -9,12 +9,33 @@ const OPTIONS: Options = Options::ENABLE_STRIKETHROUGH
 
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct Run {
-    pub text: String,
+    pub content: RunContent,
     pub bold: bool,
     pub italic: bool,
     pub strike: bool,
     pub code: bool,
     pub link: bool,
+}
+
+#[derive(Clone, PartialEq)]
+pub(crate) enum RunContent {
+    Text(String),
+    Math(Formula),
+}
+
+impl Default for RunContent {
+    fn default() -> Self {
+        Self::Text(String::new())
+    }
+}
+
+impl RunContent {
+    pub(crate) fn source(&self) -> &str {
+        match self {
+            Self::Text(text) => text,
+            Self::Math(formula) => &formula.original,
+        }
+    }
 }
 #[derive(Clone, PartialEq)]
 pub(crate) enum BlockKind {
@@ -84,6 +105,21 @@ pub(crate) fn parse(source: &str) -> Vec<Block> {
                     append(&mut stack, &mut roots, node);
                 }
             }
+            Event::DisplayMath(latex)
+                if source.get(range.clone()).is_some_and(|original| {
+                    original.starts_with("\\(") && original.ends_with("\\)")
+                }) =>
+            {
+                append(
+                    &mut stack,
+                    &mut roots,
+                    Tree {
+                        event: Event::InlineMath(latex.into_static()),
+                        range,
+                        children: Vec::new(),
+                    },
+                )
+            }
             event => append(
                 &mut stack,
                 &mut roots,
@@ -102,11 +138,12 @@ pub(crate) fn parse(source: &str) -> Vec<Block> {
 
 fn bracket_math(source: &str) -> Cow<'_, str> {
     let mut result = Cow::Borrowed(source);
-    if !source.contains("\\[") {
+    if !source.contains("\\[") && !source.contains("\\(") {
         return result;
     }
     let bytes = source.as_bytes();
     let mut opening = None;
+    let mut substitutions = Vec::new();
     let mut literal = 0_usize;
     for (event, range) in Parser::new_ext(source, OPTIONS).into_offset_iter() {
         match event {
@@ -134,18 +171,47 @@ fn bracket_math(source: &str) -> Cow<'_, str> {
                 if bytes.get(start) != Some(&b'\\') || escaped(bytes, start) {
                     continue;
                 }
-                match bytes.get(range.start) {
-                    Some(b'[') => opening = Some(start),
-                    Some(b']') if let Some(open) = opening.take() => {
+                match bytes.get(range.start).copied() {
+                    Some(b'[') => opening = Some((start, b']')),
+                    Some(b'(') => opening = Some((start, b')')),
+                    Some(close @ (b']' | b')'))
+                        if let Some((open, expected)) = opening
+                            && close == expected =>
+                    {
                         // Equal-length replacements keep every parser offset aligned with MarkdownSource.
+                        opening = None;
                         let normalized = result.to_mut();
                         normalized.replace_range(open..open + 2, "$$");
                         normalized.replace_range(start..start + 2, "$$");
+                        substitutions.push(open..start + 2);
                     }
                     _ => {}
                 }
             }
             _ => {}
+        }
+    }
+    if let Cow::Owned(normalized) = &mut result {
+        let mut confirmed = Parser::new_ext(normalized, OPTIONS)
+            .into_offset_iter()
+            .filter_map(|(event, range)| matches!(event, Event::DisplayMath(_)).then_some(range))
+            .peekable();
+        let mut rejected = Vec::new();
+        for range in substitutions {
+            while confirmed
+                .next_if(|candidate| candidate.start < range.start)
+                .is_some()
+            {}
+            if confirmed.next_if(|candidate| *candidate == range).is_none() {
+                rejected.push(range);
+            }
+        }
+        drop(confirmed);
+        for range in rejected {
+            let open = range.start..range.start + 2;
+            let close = range.end - 2..range.end;
+            normalized.replace_range(open.clone(), &source[open]);
+            normalized.replace_range(close.clone(), &source[close]);
         }
     }
     result
@@ -261,10 +327,12 @@ fn collect(nodes: &[Tree], source: &str, quote: bool, blocks: &mut Vec<Block>) {
                 kind: BlockKind::Raw,
                 quote,
                 runs: vec![Run {
-                    text: source
-                        .get(node.range.clone())
-                        .unwrap_or_default()
-                        .to_owned(),
+                    content: RunContent::Text(
+                        source
+                            .get(node.range.clone())
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
                     ..Default::default()
                 }],
                 links: Vec::new(),
@@ -314,7 +382,11 @@ fn collect_prose(
     blocks: &mut Vec<Block>,
 ) {
     let (runs, links) = inline(nodes, source);
-    if !links.is_empty() || runs.iter().any(|run| !run.text.trim().is_empty()) {
+    if !links.is_empty()
+        || runs
+            .iter()
+            .any(|run| !run.content.source().trim().is_empty())
+    {
         blocks.push(Block {
             kind: kind.clone(),
             quote,
@@ -368,12 +440,12 @@ fn inlines(nodes: &[Tree], source: &str, style: Run, runs: &mut Vec<Run>, links:
                     }
                     Tag::Image { dest_url, .. } => {
                         runs.push(Run {
-                            text: "[图片：".into(),
+                            content: RunContent::Text("[图片：".into()),
                             ..style.clone()
                         });
                         inlines(&node.children, source, style.clone(), runs, links);
                         runs.push(Run {
-                            text: format!(" · {dest_url}]"),
+                            content: RunContent::Text(format!(" · {dest_url}]")),
                             ..style.clone()
                         });
                         continue;
@@ -384,7 +456,28 @@ fn inlines(nodes: &[Tree], source: &str, style: Run, runs: &mut Vec<Run>, links:
                 continue;
             }
             Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => text.to_string(),
-            Event::InlineMath(_) | Event::DisplayMath(_) => source
+            Event::InlineMath(latex) => {
+                let original = source
+                    .get(node.range.clone())
+                    .unwrap_or_default()
+                    .to_owned();
+                let price = original.starts_with('$')
+                    && source
+                        .as_bytes()
+                        .get(node.range.end)
+                        .is_some_and(u8::is_ascii_digit);
+                next.content = if price {
+                    RunContent::Text(original)
+                } else {
+                    RunContent::Math(Formula {
+                        latex: latex.to_string(),
+                        original,
+                    })
+                };
+                runs.push(next);
+                continue;
+            }
+            Event::DisplayMath(_) => source
                 .get(node.range.clone())
                 .unwrap_or_default()
                 .to_owned(),
@@ -397,7 +490,7 @@ fn inlines(nodes: &[Tree], source: &str, style: Run, runs: &mut Vec<Run>, links:
             _ => String::new(),
         };
         if !text.is_empty() {
-            next.text = text;
+            next.content = RunContent::Text(text);
             runs.push(next);
         }
     }

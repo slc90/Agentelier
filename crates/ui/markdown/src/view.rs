@@ -1,6 +1,6 @@
-use crate::parse::{self, Block, BlockKind, Run};
+use crate::parse::{self, Block, BlockKind, Run, RunContent};
 use bevy::prelude::*;
-use bevy::text::{FontSource, FontStyle, FontWeight, LineBreak, Strikethrough, Underline};
+use bevy::text::{FontSource, FontStyle, FontWeight, Justify, LineBreak, Strikethrough, Underline};
 use bevy::ui::UiSystems;
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
@@ -64,7 +64,7 @@ struct RenderedBlock {
     index: usize,
     block: Block,
 }
-fn render(world: &mut World, mut pending: Local<Vec<Entity>>) -> Result {
+pub(crate) fn render(world: &mut World, mut pending: Local<Vec<Entity>>) -> Result {
     let mut changed = world.query_filtered::<(Entity, &MarkdownSource), Changed<MarkdownSource>>();
     let mut updates: Vec<_> = changed
         .iter(world)
@@ -176,12 +176,12 @@ fn block_scene(block: &Block) -> Box<dyn Scene> {
         BlockKind::Heading(level) => HEADING_SIZES[usize::from(level - 1)],
         _ => BODY_SIZE,
     };
-    let heading = matches!(block.kind, BlockKind::Heading(_));
-    let spans: Vec<Box<dyn Scene>> = block
-        .runs
-        .iter()
-        .map(|run| span(run, size, heading))
-        .collect();
+    let paragraph = text(
+        &block.runs,
+        size,
+        matches!(block.kind, BlockKind::Heading(_)),
+        Justify::Left,
+    );
     let links: Vec<Box<dyn Scene>> = block
         .links
         .iter()
@@ -192,14 +192,47 @@ fn block_scene(block: &Block) -> Box<dyn Scene> {
         Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(LINK_GAP), flex_shrink: 0.0, padding: UiRect::left(px(inset)), border: UiRect::left(px(if block.quote { QUOTE_BORDER } else { 0.0 })) }
         BorderColor::all(QUOTE_COLOR)
         Children [
-            Text("") WidgetryText TextFont { font_size: {bevy::text::FontSize::Px(size)} } TextLayout::linebreak(LineBreak::AnyCharacter)
-            Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }
-            Children [{spans}]--
+            @paragraph--
             {links}
         ]
     })
 }
-pub(crate) fn span(run: &Run, size: f32, heading: bool) -> Box<dyn Scene> {
+pub(crate) fn text(runs: &[Run], size: f32, heading: bool, justify: Justify) -> Box<dyn Scene> {
+    let mut spans = Vec::<Box<dyn Scene>>::with_capacity(runs.len());
+    let mut placements = Vec::<Box<dyn Scene>>::new();
+    let mut formulas = Vec::new();
+    for run in runs {
+        let style = span(run, size, heading);
+        if let RunContent::Math(formula) = &run.content {
+            let index = formulas.len();
+            formulas.push(formula.clone());
+            spans.push(Box::new(bsn! { @style Name("MarkdownInlineFormula") template(move |_| Ok(crate::math::inline::Source(index))) }));
+            placements.push(Box::new(crate::math::inline::image(index)));
+        } else {
+            spans.push(style);
+        }
+    }
+    let formulas = (!formulas.is_empty()).then(|| {
+        let paragraph = crate::math::inline::Paragraph { size, formulas };
+        bsn! { template(move |_| Ok(paragraph.clone())) }
+    });
+    let paragraph = bsn! {
+        Text("") WidgetryText TextFont { font_size: {bevy::text::FontSize::Px(size)} }
+        TextLayout { justify, linebreak: LineBreak::AnyCharacter }
+        Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }
+        @formulas
+        Children [{spans}]
+    };
+    if placements.is_empty() {
+        return Box::new(paragraph);
+    }
+    Box::new(bsn! {
+        Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, flex_shrink: 0.0 }
+        Children [@paragraph--{placements}]
+    })
+}
+
+fn span(run: &Run, size: f32, heading: bool) -> Box<dyn Scene> {
     let font = TextFont {
         font_size: size.into(),
         font: if run.code {
@@ -221,7 +254,7 @@ pub(crate) fn span(run: &Run, size: f32, heading: bool) -> Box<dyn Scene> {
     };
     let strike = run.strike;
     let underline = run.link;
-    let text = run.text.clone();
+    let text = run.content.source().to_owned();
     Box::new(bsn! { TextSpan(text) WidgetryText template(move |context| {
         if strike { context.entity.insert(Strikethrough); }
         if underline { context.entity.insert(Underline); }

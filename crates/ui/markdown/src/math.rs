@@ -13,6 +13,8 @@ use latex_rust::{Dim, MathFont, MathStyle, SvgOptions};
 use resvg::{tiny_skia, usvg};
 use std::sync::OnceLock;
 
+pub(crate) mod inline;
+
 const DISPLAY_EM_PT: i64 = 15;
 const SVG_PIXELS_PER_POINT: f32 = 96.0 / 72.0;
 const MAX_FORMULA_BYTES: usize = 16 * 1024;
@@ -67,6 +69,7 @@ impl FormulaMetrics {
 
 pub(crate) fn install(app: &mut App) {
     app.add_systems(PostUpdate, refresh.after(UiSystems::PostLayout));
+    inline::install(app);
 }
 
 pub(crate) fn scene(formula: Formula) -> impl Scene {
@@ -226,8 +229,14 @@ fn refresh(
         {
             let latex = formula.0.latex.clone();
             state.style = Some(style);
-            state.job =
-                Some(AsyncComputeTaskPool::get().spawn(async move { rasterize(&latex, style) }));
+            state.job = Some(AsyncComputeTaskPool::get().spawn(async move {
+                rasterize(
+                    &latex,
+                    style,
+                    MathStyle::Display,
+                    Dim::from_i64(DISPLAY_EM_PT),
+                )
+            }));
             busy += 1;
         }
     }
@@ -236,7 +245,12 @@ fn refresh(
     }
 }
 
-fn rasterize(latex: &str, style: RasterStyle) -> Result<FormulaRaster, String> {
+fn rasterize(
+    latex: &str,
+    style: RasterStyle,
+    math_style: MathStyle,
+    em: Dim,
+) -> Result<FormulaRaster, String> {
     static FONT: OnceLock<Result<MathFont, String>> = OnceLock::new();
     if latex.trim().is_empty() || latex.len() > MAX_FORMULA_BYTES {
         return Err("公式正文为空或过长".into());
@@ -245,15 +259,14 @@ fn rasterize(latex: &str, style: RasterStyle) -> Result<FormulaRaster, String> {
         .get_or_init(|| MathFont::stix_two_math().map_err(|error| error.to_string()))
         .as_ref()
         .map_err(Clone::clone)?;
-    let em = Dim::from_i64(DISPLAY_EM_PT);
     let ast = latex_rust::parse(latex).map_err(|error| error.to_string())?;
-    let layout = latex_rust::layout_with_em_size_pt(&ast, font, MathStyle::Display, &em)
+    let layout = latex_rust::layout_with_em_size_pt(&ast, font, math_style, &em)
         .map_err(|error| error.to_string())?;
     let [red, green, blue] = style.ink;
     let options = SvgOptions {
         font_size_pt: em,
         color: latex_rust::Color::rgb(red, green, blue),
-        display: true,
+        display: math_style == MathStyle::Display,
     };
     let vector = latex_rust::render_svg_with_metrics(&layout, font, &options)
         .map_err(|error| error.to_string())?;

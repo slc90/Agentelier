@@ -1,11 +1,10 @@
 use crate::parse::{Cell, Table};
 use bevy::prelude::*;
-use bevy::text::{Justify, LineBreak};
+use bevy::text::Justify;
 use bevy::ui::UiSystems;
 use bevy::window::RequestRedraw;
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::scroll_area::{ScrollAxis, WidgetryScrollArea};
-use bevy_widgetry::text::WidgetryText;
 use pulldown_cmark::Alignment;
 
 const COLUMN_MIN_WIDTH: f32 = 180.0;
@@ -95,11 +94,6 @@ pub(crate) fn scene(table: &Table) -> Box<dyn Scene> {
 }
 
 fn cell_scene(row: usize, column: usize, cell: &Cell, alignment: Alignment) -> Box<dyn Scene> {
-    let spans: Vec<_> = cell
-        .runs
-        .iter()
-        .map(|run| crate::view::span(run, crate::view::BODY_SIZE, row == 0))
-        .collect();
     let links: Vec<_> = cell
         .links
         .iter()
@@ -111,14 +105,14 @@ fn cell_scene(row: usize, column: usize, cell: &Cell, alignment: Alignment) -> B
         Alignment::Right => Justify::Right,
         _ => Justify::Left,
     };
+    let paragraph = crate::view::text(&cell.runs, crate::view::BODY_SIZE, row == 0, justify);
     Box::new(bsn! {
         Name(format!("MarkdownTableCell-{row}-{column}"))
         template(move |_| Ok(TableCell { row, column, cell: cell.clone() }))
         Node { min_width: px(0), flex_direction: FlexDirection::Column, padding: UiRect::all(px(CELL_PADDING)), border: UiRect::all(px(CELL_BORDER)), row_gap: px(CELL_GAP) }
         BorderColor::all(CELL_BORDER_COLOR)
         Children [
-            Text("") WidgetryText TextLayout { justify, linebreak: LineBreak::AnyCharacter }
-            Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 } Children [{spans}]--
+            @paragraph--
             {links}
         ]
     })
