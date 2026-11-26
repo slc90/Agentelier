@@ -15,6 +15,7 @@ agentelier_agent_host = { path = "../agent_host" }
 agentelier_chat_ui = { path = "../chat_ui" }
 agentelier_controls = { path = "../controls" }
 bevy_widgetry = { workspace = true, features = [
+  "canvas",
   "check_box",
   "combo_box",
   "file_dialog",
@@ -37,6 +38,7 @@ ron.workspace = true
 tracing.workspace = true
 winsafe = { workspace = true, features = ["user"] }
 tempfile.workspace = true
+time.workspace = true
 
 [lints]
 workspace = true

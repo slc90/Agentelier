@@ -1,3 +1,4 @@
+mod charts;
 mod composition;
 mod discrete;
 mod numeric;
@@ -47,10 +48,11 @@ pub(crate) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         None,
     )?;
     let host = text_input::register(discrete::register(numeric::register(host)?)?)?;
-    composition::register(host)
+    charts::register(composition::register(host)?)
 }
 
 pub(crate) fn install(app: &mut App) -> Result {
+    charts::install(app);
     composition::install(app);
     numeric::install(app);
     parameters::install(app);
