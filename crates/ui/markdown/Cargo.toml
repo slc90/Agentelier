@@ -12,6 +12,8 @@ bevy_widgetry = { workspace = true, features = [
   "text_field",
 ] }
 pulldown-cmark.workspace = true
+latex-rust.workspace = true
+resvg.workspace = true
 url.workspace = true
 winsafe = { workspace = true, features = ["ole", "shell"] }
 tracing.workspace = true

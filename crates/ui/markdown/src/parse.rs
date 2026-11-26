@@ -1,5 +1,11 @@
-use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use std::borrow::Cow;
 use std::ops::Range;
+
+const OPTIONS: Options = Options::ENABLE_STRIKETHROUGH
+    .union(Options::ENABLE_TABLES)
+    .union(Options::ENABLE_TASKLISTS)
+    .union(Options::ENABLE_MATH);
 
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct Run {
@@ -17,7 +23,14 @@ pub(crate) enum BlockKind {
     Raw,
     Rule,
     Code { language: String, text: String },
+    DisplayMath(Formula),
     Table(Table),
+}
+
+#[derive(Clone, PartialEq)]
+pub(crate) struct Formula {
+    pub(crate) latex: String,
+    pub(crate) original: String,
 }
 #[derive(Clone, PartialEq)]
 pub(crate) struct Cell {
@@ -55,14 +68,10 @@ fn append(stack: &mut [Tree], roots: &mut Vec<Tree>, node: Tree) {
     }
 }
 pub(crate) fn parse(source: &str) -> Vec<Block> {
+    let input = bracket_math(source);
     let mut roots = Vec::new();
     let mut stack: Vec<Tree> = Vec::new();
-    for (event, range) in Parser::new_ext(
-        source,
-        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS,
-    )
-    .into_offset_iter()
-    {
+    for (event, range) in Parser::new_ext(&input, OPTIONS).into_offset_iter() {
         match event {
             Event::Start(tag) => stack.push(Tree {
                 event: Event::Start(tag.into_static()),
@@ -90,6 +99,68 @@ pub(crate) fn parse(source: &str) -> Vec<Block> {
     collect(&roots, source, false, &mut blocks);
     blocks
 }
+
+fn bracket_math(source: &str) -> Cow<'_, str> {
+    let mut result = Cow::Borrowed(source);
+    if !source.contains("\\[") {
+        return result;
+    }
+    let bytes = source.as_bytes();
+    let mut opening = None;
+    let mut literal = 0_usize;
+    for (event, range) in Parser::new_ext(source, OPTIONS).into_offset_iter() {
+        match event {
+            Event::Start(
+                Tag::CodeBlock(_) | Tag::HtmlBlock | Tag::Link { .. } | Tag::Image { .. },
+            ) => {
+                literal += 1;
+                opening = None;
+            }
+            Event::End(TagEnd::CodeBlock | TagEnd::HtmlBlock | TagEnd::Link | TagEnd::Image) => {
+                literal = literal.saturating_sub(1);
+            }
+            Event::End(
+                TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item | TagEnd::TableCell,
+            )
+            | Event::Code(_)
+            | Event::InlineHtml(_)
+            | Event::InlineMath(_)
+            | Event::DisplayMath(_)
+            | Event::Rule => opening = None,
+            Event::Text(_) if literal == 0 => {
+                let Some(start) = range.start.checked_sub(1) else {
+                    continue;
+                };
+                if bytes.get(start) != Some(&b'\\') || escaped(bytes, start) {
+                    continue;
+                }
+                match bytes.get(range.start) {
+                    Some(b'[') => opening = Some(start),
+                    Some(b']') if let Some(open) = opening.take() => {
+                        // Equal-length replacements keep every parser offset aligned with MarkdownSource.
+                        let normalized = result.to_mut();
+                        normalized.replace_range(open..open + 2, "$$");
+                        normalized.replace_range(start..start + 2, "$$");
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+fn escaped(bytes: &[u8], start: usize) -> bool {
+    bytes[..start]
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\\')
+        .count()
+        % 2
+        != 0
+}
+
 fn collect(nodes: &[Tree], source: &str, quote: bool, blocks: &mut Vec<Block>) {
     let mut index = 0;
     while let Some(node) = nodes.get(index) {
@@ -99,14 +170,7 @@ fn collect(nodes: &[Tree], source: &str, quote: bool, blocks: &mut Vec<Block>) {
                 .take_while(|node| is_inline(&node.event))
                 .count()
                 + index;
-            let (runs, links) = inline(&nodes[index..end]);
-            blocks.push(Block {
-                kind: BlockKind::Prose,
-                quote,
-                runs,
-                links,
-                list: None,
-            });
+            collect_inline(&nodes[index..end], source, BlockKind::Prose, quote, blocks);
             index = end;
             continue;
         }
@@ -120,7 +184,7 @@ fn collect(nodes: &[Tree], source: &str, quote: bool, blocks: &mut Vec<Block>) {
                         row.children
                             .iter()
                             .map(|cell| {
-                                let (runs, links) = inline(&cell.children);
+                                let (runs, links) = inline(&cell.children, source);
                                 Cell { runs, links }
                             })
                             .collect()
@@ -184,14 +248,7 @@ fn collect(nodes: &[Tree], source: &str, quote: bool, blocks: &mut Vec<Block>) {
                 } else {
                     BlockKind::Prose
                 };
-                let (runs, links) = inline(&node.children);
-                blocks.push(Block {
-                    kind,
-                    quote,
-                    runs,
-                    links,
-                    list: None,
-                });
+                collect_inline(&node.children, source, kind, quote, blocks);
             }
             Event::Rule => blocks.push(Block {
                 kind: BlockKind::Rule,
@@ -216,11 +273,65 @@ fn collect(nodes: &[Tree], source: &str, quote: bool, blocks: &mut Vec<Block>) {
         }
     }
 }
+
+fn collect_inline(
+    nodes: &[Tree],
+    source: &str,
+    kind: BlockKind,
+    quote: bool,
+    blocks: &mut Vec<Block>,
+) {
+    let mut start = 0;
+    for (index, node) in nodes.iter().enumerate() {
+        let Event::DisplayMath(latex) = &node.event else {
+            continue;
+        };
+        collect_prose(&nodes[start..index], source, &kind, quote, blocks);
+        let original = source
+            .get(node.range.clone())
+            .unwrap_or_default()
+            .to_owned();
+        blocks.push(Block {
+            kind: BlockKind::DisplayMath(Formula {
+                latex: latex.to_string(),
+                original,
+            }),
+            quote,
+            runs: Vec::new(),
+            links: Vec::new(),
+            list: None,
+        });
+        start = index + 1;
+    }
+    collect_prose(&nodes[start..], source, &kind, quote, blocks);
+}
+
+fn collect_prose(
+    nodes: &[Tree],
+    source: &str,
+    kind: &BlockKind,
+    quote: bool,
+    blocks: &mut Vec<Block>,
+) {
+    let (runs, links) = inline(nodes, source);
+    if !links.is_empty() || runs.iter().any(|run| !run.text.trim().is_empty()) {
+        blocks.push(Block {
+            kind: kind.clone(),
+            quote,
+            runs,
+            links,
+            list: None,
+        });
+    }
+}
+
 fn is_inline(event: &Event<'_>) -> bool {
     matches!(
         event,
         Event::Text(_)
             | Event::Code(_)
+            | Event::InlineMath(_)
+            | Event::DisplayMath(_)
             | Event::InlineHtml(_)
             | Event::SoftBreak
             | Event::HardBreak
@@ -234,13 +345,13 @@ fn is_inline(event: &Event<'_>) -> bool {
             )
     )
 }
-pub(crate) fn inline(nodes: &[Tree]) -> (Vec<Run>, Vec<String>) {
+fn inline(nodes: &[Tree], source: &str) -> (Vec<Run>, Vec<String>) {
     let mut runs = Vec::new();
     let mut links = Vec::new();
-    inlines(nodes, Run::default(), &mut runs, &mut links);
+    inlines(nodes, source, Run::default(), &mut runs, &mut links);
     (runs, links)
 }
-fn inlines(nodes: &[Tree], style: Run, runs: &mut Vec<Run>, links: &mut Vec<String>) {
+fn inlines(nodes: &[Tree], source: &str, style: Run, runs: &mut Vec<Run>, links: &mut Vec<String>) {
     for node in nodes {
         let mut next = style.clone();
         let text = match &node.event {
@@ -260,7 +371,7 @@ fn inlines(nodes: &[Tree], style: Run, runs: &mut Vec<Run>, links: &mut Vec<Stri
                             text: "[图片：".into(),
                             ..style.clone()
                         });
-                        inlines(&node.children, style.clone(), runs, links);
+                        inlines(&node.children, source, style.clone(), runs, links);
                         runs.push(Run {
                             text: format!(" · {dest_url}]"),
                             ..style.clone()
@@ -269,10 +380,14 @@ fn inlines(nodes: &[Tree], style: Run, runs: &mut Vec<Run>, links: &mut Vec<Stri
                     }
                     _ => {}
                 }
-                inlines(&node.children, next, runs, links);
+                inlines(&node.children, source, next, runs, links);
                 continue;
             }
             Event::Text(text) | Event::Html(text) | Event::InlineHtml(text) => text.to_string(),
+            Event::InlineMath(_) | Event::DisplayMath(_) => source
+                .get(node.range.clone())
+                .unwrap_or_default()
+                .to_owned(),
             Event::Code(text) => {
                 next.code = true;
                 text.to_string()

@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod code;
 mod links;
+mod math;
 mod parse;
 mod source;
 mod table;

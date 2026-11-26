@@ -54,6 +54,7 @@ impl Plugin for MarkdownPlugin {
         app.register_type::<MarkdownSource>()
             .add_systems(PostUpdate, render.before(UiSystems::Prepare));
         crate::links::install(app);
+        crate::math::install(app);
         crate::table::install(app);
         crate::source::install(app);
     }
@@ -156,6 +157,15 @@ fn block_scene(block: &Block) -> Box<dyn Scene> {
     }
     if let BlockKind::Table(table) = &block.kind {
         return crate::table::scene(table);
+    }
+    if let BlockKind::DisplayMath(formula) = &block.kind {
+        let formula = crate::math::scene(formula.clone());
+        let inset = if block.quote { QUOTE_INSET } else { 0.0 };
+        return Box::new(bsn! {
+            Node { width: percent(100), min_width: px(0), flex_shrink: 0.0, padding: UiRect::left(px(inset)), border: UiRect::left(px(if inset > 0.0 { QUOTE_BORDER } else { 0.0 })) }
+            BorderColor::all(QUOTE_COLOR)
+            Children [@formula]
+        });
     }
     if block.kind == BlockKind::Rule {
         return Box::new(

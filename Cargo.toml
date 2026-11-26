@@ -109,6 +109,8 @@ image = { version = "0.25.9", default-features = false, features = [
 symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "wav", "pcm", "id3v2", "flac"] }
 rodio = { version = "0.22.2", default-features = false }
 url = "2.5"
+latex-rust = "=3.0.3"
+resvg = { version = "0.48.1", default-features = false }
 percent-encoding = "2"
 uritemplate = { package = "uritemplate-next", version = "0.2.0" }
 time = { version = "0.3", default-features = false, features = ["parsing"] }
