@@ -41,6 +41,7 @@ flowchart TD
     App --> UI["UI · login_ui"]
     App --> Assets["UI · assets"]
     App --> Controls["UI · controls"]
+    App --> Markdown
     Controls --> Assets
     App --> Login["Agent · login"]
     UI --> Login

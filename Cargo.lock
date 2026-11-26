@@ -179,6 +179,7 @@ dependencies = [
  "agentelier_controls",
  "agentelier_login",
  "agentelier_login_ui",
+ "agentelier_markdown",
  "bevy",
  "bevy_app_assets",
  "bevy_brp_runtime",

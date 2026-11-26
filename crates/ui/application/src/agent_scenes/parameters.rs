@@ -6,11 +6,14 @@ use bevy_widgetry::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
-use std::{collections::BTreeMap, io};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io,
+};
 
 use super::{
     charts::{
-        LINE_CHART, bars, boxplot, combined, heatmap, histogram, scatter, select_series,
+        LINE_CHART, bars, boxplot, combined, heatmap, histogram, math, scatter, select_series,
         validate_line_choices,
     },
     data_table,
@@ -121,6 +124,10 @@ pub(super) enum Binding {
         parameter: String,
         source: String,
         field: String,
+    },
+    MathParameter {
+        parameter: String,
+        variable: String,
     },
     Reset,
 }
@@ -247,7 +254,8 @@ impl Parameters {
             | Binding::CategoryFilter { parameter, .. }
             | Binding::HistogramBinning { parameter }
             | Binding::TableSelection { parameter }
-            | Binding::TableField { parameter, .. } => {
+            | Binding::TableField { parameter, .. }
+            | Binding::MathParameter { parameter, .. } => {
                 self.values.get(parameter).map(|v| &v.current)
                     == previous.values.get(parameter).map(|v| &v.current)
             }
@@ -262,6 +270,7 @@ impl Parameters {
         let mut series_filter = false;
         let mut category_filter = false;
         let mut histogram_binning = false;
+        let mut variables = BTreeSet::new();
         let mut reset = false;
         for binding in bindings {
             match binding {
@@ -404,6 +413,13 @@ impl Parameters {
                     if !matches!(self.get(parameter)?.current, Value::Choice(_)) {
                         return Err(parameter_error(parameter, "表格字段需要已选行"));
                     }
+                }
+                Binding::MathParameter {
+                    parameter,
+                    variable,
+                } if scene.template == math::TEMPLATE && variables.insert(variable.as_str()) => {
+                    let value = math_value(parameter, &self.get(parameter)?.current)?;
+                    math::bind_variable(scene, variable, value)?;
                 }
                 Binding::Reset if !reset && scene.template == "agentelier.button" => reset = true,
                 _ => {
@@ -777,6 +793,12 @@ fn project(
                         }
                     }
                 }
+                Binding::MathParameter {
+                    parameter,
+                    variable,
+                } if parameter == name => {
+                    math::set_variable(world, root, &variable, math_value(name, value)?)?;
+                }
                 _ => {}
             }
         }
@@ -787,6 +809,14 @@ fn project(
 fn mapped_series<'a>(value: &'a str, map: Option<&'a BTreeMap<String, String>>) -> &'a str {
     map.and_then(|map| map.get(value))
         .map_or(value, String::as_str)
+}
+
+fn math_value(name: &str, value: &Value) -> Result<f64> {
+    match value {
+        Value::Float(value) => Ok(*value),
+        Value::Integer(value) if (*value as f64) as i128 == i128::from(*value) => Ok(*value as f64),
+        _ => Err(parameter_error(name, "数学参数需要可表示的数值")),
+    }
 }
 
 fn project_input(world: &mut World, root: Entity, value: &Value) -> Result {

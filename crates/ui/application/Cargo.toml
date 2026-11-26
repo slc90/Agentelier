@@ -14,6 +14,7 @@ agentelier_login_ui = { path = "../login_ui" }
 agentelier_agent_host = { path = "../agent_host" }
 agentelier_chat_ui = { path = "../chat_ui" }
 agentelier_controls = { path = "../controls" }
+agentelier_markdown = { path = "../markdown" }
 bevy_widgetry = { workspace = true, features = [
   "canvas",
   "check_box",

@@ -123,6 +123,7 @@ pub(super) enum Style {
     Histogram,
     BoxPlot,
     Combined,
+    Function,
 }
 
 pub(super) struct Rendered {
@@ -325,6 +326,7 @@ fn mount(
         Style::Histogram => "NativeHistogram",
         Style::BoxPlot => "NativeBoxPlot",
         Style::Combined => "NativeCombinedChart",
+        Style::Function => "NativeFunctionPlot",
     };
     let root = root(world, parent, name, content.title.as_deref())?;
     let result = decorate(world, root, content, style);
@@ -367,6 +369,19 @@ pub(super) fn viewport(document: Entity) -> impl Scene {
         Node { width: percent(100), min_width: px(0), min_height: px(140), aspect_ratio: {Some(WIDTH / HEIGHT)} }
         template(|context| Ok(BackgroundColor(context.resource::<WidgetryTheme>().text_field.editable.normal.background)))
     }
+}
+
+pub(super) fn viewport_in(world: &World, root: Entity) -> Option<Entity> {
+    let mut pending = vec![root];
+    while let Some(entity) = pending.pop() {
+        if world.get::<NativePlot>(entity).is_some() {
+            return Some(entity);
+        }
+        if let Some(children) = world.get::<Children>(entity) {
+            pending.extend(children.iter());
+        }
+    }
+    None
 }
 
 pub(super) fn heading(title: String) -> impl Scene {

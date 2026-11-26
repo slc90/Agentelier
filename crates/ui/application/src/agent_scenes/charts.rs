@@ -5,6 +5,7 @@ pub(super) mod boxplot;
 pub(super) mod combined;
 pub(super) mod heatmap;
 pub(super) mod histogram;
+pub(super) mod math;
 mod pie;
 mod plot;
 pub(super) mod scatter;
@@ -63,10 +64,12 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
     .and_then(histogram::register)
     .and_then(boxplot::register)
     .and_then(combined::register)
+    .and_then(math::register)
 }
 
 pub(super) fn install(app: &mut App) {
     plot::install(app);
+    math::install(app);
 }
 
 pub(super) fn select_series(world: &mut World, root: Entity, selected: Option<&str>) -> Result {
