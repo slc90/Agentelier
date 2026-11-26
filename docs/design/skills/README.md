@@ -60,6 +60,8 @@ Read the project rules, inspect the relevant change, and report concrete finding
 - **用户技能**：读取当前应用数据目录的 `skills/`，作为本数据环境内跨项目复用的位置。Runtime 从本次运行已采用的数据根派生该绝对路径，普通发送、Retry 与 Queue 启动均显式传给 Runner；Skills 不读取 UI 配置或凭据文件，不扫描或回退 HOME/USERPROFILE 下的 `.agents/skills/`，不迁移其他 Agent 的文件。目录尚不存在时视为空来源，由实际创建技能的文件操作按需创建。
 - **内置技能**：由应用提供并维护的只读系统技能，其中包括 `skill-creator`。用户自建或编辑的技能与内置技能分开存放，更新内置版本不覆盖用户文件。
 
+Origin 的探索工作流提供为可导入的 [`origin-explore`](../../../crates/agent/skills/assets/origin-explore) 目录。导入后由用户技能根发现，沿用用户来源的显式调用、隐式匹配和删除语义。
+
 Codex 还支持其历史配置目录、插件提供的目录和多种执行环境来源。Agentelier 首期只需要本机 Windows 文件系统和上述明确来源；**是否同时扫描旧版 `.codex/skills` 目录属于兼容补充，不作为最小标准的一部分**。不复制 Codex 的配置层栈、插件安装器或云端 Skill Provider。
 
 用户技能保留 `SKILL.md` 的规范路径和发现路径，内置技能保留嵌入身份。用户技能身份使用规范路径去重，内置技能按嵌入身份寻址。同名来源会记录诊断，显式按名称调用要求唯一匹配。旧存档中的项目来源仅供历史展示和完整性校验。项目文件始终由用户保管。符号链接及 Windows 路径的规范化、目录扫描深度、文件大小和读取失败需要有界处理，错误与来源相联系。
