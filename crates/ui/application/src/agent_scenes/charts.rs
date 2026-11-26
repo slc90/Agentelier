@@ -2,6 +2,7 @@ mod area;
 mod axis;
 pub(super) mod bars;
 pub(super) mod heatmap;
+pub(super) mod histogram;
 mod pie;
 mod plot;
 pub(super) mod scatter;
@@ -52,6 +53,7 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
     .and_then(bars::register)
     .and_then(pie::register)
     .and_then(heatmap::register)
+    .and_then(histogram::register)
 }
 
 pub(super) fn install(app: &mut App) {

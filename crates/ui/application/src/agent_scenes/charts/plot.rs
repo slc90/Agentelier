@@ -99,6 +99,7 @@ pub(super) enum Style {
     Scatter,
     Area,
     Bars,
+    Histogram,
 }
 
 pub(super) struct Rendered {
@@ -297,6 +298,7 @@ pub(super) fn mount(
         Style::Scatter => "NativeScatterChart",
         Style::Area => "NativeAreaChart",
         Style::Bars => "NativeBarChart",
+        Style::Histogram => "NativeHistogram",
     };
     let root = root(world, parent, name, content.title.as_deref())?;
     let result = decorate(world, root, content, style);
@@ -387,7 +389,7 @@ fn decorate(
                 Style::Line => {
                     CanvasDocument::create_path(world, token, geometry, transform, paint)?
                 }
-                Style::Scatter | Style::Area | Style::Bars => {
+                Style::Scatter | Style::Area | Style::Bars | Style::Histogram => {
                     let id =
                         CanvasDocument::create_layer(world, token, index + 1, &mark.legend.name)?;
                     let path = CanvasDocument::create_path_in_layer(
@@ -411,13 +413,19 @@ fn decorate(
         Style::Line => (18., 3.),
         Style::Scatter => (8., 8.),
         Style::Area => (18., 8.),
-        Style::Bars => (11., 11.),
+        Style::Bars | Style::Histogram => (11., 11.),
     };
     let legend: Vec<_> = marks
         .into_iter()
         .map(|mark| legend(mark.legend, legend_width, legend_height))
         .collect();
     let legend = bevy::scene::RelatedScenes::<Children>::new(legend);
+    let legend = (!matches!(style, Style::Histogram)).then(|| {
+        bsn! {
+            Node { min_width: px(0), column_gap: px(14), row_gap: px(4), flex_wrap: FlexWrap::Wrap }
+            @legend
+        }
+    });
     spawn_scene(world, bsn! {
         ChildOf(root)
         Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(6) }
@@ -427,8 +435,7 @@ fn decorate(
             @viewport(document)--
             Text(x_name) WidgetryText TextLayout::linebreak(bevy::text::LineBreak::WordOrCharacter)
             Node { align_self: AlignSelf::Center }--
-            Node { min_width: px(0), column_gap: px(14), row_gap: px(4), flex_wrap: FlexWrap::Wrap }
-            @legend
+            @{legend}
         ]
     }).map_err(construction)?;
     let reference = if let Some((path, baseline)) = reference.zip(baseline) {
@@ -695,6 +702,30 @@ pub(super) fn append_polygon(commands: &mut Vec<CanvasPathCommand>, mut points: 
         commands.push(CanvasPathCommand::MoveTo(*first));
         commands.extend(remaining.iter().copied().map(CanvasPathCommand::LineTo));
         commands.push(CanvasPathCommand::Close);
+    }
+}
+
+pub(super) fn append_bar(
+    commands: &mut Vec<CanvasPathCommand>,
+    left: f64,
+    right: f64,
+    base: f64,
+    top: f64,
+) {
+    if base == top {
+        append_line(commands, &[DVec2::new(left, base), DVec2::new(right, base)]);
+    } else {
+        let low = base.min(top);
+        let high = base.max(top);
+        append_polygon(
+            commands,
+            vec![
+                DVec2::new(left, low),
+                DVec2::new(right, low),
+                DVec2::new(right, high),
+                DVec2::new(left, high),
+            ],
+        );
     }
 }
 

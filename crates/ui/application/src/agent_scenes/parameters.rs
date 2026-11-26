@@ -9,7 +9,7 @@ use serde_json::{Value as Json, json};
 use std::{collections::BTreeMap, io};
 
 use super::{
-    charts::{bars, heatmap, scatter, select_series},
+    charts::{bars, heatmap, histogram, scatter, select_series},
     discrete::{DiscreteChange, DiscreteValue},
     numeric::{NumericChange, NumericValue},
     text_input::TextChange,
@@ -104,6 +104,9 @@ pub(super) enum Binding {
     CategoryFilter {
         parameter: String,
         all: Option<String>,
+    },
+    HistogramBinning {
+        parameter: String,
     },
     Reset,
 }
@@ -217,7 +220,8 @@ impl Parameters {
             Binding::Input { parameter }
             | Binding::Text { parameter, .. }
             | Binding::SeriesFilter { parameter, .. }
-            | Binding::CategoryFilter { parameter, .. } => {
+            | Binding::CategoryFilter { parameter, .. }
+            | Binding::HistogramBinning { parameter } => {
                 self.values.get(parameter).map(|v| &v.current)
                     == previous.values.get(parameter).map(|v| &v.current)
             }
@@ -231,6 +235,7 @@ impl Parameters {
         let mut visible = false;
         let mut series_filter = false;
         let mut category_filter = false;
+        let mut histogram_binning = false;
         let mut reset = false;
         for binding in bindings {
             match binding {
@@ -298,6 +303,26 @@ impl Parameters {
                         }
                         _ => return Err(parameter_error(parameter, "图表模板不支持该筛选")),
                     }
+                }
+                Binding::HistogramBinning { parameter }
+                    if !histogram_binning && scene.template == histogram::TEMPLATE =>
+                {
+                    histogram_binning = true;
+                    let Parameter {
+                        domain: Domain::Choice { options },
+                        current: Value::Choice(current),
+                        ..
+                    } = self.get(parameter)?
+                    else {
+                        return Err(parameter_error(parameter, "直方图分箱需要选择值"));
+                    };
+                    scene
+                        .props
+                        .insert("selected_binning".into(), json!(current));
+                    histogram::validate_choices(
+                        scene,
+                        options.iter().map(|option| option.value.as_str()),
+                    )?;
                 }
                 Binding::Reset if !reset && scene.template == "agentelier.button" => reset = true,
                 _ => {
@@ -638,6 +663,11 @@ fn project(
                         } else {
                             bars::filter_category(world, root, selected)?;
                         }
+                    }
+                }
+                Binding::HistogramBinning { parameter } if parameter == name => {
+                    if let Value::Choice(value) = value {
+                        histogram::select(world, root, value)?;
                     }
                 }
                 _ => {}

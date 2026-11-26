@@ -4,7 +4,7 @@ use super::{
     plot::{self, Baseline, Content, Legend, Mark, RetainedPlot, Style},
 };
 use agentelier_agent_host::{AgentHostPlugin, EcsError, SceneDefinition};
-use bevy::{math::DVec2, prelude::*};
+use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, io};
 
@@ -178,23 +178,13 @@ impl Bars {
                     let left = self.x.range.fraction(center - slot_width * 0.42);
                     let right = self.x.range.fraction(center + slot_width * 0.42);
                     let base = self.baseline.fraction;
-                    if value == self.baseline.value {
-                        plot::append_line(
-                            &mut commands,
-                            &[DVec2::new(left, base), DVec2::new(right, base)],
-                        );
-                    } else {
-                        let at = self.y.range.fraction(value);
-                        plot::append_polygon(
-                            &mut commands,
-                            vec![
-                                DVec2::new(left, base.min(at)),
-                                DVec2::new(right, base.min(at)),
-                                DVec2::new(right, base.max(at)),
-                                DVec2::new(left, base.max(at)),
-                            ],
-                        );
-                    }
+                    plot::append_bar(
+                        &mut commands,
+                        left,
+                        right,
+                        base,
+                        self.y.range.fraction(value),
+                    );
                 }
                 let color = series
                     .color
