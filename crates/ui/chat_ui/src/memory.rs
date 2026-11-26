@@ -1,6 +1,6 @@
 use agentelier_agent_host::{
     AgentHost, HostFailed, MemoryDetail, MemoryEvent, MemoryInspection, MemoryReply, MemoryRequest,
-    MemorySource, MemoryWorkEvent, MemoryWorkState, ReceiveAgentEvents,
+    MemoryWorkEvent, MemoryWorkState, ReceiveAgentEvents,
 };
 use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
 use bevy::{
@@ -15,6 +15,7 @@ use bevy_widgetry::scroll_area::WidgetryScrollArea;
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{AutoSize, WidgetryReadOnlyTextField, WidgetryTextFieldHeadless};
 use bevy_widgetry::window::{WidgetryWindowBackground, owned_widgetry_window};
+use std::collections::BTreeSet;
 
 const GAP: f32 = 8.0;
 
@@ -26,9 +27,10 @@ struct Overview {
     work: MemoryWorkState,
     inspect_error: Option<String>,
     detail_operation: Option<u64>,
+    detail_label: Option<String>,
     detail: Option<MemoryDetail>,
     detail_error: Option<String>,
-    sources_open: bool,
+    categories_open: BTreeSet<&'static str>,
     body_dirty: bool,
     detail_dirty: bool,
 }
@@ -49,7 +51,10 @@ struct InitialReadonly(String);
 struct SourceChoice {
     publication: String,
     record: String,
+    label: String,
 }
+#[derive(Component, Clone)]
+struct CategoryChoice(&'static str);
 
 pub(super) fn install(app: &mut App) {
     crate::memory_chat::install(app);
@@ -92,28 +97,35 @@ pub(super) fn open(world: &mut World) -> Result {
                 Children [
                     Node { width: percent(100), align_items: AlignItems::Center, column_gap: px(12) }
                     Children [
-                        Text("记忆摘要") WidgetryText TextFont { font_size: FontSize::Px(25.0) }--
+                        Text("长期记忆") WidgetryText TextFont { font_size: FontSize::Px(25.0) }--
                         PublishedAt Name("MemoryPublishedAt") Text("") WidgetryText Node { flex_grow: 1.0 }
                     ]--
                     OverviewStatus Name("MemoryInspectionStatus") Text("") WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter)--
-                    @WidgetryScrollArea {
-                        @children: bsn_list! {
-                            SummarySlot Name("MemorySummarySlot")
-                            Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column }
+                    Node { width: percent(100), height: percent(42), min_height: px(0), column_gap: px(12) }
+                    Children [
+                        @WidgetryScrollArea {
+                            @children: bsn_list! {
+                                SummarySlot Name("MemorySummarySlot")
+                                Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column }
+                            }
                         }
-                    }
-                    Name("MemorySummaryScroll") Node {
-                        width: percent(100), height: percent(39), min_height: px(0), flex_shrink: 1.0
-                    }--
+                        Name("MemorySummaryScroll") Node { flex_basis: percent(52), min_width: px(0), min_height: px(0) }--
+                        @WidgetryScrollArea {
+                            @children: bsn_list! {
+                                DetailSlot Name("MemoryDetailSlot")
+                                Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column }
+                            }
+                        }
+                        Name("MemoryDetailScroll") Node { flex_basis: percent(48), min_width: px(0), min_height: px(0) }
+                    ]--
                     @chat
                 ]
             },
         )
     });
     let mut overview = world.resource_mut::<Overview>();
+    clear_inspection(&mut overview);
     overview.refresh_needed = true;
-    overview.body_dirty = true;
-    overview.detail_dirty = true;
     crate::memory_chat::open(world);
     Ok(())
 }
@@ -129,7 +141,10 @@ fn request_refresh(
     overview.refresh_needed = false;
     match host.request_memory(MemoryRequest::Inspect) {
         Ok(operation) => overview.inspect_operation = Some(operation),
-        Err(failure) => overview.inspect_error = Some(failure.to_string()),
+        Err(failure) => {
+            clear_inspection(&mut overview);
+            overview.inspect_error = Some(failure.to_string());
+        }
     }
 }
 
@@ -150,7 +165,10 @@ fn receive(
                 Ok(MemoryReply::Inspection(inspection)) => {
                     apply_inspection(&mut overview, inspection)
                 }
-                Err(failure) => overview.inspect_error = Some(failure.clone()),
+                Err(failure) => {
+                    clear_inspection(&mut overview);
+                    overview.inspect_error = Some(failure.clone());
+                }
                 _ => {}
             }
         } else if overview.detail_operation == Some(event.operation_id) {
@@ -167,30 +185,33 @@ fn receive(
     }
     for failure in failures.read() {
         overview.inspect_operation = None;
-        if overview.detail_operation.take().is_some() {
-            overview.detail_error = Some(failure.reason.clone());
-            overview.detail_dirty = true;
-        }
+        clear_inspection(&mut overview);
         overview.inspect_error = Some(failure.reason.clone());
     }
 }
 
 fn apply_inspection(overview: &mut Overview, inspection: &MemoryInspection) {
-    let old_id = overview
-        .inspection
-        .as_ref()
-        .and_then(|value| value.summary.as_ref())
-        .map(|value| &value.id);
-    let new_id = inspection.summary.as_ref().map(|value| &value.id);
-    if overview.inspection.is_none() || old_id != new_id {
-        overview.detail = None;
-        overview.detail_error = None;
-        overview.detail_operation = None;
+    let publication =
+        |value: &MemoryInspection| value.summary.as_ref().map(|summary| summary.id.clone());
+    let old = overview.inspection.as_ref();
+    if old.and_then(publication) != publication(inspection) {
+        clear_inspection(overview);
+    } else if old.is_none_or(|previous| previous.groups != inspection.groups) {
         overview.body_dirty = true;
-        overview.detail_dirty = true;
     }
     overview.inspect_error = None;
     overview.inspection = Some(inspection.clone());
+}
+
+fn clear_inspection(overview: &mut Overview) {
+    overview.inspection = None;
+    overview.inspect_error = None;
+    overview.detail = None;
+    overview.detail_label = None;
+    overview.detail_error = None;
+    overview.detail_operation = None;
+    overview.body_dirty = true;
+    overview.detail_dirty = true;
 }
 
 fn project(world: &mut World) -> Result {
@@ -207,7 +228,7 @@ fn project(world: &mut World) -> Result {
         .as_ref()
         .and_then(|value| value.summary.as_ref())
         .and_then(|value| timestamp(value.published_at_ms))
-        .map_or_else(|| "尚无更新时间".into(), |date| format!("最近更新 {date}"));
+        .map_or_else(String::new, |date| format!("最近发布 {date}"));
     let status = overview_text(overview);
     if overview.body_dirty {
         let scene = body(overview);
@@ -216,7 +237,8 @@ fn project(world: &mut World) -> Result {
             .commands()
             .spawn_scene_with_error_handler(bsn! { @scene ChildOf(slot) });
         world.resource_mut::<Overview>().body_dirty = false;
-    } else if overview.detail_dirty
+    }
+    if world.resource::<Overview>().detail_dirty
         && let Some(slot) = world
             .query_filtered::<Entity, With<DetailSlot>>()
             .iter(world)
@@ -259,19 +281,34 @@ fn overview_text(overview: &Overview) -> String {
                 inspection.pending_revisions
             ));
         }
-        if inspection.processing && overview.work == MemoryWorkState::Idle {
-            messages.push("有记忆来源等待处理。".into());
+        if inspection.pending_sources > 0 {
+            messages.push(format!(
+                "{} 个来源等待提取或正在提取。",
+                inspection.pending_sources
+            ));
+        }
+        if inspection.failed_sources > 0 {
+            messages.push(format!(
+                "{} 个来源提取失败，等待重试。",
+                inspection.failed_sources
+            ));
         }
     } else if overview.inspect_operation.is_some() {
         messages.push("正在读取已发布记忆…".into());
     }
     match overview.work {
+        MemoryWorkState::Idle
+            if overview
+                .inspection
+                .as_ref()
+                .is_some_and(|value| value.processing) =>
+        {
+            messages.push("后台正在整理长期记忆…".into());
+        }
         MemoryWorkState::Idle => {}
         MemoryWorkState::Working => messages.push("后台正在整理长期记忆…".into()),
         MemoryWorkState::SourceScanFailed => messages.push("扫描长期记忆来源失败。".into()),
-        MemoryWorkState::PublicationFailed => {
-            messages.push("全局记忆整合或发布失败，保留最近一次有效摘要。".into())
-        }
+        MemoryWorkState::PublicationFailed => messages.push("长期记忆整合或发布失败。".into()),
         MemoryWorkState::WaitingForModel => {
             messages.push("记忆整合正在等待可用账号和模型。".into())
         }
@@ -280,81 +317,95 @@ fn overview_text(overview: &Overview) -> String {
 }
 
 fn body(overview: &Overview) -> impl Scene + use<> {
-    let summary = overview
-        .inspection
-        .as_ref()
-        .and_then(|view| view.summary.as_ref());
-    let text = summary.map(|value| value.text.clone());
-    let sources = summary
-        .zip(overview.inspection.as_ref())
-        .map(|(summary, view)| {
-            view.sources
-                .iter()
-                .enumerate()
-                .map(|(index, source)| {
-                    let label = source_label(source);
-                    let action = SourceChoice {
-                        publication: summary.id.clone(),
-                        record: source.record.clone(),
-                    };
-                    bsn! {
-                        @button(label) Name({format!("InspectMemorySource{index}")})
-                        template(move |_| Ok(action.clone())) on(inspect_source)
-                    }
-                })
-                .collect::<Vec<_>>()
-        })
-        .filter(|sources| !sources.is_empty());
-    let expanded = overview.sources_open;
+    let inspection = overview.inspection.as_ref();
+    let summary = inspection.and_then(|value| value.summary.as_ref());
+    let summary_text = summary.map(|value| value.text.clone());
+    let summary_title = "发布摘要";
+    let summary_open = overview.categories_open.contains(summary_title);
+    let groups = inspection.into_iter().flat_map(|value| &value.groups).enumerate().map(|(group_index, group)| {
+        let title = group.title;
+        let count = group.records.len();
+        let heading = format!("{title} · {count}");
+        let expanded = overview.categories_open.contains(title);
+        let rows = summary.into_iter().flat_map(|summary| {
+            group.records.iter().enumerate().map(move |(index, source)| {
+                let when = source.activity_ms.and_then(timestamp).unwrap_or_else(|| "时间未知".into());
+                let directory = source.directory.as_deref().map(|path| bevy_widgetry_path_display::display_path(std::path::Path::new(path)));
+                let label = format!("{} · {} · {}", source.scope, source.status, when);
+                let button_text = if source.preview.is_empty() { label.clone() } else { format!("{}\n{label}", source.preview) };
+                let detail_label = format!("{title} · {label}\n{}\n会话 {}\n{}发布 {}", source.provenance, source.session_id,
+                    directory.as_ref().map_or_else(String::new, |path| format!("目录 {path}\n")), summary.id);
+                let action = SourceChoice { publication: summary.id.clone(), record: source.record.clone(), label: detail_label };
+                bsn! {
+                    @button(button_text) Name({format!("InspectMemorySource{group_index}-{index}")})
+                    template(move |_| Ok(action.clone())) on(inspect_source)
+                }
+            })
+        }).collect::<Vec<_>>();
+        bsn! {
+            @WidgetryCollapsible {
+                @expanded: expanded,
+                @header: bsn! { Text(heading) WidgetryText Name({format!("MemoryCategory{group_index}")}) },
+                @children: bsn_list! {
+                    Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(GAP) }
+                    Children [
+                        @{(count == 0).then_some(bsn! { Text("暂无记录") WidgetryText })}--
+                        {rows}
+                    ]
+                },
+            }
+            template(move |_| Ok(CategoryChoice(title))) on(toggle_category)
+        }
+    }).collect::<Vec<_>>();
     bsn! {
         Name("MemorySummaryContent")
         Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(GAP), flex_shrink: 0.0 }
         Children [
-            @{text.map(|text| readonly(text, "PublishedMemoryBody", 6))}--
-            @{(summary.is_none() && overview.inspection.is_some()).then_some(bsn! { Text("尚无已发布的长期记忆。") WidgetryText })}--
-            @{sources.map(|sources| bsn! {
+            {groups}--
+            @{summary_text.map(|text| bsn! {
                 @WidgetryCollapsible {
-                    @expanded: expanded,
-                    @header: bsn! { Text("详情和来源") WidgetryText Name("ToggleMemorySources") },
-                    @children: bsn_list! {
-                        Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(GAP) }
-                        Children [
-                            {sources}--
-                            DetailSlot Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(GAP) }
-                        ]
-                    },
-                } Name("MemorySources") Node { width: percent(100), flex_shrink: 0.0 }
-                on(toggle_sources)
+                    @expanded: summary_open,
+                    @header: bsn! { Text(summary_title) WidgetryText Name("ToggleMemorySummary") },
+                    @children: bsn_list! { @readonly(text, "PublishedMemoryBody", 6) },
+                }
+                template(move |_| Ok(CategoryChoice(summary_title))) on(toggle_category)
             })}
         ]
     }
 }
 
 fn detail(overview: &Overview) -> impl Scene + use<> {
-    let detail = overview.detail.as_ref().map(|value| {
-        let title = source_label(&value.source);
-        let text = value.text.clone();
-        bsn_list! {
-            Text(title) WidgetryText Name("MemoryDetailSource") TextLayout::linebreak(LineBreak::AnyCharacter)--
-            @readonly(text, "MemoryDetailBody", 9)
-        }
-    });
+    let title = overview.detail_label.clone();
+    let text = overview.detail.as_ref().map(|value| value.text.clone());
     let detail_status = if overview.detail_operation.is_some() {
         Some("正在读取来源详情…".into())
     } else {
         overview.detail_error.clone()
     };
+    let empty = title.is_none() && detail_status.is_none();
     bsn! {
         Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(GAP) }
         Children [
+            @{title.map(|title| bsn! { Text(title) WidgetryText Name("MemoryDetailSource") TextLayout::linebreak(LineBreak::AnyCharacter) })}--
             @{detail_status.map(|text| bsn! { Text(text) WidgetryText Name("MemoryDetailStatus") TextLayout::linebreak(LineBreak::AnyCharacter) })}--
-            {detail}
+            @{text.map(|text| readonly(text, "MemoryDetailBody", 9))}--
+            @{empty.then_some(bsn! { Text("选择一条记忆查看详情。") WidgetryText })}
         ]
     }
 }
 
-fn toggle_sources(event: On<WidgetryCollapsibleChanged>, mut overview: ResMut<Overview>) {
-    overview.sources_open = event.expanded;
+fn toggle_category(
+    event: On<WidgetryCollapsibleChanged>,
+    choices: Query<&CategoryChoice>,
+    mut overview: ResMut<Overview>,
+) -> Result {
+    let choice = choices.get(event.entity)?;
+    if event.expanded {
+        overview.categories_open.insert(choice.0);
+    } else {
+        overview.categories_open.remove(choice.0);
+    }
+    Ok(())
 }
 
 fn inspect_source(
@@ -373,6 +424,7 @@ fn inspect_source(
         return Ok(());
     }
     overview.detail = None;
+    overview.detail_label = Some(choice.label.clone());
     overview.detail_error = None;
     match host.request_memory(MemoryRequest::Detail {
         publication: choice.publication.clone(),
@@ -396,23 +448,6 @@ fn timestamp(ms: i64) -> Option<String> {
         time.hour(),
         time.minute()
     ))
-}
-
-fn source_label(source: &MemorySource) -> String {
-    let when = source
-        .activity_ms
-        .and_then(timestamp)
-        .unwrap_or_else(|| "时间未知".into());
-    let directory = source
-        .directory
-        .as_deref()
-        .map(|path| bevy_widgetry_path_display::display_path(std::path::Path::new(path)));
-    format!(
-        "{} · {} · {}",
-        source.session_id,
-        when,
-        directory.as_deref().unwrap_or("目录未知")
-    )
 }
 
 fn readonly(text: String, name: &'static str, rows: usize) -> impl Scene {
@@ -447,6 +482,6 @@ fn button(label: impl Into<String>) -> impl Scene {
             @style: AgentelierButtonStyle::Secondary,
             @children: bsn_list! { Text(label) WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter) }
         }
-        Node { align_self: AlignSelf::Start, flex_shrink: 0.0 }
+        Node { align_self: AlignSelf::Start, max_width: percent(100), flex_shrink: 0.0 }
     }
 }

@@ -4,7 +4,7 @@ use crate::{
     classified,
     consolidation::sha256,
     experience::{Experience, ExperienceState},
-    observation::{Category, Scope},
+    observation::{Category, EvidenceKind, Scope},
     publication::{DETAILS, detail_name, read_checked},
     redaction::Redactor,
     store::check_path,
@@ -15,6 +15,7 @@ use agentelier_llm_model::{
 };
 use rusqlite::{Connection, params};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,7 +27,17 @@ const MAX_QUERY_BYTES: usize = 256;
 const MAX_MATCHES: usize = 5;
 const MAX_EXCERPT_BYTES: usize = 640;
 const MAX_SCOPE_DISPLAY_BYTES: usize = 512;
+const MAX_INSPECTION_PREVIEW_BYTES: usize = 210;
 const MAX_DETAIL_BYTES: usize = 9 * 1024;
+const INSPECTION_CATEGORIES: [(Category, &str); 7] = [
+    (Category::UserPreference, "用户偏好"),
+    (Category::SharedExperience, "共同经历"),
+    (Category::OriginSelfObservation, "Origin 自我观察"),
+    (Category::AttentionClue, "当前关注"),
+    (Category::ExperienceClue, "经验"),
+    (Category::WorkFact, "项目工作记忆"),
+    (Category::UserRevision, "用户修订"),
+];
 const SOURCE_QUERY: &str = "SELECT p.session_id, p.revision, p.content_hash, p.file_name,
         COALESCE(m.work_directory, s.work_directory), COALESCE(m.sequence, s.sequence),
         COALESCE(m.activity_ms, s.activity_ms), a.content, COALESCE(m.directory_verified, 0),
@@ -84,10 +95,30 @@ pub struct PublishedSummary {
 #[derive(Clone)]
 pub struct MemoryInspection {
     pub summary: Option<PublishedSummary>,
-    pub sources: Vec<MemorySource>,
+    pub groups: Vec<MemoryInspectionGroup>,
     pub processing: bool,
+    pub pending_sources: i64,
+    pub failed_sources: i64,
     pub pending_revisions: usize,
     pub notice: Option<&'static str>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct MemoryInspectionGroup {
+    pub title: &'static str,
+    pub records: Vec<MemoryInspectionRecord>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct MemoryInspectionRecord {
+    pub record: String,
+    pub session_id: SessionId,
+    pub activity_ms: Option<i64>,
+    pub scope: &'static str,
+    pub directory: Option<String>,
+    pub status: &'static str,
+    pub provenance: String,
+    pub preview: String,
 }
 
 struct IndexedSource {
@@ -357,45 +388,90 @@ impl MemoryClient {
     }
     pub async fn inspect(&self, processing: bool) -> io::Result<MemoryInspection> {
         self.with_active_store(move |connection, workspace| {
-            let (snapshot, mut notice) = match crate::publication::snapshot(connection, workspace) {
-                Ok(snapshot) => (snapshot, None),
-                Err(failure) => {
-                    tracing::warn!(error = %failure, "读取摘要文件失败，尝试已提交的摘要副本");
-                    (Some(crate::publication::committed_snapshot(connection)?),
-                     Some("读取已发布摘要文件失败，当前显示记忆库中已提交的副本。"))
+            let (generation, published) =
+                crate::store::generations(connection).map_err(io::Error::other)?;
+            let (snapshot, mut notice) = if generation != published {
+                (None, Some("已撤回旧发布，等待新的记忆发布。"))
+            } else {
+                match crate::publication::snapshot(connection, workspace) {
+                    Ok(snapshot) => (snapshot, None),
+                    Err(failure) => {
+                        tracing::warn!(error = %failure, "读取摘要文件失败，尝试已提交的摘要副本");
+                        (
+                            Some(crate::publication::committed_snapshot(connection)?),
+                            Some("读取已发布摘要文件失败，当前显示记忆库中已提交的副本。"),
+                        )
+                    }
                 }
             };
-            let epoch: i64 = connection.query_row("SELECT epoch FROM memory_state WHERE singleton = 1", [], |row| row.get(0)).map_err(io::Error::other)?;
-            let pending_revisions = match crate::revision::revisions(workspace, epoch).and_then(|revisions| {
-                let published = crate::revision::published_ids(connection)?;
-                Ok(revisions.iter().filter(|revision| !published.contains(&revision.id)).count())
-            }) {
-                Ok(count) => count,
-                Err(failure) => {
-                    tracing::warn!(error = %failure, "记忆修订待发布状态不可用");
-                    notice.get_or_insert("无法核对待整合的记忆修订。");
-                    0
-                }
+            let epoch: i64 = connection
+                .query_row(
+                    "SELECT epoch FROM memory_state WHERE singleton = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(io::Error::other)?;
+            let pending_revisions =
+                match crate::revision::revisions(workspace, epoch).and_then(|revisions| {
+                    let published = crate::revision::published_ids(connection)?;
+                    Ok(revisions
+                        .iter()
+                        .filter(|revision| !published.contains(&revision.id))
+                        .count())
+                }) {
+                    Ok(count) => count,
+                    Err(failure) => {
+                        tracing::warn!(error = %failure, "记忆修订待发布状态不可用");
+                        notice.get_or_insert("无法核对待整合的记忆修订。");
+                        0
+                    }
+                };
+            let (pending_sources, failed_sources) = connection
+                .query_row(
+                    "SELECT COUNT(*) FILTER (WHERE status IN ('pending', 'processing')),
+                     COUNT(*) FILTER (WHERE status = 'failed') FROM sources",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(io::Error::other)?;
+            let (summary, records) = if let Some(snapshot) = snapshot {
+                let published_at_ms = connection
+                    .query_row("SELECT published_at_ms FROM publication", [], |row| {
+                        row.get(0)
+                    })
+                    .map_err(io::Error::other)?;
+                let records = inspection_records(connection)?;
+                let redactor = Redactor::new()?;
+                (
+                    Some(PublishedSummary {
+                        id: snapshot.publication_id.to_string(),
+                        text: redactor.clean(&snapshot.summary, MAX_MEMORY_SUMMARY_BYTES),
+                        published_at_ms,
+                    }),
+                    records,
+                )
+            } else {
+                (None, BTreeMap::new())
             };
-            let processing = processing || (snapshot.is_none() && connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM sources WHERE status = 'summary'
-                    AND NOT EXISTS (SELECT 1 FROM consolidation_inputs WHERE session_id = sources.session_id))",
-                [],
-                |row| row.get(0),
-            ).map_err(io::Error::other)?);
-            let Some(snapshot) = snapshot else {
-                return Ok(MemoryInspection { summary: None, sources: Vec::new(), processing, pending_revisions, notice });
-            };
-            let published_at_ms = connection.query_row("SELECT published_at_ms FROM publication", [], |row| row.get(0)).map_err(io::Error::other)?;
-            let sources = sources(connection, None)?.into_iter().map(|source| source.source).collect();
+            let mut records = records;
+            let groups = INSPECTION_CATEGORIES
+                .into_iter()
+                .map(|(category, title)| MemoryInspectionGroup {
+                    title,
+                    records: records.remove(&category).unwrap_or_default(),
+                })
+                .collect();
             Ok(MemoryInspection {
-                summary: Some(PublishedSummary { id: snapshot.publication_id.to_string(), text: snapshot.summary, published_at_ms }),
-                sources,
+                summary,
+                groups,
                 processing,
+                pending_sources,
+                failed_sources,
                 pending_revisions,
                 notice,
             })
-        }).await
+        })
+        .await
     }
 
     pub async fn inspect_detail(
@@ -411,7 +487,14 @@ impl MemoryClient {
                 "记忆发布标识无效",
             ));
         }
+        if !detail_name(&record) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "记忆记录标识格式无效",
+            ));
+        }
         self.with_active_store(move |connection, workspace| {
+            current_generation(connection)?;
             let current: bool = connection
                 .query_row(
                     "SELECT EXISTS(SELECT 1 FROM publication WHERE publication_id = ?1)",
@@ -425,10 +508,19 @@ impl MemoryClient {
                     "记忆已重新发布，请刷新后查看来源",
                 ));
             }
-            if let Some((name, hash, entry)) = classified::saved(connection, Some(&record))?.pop() {
-                return classified_detail(workspace, name, hash, entry, publication);
-            }
-            detail(workspace, source(connection, &record)?)
+            let redactor = Redactor::new()?;
+            let mut result = if let Some((name, hash, entry)) =
+                classified::saved(connection, Some(&record))?.pop()
+            {
+                let text = inspection_text(&entry);
+                let mut checked = classified_detail(workspace, name, hash, entry, publication)?;
+                checked.text = text;
+                checked
+            } else {
+                detail(workspace, source(connection, &record)?)?
+            };
+            result.text = redactor.clean(&result.text, MAX_DETAIL_BYTES);
+            Ok(result)
         })
         .await
     }
@@ -590,6 +682,115 @@ fn classified_source(
         attention: entry.attention.map(Box::new),
         experience: entry.experience.map(Box::new),
     })
+}
+
+fn inspection_records(
+    connection: &Connection,
+) -> io::Result<BTreeMap<Category, Vec<MemoryInspectionRecord>>> {
+    let mut groups = BTreeMap::<_, Vec<_>>::new();
+    let redactor = Redactor::new()?;
+    for (record, _, entry) in classified::saved(connection, None)? {
+        let (scope, directory) = match &entry.scope {
+            Scope::Global => ("全局", None),
+            Scope::Context => ("原对话情境", None),
+            Scope::Project { directory } => (
+                "项目",
+                Some(redactor.clean(directory, MAX_SCOPE_DISPLAY_BYTES)),
+            ),
+        };
+        let status = match &entry.experience {
+            Some(experience) if experience.state == ExperienceState::Candidate => "候选",
+            _ => entry.state.label(),
+        };
+        let (status, summary) = if entry.body.is_empty() {
+            (entry.state.label(), "")
+        } else if let Some(attention) = &entry.attention {
+            (attention.state.label(), attention.question.as_str())
+        } else if let Some(experience) = &entry.experience {
+            (status, experience.topic.as_str())
+        } else {
+            (status, entry.body.as_str())
+        };
+        groups
+            .entry(entry.category)
+            .or_default()
+            .push(MemoryInspectionRecord {
+                record,
+                session_id: entry.session,
+                activity_ms: i64::try_from(entry.at_ms).ok(),
+                scope,
+                directory,
+                status,
+                provenance: inspection_provenance(&entry.source),
+                preview: redactor.clean(summary, MAX_INSPECTION_PREVIEW_BYTES),
+            });
+    }
+    for indexed in sources(connection, None)? {
+        let source = indexed.source;
+        groups
+            .entry(Category::WorkFact)
+            .or_default()
+            .push(MemoryInspectionRecord {
+                record: source.record,
+                session_id: source.session_id,
+                activity_ms: source.activity_ms,
+                scope: if indexed.scope.is_some() {
+                    "项目"
+                } else {
+                    "目录待核对"
+                },
+                directory: source.directory,
+                status: "来源摘要",
+                provenance: source.sequence.map_or_else(
+                    || "会话存档".into(),
+                    |sequence| format!("会话存档 · 序号 {sequence}"),
+                ),
+                preview: String::new(),
+            });
+    }
+    Ok(groups)
+}
+
+fn inspection_provenance(source: &classified::Provenance) -> String {
+    match source {
+        classified::Provenance::Observation { anchor, evidence } => {
+            let label = match evidence {
+                EvidenceKind::UserStatement => "用户陈述",
+                EvidenceKind::RootExpression => "Origin 表达",
+                EvidenceKind::ToolObservation => "工具回执",
+                EvidenceKind::Inference => "据来源推断",
+            };
+            format!(
+                "{label} · 第 {} 轮 · 序号 {}",
+                anchor.turn.0, anchor.sequence
+            )
+        }
+        classified::Provenance::Revision { turn, .. } => format!("用户授权修订 · 第 {turn} 轮"),
+    }
+}
+
+fn inspection_text(entry: &classified::Entry) -> String {
+    if entry.body.is_empty() {
+        return "此记录只保留状态与来源。".into();
+    }
+    let mut text = entry.body.clone();
+    if let Some(attention) = &entry.attention {
+        text.push_str(&format!(
+            "\n\n{}\n{}",
+            attention.author.label(),
+            attention.question
+        ));
+        if let Some(reason) = &attention.reason {
+            text.push_str(&format!("\n理由：{reason}"));
+        }
+    }
+    if let Some(experience) = &entry.experience {
+        text.push_str(&format!(
+            "\n\n{}\n方法：{}\n适用条件：{}\n理由：{}",
+            experience.topic, experience.method, experience.conditions, experience.reason
+        ));
+    }
+    text
 }
 
 fn classified_detail(

@@ -45,7 +45,7 @@ pub(crate) enum AttentionState {
 }
 
 impl AttentionState {
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Continue => "仍可继续",
             Self::Wait => "等待材料或新证据",
@@ -64,7 +64,7 @@ pub(crate) enum Author {
 }
 
 impl Author {
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::User => "用户提出",
             Self::Origin => "Origin 表达的关注",

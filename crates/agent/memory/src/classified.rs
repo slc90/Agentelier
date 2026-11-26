@@ -36,7 +36,7 @@ impl Status {
         matches!(self, Self::Explicit | Self::Tentative | Self::Supported)
     }
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Explicit => "明确陈述",
             Self::Tentative => "暂定",

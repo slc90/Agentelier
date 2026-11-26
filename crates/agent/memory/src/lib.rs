@@ -17,6 +17,9 @@ mod tools;
 
 pub use consolidation::Consolidation;
 pub use extraction::{Extraction, SourceClaim, SourceCompletion, extraction_prompt};
-pub use retrieval::{MemoryDetail, MemoryInspection, MemorySource, PublishedSummary, ReadView};
+pub use retrieval::{
+    MemoryDetail, MemoryInspection, MemoryInspectionGroup, MemoryInspectionRecord, MemorySource,
+    PublishedSummary, ReadView,
+};
 pub use store::{Memory, MemoryClient};
 pub use tools::{management_registrations, registrations};
