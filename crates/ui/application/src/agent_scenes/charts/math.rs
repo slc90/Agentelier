@@ -2,6 +2,7 @@ mod expression;
 mod function;
 mod implicit;
 mod level_grid;
+mod parametric;
 mod polar;
 mod region;
 mod region_mesh;
@@ -97,7 +98,8 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
     let host = function::register(host)?;
     let host = implicit::register(host)?;
     let host = region::register(host)?;
-    polar::register(host)
+    let host = polar::register(host)?;
+    parametric::register(host)
 }
 
 pub(super) fn install(app: &mut App) {
@@ -107,7 +109,11 @@ pub(super) fn install(app: &mut App) {
 pub(in crate::agent_scenes) fn supports(template: &str) -> bool {
     matches!(
         template,
-        function::TEMPLATE | implicit::TEMPLATE | region::TEMPLATE | polar::TEMPLATE
+        function::TEMPLATE
+            | implicit::TEMPLATE
+            | region::TEMPLATE
+            | polar::TEMPLATE
+            | parametric::TEMPLATE
     )
 }
 

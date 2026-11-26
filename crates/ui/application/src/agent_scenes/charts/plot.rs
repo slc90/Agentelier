@@ -135,6 +135,7 @@ pub(super) enum Style {
     Implicit,
     Region,
     Polar(AngleUnit),
+    Parametric,
 }
 
 pub(super) struct Rendered {
@@ -341,6 +342,7 @@ fn mount(
         Style::Implicit => "NativeImplicitPlot",
         Style::Region => "NativeInequalityPlot",
         Style::Polar(_) => "NativePolarPlot",
+        Style::Parametric => "NativeParametricPlot",
     };
     let root = root(world, parent, name, content.title.as_deref())?;
     let result = decorate(world, root, content, style);
