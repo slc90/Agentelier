@@ -36,9 +36,18 @@ impl SessionKind {
     }
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct BackgroundBinding {
+    pub source: SessionId,
+    pub source_turn: TurnId,
+    pub title: String,
+    pub brief: String,
+}
+
 #[derive(Clone)]
 pub struct SessionSettings {
     pub kind: SessionKind,
+    pub background: Option<BackgroundBinding>,
     pub codex: Option<agentelier_llm_model::CodexIdentity>,
     pub slug: String,
     pub display_name: String,
@@ -95,6 +104,7 @@ impl SessionCreate {
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
         Ok(SessionSettings {
             kind: SessionKind::User,
+            background: None,
             codex: Some(source),
             slug: self.slug,
             display_name: model.display_name.clone(),
@@ -281,6 +291,7 @@ pub enum ConversationEvent {
     ArchiveFailed(String),
     Tasks(crate::SessionTasks),
     GlobalTasks(crate::GlobalTasks),
+    BackgroundTasks(Vec<crate::BackgroundTask>),
     TaskNotification(crate::TaskNotification),
     Created(SessionView),
     CreatedForSend(SessionView),
@@ -355,6 +366,12 @@ pub struct Conversation {
 }
 
 impl Conversation {
+    pub fn tool_definitions(&self) -> impl Iterator<Item = &agentelier_tools::ToolDefinition> {
+        self.session
+            .iter()
+            .flat_map(|session| session.tools.definitions())
+    }
+
     pub fn validate_model_source(
         &self,
         codex: &agentelier_llm_model::CodexIdentity,
@@ -591,6 +608,15 @@ impl Conversation {
                 "新会话需要绑定有效的 Codex 账号和工作区",
             ));
         }
+        if let Some(background) = &settings.background
+            && (!settings.kind.is_user()
+                || background.source.is_nil()
+                || background.source_turn.0 == 0
+                || background.brief.trim().is_empty()
+                || crate::session_title(&background.title).is_err())
+        {
+            return Err(ConversationFailure::new("后台任务会话的来源或委托无效"));
+        }
         let id = SessionId::new_v4();
         self.agents
             .ensure_available(id, AgentId::for_root(id))
@@ -728,6 +754,7 @@ impl Conversation {
             id: thread,
             settings: Box::new(SessionSettings {
                 kind: settings.kind,
+                background: None,
                 codex: settings.codex,
                 slug: settings.slug,
                 display_name: settings.display_name,

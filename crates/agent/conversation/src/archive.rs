@@ -351,6 +351,8 @@ pub struct StoredSettings {
     #[serde(default, skip_serializing_if = "user_session")]
     pub kind: crate::SessionKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<crate::BackgroundBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex: Option<agentelier_llm_model::CodexIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<agentelier_llm_model::MemorySnapshot>,
@@ -399,6 +401,8 @@ pub struct SessionSummary {
     pub deleted: bool,
     #[serde(default)]
     pub archived: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_source: Option<SessionId>,
 }
 
 impl InitialSession {
@@ -415,10 +419,15 @@ impl InitialSession {
             .map_err(|_| crate::ConversationFailure::new("会话时间超出记录范围"))?;
         Ok(Self {
             session: view.id,
-            title: "新会话".into(),
+            title: view
+                .settings
+                .background
+                .as_ref()
+                .map_or_else(|| "新会话".into(), |binding| binding.title.clone()),
             created_at_ms,
             settings: StoredSettings {
                 kind: view.settings.kind,
+                background: view.settings.background.clone(),
                 codex: view.settings.codex.clone(),
                 memory,
                 context_limits: view.settings.context_limits.clone(),
@@ -443,6 +452,11 @@ impl InitialSession {
             last_sequence: sequence,
             deleted: false,
             archived: false,
+            background_source: self
+                .settings
+                .background
+                .as_ref()
+                .map(|binding| binding.source),
         }
     }
 }

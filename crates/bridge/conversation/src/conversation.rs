@@ -479,6 +479,7 @@ pub enum ConversationEvent {
         result: Result<ArchiveEntry, String>,
     },
     Archives(Vec<ArchiveEntry>),
+    BackgroundTasks(Vec<agentelier_conversation::BackgroundTask>),
     Projects(Result<crate::ProjectCatalog, String>),
     ProjectSaved(Result<(), String>),
     Opened(SessionView),
@@ -1005,6 +1006,9 @@ pub fn convert(event: agentelier_conversation::ConversationEvent) -> Conversatio
                     })
                     .collect(),
             )
+        }
+        agentelier_conversation::ConversationEvent::BackgroundTasks(tasks) => {
+            ConversationEvent::BackgroundTasks(tasks)
         }
         agentelier_conversation::ConversationEvent::Opened(session) => {
             ConversationEvent::Opened(view(session))

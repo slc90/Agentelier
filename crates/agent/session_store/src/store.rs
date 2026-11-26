@@ -47,6 +47,7 @@ pub struct ArchiveCatalog {
     pub cleanup_errors: Vec<String>,
     pub projects: Result<agentelier_conversation::ProjectCatalog, String>,
     pub task_history: Vec<ArchivedTasks>,
+    pub background_tasks: Vec<agentelier_conversation::BackgroundTask>,
 }
 
 pub struct ArchivedTasks {
@@ -90,6 +91,7 @@ enum Command {
         oneshot::Sender<io::Result<()>>,
     ),
     ProjectDirectory(ProjectId, oneshot::Sender<io::Result<PathBuf>>),
+    SessionProject(SessionId, oneshot::Sender<io::Result<Option<ProjectId>>>),
     Scan {
         task_history: bool,
         reply: oneshot::Sender<io::Result<ArchiveCatalog>>,
@@ -102,6 +104,7 @@ enum Command {
     ),
     Load(
         SessionId,
+        Option<SessionId>,
         oneshot::Sender<io::Result<agentelier_conversation::RestoredSession>>,
     ),
     LoadChild(
@@ -310,9 +313,25 @@ impl SessionStoreClient {
         &self,
         session: SessionId,
     ) -> io::Result<oneshot::Receiver<io::Result<agentelier_conversation::RestoredSession>>> {
+        self.load_scoped(session, None)
+    }
+
+    pub fn load_background(
+        &self,
+        session: SessionId,
+        source: SessionId,
+    ) -> io::Result<oneshot::Receiver<io::Result<agentelier_conversation::RestoredSession>>> {
+        self.load_scoped(session, Some(source))
+    }
+
+    fn load_scoped(
+        &self,
+        session: SessionId,
+        source: Option<SessionId>,
+    ) -> io::Result<oneshot::Receiver<io::Result<agentelier_conversation::RestoredSession>>> {
         let (reply, result) = oneshot::channel();
         self.0
-            .try_send(Command::Load(session, reply))
+            .try_send(Command::Load(session, source, reply))
             .map_err(|failure| io::Error::other(format!("无法接纳会话读取：{failure}")))?;
         Ok(result)
     }
@@ -477,8 +496,15 @@ impl SessionStore {
                         Command::ProjectDirectory(project, reply) => {
                             drop(reply.send(crate::projects::project_directory(&root, project)));
                         }
+                        Command::SessionProject(session, reply) => {
+                            drop(reply.send(crate::projects::session_project(&root, session)));
+                        }
                         Command::Scan { task_history, reply } => {
-                            let result = crate::reader::scan(&root, task_history);
+                            let cleanup_errors = crate::deletion::resume_groups(&root, &mut writer);
+                            let result = crate::reader::scan(&root, task_history).map(|mut catalog| {
+                                catalog.cleanup_errors.extend(cleanup_errors);
+                                catalog
+                            });
                             if let Err(failure) = &result { error!(error = %failure, "本地会话目录读取失败"); }
                             if reply.send(result).is_err() { debug!("会话目录读取已结束，等待者已离开"); }
                         }
@@ -491,8 +517,8 @@ impl SessionStore {
                         Command::MemorySource(session, reply) => {
                             let _closed = reply.send(crate::reader::memory_source(&root, session));
                         }
-                        Command::Load(session, reply) => {
-                            let result = crate::reader::load(&root, session, &mut writer);
+                        Command::Load(session, source, reply) => {
+                            let result = crate::reader::load(&root, session, source, &mut writer);
                             if let Err(failure) = &result { error!(session_id = %session, error = %failure, "本地会话读取失败"); }
                             if reply.send(result).is_err() { debug!("会话读取已结束，等待者已离开"); }
                         }
@@ -588,6 +614,17 @@ impl SessionStore {
             .map_err(|_| io::Error::other("项目存储未返回目录"))?
     }
 
+    pub async fn session_project(&self, session: SessionId) -> io::Result<Option<ProjectId>> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(Command::SessionProject(session, reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("项目存储未返回会话归属"))?
+    }
+
     pub fn create(
         &self,
         initial: InitialSession,
@@ -636,6 +673,24 @@ fn create(
             io::ErrorKind::InvalidInput,
             "初始会话身份为空",
         ));
+    }
+    if let Some(binding) = &initial.settings.background {
+        let source = crate::attachments::session_directory(root, binding.source)?;
+        let source = crate::reader::read(&source, binding.source)?;
+        if source.summary.deleted
+            || crate::deletion::group_pending(root, binding.source)
+            || source.summary.archived
+            || source.issue.is_some()
+            || source.initial.as_ref().is_none_or(|initial| {
+                !initial.settings.kind.is_user() || initial.settings.background.is_some()
+            })
+            || project.is_none()
+            || project != crate::projects::session_project(root, binding.source)?
+        {
+            return Err(io::Error::other(
+                "后台任务的来源聊天不可用，或项目归属不一致",
+            ));
+        }
     }
     let sessions = root.join("sessions");
     fs::create_dir_all(&sessions)?;

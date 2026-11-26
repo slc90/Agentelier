@@ -250,6 +250,7 @@ impl ActiveTurn<'_> {
             },
             settings: StoredSettings {
                 kind: crate::SessionKind::User,
+                background: None,
                 codex: Some(identity.clone()),
                 memory: None,
                 context_limits: Box::new(limits.clone()),

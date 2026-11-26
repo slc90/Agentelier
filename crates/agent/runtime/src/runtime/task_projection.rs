@@ -1,7 +1,7 @@
 use agentelier_conversation::{
-    ConversationEvent, GlobalTask, GlobalTaskGroup, GlobalTaskProcess, GlobalTaskStatus,
-    GlobalTasks, SessionId, SessionProcesses, SessionTaskView, SessionTasks, TaskDelivery, TaskId,
-    TaskNotification, TaskNotificationKind, ToolStatus,
+    BackgroundTask, ConversationEvent, GlobalTask, GlobalTaskGroup, GlobalTaskProcess,
+    GlobalTaskStatus, GlobalTasks, SessionId, SessionProcesses, SessionTaskView, SessionTasks,
+    TaskDelivery, TaskId, TaskNotification, TaskNotificationKind, ToolStatus,
 };
 use agentelier_tools::{ProcessPhase, ToolAccess};
 use std::collections::{BTreeMap, HashMap};
@@ -12,6 +12,7 @@ pub(super) struct Projection {
     titles: HashMap<SessionId, String>,
     published: Vec<GlobalTaskGroup>,
     revision: u64,
+    background: BTreeMap<SessionId, BackgroundTask>,
 }
 
 #[derive(Default)]
@@ -27,6 +28,34 @@ struct Process {
 }
 
 impl Projection {
+    pub(super) fn is_background(&self, session: SessionId) -> bool {
+        self.background.contains_key(&session)
+    }
+
+    pub(super) fn background(&self, source: SessionId) -> Vec<BackgroundTask> {
+        self.background
+            .values()
+            .filter(|task| task.source == source)
+            .cloned()
+            .collect()
+    }
+
+    pub(super) fn seed_background(
+        &mut self,
+        persisted: Vec<BackgroundTask>,
+        loaded: impl Fn(SessionId) -> bool,
+    ) -> ConversationEvent {
+        self.background.retain(|session, _| loaded(*session));
+        for task in persisted {
+            self.background.entry(task.session).or_insert(task);
+        }
+        self.background_snapshot()
+    }
+
+    fn background_snapshot(&self) -> ConversationEvent {
+        ConversationEvent::BackgroundTasks(self.background.values().cloned().collect())
+    }
+
     pub(super) fn seed_history(
         &mut self,
         history: Vec<agentelier_session_store::ArchivedTasks>,
@@ -45,7 +74,25 @@ impl Projection {
     pub(super) fn observe(&mut self, event: &ConversationEvent) -> Vec<ConversationEvent> {
         let mut events = Vec::new();
         match event {
+            ConversationEvent::Created(view)
+            | ConversationEvent::CreatedForSend(view)
+            | ConversationEvent::Accepted(view)
+            | ConversationEvent::Started(view)
+            | ConversationEvent::Updated(view)
+            | ConversationEvent::Finished(view)
+            | ConversationEvent::IdleUpdated(view) => {
+                if let Some(task) = BackgroundTask::from_view(view)
+                    && self.background.get(&task.session) != Some(&task)
+                {
+                    self.background.insert(task.session, task);
+                    events.push(self.background_snapshot());
+                }
+                return events;
+            }
             ConversationEvent::Tasks(tasks) => {
+                if self.is_background(tasks.session) {
+                    return events;
+                }
                 let scope = self.sessions.entry(tasks.session).or_default();
                 if scope
                     .tasks
@@ -74,6 +121,9 @@ impl Projection {
                 }
             }
             ConversationEvent::Processes(update) => {
+                if self.is_background(update.session) {
+                    return events;
+                }
                 let scope = self.sessions.entry(update.session).or_default();
                 if scope.process_revision > update.revision {
                     return events;
@@ -103,6 +153,12 @@ impl Projection {
             ConversationEvent::Deleted { session, .. } => {
                 self.sessions.remove(session);
                 self.titles.remove(session);
+                let count = self.background.len();
+                self.background
+                    .retain(|id, task| id != session && task.source != *session);
+                if self.background.len() != count {
+                    events.push(self.background_snapshot());
+                }
             }
             _ => return events,
         }

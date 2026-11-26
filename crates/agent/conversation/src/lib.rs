@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod active;
 mod agent_registry;
+mod background;
 mod behavior;
 pub use agent_registry::{
     AgentId, AgentIdentity, AgentNode, AgentOrigin, AgentPath, AgentRegistry, AgentRegistryError,
@@ -65,12 +66,14 @@ pub use archive::{
     ResponseAcceptance, SessionRecord, SessionSummary, StoredImage, StoredSettings, StoredState,
     StoredTool,
 };
+pub use background::{BACKGROUND_RESULT_TOOL, BackgroundOutcome, BackgroundStatus, BackgroundTask};
 pub use conversation::PreparedSession;
 
 pub use conversation::{
-    CompactionContinuation, Conversation, ConversationEvent, ConversationFailure,
-    ConversationRequest, MAX_TURN_REQUESTS, SessionCreate, SessionId, SessionKind, SessionLocation,
-    SessionSettings, SessionView, TaskPhase, ToolImage, ToolView, TurnId, TurnStatus, TurnView,
+    BackgroundBinding, CompactionContinuation, Conversation, ConversationEvent,
+    ConversationFailure, ConversationRequest, MAX_TURN_REQUESTS, SessionCreate, SessionId,
+    SessionKind, SessionLocation, SessionSettings, SessionView, TaskPhase, ToolImage, ToolView,
+    TurnId, TurnStatus, TurnView,
 };
 
 pub use agentelier_llm_model::ProtocolItemSummary;

@@ -53,6 +53,7 @@ fn placeholder(session: SessionId) -> SessionSummary {
         last_sequence: 0,
         deleted: false,
         archived: false,
+        background_source: None,
     }
 }
 
@@ -238,11 +239,13 @@ pub(super) fn scan(root: &Path, include_task_history: bool) -> io::Result<crate:
             cleanup_errors: Vec::new(),
             projects: crate::projects::catalog(root, &[]).map_err(|failure| failure.to_string()),
             task_history: Vec::new(),
+            background_tasks: Vec::new(),
         });
     };
     let mut entries = Vec::new();
     let mut cleanup_errors = Vec::new();
     let mut task_history = Vec::new();
+    let mut background_tasks = Vec::new();
     for entry in fs::read_dir(&path)? {
         let entry = entry?;
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
@@ -264,6 +267,9 @@ pub(super) fn scan(root: &Path, include_task_history: bool) -> io::Result<crate:
             continue;
         };
         if session.is_nil() || session.to_string() != name {
+            continue;
+        }
+        if crate::deletion::group_pending(&root, session) {
             continue;
         }
         let result = crate::attachments::session_directory(&root, session)
@@ -305,6 +311,33 @@ pub(super) fn scan(root: &Path, include_task_history: bool) -> io::Result<crate:
                         ));
                     }
                 } else {
+                    if let Some(binding) = parsed
+                        .initial
+                        .as_ref()
+                        .and_then(|initial| initial.settings.background.as_ref())
+                    {
+                        let state = parsed
+                            .records
+                            .iter()
+                            .rev()
+                            .find_map(|record| record.event.state());
+                        let turn = state.and_then(|state| {
+                            state
+                                .turn
+                                .as_deref()
+                                .or_else(|| state.previous_turns.last())
+                        });
+                        background_tasks.push(
+                            agentelier_conversation::BackgroundTask::from_record(
+                                session,
+                                binding,
+                                turn,
+                                true,
+                                state.is_some_and(|state| state.execution_blocked)
+                                    || error.is_some(),
+                            ),
+                        );
+                    }
                     if include_task_history && !matches!(parsed.issue, Some(Issue::Corrupt { .. }))
                         && parsed.records.iter().any(|record| matches!(&record.event,
                             RecordEvent::Response { registrations: Some(agentelier_conversation::ResponseTasks::Registered(tasks)), .. }
@@ -352,6 +385,7 @@ pub(super) fn scan(root: &Path, include_task_history: bool) -> io::Result<crate:
         cleanup_errors,
         projects,
         task_history,
+        background_tasks,
     })
 }
 
@@ -444,7 +478,7 @@ fn memory_excluded(entry: &fs::DirEntry, session: SessionId) -> io::Result<bool>
     if first.ends_with(b"\n") && serde_json::from_slice::<Record>(&first).is_ok_and(|record| {
         record.format == FORMAT && record.version == FORMAT_VERSION
             && record.sequence == crate::store::INITIAL_SEQUENCE
-            && matches!(record.kind, RecordKind::Created(initial) if initial.session == session && !initial.settings.kind.is_user())
+            && matches!(record.kind, RecordKind::Created(initial) if initial.session == session && (!initial.settings.kind.is_user() || initial.settings.background.is_some()))
     }) {
         return Ok(true);
     }
@@ -484,13 +518,13 @@ pub(super) fn memory_source(
         Some(issue @ Issue::Corrupt { .. }) => return Err(io::Error::other(issue.to_string())),
         None => {}
     }
-    if parsed.summary.deleted {
+    if parsed.summary.deleted || crate::deletion::group_pending(root, session) {
         return Ok(None);
     }
     let initial = parsed
         .initial
         .ok_or_else(|| io::Error::other("记忆来源缺少会话初始记录"))?;
-    if !initial.settings.kind.is_user() {
+    if !initial.settings.kind.is_user() || initial.settings.background.is_some() {
         return Ok(None);
     }
     let turns =
@@ -646,6 +680,7 @@ fn restore_archive(
 pub(super) fn load(
     root: &Path,
     session: SessionId,
+    source: Option<SessionId>,
     writer: &mut crate::journal::Writer,
 ) -> io::Result<RestoredSession> {
     let directory = crate::attachments::session_directory(root, session)?;
@@ -653,15 +688,22 @@ pub(super) fn load(
     if let Some(issue @ Issue::Corrupt { .. }) = &parsed.issue {
         return Err(io::Error::other(issue.to_string()));
     }
-    if parsed.summary.deleted {
+    if parsed.summary.deleted || crate::deletion::group_pending(root, session) {
         return Err(io::Error::other("会话已删除"));
     }
     let initial = parsed
         .initial
         .take()
         .ok_or_else(|| io::Error::other("存档没有可恢复的初始记录"))?;
-    if !initial.settings.kind.is_user() {
-        return Err(io::Error::other("此内部会话不能通过普通聊天打开"));
+    if !initial.settings.kind.is_user()
+        || initial
+            .settings
+            .background
+            .as_ref()
+            .map(|binding| binding.source)
+            != source
+    {
+        return Err(io::Error::other("此会话只能在其关联范围内加载"));
     }
     for record in &parsed.records {
         let event = match &record.event {

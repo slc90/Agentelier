@@ -11,6 +11,7 @@ use agentelier_memory::Memory;
 use agentelier_turn_runner::RunnerEvent;
 mod account_login;
 mod audio_task;
+mod background;
 mod child_runtime;
 mod creation;
 mod deleting;
@@ -333,7 +334,9 @@ impl AgentRuntime {
                                     .map_err(|_| DeliveryFailure::Closed)?.observe(event),
                                 _ => Vec::new(),
                             };
-                            deliver(event)?;
+                            if !background::hidden_lifecycle(&event) {
+                                deliver(event)?;
+                            }
                             for event in updates {
                                 deliver(AgentEvent { operation_id: 0, kind: AgentEventKind::Conversation(event) })?;
                             }
@@ -389,8 +392,9 @@ impl AgentRuntime {
                         let mut model_catalog: Option<(agentelier_llm_model::CodexIdentity, Vec<agentelier_llm_model::ModelInfo>)> = None;
                         let mut delivery_failure = None;
                         let user_skills = agentelier_skills::UserSkills::new(data_root.join("skills"));
+                        let (background_commands, mut background_incoming) = mpsc::channel::<background::Invocation>(COMMAND_CAPACITY);
                         let make_owner = || session_execution::Owner::new(
-                            &owner_credentials, &data_root, memory.as_ref().ok().map(Memory::client), &user_skills,
+                            &owner_credentials, &data_root, memory.as_ref().ok().map(Memory::client), &user_skills, &background_commands,
                         );
                         let mut owners = HashMap::from([(None, make_owner()?)]);
                         let mut skill_jobs = tokio::task::JoinSet::new();
@@ -451,6 +455,20 @@ impl AgentRuntime {
                                 let mut event_owner = None;
                                 let command = tokio::select! { biased;
                                     _ = runtime_shutdown.cancelled() => break,
+                                    Some(invocation) = background_incoming.recv() => {
+                                        let tasks = projection.lock().map_err(|_| RuntimeFailure::ModelState)?.background(invocation.source);
+                                        let source = if suspending == 0 && pending_source.is_none() {
+                                            model_source(&account).ok()
+                                        } else { None };
+                                        if invocation.run(tasks, &mut owners, background::Environment {
+                                            data_root: &data_root, store: &store, credentials: &owner_credentials, shared: &owner_model,
+                                            source, mcp: &mcp_connections, memory: memory.as_ref().ok().map(Memory::client), skills: &user_skills,
+                                            operations: &operations, ecs: &ecs_access, commands: &background_commands, publish: &publish,
+                                        }).await {
+                                            catalog_dirty = true;
+                                        }
+                                        continue;
+                                    },
                                     Some(command) = async { initial_send.take() }, if initial_send.is_some() => command,
                                     signal = memory_dialogue.next() => Command::MemoryDialogue(signal),
                                     Ok(()) = memory_status.changed() => Command::MemoryWork(*memory_status.borrow_and_update()),
@@ -557,6 +575,19 @@ impl AgentRuntime {
                                     target.filter(|session| owners.contains_key(&Some(*session)))
                                 });
                                 let deleting_target = deleting.as_ref().is_some_and(|pending| event_owner == Some(pending.session()));
+                                let related_source = match &command {
+                                    Command::ChangeMetadata { session, change: agentelier_conversation::SessionMetadataChange::Archive, .. }
+                                    | Command::Conversation { request: ConversationRequest::Delete { session }, .. } => Some(*session),
+                                    Command::Deleted(_) => deleting.as_ref().map(deleting::Deleting::session),
+                                    _ => None,
+                                };
+                                let related = if let Some(source) = related_source {
+                                    projection.lock().map_err(|_| RuntimeFailure::ModelState)?.background(source)
+                                } else { Vec::new() };
+                                let related_busy = related.iter().any(|task| {
+                                    task.status == agentelier_conversation::BackgroundStatus::Running
+                                        || owners.get(&Some(task.session)).is_some_and(|owner| !owner.ready_to_remove())
+                                });
                                 let owner = owners.get_mut(&event_owner).ok_or(RuntimeFailure::ModelState)?;
                                 let session_execution::Owner {
                                     conversation, model, tools: session_tools, progress: progress_events, children,
@@ -806,6 +837,14 @@ impl AgentRuntime {
                                         emit(&publish, 0, AgentEventKind::McpStatus(status))?;
                                     }
                                     Command::ChangeMetadata { id, session, change } => {
+                                        if matches!(&change, agentelier_conversation::SessionMetadataChange::Archive)
+                                            && (related_busy || related.iter().any(|task| task.status == agentelier_conversation::BackgroundStatus::NeedsInput))
+                                        {
+                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::MetadataSaved {
+                                                session, result: Err("请在原聊天处理正在运行或等待确认的后台任务，再归档".into()),
+                                            }))?;
+                                            continue;
+                                        }
                                         match if saving_metadata.is_some() || deleting.is_some() { Err(io::Error::other("已有会话管理操作正在保存")) } else { session_metadata::SavingMetadata::start(id, session, change, &store) } {
                                             Ok(pending) => saving_metadata = Some(pending),
                                             Err(failure) => emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::MetadataSaved { session, result: Err(failure.to_string()) }))?,
@@ -828,6 +867,13 @@ impl AgentRuntime {
                                             }
                                             if event_owner.is_some() {
                                                 owners.remove(&event_owner);
+                                            }
+                                            for task in related {
+                                                if let Some(mut owner) = owners.remove(&Some(task.session))
+                                                    && let Some((_, tools)) = owner.tools.take()
+                                                {
+                                                    tools.join("background_session_deleted").await?;
+                                                }
                                             }
                                         }
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
@@ -878,8 +924,12 @@ impl AgentRuntime {
                                             Ok(catalog) => {
                                                 emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Projects(catalog.projects)))?;
                                                 let entries = catalog.entries;
+                                                let entries: Vec<_> = entries.into_iter().filter(|entry| entry.summary.background_source.is_none()).collect();
                                                 let first = entries.iter().find(|entry| !entry.summary.archived).map(|entry| entry.summary.session);
                                                 emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Archives(entries)))?;
+                                                let backgrounds = projection.lock().map_err(|_| RuntimeFailure::ModelState)?
+                                                    .seed_background(catalog.background_tasks, |id| owners.contains_key(&Some(id)));
+                                                emit(&publish, 0, AgentEventKind::Conversation(backgrounds))?;
                                                 if !catalog.task_history.is_empty() {
                                                     let history = projection.lock().map_err(|_| AccountFailure::Delivery(DeliveryFailure::Closed))?
                                                         .seed_history(catalog.task_history);
@@ -1127,6 +1177,22 @@ impl AgentRuntime {
                                         steers,
                                         task_actions,
                                     } => {
+                                        if related_busy && matches!(&request, ConversationRequest::Delete { .. }) {
+                                            control.finished.cancel();
+                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("请先停止关联后台任务，等待执行及保存收尾".into())))?;
+                                            continue;
+                                        }
+                                        let hidden = match &request {
+                                            ConversationRequest::Open { session } | ConversationRequest::Delete { session } => {
+                                                projection.lock().map_err(|_| RuntimeFailure::ModelState)?.is_background(*session)
+                                            }
+                                            _ => false,
+                                        };
+                                        if hidden {
+                                            control.finished.cancel();
+                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected("请在发起聊天中查看或管理此后台任务".into())))?;
+                                            continue;
+                                        }
                                         let replacing = match &request {
                                             ConversationRequest::Delete { session } => conversation.current().is_some_and(|current| current.id == *session),
                                             ConversationRequest::Create(_) | ConversationRequest::CreateAndSend { .. } | ConversationRequest::Open { .. } | ConversationRequest::Reset { .. } | ConversationRequest::SetWorkingDirectory { .. } => true,

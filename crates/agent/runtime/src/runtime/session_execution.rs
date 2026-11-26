@@ -33,6 +33,7 @@ impl Owner {
         data_root: &Path,
         memory: Option<agentelier_memory::MemoryClient>,
         skills: &agentelier_skills::UserSkills,
+        background: &mpsc::Sender<super::background::Invocation>,
     ) -> Result<Self, RuntimeFailure> {
         let (spawn_sender, spawns) = mpsc::channel(super::COMMAND_CAPACITY);
         let (mailbox_sender, mailbox) = mpsc::channel(super::SESSION_COMMAND_CAPACITY);
@@ -53,6 +54,7 @@ impl Owner {
         extensions.push(super::list_agents::registration(mailbox_sender.clone()));
         extensions.push(super::skill_resource::registration());
         extensions.extend(super::skill_creation::registrations(skills.clone()));
+        extensions.extend(super::background::registrations(background.clone()));
         Ok(Self {
             conversation: Conversation::with_extensions(extensions),
             model: None,
@@ -134,6 +136,17 @@ impl Owner {
 
     pub(super) fn busy(&self) -> bool {
         self.model.is_some() || self.finalizing || self.pending_queue
+    }
+
+    pub(super) fn ready_to_remove(&self) -> bool {
+        !self.busy()
+            && !self.children.has_active()
+            && self.records.is_empty()
+            && self.receipts.is_empty()
+            && self.conversation.check_replacement().is_ok()
+            && self.tools.as_ref().is_none_or(|(_, tools)| {
+                !tools.busy() && !tools.process_views.borrow().has_active()
+            })
     }
 
     pub(super) async fn stop(

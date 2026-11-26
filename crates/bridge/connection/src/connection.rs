@@ -687,6 +687,7 @@ impl Connection {
                     if matches!(
                         kind,
                         agentelier_conversation_bridge::ConversationEvent::GlobalTasks(_)
+                            | agentelier_conversation_bridge::ConversationEvent::BackgroundTasks(_)
                             | agentelier_conversation_bridge::ConversationEvent::TaskNotification(
                                 _
                             )
@@ -694,6 +695,14 @@ impl Connection {
                         if event.operation_id != 0 {
                             return self.protocol_failure();
                         }
+                        return Ok(Some(event));
+                    }
+                    if event.operation_id == 0
+                        && matches!(
+                            kind,
+                            agentelier_conversation_bridge::ConversationEvent::Deleted { .. }
+                        )
+                    {
                         return Ok(Some(event));
                     }
                     if matches!(

@@ -66,6 +66,22 @@ pub(super) fn save_membership(directory: &Path, project: ProjectId) -> io::Resul
     save(&directory.join(MEMBERSHIP_FILE), &project)
 }
 
+pub(super) fn session_project(
+    root: &Path,
+    session: agentelier_conversation::SessionId,
+) -> io::Result<Option<ProjectId>> {
+    let directory = crate::attachments::session_directory(root, session)?;
+    let archive = crate::reader::read(&directory, session)?;
+    if archive.issue.is_some() || archive.summary.archived || archive.summary.deleted {
+        return Err(io::Error::other("该会话已归档、已删除或记录不可用"));
+    }
+    let project = read_optional(&directory.join(MEMBERSHIP_FILE))?;
+    if let Some(project) = project {
+        project_directory(root, project)?;
+    }
+    Ok(project)
+}
+
 pub(super) fn catalog(root: &Path, entries: &[ArchiveEntry]) -> io::Result<ProjectCatalog> {
     let projects = load(root)?;
     let mut catalog = ProjectCatalog::default();

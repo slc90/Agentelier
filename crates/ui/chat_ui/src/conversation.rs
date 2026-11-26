@@ -330,12 +330,13 @@ pub(crate) fn install(app: &mut App) {
 pub(crate) fn panel(state: &ChatState) -> impl Scene {
     let draft = state.draft.clone();
     bsn! {
-        Name("ChatPanel")
+        Name("ChatPanel") crate::background_tasks::Bounds
         Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column }
         Children [
             @crate::queue::panel()--
             @conversation_view()--
-            @chat_composer(draft)
+            @chat_composer(draft)--
+            @crate::background_tasks::panel()
         ]
     }
 }
@@ -1114,6 +1115,10 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             changed = true;
             continue;
         }
+        if let ConversationEvent::BackgroundTasks(tasks) = event.kind {
+            world.resource_mut::<crate::background_tasks::Tasks>().items = tasks;
+            continue;
+        }
         if let ConversationEvent::Projects(projects) = event.kind {
             crate::projects::catalog(world, projects)?;
             continue;
@@ -1260,6 +1265,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             ),
             ConversationEvent::Tasks(_)
             | ConversationEvent::GlobalTasks(_)
+            | ConversationEvent::BackgroundTasks(_)
             | ConversationEvent::TaskNotification(_)
             | ConversationEvent::AudioDraft { .. }
             | ConversationEvent::AudioTranscription { .. }

@@ -316,6 +316,7 @@ pub(crate) fn complete(
 }
 fn update(
     state: Res<SessionActions>,
+    tasks: Res<crate::background_tasks::Tasks>,
     mut panels: Query<
         (&mut Node, Has<RenamePanel>, Has<RenameControls>),
         Or<(
@@ -330,7 +331,7 @@ fn update(
     mut prompts: Query<&mut Text, (With<DeletePrompt>, Without<RenameError>)>,
     mut commands: Commands,
 ) {
-    if !state.is_changed() {
+    if !state.is_changed() && !tasks.is_changed() {
         return;
     }
     for (mut panel, root, rename) in &mut panels {
@@ -348,8 +349,14 @@ fn update(
         };
     }
     for mut text in &mut prompts {
+        let count = state.target.map_or(0, |session| tasks.count(session));
+        let scope = if count == 0 {
+            "本操作删除会话存档和附件。".to_owned()
+        } else {
+            format!("本操作同时删除该聊天的 {count} 个后台任务会话及其存档。")
+        };
         text.set_if_neq(Text::new(format!(
-            "确定删除“{}”？只删除此会话的本地记录和附件，不撤销已修改的项目文件。",
+            "确定删除“{}”？{scope}项目目录中的产物将保留。",
             state.title
         )));
     }

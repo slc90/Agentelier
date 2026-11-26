@@ -1890,6 +1890,7 @@ impl Conversation {
             notice: restored.notice,
             settings: Box::new(SessionSettings {
                 kind: settings.kind,
+                background: settings.background,
                 codex: settings.codex,
                 context_limits: Box::new(restored.model.context_limits),
                 slug: restored.model.slug,

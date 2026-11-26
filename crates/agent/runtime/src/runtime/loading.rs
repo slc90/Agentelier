@@ -28,6 +28,20 @@ impl Loading {
         })
     }
 
+    pub(super) fn start_background(
+        id: u64,
+        session: SessionId,
+        source: SessionId,
+        store: &SessionStore,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            id,
+            control: None,
+            session,
+            reply: store.client().load_background(session, source)?,
+        })
+    }
+
     pub(super) async fn wait(&mut self) -> io::Result<RestoredSession> {
         (&mut self.reply)
             .await
