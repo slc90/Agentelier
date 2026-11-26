@@ -1,12 +1,15 @@
 mod input;
+mod playback;
 
 use agentelier_agent_host::{
     AgentHost, AgentHostPlugin, EcsError, SceneDefinition, mount_scene_child, patch_native_scene,
     replace_scene_children, validating_scene, widget,
 };
-use bevy::prelude::*;
+use bevy::{prelude::*, window::PrimaryWindow};
 use bevy_widgetry::{scene::spawn_scene, text::WidgetryText};
+use playback::Clock;
 use serde_json::{Map, Value};
+use std::time::Instant;
 use std::{collections::VecDeque, io};
 
 #[derive(Component)]
@@ -27,7 +30,13 @@ struct Live {
     program: widget::Program,
     view: widget::View,
     events: VecDeque<widget::Event>,
-    pending: Option<widget::Ticket>,
+    pending: Option<Pending>,
+    clock: Clock,
+}
+
+struct Pending {
+    ticket: widget::Ticket,
+    due: Option<Instant>,
 }
 
 pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
@@ -40,6 +49,7 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
             ("resources", "Optional serializable resource snapshots furnished to both callbacks."),
             ("parts returned by source", "1 to 16 native composition parts, each #{id, area, scene: #{template, props}}. area is intro, controls, content, or footer. Use actual registered Scene props. Host owns their native lifetimes."),
             ("on_event callback", "Optional fn on_event(ctx, event), called locally in real input order; return () to ignore or return a new #{parts, state}. ctx.state holds the last successfully displayed state. event.part is a stable part ID. event.kind is click, number, selection, text, key, or drag. Number and text carry value and is_final; selection carries value; key carries key, pressed, repeat; drag carries phase (start/move/end), position and delta."),
+            ("playback returned by on_event", "Optional playback: #{running: true or false, interval_ms: 16..1000, reset_clock: optional bool}. Only a user-operated widget starts playback. While running on_event receives kind 'tick', empty part, and dt and elapsed in seconds. Omit playback to retain the current setting. Use reset_clock once on reset. On history restore the host clock is paused."),
         ],
         build,
         None,
@@ -106,13 +116,21 @@ fn layout(parts: Vec<Value>) -> SceneDefinition {
 }
 
 fn advance(world: &mut World) {
+    let visible = world
+        .query_filtered::<&Window, With<PrimaryWindow>>()
+        .iter(world)
+        .any(|window| window.visible);
     let roots: Vec<_> = world
         .query::<(Entity, &ScriptedWidget)>()
         .iter(world)
         .filter_map(|(entity, state)| {
             let work = match &state.load {
                 Load::Queued(_) | Load::Building(_) => true,
-                Load::Live(live) => live.pending.is_some() || !live.events.is_empty(),
+                Load::Live(live) => {
+                    live.pending.is_some()
+                        || !live.events.is_empty()
+                        || (visible && live.clock.running())
+                }
                 Load::Done => false,
             };
             work.then_some(entity)
@@ -150,7 +168,7 @@ fn advance(world: &mut World) {
                 },
             },
             Load::Live(mut live) => {
-                run_event(world, status, &mut live, &host);
+                run_event(world, status, &mut live, &host, visible);
                 Load::Live(live)
             }
             Load::Done => Load::Done,
@@ -186,25 +204,46 @@ fn mount_live(world: &mut World, root: Entity, reply: widget::Reply) -> Result<L
         view,
         events: VecDeque::new(),
         pending: None,
+        clock: Clock::default(),
     })
 }
 
-fn run_event(world: &mut World, status: Entity, live: &mut Live, host: &AgentHost) {
-    if let Some(ticket) = &live.pending {
-        let Some(result) = ticket.poll() else {
+fn run_event(world: &mut World, status: Entity, live: &mut Live, host: &AgentHost, visible: bool) {
+    if !visible {
+        live.clock.suspend();
+    }
+    if live
+        .pending
+        .as_ref()
+        .and_then(|work| work.due)
+        .is_some_and(|due| !visible || (!live.events.is_empty() && Instant::now() < due))
+    {
+        live.pending = None;
+    }
+    if let Some(work) = &live.pending {
+        let timed = work.due.is_some();
+        let Some(result) = work.ticket.poll() else {
             return;
         };
         live.pending = None;
         let applied = result.map_err(|error| error.to_string()).and_then(|reply| {
+            if let Some(view) = &reply.view
+                && view.parts != live.view.parts
+            {
+                let definition = layout(view.parts.clone());
+                definition.validate().map_err(|error| error.to_string())?;
+                let updated = patch_native_scene(world, live.native, &definition)
+                    .map_err(|error| error.to_string())?;
+                if !updated {
+                    return Err("脚本控件原生布局已失效".to_owned());
+                }
+            }
+            if let Some((at, elapsed)) = reply.time {
+                live.clock.ticked(at, elapsed);
+            }
             if let Some(view) = reply.view {
-                if view.parts != live.view.parts {
-                    let definition = layout(view.parts.clone());
-                    definition.validate().map_err(|error| error.to_string())?;
-                    let updated = patch_native_scene(world, live.native, &definition)
-                        .map_err(|error| error.to_string())?;
-                    if !updated {
-                        return Err("脚本控件原生布局已失效".to_owned());
-                    }
+                if let Some(request) = view.playback {
+                    live.clock.request(request);
                 }
                 live.view = view;
                 feedback(world, status, None);
@@ -212,6 +251,9 @@ fn run_event(world: &mut World, status: Entity, live: &mut Live, host: &AgentHos
             Ok(())
         });
         if let Err(error) = applied {
+            if timed {
+                live.clock.stop();
+            }
             feedback(world, status, Some(format!("脚本控件事件失败：{error}")));
         }
     }
@@ -219,7 +261,7 @@ fn run_event(world: &mut World, status: Entity, live: &mut Live, host: &AgentHos
         let job = widget::Job::event(live.program.clone(), live.view.state.clone(), event);
         match host.run_widget(job) {
             Ok(ticket) => {
-                live.pending = Some(ticket);
+                live.pending = Some(Pending { ticket, due: None });
                 live.events.pop_front();
             }
             Err(error) => feedback(
@@ -227,6 +269,28 @@ fn run_event(world: &mut World, status: Entity, live: &mut Live, host: &AgentHos
                 status,
                 Some(format!("脚本控件暂时无法处理输入：{error}")),
             ),
+        }
+    } else if visible
+        && live.program.accepts_events()
+        && let Some(timer) = live.clock.timer()
+    {
+        let due = timer.due;
+        let job = widget::Job::tick(live.program.clone(), live.view.state.clone(), timer);
+        match host.run_widget(job) {
+            Ok(ticket) => {
+                live.pending = Some(Pending {
+                    ticket,
+                    due: Some(due),
+                })
+            }
+            Err(error) => {
+                live.clock.stop();
+                feedback(
+                    world,
+                    status,
+                    Some(format!("脚本控件无法继续播放：{error}")),
+                );
+            }
         }
     }
 }

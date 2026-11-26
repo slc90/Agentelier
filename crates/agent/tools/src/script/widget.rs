@@ -7,6 +7,7 @@ use rhai::{AST, Dynamic, Engine, Scope};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 pub const TEMPLATE: &str = "agentelier.scripted_widget";
@@ -30,6 +31,17 @@ pub struct View {
     pub parts: Vec<Value>,
     #[serde(default)]
     pub state: Map<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playback: Option<Playback>,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Playback {
+    pub running: bool,
+    pub interval_ms: u64,
+    #[serde(default)]
+    pub reset_clock: bool,
 }
 
 #[derive(Clone)]
@@ -82,6 +94,10 @@ pub enum Input {
         position: [f32; 2],
         delta: [f32; 2],
     },
+    Tick {
+        dt: f64,
+        elapsed: f64,
+    },
 }
 
 #[derive(Clone, Copy, Serialize, PartialEq, Eq)]
@@ -95,12 +111,20 @@ pub enum DragPhase {
 pub struct Reply {
     pub program: Program,
     pub view: Option<View>,
+    pub time: Option<(Instant, Duration)>,
+}
+
+pub struct Timer {
+    pub due: Instant,
+    pub last: Instant,
+    pub elapsed: Duration,
 }
 
 enum Invocation {
     Init(Box<Definition>),
     Restore(Box<Definition>, State),
     Event(Program, State, Event),
+    Tick(Program, State, Timer),
 }
 
 pub struct Job {
@@ -149,6 +173,10 @@ impl Job {
         Self::new(Invocation::Event(program, state, event))
     }
 
+    pub fn tick(program: Program, state: State, timer: Timer) -> (Self, Ticket) {
+        Self::new(Invocation::Tick(program, state, timer))
+    }
+
     fn new(invocation: Invocation) -> (Self, Ticket) {
         let (send, receive) = mpsc::channel();
         let cancel = CancellationToken::new();
@@ -171,6 +199,14 @@ impl Job {
             result,
             cancel,
         } = self;
+        if let Invocation::Tick(_, _, timer) = &invocation {
+            tokio::select! {
+                biased;
+                () = shutdown.cancelled() => return,
+                () = cancel.cancelled() => return,
+                () = tokio::time::sleep_until(timer.due.into()) => {}
+            }
+        }
         let task = evaluate(invocation, access, &cancel);
         tokio::pin!(task);
         let value = tokio::select! {
@@ -218,10 +254,23 @@ async fn evaluate(
 
 fn run(invocation: Invocation, access: EcsAccess, control: Control) -> Result<Reply, ToolFailure> {
     control.check()?;
-    let (program, state, event, restoring) = match invocation {
-        Invocation::Init(definition) => (compile(*definition)?, State::new(), None, false),
-        Invocation::Restore(definition, state) => (compile(*definition)?, state, None, true),
-        Invocation::Event(program, state, event) => (program, state, Some(event), false),
+    let (program, state, event, restoring, time) = match invocation {
+        Invocation::Init(definition) => (compile(*definition)?, State::new(), None, false, None),
+        Invocation::Restore(definition, state) => (compile(*definition)?, state, None, true, None),
+        Invocation::Event(program, state, event) => (program, state, Some(event), false, None),
+        Invocation::Tick(program, state, timer) => {
+            let now = Instant::now();
+            let dt = now.saturating_duration_since(timer.last);
+            let elapsed = timer.elapsed.saturating_add(dt);
+            let event = Event {
+                part: String::new(),
+                input: Input::Tick {
+                    dt: dt.as_secs_f64(),
+                    elapsed: elapsed.as_secs_f64(),
+                },
+            };
+            (program, state, Some(event), false, Some((now, elapsed)))
+        }
     };
     let compiled = &program.0;
     let mut engine = compiled
@@ -277,7 +326,11 @@ fn run(invocation: Invocation, access: EcsAccess, control: Control) -> Result<Re
     } else {
         Some(decode(&result)?)
     };
-    Ok(Reply { program, view })
+    Ok(Reply {
+        program,
+        view,
+        time,
+    })
 }
 
 fn compile(definition: Definition) -> Result<Program, ToolFailure> {
@@ -310,6 +363,15 @@ fn compile(definition: Definition) -> Result<Program, ToolFailure> {
 fn decode(result: &Dynamic) -> Result<View, ToolFailure> {
     let view: View = rhai::serde::from_dynamic(result)
         .map_err(|error| ToolFailure::new("invalid_widget_output", error.to_string()))?;
+    if view
+        .playback
+        .is_some_and(|play| !(16..=1000).contains(&play.interval_ms))
+    {
+        return Err(ToolFailure::new(
+            "invalid_widget_output",
+            "播放间隔 interval_ms 必须在 16 到 1000 毫秒之间",
+        ));
+    }
     if !(1..=16).contains(&view.parts.len())
         || view.parts.iter().any(|part| {
             part.pointer("/scene/template")
