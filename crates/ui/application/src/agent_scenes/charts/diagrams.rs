@@ -1,7 +1,11 @@
-pub(in crate::agent_scenes) mod geometry;
+mod geometry;
+mod graph;
+mod input;
 
 use super::{construction, plot};
-use agentelier_agent_host::{AgentHostPlugin, EcsError};
+use agentelier_agent_host::{
+    AgentHostPlugin, EcsError, MountedScene, SceneDefinition, SceneState, SceneStateWrites,
+};
 use bevy::prelude::*;
 use bevy_widgetry::{
     canvas::{
@@ -10,16 +14,14 @@ use bevy_widgetry::{
     scene::spawn_scene,
     theme::WidgetryTheme,
 };
-
-#[derive(Component)]
-struct BoardInput {
-    root: Entity,
-    canvas: Entity,
-}
+use input::{BoardInput, Gesture};
+use serde_json::{Map, Value};
 
 #[derive(Clone)]
 struct Board {
     document: Entity,
+    frame: Entity,
+    canvas: Entity,
     paths: Vec<Entity>,
     labels: Vec<Entity>,
     ink: Color,
@@ -32,11 +34,68 @@ struct Drawing {
 }
 
 pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
-    geometry::register(host)
+    graph::register(geometry::register(host)?)
 }
 
 pub(super) fn install(app: &mut App) {
-    geometry::install(app);
+    input::install(app);
+    graph::install(app);
+}
+
+pub(in crate::agent_scenes) fn saves_positions(template: &str) -> bool {
+    matches!(template, geometry::TEMPLATE | graph::TEMPLATE)
+}
+
+pub(in crate::agent_scenes) fn snapshot(world: &World, root: Entity) -> Option<Map<String, Value>> {
+    geometry::snapshot(world, root).or_else(|| graph::snapshot(world, root))
+}
+
+pub(in crate::agent_scenes) fn restore_definition(
+    scene: &mut SceneDefinition,
+    values: &Map<String, Value>,
+    overwrite: bool,
+) -> Result {
+    match scene.template.as_str() {
+        geometry::TEMPLATE => geometry::restore_definition(scene, values, overwrite),
+        graph::TEMPLATE => graph::restore_definition(scene, values, overwrite),
+        _ => Ok(()),
+    }
+}
+
+pub(in crate::agent_scenes) fn inherit_definition(
+    scene: &mut SceneDefinition,
+    previous: &SceneDefinition,
+) -> Result {
+    if scene.template != previous.template {
+        return Ok(());
+    }
+    match scene.template.as_str() {
+        geometry::TEMPLATE => geometry::inherit_definition(scene, previous),
+        graph::TEMPLATE => graph::inherit_definition(scene, previous),
+        _ => Ok(()),
+    }
+}
+
+fn persist_positions(world: &mut World, root: Entity) {
+    if let Some(&mount) = world.get::<MountedScene>(root) {
+        let Some(values) = snapshot(world, root) else {
+            return;
+        };
+        let state = SceneState {
+            revision: mount.revision,
+            values,
+            part_values: Default::default(),
+        };
+        world
+            .resource_mut::<SceneStateWrites>()
+            .schedule(root, mount, state);
+    } else if let Some(owner) = world
+        .get::<ChildOf>(root)
+        .and_then(|area| world.get::<ChildOf>(area.parent()))
+        .map(ChildOf::parent)
+    {
+        crate::agent_scenes::composition::schedule_save(world, owner);
+    }
 }
 
 impl Board {
@@ -45,7 +104,7 @@ impl Board {
         root: Entity,
         title: Option<String>,
         drawing: Drawing,
-        interactive: bool,
+        gesture: Option<Gesture>,
     ) -> Result<Self, EcsError> {
         let document = plot::document(world, root)?;
         let color = world.resource::<WidgetryTheme>().text.normal.foreground;
@@ -62,14 +121,14 @@ impl Board {
         }).map_err(construction)?;
         let canvas =
             plot::viewport_in(world, wrapper).ok_or_else(|| construction("示意图缺少原生画布"))?;
-        if interactive {
-            let input = world
-                .get::<ChildOf>(canvas)
-                .ok_or_else(|| construction("示意图缺少指针区域"))?
-                .parent();
+        let frame = world
+            .get::<ChildOf>(canvas)
+            .ok_or_else(|| construction("示意图缺少指针区域"))?
+            .parent();
+        if let Some(gesture) = gesture {
             world
-                .entity_mut(input)
-                .insert((BoardInput { root, canvas }, Pickable::default()));
+                .entity_mut(frame)
+                .insert((BoardInput::new(root, canvas, gesture), Pickable::default()));
         }
         let (paths, labels) = CanvasDocument::edit(world, document, |world, token| {
             let paths = drawing
@@ -97,6 +156,8 @@ impl Board {
         .map_err(construction)?;
         Ok(Self {
             document,
+            frame,
+            canvas,
             paths,
             labels,
             ink: color,
@@ -131,6 +192,12 @@ impl Board {
             Ok(())
         })?;
         Ok(())
+    }
+
+    fn reset_input(&self, world: &mut World) {
+        if let Some(mut input) = world.get_mut::<BoardInput>(self.frame) {
+            input.reset();
+        }
     }
 }
 

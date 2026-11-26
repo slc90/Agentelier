@@ -1,13 +1,10 @@
 mod model;
 mod render;
 
-use super::{Board, BoardInput, Drawing, construction, plot, pointer_position};
-use agentelier_agent_host::{
-    AgentHostPlugin, EcsError, MountedScene, SceneDefinition, SceneState, SceneStateWrites,
-    SceneStored,
-};
+use super::{Board, Drawing, Gesture, construction, plot};
+use agentelier_agent_host::{AgentHostPlugin, EcsError, SceneDefinition, SceneState, SceneStored};
 use agentelier_markdown::{MarkdownSource, MarkdownView};
-use bevy::{picking::pointer::PointerId, prelude::*};
+use bevy::prelude::*;
 use bevy_widgetry::scene::spawn_scene;
 use model::{Model, Properties};
 use serde_json::{Map, Value};
@@ -20,15 +17,9 @@ struct Geometry {
     board: Board,
     model: Model,
     details: Entity,
-    drag: Option<Drag>,
 }
 
-struct Drag {
-    index: usize,
-    pointer: PointerId,
-    offset: Vec2,
-    changed: bool,
-}
+const GESTURE: Gesture = Gesture { pick, adjust };
 
 pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
     host.with_ecs_scene_factory(
@@ -43,14 +34,6 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         build, None, Some(prepare),
     )?.with_conditional_ecs_scene_update(TEMPLATE, patch)?
       .with_ecs_scene_restore(TEMPLATE, restore, prepare_unmounted)
-}
-
-pub(super) fn install(app: &mut App) {
-    app.add_observer(press)
-        .add_observer(drag)
-        .add_observer(release)
-        .add_observer(end_drag)
-        .add_observer(cancel_drag);
 }
 
 fn build(world: &mut World, parent: Entity, props: Properties) -> Result<Entity, EcsError> {
@@ -68,7 +51,7 @@ fn build(world: &mut World, parent: Entity, props: Properties) -> Result<Entity,
             root,
             model.title.clone(),
             drawing,
-            model.interactive(),
+            model.interactive().then_some(GESTURE),
         )?;
         let details = model.details();
         let details = spawn_scene(world, bsn! {
@@ -78,7 +61,6 @@ fn build(world: &mut World, parent: Entity, props: Properties) -> Result<Entity,
             board,
             model,
             details,
-            drag: None,
         });
         Ok(root)
     })();
@@ -105,11 +87,11 @@ fn patch(world: &mut World, root: Entity, props: Properties) -> Result<bool> {
     let board = live.board.clone();
     let details = live.details;
     apply(world, &board, details, drawing, &model)?;
+    board.reset_input(world);
     world.entity_mut(root).insert(Geometry {
         board,
         model,
         details,
-        drag: None,
     });
     Ok(true)
 }
@@ -182,130 +164,21 @@ pub(in crate::agent_scenes) fn inherit_definition(
     Ok(())
 }
 
-fn press(event: On<PointerPress>, inputs: Query<&BoardInput>, mut commands: Commands) {
-    if event.button != PointerButton::Primary || inputs.get(event.entity).is_err() {
-        return;
-    }
-    let (entity, screen, pointer) = (event.entity, event.pointer.position, event.pointer.id);
-    commands.queue(move |world: &mut World| {
-        let Some(input) = world.get::<BoardInput>(entity) else {
-            return;
-        };
-        let Some((point, zoom)) = pointer_position(world, input, screen) else {
-            return;
-        };
-        let root = input.root;
+fn pick(world: &World, root: Entity, point: Vec2, radius: f32) -> Option<(usize, Vec2)> {
+    world.get::<Geometry>(root)?.model.pick(point, radius)
+}
+
+fn adjust(world: &mut World, root: Entity, index: usize, point: Vec2) -> Result<bool> {
+    let (board, drawing) = {
         let Some(mut geometry) = world.get_mut::<Geometry>(root) else {
-            return;
+            return Ok(false);
         };
-        if geometry.drag.is_some() {
-            return;
+        let target = geometry.model.plane.unmap(point);
+        if !geometry.model.move_point(index, target)? {
+            return Ok(false);
         }
-        if let Some((index, at)) = geometry.model.pick(point, 15.0 / zoom) {
-            geometry.drag = Some(Drag {
-                index,
-                pointer,
-                offset: at - point,
-                changed: false,
-            });
-        }
-    });
-}
-
-fn drag(event: On<PointerDrag>, inputs: Query<&BoardInput>, mut commands: Commands) {
-    if event.button != PointerButton::Primary || inputs.get(event.entity).is_err() {
-        return;
-    }
-    let (entity, screen, pointer) = (event.entity, event.pointer.position, event.pointer.id);
-    commands.queue(move |world: &mut World| -> Result {
-        let Some(input) = world.get::<BoardInput>(entity) else {
-            return Ok(());
-        };
-        let Some((point, _)) = pointer_position(world, input, screen) else {
-            return Ok(());
-        };
-        let root = input.root;
-        let update = {
-            let Some(mut geometry) = world.get_mut::<Geometry>(root) else {
-                return Ok(());
-            };
-            let Some(drag) = geometry
-                .drag
-                .as_ref()
-                .filter(|drag| drag.pointer == pointer)
-            else {
-                return Ok(());
-            };
-            let target = geometry.model.plane.unmap(point + drag.offset);
-            let index = drag.index;
-            if !geometry.model.move_point(index, target)? {
-                return Ok(());
-            }
-            if let Some(drag) = &mut geometry.drag {
-                drag.changed = true;
-            }
-            (geometry.board.clone(), geometry.model.drawing())
-        };
-        update.0.plot(world, update.1)
-    });
-}
-
-fn release(event: On<PointerRelease>, inputs: Query<&BoardInput>, mut commands: Commands) {
-    if event.button == PointerButton::Primary
-        && let Ok(input) = inputs.get(event.entity)
-    {
-        let (root, pointer) = (input.root, event.pointer.id);
-        commands.queue(move |world: &mut World| finish(world, root, pointer));
-    }
-}
-
-fn end_drag(event: On<PointerDragEnd>, inputs: Query<&BoardInput>, mut commands: Commands) {
-    if event.button == PointerButton::Primary
-        && let Ok(input) = inputs.get(event.entity)
-    {
-        let (root, pointer) = (input.root, event.pointer.id);
-        commands.queue(move |world: &mut World| finish(world, root, pointer));
-    }
-}
-
-fn cancel_drag(event: On<PointerCancel>, inputs: Query<&BoardInput>, mut commands: Commands) {
-    if let Ok(input) = inputs.get(event.entity) {
-        let (root, pointer) = (input.root, event.pointer.id);
-        commands.queue(move |world: &mut World| finish(world, root, pointer));
-    }
-}
-
-fn finish(world: &mut World, root: Entity, pointer: PointerId) {
-    let Some(mut geometry) = world.get_mut::<Geometry>(root) else {
-        return;
+        (geometry.board.clone(), geometry.model.drawing())
     };
-    if !geometry
-        .drag
-        .as_ref()
-        .is_some_and(|drag| drag.pointer == pointer)
-    {
-        return;
-    }
-    if !geometry.drag.take().is_some_and(|drag| drag.changed) {
-        return;
-    }
-    if let Some(&mount) = world.get::<MountedScene>(root) {
-        let Some(values) = snapshot(world, root) else {
-            return;
-        };
-        let state = SceneState {
-            revision: mount.revision,
-            values,
-            part_values: Default::default(),
-        };
-        world
-            .resource_mut::<SceneStateWrites>()
-            .schedule(root, mount, state);
-    } else if let Some(owner) = world
-        .get::<ChildOf>(root)
-        .and_then(|area| world.get::<ChildOf>(area.parent()))
-        .map(ChildOf::parent)
-    {
-        crate::agent_scenes::composition::schedule_save(world, owner);
-    }
+    board.plot(world, drawing)?;
+    Ok(true)
 }
