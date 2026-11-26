@@ -48,7 +48,7 @@ pub enum BridgeEventKind {
     MemoryProgress(Box<agentelier_conversation_bridge::SessionView>),
     MemoryWork(crate::MemoryWorkState),
     ImageAttachment(Result<crate::ImageAttachmentReply, String>),
-    AudioPlayback(Result<std::sync::Arc<[u8]>, String>),
+    SavedAudio(Result<std::sync::Arc<[u8]>, String>),
     McpMaterial(Result<crate::MaterialReply, String>),
 }
 #[derive(Clone, Debug)]
@@ -110,7 +110,7 @@ pub struct Connection {
     pending_projects: HashSet<u64>,
     pending_session_models: HashMap<u64, SessionId>,
     pending_images: HashSet<u64>,
-    pending_audio_playback: HashSet<u64>,
+    pending_saved_audio: HashSet<u64>,
     pending_audio: HashMap<u64, SessionId>,
 }
 impl Connection {
@@ -153,7 +153,7 @@ impl Connection {
                         AgentEventKind::MemoryProgress(view) => BridgeEventKind::MemoryProgress(Box::new(agentelier_conversation_bridge::session_view(*view))),
                         AgentEventKind::MemoryWork(status) => BridgeEventKind::MemoryWork(status),
                         AgentEventKind::ImageAttachment(reply) => BridgeEventKind::ImageAttachment(reply),
-                        AgentEventKind::AudioPlayback(reply) => BridgeEventKind::AudioPlayback(reply),
+                        AgentEventKind::SavedAudio(reply) => BridgeEventKind::SavedAudio(reply),
                         AgentEventKind::McpMaterial(reply) => BridgeEventKind::McpMaterial(reply),
                         AgentEventKind::McpStatus(status) => BridgeEventKind::McpStatus(status),
                         AgentEventKind::McpConfig(result) => {
@@ -226,7 +226,7 @@ impl Connection {
             pending_projects: HashSet::new(),
             pending_session_models: HashMap::new(),
             pending_images: HashSet::new(),
-            pending_audio_playback: HashSet::new(),
+            pending_saved_audio: HashSet::new(),
             pending_audio: HashMap::new(),
         })
     }
@@ -245,7 +245,7 @@ impl Connection {
         Ok(id)
     }
 
-    pub fn request_audio_playback(
+    pub fn request_saved_audio(
         &mut self,
         session: SessionId,
         audio: SessionId,
@@ -258,9 +258,9 @@ impl Connection {
             .allocate()
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
         self.runtime
-            .request_audio_playback(id, session, audio)
+            .request_saved_audio(id, session, audio)
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
-        self.pending_audio_playback.insert(id);
+        self.pending_saved_audio.insert(id);
         Ok(id)
     }
 
@@ -808,8 +808,8 @@ impl Connection {
                     }
                     return Ok(Some(event));
                 }
-                if matches!(event.kind, BridgeEventKind::AudioPlayback(_)) {
-                    if !self.pending_audio_playback.remove(&event.operation_id) {
+                if matches!(event.kind, BridgeEventKind::SavedAudio(_)) {
+                    if !self.pending_saved_audio.remove(&event.operation_id) {
                         return self.protocol_failure();
                     }
                     return Ok(Some(event));
@@ -838,7 +838,7 @@ impl Connection {
                     | BridgeEventKind::MemoryProgress(_)
                     | BridgeEventKind::MemoryWork(_)
                     | BridgeEventKind::ImageAttachment(_)
-                    | BridgeEventKind::AudioPlayback(_)
+                    | BridgeEventKind::SavedAudio(_)
                     | BridgeEventKind::Skills(_)
                     | BridgeEventKind::McpConfig(_)
                     | BridgeEventKind::McpMaterial(_) => {

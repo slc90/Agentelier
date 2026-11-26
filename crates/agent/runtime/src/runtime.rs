@@ -72,7 +72,7 @@ pub enum AgentEventKind {
     MemoryProgress(Box<agentelier_conversation::SessionView>),
     MemoryWork(MemoryWorkState),
     ImageAttachment(Result<ImageAttachmentReply, String>),
-    AudioPlayback(Result<Arc<[u8]>, String>),
+    SavedAudio(Result<Arc<[u8]>, String>),
 }
 #[derive(Debug)]
 pub enum RuntimeFailure {
@@ -144,7 +144,7 @@ enum Command {
     MemoryDialogue(memory_dialogue::Signal),
     MemoryWork(MemoryWorkState),
     ImageAttachment(u64, SessionId, String, ImageAttachmentAction),
-    AudioPlayback(u64, SessionId, AudioId),
+    SavedAudio(u64, SessionId, AudioId),
     AttachmentFinished(u64, AttachmentReply),
     AudioDraft(u64, SessionId, Option<PathBuf>),
     TranscribeAudio(u64, SessionId, AudioId),
@@ -730,15 +730,15 @@ impl AgentRuntime {
                                             emit(&publish, id, AgentEventKind::ImageAttachment(Err("当前会话没有这张已确认的图片".into())))?;
                                         }
                                     }
-                                    Command::AudioPlayback(id, session, audio) => {
-                                        if let Some(audio) = conversation.playback_audio(session, audio).filter(|_| !deleting_target) {
+                                    Command::SavedAudio(id, session, audio) => {
+                                        if let Some(audio) = conversation.saved_audio(session, audio).filter(|_| !deleting_target) {
                                             let client = store.client();
                                             attachments.spawn(async move {
                                                 let result = client.read_audio(session, audio).await.map(Arc::from);
                                                 (id, AttachmentReply::Audio(result))
                                             });
                                         } else {
-                                            emit(&publish, id, AgentEventKind::AudioPlayback(Err("当前会话没有此音频附件".into())))?;
+                                            emit(&publish, id, AgentEventKind::SavedAudio(Err("当前会话没有此音频附件".into())))?;
                                         }
                                     }
                                     Command::AttachmentFinished(id, reply) => {
@@ -751,9 +751,9 @@ impl AgentRuntime {
                                             }
                                             AttachmentReply::Audio(result) => {
                                                 if let Err(failure) = &result {
-                                                    error!(operation_id = id, error = %failure, "读取播放音频失败");
+                                                    error!(operation_id = id, error = %failure, "读取已保存音频失败");
                                                 }
-                                                AgentEventKind::AudioPlayback(result.map_err(|failure| failure.to_string()))
+                                                AgentEventKind::SavedAudio(result.map_err(|failure| failure.to_string()))
                                             }
                                         };
                                         emit(&publish, id, kind)?;
@@ -1738,13 +1738,13 @@ impl AgentRuntime {
         self.submit(Command::AudioDraft(id, session, path))
     }
 
-    pub fn request_audio_playback(
+    pub fn request_saved_audio(
         &self,
         id: u64,
         session: SessionId,
         audio: AudioId,
     ) -> Result<(), RuntimeFailure> {
-        self.submit(Command::AudioPlayback(id, session, audio))
+        self.submit(Command::SavedAudio(id, session, audio))
     }
 
     pub fn transcribe_audio(

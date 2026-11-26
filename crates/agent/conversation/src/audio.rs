@@ -204,7 +204,7 @@ impl AudioAttachment {
 }
 
 impl Conversation {
-    pub fn playback_audio(&self, session: SessionId, audio: AudioId) -> Option<AudioAttachment> {
+    pub fn saved_audio(&self, session: SessionId, audio: AudioId) -> Option<AudioAttachment> {
         let view = &self
             .session
             .as_ref()

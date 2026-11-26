@@ -33,20 +33,19 @@ impl From<AudioAttachmentView> for ChatAudio {
 
 impl ChatAudio {
     fn label(&self) -> String {
-        let seconds = self.duration_ms as f64 / 1000.0;
         let kib = self.encoded_bytes as f64 / 1024.0;
         let format = match self.mime.as_str() {
             "audio/wav" => "WAV",
             "audio/flac" => "FLAC",
             _ => "MP3",
         };
-        format!("{} · {format} · {seconds:.2} 秒 · {kib:.1} KiB", self.name)
+        format!("{} · {format} · {kib:.1} KiB", self.name)
     }
 }
 
 pub(super) fn published_card(session: SessionId, audio: ChatAudio) -> impl Scene {
     let label = audio.label();
-    let controls = super::audio_playback::controls(session, audio.id, audio.duration_ms);
+    let controls = super::audio_playback::controls(session, &audio);
     bsn! {
         Name("ChatPublishedAudio")
         Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(4) }
@@ -100,7 +99,7 @@ pub(crate) fn draft_panel() -> impl Scene {
 pub(crate) fn card(session: SessionId, audio: ChatAudio) -> impl Scene {
     let metadata = audio.label();
     let id = audio.id;
-    let controls = super::audio_playback::controls(session, id, audio.duration_ms);
+    let controls = super::audio_playback::controls(session, &audio);
     bsn! {
         Node { flex_direction: FlexDirection::Column, padding: UiRect::all(px(8)), row_gap: px(4), align_self: AlignSelf::Start, max_width: percent(100), flex_shrink: 0.0 }
         Children [Text("音频附件") WidgetryText-- Text(metadata) WidgetryText-- @controls--
@@ -168,7 +167,13 @@ fn synchronize(
     let session = chat.session.as_ref();
     let draft = session.and_then(|session| session.audio_draft.as_ref());
     let metadata = draft
-        .map(|audio| format!("随下一条直接发送的消息附上 {}", audio.label()))
+        .map(|audio| {
+            let seconds = audio.duration_ms as f64 / 1000.0;
+            format!(
+                "随下一条直接发送的消息附上 {} · {seconds:.2} 秒",
+                audio.label()
+            )
+        })
         .unwrap_or_default();
     let feedback = if media.pending.is_some() {
         "正在移除音频附件…"

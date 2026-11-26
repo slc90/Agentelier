@@ -214,6 +214,7 @@ dependencies = [
  "agentelier_login_ui",
  "agentelier_markdown",
  "agentelier_prompts",
+ "agentelier_session_store",
  "bevy",
  "bevy_app_assets",
  "bevy_widgetry",

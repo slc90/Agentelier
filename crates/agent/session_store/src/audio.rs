@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{self, Cursor, Read};
 use std::path::Path;
 use std::sync::Arc;
+use symphonia::core::audio::GenericAudioBufferRef;
 use symphonia::core::codecs::audio::well_known::{CODEC_ID_FLAC, CODEC_ID_MP3};
 use symphonia::core::formats::{TrackType, probe::Hint};
 use symphonia::core::io::MediaSourceStream;
@@ -23,6 +24,51 @@ pub(super) fn checksum(bytes: &[u8]) -> String {
 pub(super) enum Source {
     Draft,
     Published,
+}
+
+const AUDIO_ENVELOPE_BINS: usize = 512;
+
+#[derive(Clone, Copy, Default)]
+pub struct AudioExtrema {
+    pub min: f32,
+    pub max: f32,
+}
+
+pub fn summarize_audio(bytes: Arc<[u8]>, duration_ms: u64) -> io::Result<Vec<AudioExtrema>> {
+    let mut bins = Vec::<AudioExtrema>::new();
+    let mut samples = Vec::<f32>::new();
+    let mut frame_index = 0_u64;
+    let mut last_bin = 0;
+    inspect(bytes, Source::Published, |audio| {
+        let channels = audio.spec().channels().count();
+        if channels == 0 {
+            return Err(io::Error::other("音频没有可解码的声道"));
+        }
+        // Stored duration is rounded up to milliseconds. Drop the trailing bins with no frames.
+        let estimated_frames = duration_ms
+            .saturating_mul(u64::from(audio.spec().rate()))
+            .div_ceil(1000)
+            .max(1);
+        let bin_count = estimated_frames.min(AUDIO_ENVELOPE_BINS as u64);
+        bins.resize(bin_count as usize, AudioExtrema::default());
+        audio.copy_to_vec_interleaved(&mut samples);
+        for frame in samples.chunks_exact(channels) {
+            last_bin = (frame_index * bin_count / estimated_frames).min(bin_count - 1) as usize;
+            let bin = &mut bins[last_bin];
+            for &sample in frame {
+                if !sample.is_finite() {
+                    return Err(io::Error::other("音频包含非有限样本"));
+                }
+                let sample = sample.clamp(-1.0, 1.0);
+                bin.min = bin.min.min(sample);
+                bin.max = bin.max.max(sample);
+            }
+            frame_index += 1;
+        }
+        Ok(())
+    })?;
+    bins.truncate(last_bin + 1);
+    Ok(bins)
 }
 
 pub(super) fn import(path: &Path, source: Source) -> io::Result<ImportedAudio> {
@@ -64,7 +110,7 @@ pub(super) fn import(path: &Path, source: Source) -> io::Result<ImportedAudio> {
         return Err(io::Error::other("音频为空或文件在读取期间变化"));
     }
     let bytes: Arc<[u8]> = bytes.into();
-    let (format, duration_ms) = inspect(bytes.clone(), source)?;
+    let (format, duration_ms) = inspect(bytes.clone(), source, |_| Ok(()))?;
     let attachment = AudioAttachment {
         id: AudioId::new_v4(),
         name,
@@ -77,7 +123,11 @@ pub(super) fn import(path: &Path, source: Source) -> io::Result<ImportedAudio> {
     Ok(ImportedAudio { attachment, bytes })
 }
 
-fn inspect(bytes: Arc<[u8]>, source: Source) -> io::Result<(AudioFormat, u64)> {
+fn inspect(
+    bytes: Arc<[u8]>,
+    source: Source,
+    mut visit: impl FnMut(GenericAudioBufferRef<'_>) -> io::Result<()>,
+) -> io::Result<(AudioFormat, u64)> {
     let wav = bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WAVE");
     if wav
         && let Some(header) = bytes
@@ -132,6 +182,7 @@ fn inspect(bytes: Arc<[u8]>, source: Source) -> io::Result<(AudioFormat, u64)> {
             return Err(io::Error::other("文件包含无效或变化的音频采样率"));
         }
         frames += audio.frames() as u64;
+        visit(audio)?;
     }
     let rate = rate
         .filter(|_| frames != 0)

@@ -9,6 +9,7 @@ mod projects;
 mod reader;
 mod store;
 
+pub use audio::{AudioExtrema, summarize_audio};
 pub use store::{
     Commit, FORMAT, FORMAT_VERSION, MetadataCommit, Record, RecordKind, SessionStore,
     SessionStoreClient,

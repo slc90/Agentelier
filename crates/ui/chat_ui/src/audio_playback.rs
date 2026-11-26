@@ -1,5 +1,5 @@
 use crate::conversation::ChatState;
-use agentelier_agent_host::{AgentHost, AudioPlaybackEvent, HostFailed};
+use agentelier_agent_host::{AgentHost, HostFailed, SavedAudioEvent};
 use agentelier_controls::AgentelierButton;
 use agentelier_conversation_bridge::SessionId;
 use bevy::audio::{AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackSettings};
@@ -13,14 +13,17 @@ use bevy_widgetry::text::WidgetryText;
 use std::io::Cursor;
 use std::time::{Duration, Instant};
 
+mod waveform;
+
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 const SINK_TIMEOUT: Duration = Duration::from_secs(3);
 
-#[derive(Component, Clone, Copy)]
+#[derive(Component, Clone)]
 struct AudioClip {
     session: SessionId,
     id: SessionId,
     duration_ms: u64,
+    digest: String,
 }
 
 #[derive(Component, Clone, Default, PartialEq, Reflect)]
@@ -46,8 +49,6 @@ enum PlaybackPhase {
 struct PlaybackButton;
 #[derive(Component, Clone, Default)]
 struct PlaybackLabel;
-#[derive(Component, Clone, Default)]
-struct PlaybackTime;
 #[derive(Component, Clone, Default)]
 struct PlaybackError;
 
@@ -76,6 +77,7 @@ struct Output {
 }
 
 pub(super) fn install(app: &mut App) {
+    waveform::install(app);
     app.init_resource::<Playback>()
         .register_type::<AudioPlaybackStatus>()
         .add_systems(
@@ -84,19 +86,25 @@ pub(super) fn install(app: &mut App) {
         );
 }
 
-pub(super) fn controls(session: SessionId, id: SessionId, duration_ms: u64) -> impl Scene {
+pub(super) fn controls(
+    session: SessionId,
+    audio: &super::audio_attachment::ChatAudio,
+) -> impl Scene + use<> {
     let clip = AudioClip {
         session,
-        id,
-        duration_ms,
+        id: audio.id,
+        duration_ms: audio.duration_ms,
+        digest: audio.digest.clone(),
     };
+    let duration = time_label(clip.duration_ms);
     bsn! {
-        Name("ChatAudioPlayback") template(move |_| Ok(clip)) AudioPlaybackStatus
+        Name("ChatAudioPlayback") template(move |_| Ok(clip.clone())) AudioPlaybackStatus
         Node { width: percent(100), min_width: px(0), align_items: AlignItems::Center, column_gap: px(8), row_gap: px(4), flex_wrap: FlexWrap::Wrap }
         Children [
             @AgentelierButton { @children: bsn_list! { Name("ChatAudioPlaybackLabel") PlaybackLabel Text("播放") WidgetryText } }
             Name("ChatAudioTogglePlayback") PlaybackButton on(activate)--
-            Name("ChatAudioPlaybackTime") PlaybackTime Text::default() WidgetryText--
+            @waveform::view()--
+            Name("ChatAudioPlaybackTime") Text(duration) WidgetryText--
             Name("ChatAudioPlaybackError") PlaybackError Text::default() WidgetryText
             TextLayout::linebreak(LineBreak::AnyCharacter)
             Node { display: Display::None, width: percent(100), min_width: px(0) }
@@ -116,7 +124,7 @@ fn activate(
 
 fn drive(
     world: &mut World,
-    mut receipts: Local<MessageCursor<AudioPlaybackEvent>>,
+    mut receipts: Local<MessageCursor<SavedAudioEvent>>,
     mut failures: Local<MessageCursor<HostFailed>>,
     mut exits: Local<MessageCursor<AppExit>>,
 ) {
@@ -134,14 +142,9 @@ fn drive(
     world.resource_scope(|world, mut playback: Mut<Playback>| {
         let mut active = playback.active.take();
         let requested = playback.requested.take();
-        if exiting
-            || active
-                .as_ref()
-                .is_some_and(|active| !belongs(world, active.card, session))
+        if let Some(old) = active.take_if(|active| exiting || !belongs(world, active.card, session))
         {
-            if let Some(old) = active.take() {
-                reset(world, old);
-            }
+            reset(world, old);
         }
         if let Some(card) = requested.filter(|&card| !exiting && belongs(world, card, session)) {
             let restart = match active.as_mut().filter(|active| active.card == card) {
@@ -175,7 +178,7 @@ fn drive(
             }
         }
 
-        let received = receipts.read(world.resource::<Messages<AudioPlaybackEvent>>());
+        let received = receipts.read(world.resource::<Messages<SavedAudioEvent>>());
         if let Some(Active {
             card,
             source: Source::Reading { operation, expires },
@@ -220,10 +223,10 @@ fn belongs(world: &World, card: Entity, session: Option<SessionId>) -> bool {
 }
 
 fn request(world: &mut World, card: Entity, now: Instant) -> Option<Active> {
-    let clip = *world.get::<AudioClip>(card)?;
+    let clip = world.get::<AudioClip>(card)?;
     match world
         .resource::<AgentHost>()
-        .request_audio_playback(clip.session, clip.id)
+        .request_saved_audio(clip.session, clip.id)
     {
         Ok(operation) => {
             set_status(world, card, PlaybackPhase::Loading, 0);
@@ -354,22 +357,14 @@ fn set_status(world: &mut World, card: Entity, phase: PlaybackPhase, position_ms
 }
 
 fn present(
-    cards: Query<(&AudioClip, &AudioPlaybackStatus, &Children), Changed<AudioPlaybackStatus>>,
+    cards: Query<(&AudioPlaybackStatus, &Children), Changed<AudioPlaybackStatus>>,
     buttons: Query<Has<InteractionDisabled>, With<PlaybackButton>>,
     descendants: Query<&Children>,
-    mut labels: Query<
-        &mut Text,
-        (
-            With<PlaybackLabel>,
-            Without<PlaybackTime>,
-            Without<PlaybackError>,
-        ),
-    >,
-    mut times: Query<&mut Text, (With<PlaybackTime>, Without<PlaybackError>)>,
+    mut labels: Query<&mut Text, (With<PlaybackLabel>, Without<PlaybackError>)>,
     mut errors: Query<(&mut Text, &mut Node), With<PlaybackError>>,
     mut commands: Commands,
 ) {
-    for (clip, state, children) in &cards {
+    for (state, children) in &cards {
         let (label, busy, reason) = match &state.phase {
             PlaybackPhase::Loading => ("正在加载", true, ""),
             PlaybackPhase::WaitingForOutput => ("正在连接音频输出", true, ""),
@@ -401,12 +396,6 @@ fn present(
                 if !busy && disabled {
                     commands.entity(item).remove::<InteractionDisabled>();
                 }
-            } else if let Ok(mut text) = times.get_mut(item) {
-                text.set_if_neq(Text::new(format!(
-                    "{} / {}",
-                    time_label(state.position_ms),
-                    time_label(clip.duration_ms),
-                )));
             }
         }
     }

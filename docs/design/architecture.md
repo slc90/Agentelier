@@ -57,6 +57,7 @@ flowchart TD
     ChatUI --> ModelBridge["Bridge · llm_model"]
     ChatUI --> ConversationBridge["Bridge · conversation"]
     ChatUI --> Prompts["Agent · prompts"]
+    ChatUI --> SessionStore
     ChatUI --> Assets
     Host --> AccountBridge
     Host --> ModelBridge
@@ -103,7 +104,7 @@ flowchart TD
     Account --> Login
 ```
 
-图中为内部 Crate 的直接依赖。UI 库另依赖 Bevy、Widgetry 及路径转换库。Login 直接依赖只使用标准库的 `bevy_widgetry_path_display`，复用 Shell 路径前缀简化。Application 通过 Bevy 装配原生音频并按配置安装 BRP Runtime。Chat UI 使用 Bevy 底层的 Rodio 解码器预检音频。Agent 与 Bridge 不依赖 Bevy，不访问 Entity、Component 或 World，也不安装日志 Subscriber。
+图中为内部 Crate 的直接依赖。UI 库另依赖 Bevy、Widgetry 及路径转换库。Login 直接依赖只使用标准库的 `bevy_widgetry_path_display`，复用 Shell 路径前缀简化。Application 通过 Bevy 装配原生音频并按配置安装 BRP Runtime。Chat UI 使用 Bevy 底层的 Rodio 解码器预检播放，复用 Session Store 的 Symphonia 解码生成波形摘要。两条路径都从 Runtime 请求会话授权且已校验的原件。Agent 与 Bridge 不依赖 Bevy，不访问 Entity、Component 或 World，也不安装日志 Subscriber。
 
 `app/Cargo.toml` 通过 `[package.metadata.bevy_brp].apps` 登记 `agentelier` 二进制，BRP MCP 据此发现入口，Bevy 与 BRP 的实际装配仍由 application 负责。
 
