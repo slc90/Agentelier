@@ -34,6 +34,7 @@ impl std::io::Write for RequestBytes {
 }
 
 pub struct GenerationRequest {
+    pub behavior: Option<String>,
     pub memory: Option<crate::MemorySnapshot>,
     pub transcript: Option<crate::TranscriptEvidence>,
     pub selected_skills: Vec<agentelier_skills::SelectedSkill>,
@@ -71,6 +72,8 @@ pub struct RequestProjection {
     pub compaction: Option<RequestCompaction>,
     #[serde(default, skip_serializing_if = "ToolContract::is_flat")]
     pub tool_contract: ToolContract,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior: Option<BehaviorMaterial>,
     #[serde(default)]
     pub skill_materials: Vec<SkillMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,6 +88,13 @@ pub struct RequestProjection {
     pub payload_bytes: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fixed_bytes: Option<usize>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct BehaviorMaterial {
+    pub input_index: usize,
+    pub text: String,
+    pub hash: String,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -182,7 +192,15 @@ impl RequestProjection {
                 return Err(crate::model::protocol("冻结请求的开放调用或压缩策略不一致"));
             }
         }
-        let memory_index = usize::from(self.additional_tools_in_input()) + self.base_hashes.len();
+        let behavior_index = usize::from(self.additional_tools_in_input()) + self.base_hashes.len();
+        if let Some(behavior) = &self.behavior
+            && (behavior.input_index != behavior_index
+                || behavior.text.trim().is_empty()
+                || behavior.hash != agentelier_prompts::content_hash(&behavior.text))
+        {
+            return Err(crate::model::protocol("任务情境材料位置或摘要无效"));
+        }
+        let memory_index = behavior_index + usize::from(self.behavior.is_some());
         let transcript_index = memory_index + usize::from(self.memory.is_some());
         let catalog_index = transcript_index + usize::from(self.transcript.is_some());
         if let Some(memory) = &self.memory {
@@ -286,6 +304,15 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
             .into_iter()
             .map(|message| serde_json::json!({"role": message.role, "content": message.text})),
     );
+    let behavior = generation.behavior.map(|text| {
+        let material = BehaviorMaterial {
+            input_index: input.len(),
+            hash: agentelier_prompts::content_hash(&text),
+            text,
+        };
+        input.push(serde_json::json!({ "role": "developer", "content": material.text }));
+        material
+    });
     let memory = generation
         .memory
         .map(|snapshot| {
@@ -383,6 +410,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         route: RecordedModelSource::Codex,
         compaction: Some(compaction),
         tool_contract: contract,
+        behavior,
         skill_materials,
         memory,
         transcript,

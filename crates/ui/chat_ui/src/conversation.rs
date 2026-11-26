@@ -99,7 +99,15 @@ pub struct ChatRequestMemory {
 }
 
 #[derive(Clone, Reflect)]
+pub struct ChatRequestBehavior {
+    pub hash: String,
+    pub text: String,
+    pub input_index: usize,
+}
+
+#[derive(Clone, Reflect)]
 pub struct ChatRequest {
+    pub behavior: Option<ChatRequestBehavior>,
     pub transcript: Option<(usize, crate::transcription::ChatTranscriptReference)>,
     pub response_accepted: Option<bool>,
     pub additional_tools_in_input: bool,
@@ -866,6 +874,11 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
             .requests
             .into_iter()
             .map(|fact| ChatRequest {
+                behavior: fact.behavior.map(|material| ChatRequestBehavior {
+                    hash: material.hash,
+                    text: material.text,
+                    input_index: material.input_index,
+                }),
                 transcript: fact
                     .transcript
                     .map(|(index, source)| (index, source.into())),

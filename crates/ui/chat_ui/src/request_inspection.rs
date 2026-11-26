@@ -34,6 +34,7 @@ struct Metadata;
 #[derive(Component, Clone, Copy)]
 enum Body {
     Base,
+    Behavior,
     Project,
     Order,
     Memory,
@@ -76,8 +77,10 @@ pub(crate) fn panel() -> impl Scene {
                 @button("最近请求", "InspectLastRequest", Navigate::Last)
             ]--
             Text::default() WidgetryText Metadata Name("SelectedRequestMetadata") TextLayout::linebreak(LineBreak::AnyCharacter)--
-            Text("固定基础与 supplements · developer · 按保存顺序") WidgetryText--
+            Text("固定指令 · developer · 按保存顺序") WidgetryText--
             @field("SelectedRequestBase", Body::Base)--
+            Text("本次请求的情境指令") WidgetryText--
+            @field("SelectedRequestBehavior", Body::Behavior)--
             Text("长期记忆") WidgetryText--
             @field("SelectedRequestMemory", Body::Memory)--
             Text("自动项目材料 · user · 最终包装正文") WidgetryText--
@@ -143,7 +146,7 @@ fn order(request: &ChatRequest) -> String {
         request
             .base_hashes
             .iter()
-            .map(|hash| format!("developer · 基础/supplement · {hash}")),
+            .map(|hash| format!("developer · 固定指令 · {hash}")),
     );
     for item in &request.items {
         let description = match item {
@@ -165,6 +168,12 @@ fn order(request: &ChatRequest) -> String {
         lines.push(description);
     }
     let mut materials = request.skills.clone();
+    if let Some(behavior) = &request.behavior {
+        materials.push((
+            behavior.input_index,
+            format!("developer · 本次请求情境 · {}", behavior.hash),
+        ));
+    }
     if let Some(memory) = &request.memory {
         materials.push((
             memory.input_index,
@@ -205,6 +214,7 @@ fn synchronize(world: &mut World) -> Result {
     let list = requests(&state);
     let mut metadata = "尚无已准备的请求；采集状态见下方".to_owned();
     let (mut base, mut project, mut protocol) = (String::new(), String::new(), String::new());
+    let mut behavior_body = String::new();
     let mut memory_body = String::new();
     let mut publication = None;
     if let Some(index) = selected(&state, &list) {
@@ -233,10 +243,21 @@ fn synchronize(world: &mut World) -> Result {
             request.payload_hash
         );
         base = if request.base_hashes.is_empty() {
-            "未附加客户端基础文本或 supplements".into()
+            "本次请求未附加客户端固定指令".into()
         } else {
             turn.request_instructions.clone()
         };
+        behavior_body = request.behavior.as_ref().map_or_else(
+            || "本次请求未附加情境指令".into(),
+            |behavior| {
+                format!(
+                    "developer · 输入 {} · SHA-256 {}\n\n{}",
+                    behavior.input_index + 1,
+                    behavior.hash,
+                    behavior.text
+                )
+            },
+        );
         memory_body = request.memory.as_ref().map_or_else(
             || "本次请求未注入长期记忆".into(),
             |memory| {
@@ -297,6 +318,7 @@ fn synchronize(world: &mut World) -> Result {
     for (entity, body) in fields {
         let value = match body {
             Body::Base => &base,
+            Body::Behavior => &behavior_body,
             Body::Project => &project,
             Body::Order => &protocol,
             Body::Memory => &memory_body,

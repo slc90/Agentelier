@@ -185,7 +185,15 @@ pub struct RequestMemory {
 }
 
 #[derive(Clone)]
+pub struct RequestBehavior {
+    pub hash: String,
+    pub text: String,
+    pub input_index: usize,
+}
+
+#[derive(Clone)]
 pub struct RequestView {
+    pub behavior: Option<RequestBehavior>,
     pub transcript: Option<(usize, TranscriptReferenceView)>,
     pub response_accepted: Option<bool>,
     pub additional_tools_in_input: bool,
@@ -706,6 +714,11 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
             .map(|fact| RequestView {
                 response_accepted: fact.response_accepted,
                 additional_tools_in_input: fact.projection.additional_tools_in_input(),
+                behavior: fact.projection.behavior.map(|material| RequestBehavior {
+                    hash: material.hash,
+                    text: material.text,
+                    input_index: material.input_index,
+                }),
                 memory: fact.projection.memory.map(|material| RequestMemory {
                     publication_id: material.snapshot.publication_id.to_string(),
                     hash: material.snapshot.hash,

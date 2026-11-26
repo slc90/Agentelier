@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod active;
 mod agent_registry;
+mod behavior;
 pub use agent_registry::{
     AgentId, AgentIdentity, AgentNode, AgentOrigin, AgentPath, AgentRegistry, AgentRegistryError,
     AgentReservation, AgentResidency, AgentRuntimeId, AgentState, AgentStop, AgentStopSource,

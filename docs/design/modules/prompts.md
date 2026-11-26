@@ -24,6 +24,8 @@ Chat UI 通过数据目录就绪事件取得当前存储路径；Widgetry JobMan
 
 Conversation 在创建时核对并固定快照。Reset 复制设置并替换 Origin 槽位，重试及恢复旧会话使用保存的快照。指令独立于 ProtocolHistory，每次只在请求前部注入一次。Origin 的本地文件独立于可编辑版本库，源文件更新时，已存储会话继续使用固定正文与摘要。
 
+普通 Origin 聊天的情境指导在逻辑请求准备时选取，放在固定 Developer 指令之后、记忆和 Skills 材料之前。该片段随实际请求投影独立保存。请求核对页可读取它的正文、位置和内容摘要。选取情境以及保存结果的职责见[会话与协议历史](conversation.md)。
+
 TurnView 保留其请求所用的指令消息，Bridge 传递完整安全投影。Chat UI 的反射状态保存 JSON 形式的会话快照及最近请求指令，供用户查看和 BRP 只读核对；该 JSON 不参与网络请求构造。诊断不包含凭据、账号认证头或加密 reasoning 原文，日志不输出提示词及聊天正文。
 
 项目 `AGENTS.md` 的最近采集状态与所选请求的保存材料在同一核对入口独立展示，来源不构造成 PromptRef，也不加入基础或补充槽位。自动项目正文按实际发布记录作为 user 项进入请求，固定基础与 supplements 保持 developer。发现机制见[项目上下文](project-context.md)。

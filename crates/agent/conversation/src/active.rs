@@ -400,6 +400,7 @@ impl ActiveTurn<'_> {
         } else {
             0
         };
+        let behavior = crate::behavior::for_request(self.view, turn);
         let turn = self
             .view
             .turn
@@ -420,6 +421,7 @@ impl ActiveTurn<'_> {
             history_position: self.history.position(),
             skip_compaction,
             reserved_result_bytes,
+            behavior,
             memory: self.state.memory.as_deref().cloned(),
             transcript,
             selected_skills: turn.selected_skills.clone(),
