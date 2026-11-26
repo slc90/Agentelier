@@ -179,13 +179,13 @@ Agentelier 的 UI 构造继续使用 BSN、Scene 和 SceneList。为运行时创
 
 每个模板都是 Rust 侧已经实现并注册的 Scene Function 或 SceneComponent 组合，内部仍使用 `bsn!`。Rhai 只选择模板、提供语义参数和父 Entity，不自行描述一套替代 BSN 的通用 UI 树语言。
 
-Application 登记 `agentelier.button`、`agentelier.slider`、`agentelier.number_input`、`agentelier.choice` 和 `agentelier.boolean` 模板。按钮接受标签和样式，数值控件接受整数或浮点定义，离散控件接受稳定选择身份或布尔状态。`scene_spawn` 校验父实体为存活的 UI Node，调用 Widgetry 的 Scene 构造入口，并在成功后返回根 Entity 引用。需要在构造前取得 World 实体引用的模板可在同一 Factory 内构造子树，下拉框由此把选项数据源和控件交给同一个实例拥有。
+Application 登记按钮、数值、离散和单行文本输入模板。`scene_spawn` 校验父实体为存活的 UI Node，调用 Widgetry 的 Scene 构造入口，并在成功后返回根 Entity 引用。需要解析 World 实体引用的模板可在同一 Factory 内构造子树。下拉框以同一个实例拥有列表数据源及控件，文本输入在实际编辑器上配置长度与单行过滤。
 
 Root Agent 的 `publish_scene` 通过进程内请求复用同一 Factory 验证语义定义。AgentHost 在临时父节点中构造，并在返回验证结果前释放该节点及其子树。持久定义提交成功后，Chat UI 使用同一个 Factory 在会话回复中挂载实例。详见[动态 Scene](../assistant-content/04-dynamic-scenes.md)。
 
 模板注册可提供原位更新函数，`scene_templates()` 在模板描述中提供 `supports_in_place_update`。`update_scene` 继续先通过 Factory 验证新定义，Chat UI 在收到已提交修订后调用已挂载同模板的更新函数。`agentelier.button` 原位更新标签和公开运行时样式。
 
-模板可在构造验证前读取同 Session、同产物的已挂载同模板实例。数值和离散模板据此填入省略的当前值，实际构造校验通过后返回补全的定义。Turn Runner 提交补全的定义，Chat UI 据此替换子树，存档恢复也使用同一份定义。
+模板可在构造验证前读取同 Session、同产物的已挂载同模板实例。输入模板据此填入省略的当前值，实际构造校验通过后返回补全的定义。Turn Runner 提交补全的定义，Chat UI 据此替换子树，存档恢复也使用同一份定义。
 
 构造成功时在根实体记录该实例拥有的实体身份。清理时先解除后来挂入的外部子实体与该实例的关系，再销毁仍存活的实例实体。调用方提供的父实体和额外挂入的实体得以保留。
 

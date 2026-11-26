@@ -35,6 +35,8 @@ Application 已注册 `agentelier.slider` 和 `agentelier.number_input`。两者
 
 离散输入模板 `agentelier.choice` 以 ComboBox、Radio Group 或 Segmented Control 呈现同一组选项，`agentelier.boolean` 以 CheckBox 或 Toggle Button 呈现布尔值。选项的字符串身份独立于标签、顺序和 Widgetry 的临时索引。实例从实际选择或勾选状态投影为统一离散事件。ComboBox 的列表数据源由该实例拥有，随回复控件挂载及回收。
 
+`agentelier.text_input` 通过 Widgetry TextField 编辑独立的单行文本。定义提供标签、初始文本、占位和 Unicode 标量数量上限，超出定义长度的初值会被拒绝。编辑系统在实际文本改变后发出文本值事件。已聚焦字段的 Enter 发出一次本地提交事件，输入法预编辑及提交按 Widgetry 的编辑流程处理。聊天发送仍由 ChatComposer 自身的编辑器焦点触发。
+
 这里的组合不要求预先为所有可能的应用实现一个完整的 Rust Scene。先具备可描述的布局位置及标准组件，进一步通过自定义脚本控件承载新行为。两者使用同一聊天内容归属与状态保存关系。
 
 ## 交互需要状态和绑定
@@ -67,6 +69,8 @@ Chat UI 保留原产物位置和容器。相同 `agentelier.button` 模板通过
 数值模板在更新时允许省略 `value`。AgentHost 在同一 Session、同一产物的已挂载同类型控件中读取当前值，和新范围及步进一并校验，将生效值写入已确认的定义。当前值不满足新定义、更换控件或数值类型、或者实例未挂载时，Agent 必须提供有效的 `value`。普通用户交互值暂随当前挂载实例保留。
 
 离散模板切换呈现方式时使用同一套值校验。选项重排或修改显示标签后，当前选项的身份仍可保留。移除当前选项需要同时提供新的合法值。布尔值在复选框和切换按钮间可沿用。
+
+文本定义修订省略 `value` 时读取该产物的实际编辑器文本。若保留的文本超出新的长度上限，修订需要同时给出有效的新值。
 
 用户和 Agent 按顺序操作同一个场景。Agent 修改场景时，用户可以等更新完成，再继续使用控件。也可以通过现有聊天交互让 Agent 停止，等任务停止后接手操作。
 

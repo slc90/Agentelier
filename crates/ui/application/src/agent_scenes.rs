@@ -1,5 +1,6 @@
 mod discrete;
 mod numeric;
+mod text_input;
 
 use agentelier_agent_host::AgentHostPlugin;
 use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
@@ -43,11 +44,12 @@ pub(crate) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         Some(update_button),
         None,
     )?;
-    discrete::register(numeric::register(host)?)
+    text_input::register(discrete::register(numeric::register(host)?)?)
 }
 
 pub(crate) fn install(app: &mut App) -> Result {
     numeric::install(app);
+    text_input::install(app);
     discrete::install(app)
 }
 
