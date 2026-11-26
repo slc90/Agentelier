@@ -1,11 +1,12 @@
 use crate::{
-    consolidation::{Consolidation, sha256},
+    classified,
+    consolidation::{Consolidation, PublicationContent, sha256},
     store::{FILE_ATTRIBUTE_REPARSE_POINT, check_path},
 };
 use agentelier_conversation::SessionId;
 use agentelier_llm_model::{MAX_MEMORY_SUMMARY_BYTES, MemorySnapshot};
 use rusqlite::{Connection, OptionalExtension, params};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
@@ -15,8 +16,21 @@ use uuid::Uuid;
 
 impl crate::MemoryClient {
     pub async fn snapshot(&self) -> io::Result<Option<MemorySnapshot>> {
-        self.with_active_store(|connection, workspace| snapshot(connection, workspace))
-            .await
+        self.with_active_store(|connection, workspace| {
+            let current: bool = connection
+                .query_row(
+                    "SELECT EXISTS (SELECT 1 FROM classified_publication)",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(io::Error::other)?;
+            if current {
+                snapshot(connection, workspace)
+            } else {
+                Ok(None)
+            }
+        })
+        .await
     }
 }
 
@@ -109,8 +123,8 @@ type Artifacts = BTreeMap<String, String>;
 
 pub(crate) struct Published {
     pub(crate) id: Option<String>,
-    pub(crate) summary: String,
     pub(crate) sources: BTreeMap<String, (String, String)>,
+    pub(crate) classified_hash: Option<String>,
 }
 
 pub(crate) fn restore(connection: &Connection, workspace: &Path) -> io::Result<Published> {
@@ -131,13 +145,20 @@ pub(crate) fn restore(connection: &Connection, workspace: &Path) -> io::Result<P
         .map_err(io::Error::other)?;
     let mut published = Published {
         id: None,
-        summary: String::new(),
         sources: BTreeMap::new(),
+        classified_hash: connection
+            .query_row(
+                "SELECT input_hash FROM classified_publication WHERE singleton = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(io::Error::other)?,
     };
     let mut artifacts = Artifacts::new();
     if let Some((id, hash)) = record {
         artifacts = load_artifacts(connection)?;
-        let summary = artifacts
+        artifacts
             .get(SUMMARY)
             .filter(|content| sha256(content) == hash)
             .ok_or_else(|| io::Error::other("已发布全局摘要与数据库校验不符"))?;
@@ -160,11 +181,19 @@ pub(crate) fn restore(connection: &Connection, workspace: &Path) -> io::Result<P
             }
             published.sources.insert(source, (revision, hash));
         }
-        if artifacts.len() != published.sources.len() + 1 {
+        let classified = classified::saved(connection, None)?;
+        for (name, hash, _) in &classified {
+            if !artifacts
+                .get(name)
+                .is_some_and(|body| sha256(body) == *hash)
+            {
+                return Err(io::Error::other("已发布分类详情与数据库校验不符"));
+            }
+        }
+        if artifacts.len() != published.sources.len() + classified.len() + 1 {
             return Err(io::Error::other("已发布来源详情数量与数据库不一致"));
         }
         published.id = Some(id);
-        published.summary = summary.clone();
     }
     let mut inputs = connection
         .prepare("SELECT session_id, revision, content_hash FROM consolidation_inputs")
@@ -198,8 +227,7 @@ pub(crate) fn publish(
     connection: &mut Connection,
     workspace: &Path,
     work: Consolidation,
-    summary: Option<String>,
-    excluded: BTreeSet<String>,
+    content: PublicationContent,
     published_at_ms: i64,
 ) -> io::Result<bool> {
     let current = restore(connection, workspace)?;
@@ -223,14 +251,7 @@ pub(crate) fn publish(
     connection
         .execute("INSERT INTO pending_publication (singleton) VALUES (1)", [])
         .map_err(io::Error::other)?;
-    match commit(
-        connection,
-        workspace,
-        work,
-        summary,
-        excluded,
-        published_at_ms,
-    ) {
+    match commit(connection, workspace, work, content, published_at_ms) {
         Ok(()) => Ok(true),
         Err(failure) => match restore(connection, workspace) {
             Ok(_) => Err(failure),
@@ -245,17 +266,23 @@ fn commit(
     connection: &mut Connection,
     workspace: &Path,
     work: Consolidation,
-    summary: Option<String>,
-    excluded: BTreeSet<String>,
+    content: PublicationContent,
     published_at_ms: i64,
 ) -> io::Result<()> {
     let tx = connection.transaction().map_err(io::Error::other)?;
     tx.execute_batch(
-        "DELETE FROM published_artifacts; DELETE FROM published_sources; DELETE FROM published_source_metadata; DELETE FROM publication;",
+        "DELETE FROM published_artifacts; DELETE FROM published_sources; DELETE FROM published_source_metadata;
+         DELETE FROM published_classified; DELETE FROM publication;",
     )
     .map_err(io::Error::other)?;
     tx.execute_batch("DELETE FROM consolidation_inputs; DELETE FROM revisions;")
         .map_err(io::Error::other)?;
+    tx.execute(
+        "INSERT INTO classified_publication (singleton, input_hash) VALUES (1, ?1)
+         ON CONFLICT(singleton) DO UPDATE SET input_hash = excluded.input_hash",
+        [&work.classified_hash],
+    )
+    .map_err(io::Error::other)?;
     for (id, detail) in &work.details {
         tx.execute("INSERT INTO consolidation_inputs (session_id, revision, content_hash) VALUES (?1, ?2, ?3)",
             params![id, detail.revision, detail.hash]).map_err(io::Error::other)?;
@@ -268,19 +295,27 @@ fn commit(
         .map_err(io::Error::other)?;
     }
     let mut artifacts = Artifacts::new();
-    if let Some(summary) = summary {
+    if let Some(summary) = content.summary {
         let publication_id = Uuid::new_v4().to_string();
         tx.execute("INSERT INTO publication (singleton, publication_id, summary_hash, published_at_ms) VALUES (1, ?1, ?2, ?3)",
             params![publication_id, sha256(&summary), published_at_ms]).map_err(io::Error::other)?;
         for (id, detail) in work.details {
-            if excluded.contains(&id) {
+            if content.excluded.contains(&id) {
                 continue;
             }
             tx.execute("INSERT INTO published_sources (session_id, revision, content_hash, file_name) VALUES (?1, ?2, ?3, ?4)",
                 params![id, detail.revision, detail.hash, detail.name]).map_err(io::Error::other)?;
-            tx.execute("INSERT INTO published_source_metadata (session_id, work_directory, sequence, activity_ms) VALUES (?1, ?2, ?3, ?4)",
-                params![id, detail.directory, detail.sequence, detail.activity_ms]).map_err(io::Error::other)?;
+            tx.execute("INSERT INTO published_source_metadata (session_id, work_directory, sequence, activity_ms, directory_verified)
+                VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id, detail.directory, detail.sequence, detail.activity_ms, detail.directory_verified]).map_err(io::Error::other)?;
             artifacts.insert(detail.name, detail.content);
+        }
+        for entry in content.classified {
+            let (name, hash, body) = entry.artifact()?;
+            let metadata = serde_json::to_string(&entry).map_err(io::Error::other)?;
+            tx.execute("INSERT INTO published_classified (file_name, content_hash, metadata) VALUES (?1, ?2, ?3)",
+                params![name, hash, metadata]).map_err(io::Error::other)?;
+            artifacts.insert(name, body);
         }
         artifacts.insert(SUMMARY.to_owned(), summary);
     }

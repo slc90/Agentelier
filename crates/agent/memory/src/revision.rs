@@ -47,7 +47,7 @@ pub(crate) struct RevisionArguments {
 
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum RevisionScope {
+pub(crate) enum RevisionScope {
     Global,
     Project { directory: String },
 }
@@ -59,12 +59,12 @@ pub(crate) struct Revision {
     epoch: i64,
     pub(crate) action: Action,
     pub(crate) target: String,
-    replacement: Option<String>,
-    scope: RevisionScope,
-    session_id: uuid::Uuid,
-    turn: u64,
-    input: u64,
-    at_ms: u64,
+    pub(crate) replacement: Option<String>,
+    pub(crate) scope: RevisionScope,
+    pub(crate) session_id: uuid::Uuid,
+    pub(crate) turn: u64,
+    pub(crate) input: u64,
+    pub(crate) at_ms: u64,
     user_request: String,
 }
 
@@ -257,7 +257,10 @@ fn authorizes(
         return Ok(matches!(scope, ScopeArgument::Global));
     }
     if matches!(scope, ScopeArgument::Global) {
-        let explicit_global = Regex::new(r"(?i)\b(?:globally|cross.project|across (?:all )?projects|(?:all|every) (?:project|repo|workspace)s?)\b|全局|跨项目|所有项目|每个项目").map_err(io::Error::other)?;
+        let explicit_global = Regex::new(concat!(
+            r"(?i)\b(?:globally|global (?:memory|preference|rule|scope)|cross.project|",
+            r"across (?:all )?projects|(?:all|every) (?:project|repo|workspace)s?)\b|全局|跨项目|所有项目|每个项目"
+        )).map_err(io::Error::other)?;
         return Ok(explicit_global.is_match(request));
     }
     Ok(true)

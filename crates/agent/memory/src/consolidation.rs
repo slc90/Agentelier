@@ -1,7 +1,9 @@
 use crate::{
-    MemoryClient, publication,
+    MemoryClient, classified,
+    observation::Observation,
+    publication,
     redaction::Redactor,
-    revision::{self, Revision},
+    revision::{self, Action, Revision},
 };
 use agentelier_conversation::SessionId;
 use rusqlite::Connection;
@@ -12,8 +14,6 @@ use std::fmt::Write;
 use std::io;
 
 const MAX_SOURCES: usize = 12;
-const MAX_SOURCE_EXCERPT_BYTES: usize = 2 * 1024;
-const MAX_PREVIOUS_EXCERPT_BYTES: usize = 4 * 1024;
 const MAX_PROJECT_BYTES: usize = 160;
 use agentelier_llm_model::MAX_MEMORY_SUMMARY_BYTES;
 
@@ -22,8 +22,8 @@ pub struct Consolidation {
     pub(crate) epoch: i64,
     pub(crate) details: BTreeMap<String, Detail>,
     pub(crate) deleted: Vec<String>,
-    previous_summary: String,
-    changes: Changes,
+    pub(crate) classified_hash: String,
+    observations: Vec<Observation>,
     pub(crate) revisions: Vec<Revision>,
 }
 
@@ -35,23 +35,21 @@ pub(crate) struct Detail {
     pub(crate) directory: String,
     pub(crate) sequence: i64,
     pub(crate) activity_ms: i64,
-    project: String,
+    pub(crate) directory_verified: bool,
     date: time::Date,
-    excerpt: String,
 }
 
-#[derive(Default, serde::Serialize)]
-struct Changes {
-    added: Vec<String>,
-    updated: Vec<String>,
-    removed: Vec<String>,
-}
-
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConsolidatedText {
-    summary: String,
     excluded_sources: BTreeSet<String>,
+    excluded_observations: BTreeSet<String>,
+}
+
+pub(crate) struct PublicationContent {
+    pub(crate) summary: Option<String>,
+    pub(crate) excluded: BTreeSet<String>,
+    pub(crate) classified: Vec<classified::Entry>,
 }
 
 impl MemoryClient {
@@ -66,6 +64,7 @@ impl MemoryClient {
         self.with_store(move |connection, workspace| {
             let baseline = publication::restore(connection, workspace)?;
             let details = select(connection, &sessions)?;
+            let (classified_hash, observations) = classified::inputs(connection, &sessions)?;
             let epoch = connection
                 .query_row(
                     "SELECT epoch FROM memory_state WHERE singleton = 1",
@@ -77,45 +76,35 @@ impl MemoryClient {
             let published = revision::published_ids(connection)?;
             let all_revisions_published = revisions.len() == published.len()
                 && revisions.iter().all(|note| published.contains(&note.id));
-            let mut changes = Changes::default();
-            for (session_id, detail) in &details {
-                match baseline.sources.get(session_id) {
-                    None => changes.added.push(session_id.clone()),
-                    Some((revision, hash))
-                        if *revision != detail.revision || *hash != detail.hash =>
-                    {
-                        changes.updated.push(session_id.clone())
-                    }
-                    Some(_) => {}
-                }
-            }
-            changes.removed.extend(
-                baseline
-                    .sources
-                    .keys()
-                    .filter(|id| !details.contains_key(*id))
-                    .cloned(),
-            );
+            let unchanged = details.len() == baseline.sources.len()
+                && details.iter().all(|(id, detail)| {
+                    baseline.sources.get(id).is_some_and(|(revision, hash)| {
+                        *revision == detail.revision && *hash == detail.hash
+                    })
+                });
+            let mut statement = connection
+                .prepare("SELECT session_id FROM sources")
+                .map_err(io::Error::other)?;
+            let deleted = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(io::Error::other)?
+                .filter(|id| id.as_ref().map_or(true, |id| !sessions.contains(id)))
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(io::Error::other)?;
             if all_revisions_published
-                && changes.added.is_empty()
-                && changes.updated.is_empty()
-                && changes.removed.is_empty()
+                && unchanged
+                && baseline.classified_hash.as_deref() == Some(&classified_hash)
+                && deleted.is_empty()
             {
                 return Ok(None);
             }
-            let deleted = changes
-                .removed
-                .iter()
-                .filter(|id| !sessions.contains(*id))
-                .cloned()
-                .collect();
             Ok(Some(Consolidation {
                 previous_id: baseline.id,
                 epoch,
                 details,
                 deleted,
-                previous_summary: baseline.summary,
-                changes,
+                classified_hash,
+                observations,
                 revisions,
             }))
         })
@@ -128,17 +117,10 @@ impl MemoryClient {
         output: Option<String>,
         published_at_ms: u64,
     ) -> io::Result<bool> {
-        let (summary, excluded) = work.summary(output.as_deref())?;
+        let content = work.content(output.as_deref())?;
         let published_at_ms = i64::try_from(published_at_ms).map_err(io::Error::other)?;
         self.with_store(move |connection, workspace| {
-            publication::publish(
-                connection,
-                workspace,
-                work,
-                summary,
-                excluded,
-                published_at_ms,
-            )
+            publication::publish(connection, workspace, work, content, published_at_ms)
         })
         .await
     }
@@ -150,7 +132,12 @@ impl Consolidation {
     }
 
     pub fn needs_model(&self) -> bool {
-        !self.details.is_empty() || !self.revisions.is_empty()
+        self.revisions
+            .iter()
+            .any(|note| note.action != Action::Remember)
+            && (!self.details.is_empty()
+                || !self.observations.is_empty()
+                || self.revisions.len() > 1)
     }
 
     fn corrective_revision_applies(&self, detail: &Detail) -> bool {
@@ -163,41 +150,33 @@ impl Consolidation {
         let sources = self
             .details
             .iter()
+            .filter(|(_, detail)| self.corrective_revision_applies(detail))
             .map(|(id, detail)| {
                 serde_json::json!({
                     "session_id": id,
-                    "project": detail.project,
-                    "date": detail.date.to_string(),
-                    "record": detail.name,
-                    "evidence": if self.corrective_revision_applies(detail) { &detail.content } else { &detail.excerpt },
-                    "work_directory": if self.corrective_revision_applies(detail) {
-                        Some(&detail.directory)
-                    } else { None },
+                    "evidence": detail.content,
+                    "work_directory": detail.directory,
                 })
             })
             .collect::<Vec<_>>();
         serde_json::json!({
-            "previous_summary": &self.previous_summary[..self.previous_summary.floor_char_boundary(MAX_PREVIOUS_EXCERPT_BYTES)],
-            "changes": self.changes,
             "sources": sources,
+            "observations": self.observations.iter()
+                .filter(|item| self.revisions.iter().any(|note| classified::affected(note, &item.scope)))
+                .collect::<Vec<_>>(),
             "revision_notes": self.revisions,
         }).to_string()
     }
 
-    fn summary(&self, output: Option<&str>) -> io::Result<(Option<String>, BTreeSet<String>)> {
-        if !self.needs_model() && output.is_none() {
-            return Ok((None, BTreeSet::new()));
-        }
-        let output = output.ok_or_else(|| io::Error::other("整合结果缺少模型正文"))?;
-        if output.len() > MAX_MEMORY_SUMMARY_BYTES * 2 {
-            return Err(io::Error::other("全局记忆模型响应超出大小限制"));
-        }
-        let result: ConsolidatedText = serde_json::from_str(output)
-            .map_err(|_| io::Error::other("全局记忆模型返回无效结构"))?;
-        let body = result.summary.trim();
-        if body.len() > MAX_MEMORY_SUMMARY_BYTES {
-            return Err(io::Error::other("全局记忆摘要超出大小限制"));
-        }
+    fn content(&self, output: Option<&str>) -> io::Result<PublicationContent> {
+        let result: ConsolidatedText = match output {
+            Some(output) if output.len() <= MAX_MEMORY_SUMMARY_BYTES * 2 => {
+                serde_json::from_str(output)
+                    .map_err(|_| io::Error::other("全局记忆模型返回无效结构"))?
+            }
+            None if !self.needs_model() => ConsolidatedText::default(),
+            _ => return Err(io::Error::other("整合结果缺失或超出大小限制")),
+        };
         let mut excluded = result.excluded_sources;
         if excluded.iter().any(|id| {
             self.details
@@ -205,6 +184,25 @@ impl Consolidation {
                 .is_none_or(|detail| !self.corrective_revision_applies(detail))
         }) {
             return Err(io::Error::other("整合结果排除了修订范围外的来源"));
+        }
+        if result.excluded_observations.iter().any(|id| {
+            let observation = self.observations.iter().any(|item| {
+                &item.id == id
+                    && self
+                        .revisions
+                        .iter()
+                        .any(|note| classified::affected(note, &item.scope))
+            });
+            let revision = self.revisions.iter().enumerate().any(|(index, note)| {
+                &note.id == id
+                    && note.action != Action::Forget
+                    && self.revisions[index + 1..]
+                        .iter()
+                        .any(|later| classified::affected(later, &classified::revision_scope(note)))
+            });
+            !observation && !revision
+        }) {
+            return Err(io::Error::other("整合结果排除了修订范围外的观察"));
         }
         for (id, detail) in &self.details {
             let contents = detail.content.to_lowercase();
@@ -215,30 +213,37 @@ impl Consolidation {
                 excluded.insert(id.clone());
             }
         }
-        if body.is_empty() && self.details.len() == excluded.len() {
-            return Ok((None, excluded));
-        }
-        let mut index = String::new();
+        let classified = classified::classify(
+            &self.observations,
+            &self.revisions,
+            &result.excluded_observations,
+        );
+        let mut summary = classified::personal_navigation(&classified)?;
         if self.details.len() > excluded.len() {
-            index.push_str("\n\n## 来源会话\n\n");
+            summary.push_str("\n\n## 项目工作记忆\n\n");
         }
         for (id, detail) in &self.details {
             if excluded.contains(id) {
                 continue;
             }
             writeln!(
-                index,
-                "- [{}](rollout_summaries/{}) · {} · {}",
-                id, detail.name, detail.date, detail.project
+                summary,
+                "- [项目来源 {}](rollout_summaries/{}) · {}",
+                id, detail.name, detail.date
             )
             .map_err(io::Error::other)?;
         }
-        let body = Redactor::new()?.clean(body, MAX_MEMORY_SUMMARY_BYTES);
-        let summary = format!("{body}{index}");
+        if summary.trim().is_empty() && !classified.is_empty() {
+            summary.push_str("## 来源记忆\n\n已发布当前可按范围检索的分类记录。");
+        }
         if summary.len() > MAX_MEMORY_SUMMARY_BYTES {
             return Err(io::Error::other("全局记忆摘要与来源导航合计超过 10 KiB"));
         }
-        Ok((Some(summary), excluded))
+        Ok(PublicationContent {
+            summary: (!summary.trim().is_empty()).then_some(summary),
+            excluded,
+            classified,
+        })
     }
 }
 
@@ -248,7 +253,7 @@ fn select(
 ) -> io::Result<BTreeMap<String, Detail>> {
     let redactor = Redactor::new()?;
     let mut statement = connection.prepare(
-        "SELECT session_id, sequence, revision, work_directory, activity_ms, summary FROM sources
+        "SELECT session_id, sequence, revision, work_directory, activity_ms, summary, directory_verified FROM sources
          WHERE status = 'summary' ORDER BY max(activity_ms, COALESCE(last_usage_ms, activity_ms)) DESC,
          usage_count DESC, activity_ms DESC, session_id",
     ).map_err(io::Error::other)?;
@@ -266,12 +271,18 @@ fn select(
         let directory: String = row.get(3).map_err(io::Error::other)?;
         let timestamp_ms: i64 = row.get(4).map_err(io::Error::other)?;
         let summary: String = row.get(5).map_err(io::Error::other)?;
+        let directory_verified = row.get(6).map_err(io::Error::other)?;
         let date = time::OffsetDateTime::from_unix_timestamp(timestamp_ms / 1_000)
             .map_err(io::Error::other)?
             .date();
         let project = redactor.clean(&directory.replace(['\n', '\r'], " "), MAX_PROJECT_BYTES);
+        let scope = if directory_verified {
+            "已核对为单一目录"
+        } else {
+            "仅供管理检查"
+        };
         let content = format!(
-            "# 会话 {id}\n\n- 项目目录 `{project}`\n- 日期 {date}\n- 已处理日志序号 {sequence}\n- 来源修订 `{revision}`\n\n{summary}\n"
+            "# 会话 {id}\n\n- 项目目录 `{project}`\n- 目录范围 {scope}\n- 日期 {date}\n- 已处理日志序号 {sequence}\n- 来源修订 `{revision}`\n\n{summary}\n"
         );
         let hash = sha256(&content);
         let name = format!("{id}-{hash}.md");
@@ -285,9 +296,8 @@ fn select(
                 directory,
                 sequence,
                 activity_ms: timestamp_ms,
-                project,
+                directory_verified,
                 date,
-                excerpt: redactor.clean(&summary, MAX_SOURCE_EXCERPT_BYTES),
             },
         );
     }

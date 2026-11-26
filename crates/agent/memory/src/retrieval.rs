@@ -1,6 +1,7 @@
 use crate::{
-    MemoryClient,
+    MemoryClient, classified,
     consolidation::sha256,
+    observation::{Category, Scope},
     publication::{DETAILS, detail_name, read_checked},
     redaction::Redactor,
     store::check_path,
@@ -21,7 +22,8 @@ const MAX_SCOPE_DISPLAY_BYTES: usize = 512;
 const MAX_DETAIL_BYTES: usize = 9 * 1024;
 const SOURCE_QUERY: &str = "SELECT p.session_id, p.revision, p.content_hash, p.file_name,
         COALESCE(m.work_directory, s.work_directory), COALESCE(m.sequence, s.sequence),
-        COALESCE(m.activity_ms, s.activity_ms), a.content
+        COALESCE(m.activity_ms, s.activity_ms), a.content, COALESCE(m.directory_verified, 0),
+        (SELECT publication_id FROM publication)
     FROM published_sources p
     LEFT JOIN published_source_metadata m ON m.session_id = p.session_id
     LEFT JOIN sources s ON s.session_id = p.session_id AND s.revision = p.revision
@@ -37,6 +39,16 @@ pub struct MemorySource {
     pub directory: Option<String>,
     pub sequence: Option<i64>,
     pub activity_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    publication: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    category: Option<Category>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<Scope>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    state: Option<classified::Status>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provenance: Option<classified::Provenance>,
 }
 
 #[derive(Serialize)]
@@ -145,6 +157,9 @@ impl MemoryClient {
                     "记忆已重新发布，请刷新后查看来源",
                 ));
             }
+            if let Some((name, hash, entry)) = classified::saved(connection, Some(&record))?.pop() {
+                return classified_detail(workspace, name, hash, entry, publication);
+            }
             detail(workspace, source(connection, &record)?)
         })
         .await
@@ -166,8 +181,49 @@ impl MemoryClient {
         }
         self.with_epoch(epoch, move |connection, _| {
             check_cancel(&cancel)?;
-            let words: Vec<_> = query.split_whitespace().collect();
+            let mut category = None;
+            let mut scope = None;
+            let mut words = Vec::new();
+            for word in query.split_whitespace() {
+                if let Some(value) = word.strip_prefix("category:") {
+                    category = Some(value);
+                } else if let Some(value) = word.strip_prefix("scope:") {
+                    scope = Some(value);
+                } else {
+                    words.push(word);
+                }
+            }
             let mut matches = Vec::new();
+            if let Some(publication) = current_publication(connection)? {
+                for (name, _, entry) in classified::saved(connection, None)? {
+                    check_cancel(&cancel)?;
+                    let scope_name = match &entry.scope {
+                        Scope::Context => "context",
+                        Scope::Project { .. } => "project",
+                        Scope::Global => "global",
+                    };
+                    if !entry.visible_from(directory.as_deref())
+                        || entry.body.is_empty()
+                        || category.is_some_and(|category| category != entry.category.label())
+                        || scope.is_some_and(|scope| scope != scope_name)
+                        || !contains_words(&entry.body, &words)
+                    {
+                        continue;
+                    }
+                    let excerpt =
+                        entry.body[..entry.body.floor_char_boundary(MAX_EXCERPT_BYTES)].to_owned();
+                    matches.push(MemoryMatch {
+                        source: classified_source(name, entry, publication.clone())?,
+                        excerpt,
+                    });
+                    if matches.len() == MAX_MATCHES {
+                        return Ok(matches);
+                    }
+                }
+            }
+            if category.is_some() || scope.is_some_and(|scope| scope != "project") {
+                return Ok(matches);
+            }
             for indexed in sources(connection, None)? {
                 check_cancel(&cancel)?;
                 if directory
@@ -181,8 +237,7 @@ impl MemoryClient {
                     .split_once("\n\n")
                     .and_then(|(_, rest)| rest.split_once("\n\n"))
                     .map_or(indexed.content.as_str(), |(_, body)| body);
-                let text = body.to_lowercase();
-                if words.iter().all(|word| text.contains(word)) {
+                if contains_words(body, &words) {
                     let line = body
                         .lines()
                         .find(|line| {
@@ -214,11 +269,19 @@ impl MemoryClient {
     ) -> io::Result<MemoryDetail> {
         self.with_epoch(epoch, move |connection, workspace| {
             check_cancel(&cancel)?;
-            let indexed = source(connection, &record)?;
-            if directory.as_ref().is_some_and(|directory| indexed.scope.as_deref() != Some(directory.as_path())) {
-                return Err(io::Error::new(io::ErrorKind::NotFound, "当前目录没有这份已发布记录"));
-            }
-            let detail = detail(workspace, indexed)?;
+            let detail = if let Some((name, hash, entry)) = classified::saved(connection, Some(&record))?.pop() {
+                let publication = current_publication(connection)?.ok_or_else(|| io::Error::other("分类记忆缺少发布身份"))?;
+                if !entry.visible_from(directory.as_deref()) {
+                    return Err(invisible());
+                }
+                classified_detail(workspace, name, hash, entry, publication)?
+            } else {
+                let indexed = source(connection, &record)?;
+                if directory.as_ref().is_some_and(|directory| indexed.scope.as_deref() != Some(directory.as_path())) {
+                    return Err(invisible());
+                }
+                detail(workspace, indexed)?
+            };
             check_cancel(&cancel)?;
             let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)
                 .map_err(io::Error::other)?.as_millis()).map_err(io::Error::other)?;
@@ -264,6 +327,70 @@ fn source(connection: &Connection, record: &str) -> io::Result<IndexedSource> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "未找到当前已发布的记忆记录"))
 }
 
+fn invisible() -> io::Error {
+    io::Error::new(io::ErrorKind::NotFound, "当前目录没有这份已发布记录")
+}
+
+fn contains_words(body: &str, words: &[&str]) -> bool {
+    let text = body.to_lowercase();
+    words.iter().all(|word| text.contains(word))
+}
+
+fn current_publication(connection: &Connection) -> io::Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    connection
+        .query_row(
+            "SELECT publication_id FROM publication CROSS JOIN classified_publication",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(io::Error::other)
+}
+
+fn classified_source(
+    name: String,
+    entry: classified::Entry,
+    publication: String,
+) -> io::Result<MemorySource> {
+    let directory = match &entry.scope {
+        Scope::Project { directory } => {
+            Some(Redactor::new()?.clean(directory, MAX_SCOPE_DISPLAY_BYTES))
+        }
+        _ => None,
+    };
+    Ok(MemorySource {
+        session_id: entry.session,
+        record: name,
+        sequence: entry.sequence().and_then(|value| i64::try_from(value).ok()),
+        revision: entry.id,
+        activity_ms: i64::try_from(entry.at_ms).ok(),
+        publication: Some(publication),
+        directory,
+        category: Some(entry.category),
+        scope: Some(entry.scope),
+        state: Some(entry.state),
+        provenance: Some(entry.source),
+    })
+}
+
+fn classified_detail(
+    workspace: &Path,
+    name: String,
+    hash: String,
+    entry: classified::Entry,
+    publication: String,
+) -> io::Result<MemoryDetail> {
+    check_path(workspace, true)?;
+    let directory = workspace.join(DETAILS);
+    check_path(&directory, true)?;
+    let text = read_checked(&directory.join(&name), MAX_DETAIL_BYTES, &hash)?;
+    Ok(MemoryDetail {
+        source: classified_source(name, entry, publication)?,
+        text,
+    })
+}
+
 fn sources(connection: &Connection, record: Option<&str>) -> io::Result<Vec<IndexedSource>> {
     let redactor = Redactor::new()?;
     let mut statement = connection.prepare(SOURCE_QUERY).map_err(io::Error::other)?;
@@ -279,6 +406,7 @@ fn sources(connection: &Connection, record: Option<&str>) -> io::Result<Vec<Inde
         let sequence = row.get(5).map_err(io::Error::other)?;
         let activity_ms = row.get(6).map_err(io::Error::other)?;
         let content: String = row.get(7).map_err(io::Error::other)?;
+        let directory_verified: bool = row.get(8).map_err(io::Error::other)?;
         if !detail_name(&record)
             || record != format!("{session_id}-{hash}.md")
             || content.len() > MAX_DETAIL_BYTES
@@ -296,8 +424,13 @@ fn sources(connection: &Connection, record: Option<&str>) -> io::Result<Vec<Inde
                     .map(|path| redactor.clean(path, MAX_SCOPE_DISPLAY_BYTES)),
                 sequence,
                 activity_ms,
+                publication: row.get(9).map_err(io::Error::other)?,
+                category: None,
+                scope: None,
+                state: None,
+                provenance: None,
             },
-            scope: directory.map(PathBuf::from),
+            scope: directory.filter(|_| directory_verified).map(PathBuf::from),
             hash,
             content,
         });

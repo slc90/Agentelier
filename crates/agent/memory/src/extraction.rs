@@ -64,6 +64,10 @@ impl MemoryClient {
             .ok_or_else(|| io::Error::other("记忆来源路径不是 UTF-8"))?
             .to_owned();
         let activity = sql_integer(source.activity_ms)?;
+        let directory_verified = source
+            .turns
+            .iter()
+            .all(|turn| turn.work_directory == source.work_directory);
         let now_ms = sql_integer(now_ms)?;
         self.with_connection(move |connection| {
             let tx = connection.transaction()?;
@@ -77,16 +81,24 @@ impl MemoryClient {
                 [&session], |row| row.get(0),
             )?;
             let attempts = tx.query_row(
-                "INSERT INTO sources (session_id, sequence, revision, work_directory, activity_ms, status, attempts)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'processing', 1)
+                "INSERT INTO sources (session_id, sequence, revision, work_directory, activity_ms, status, attempts, directory_verified)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'processing', 1, ?7)
                  ON CONFLICT(session_id) DO UPDATE SET sequence = excluded.sequence, revision = excluded.revision,
                    work_directory = excluded.work_directory, activity_ms = excluded.activity_ms, status = 'processing',
+                   directory_verified = excluded.directory_verified,
                    summary = NULL, slug = NULL, retry_at_ms = NULL,
                    attempts = CASE WHEN sources.revision = excluded.revision THEN MIN(sources.attempts + 1, 32) ELSE 1 END
                  WHERE excluded.sequence >= sources.sequence AND (sources.revision <> excluded.revision OR sources.status = 'pending'
                    OR (sources.status = 'failed' AND sources.retry_at_ms <= ?6)) RETURNING attempts",
-                params![session, sequence, revision, directory, activity, now_ms], |row| row.get(0),
+                params![session, sequence, revision, directory, activity, now_ms, directory_verified], |row| row.get(0),
             ).optional()?;
+            if attempts.is_none() {
+                tx.execute(
+                    "UPDATE sources SET directory_verified = ?3
+                     WHERE session_id = ?1 AND revision = ?2 AND status = 'summary' AND directory_verified <> ?3",
+                    params![session, revision, directory_verified],
+                )?;
+            }
             tx.commit()?;
             Ok(attempts.map(|attempts| SourceClaim { session, sequence, revision, epoch, cutoff: cutoff.cast_unsigned(), cutoff_turn: cutoff_turn.cast_unsigned(), attempts }))
         }).await

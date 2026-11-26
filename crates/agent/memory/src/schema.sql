@@ -33,6 +33,17 @@ CREATE TABLE IF NOT EXISTS source_observations (
     observations TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS classified_publication (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    input_hash TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS published_classified (
+    file_name TEXT PRIMARY KEY,
+    content_hash TEXT NOT NULL,
+    metadata TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS publication (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     publication_id TEXT NOT NULL,

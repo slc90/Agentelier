@@ -55,6 +55,21 @@ pub(crate) enum Category {
     WorkFact,
     ExperienceClue,
     AttentionClue,
+    UserRevision,
+}
+
+impl Category {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::UserPreference => "user_preference",
+            Self::SharedExperience => "shared_experience",
+            Self::OriginSelfObservation => "origin_self_observation",
+            Self::WorkFact => "work_fact",
+            Self::ExperienceClue => "experience_clue",
+            Self::AttentionClue => "attention_clue",
+            Self::UserRevision => "user_revision",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,7 +233,8 @@ fn observation(
     let anchor = item.anchor.as_ref()?;
     let kind = anchor.location.kind();
     let category = candidate.category;
-    if item.fictional_context
+    if category == Category::UserRevision
+        || item.fictional_context
         || candidate.inference
             && !matches!(category, Category::ExperienceClue | Category::AttentionClue)
         || category == Category::UserPreference && kind != EvidenceKind::UserStatement
@@ -248,6 +264,7 @@ fn observation(
     };
     let subject = match category {
         Category::UserPreference => Subject::User,
+        Category::UserRevision => Subject::User,
         Category::OriginSelfObservation => Subject::Origin,
         Category::WorkFact => Subject::Project,
         Category::SharedExperience | Category::ExperienceClue | Category::AttentionClue => {

@@ -75,6 +75,8 @@ fn begin(connection: &mut Connection, cutoffs: Vec<MemoryCutoff>) -> io::Result<
          DELETE FROM pending_publication;
          DELETE FROM consolidation_inputs;
          DELETE FROM published_artifacts;
+         DELETE FROM published_classified;
+         DELETE FROM classified_publication;
          DELETE FROM published_source_metadata;
          DELETE FROM published_sources;
          DELETE FROM publication;

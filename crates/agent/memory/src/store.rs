@@ -48,6 +48,24 @@ impl Memory {
         transaction
             .execute_batch(include_str!("schema.sql"))
             .map_err(io::Error::other)?;
+        for table in ["sources", "published_source_metadata"] {
+            let present: bool = transaction.query_row(
+                "SELECT EXISTS (SELECT 1 FROM pragma_table_info(?1) WHERE name = 'directory_verified')",
+                [table],
+                |row| row.get(0),
+            ).map_err(io::Error::other)?;
+            if !present {
+                transaction
+                    .execute(
+                        &format!(
+                    "ALTER TABLE {table} ADD COLUMN directory_verified INTEGER NOT NULL DEFAULT 0
+                     CHECK (directory_verified IN (0, 1))"
+                ),
+                        [],
+                    )
+                    .map_err(io::Error::other)?;
+            }
+        }
         transaction
             .execute(
                 "UPDATE sources SET status = 'pending' WHERE status = 'processing'",
