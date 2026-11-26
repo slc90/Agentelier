@@ -287,12 +287,10 @@ impl Node {
             Self::Literal(value) => tex_number(*value, minimum),
             Self::Constant(value) => value.tex().into(),
             Self::Variable { index, name } => variables.get(*index).copied().flatten().map_or_else(
-                || {
-                    if name.len() == 1 {
-                        name.clone()
-                    } else {
-                        format!("\\mathrm{{{name}}}")
-                    }
+                || match name.as_str() {
+                    "theta" => r"\theta ".into(),
+                    short if short.len() == 1 => name.clone(),
+                    _ => format!("\\mathrm{{{name}}}"),
                 },
                 |value| tex_number(value, minimum),
             ),

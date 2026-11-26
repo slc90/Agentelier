@@ -1,3 +1,5 @@
+mod polar;
+
 use super::{axis::Axis, construction, invalid};
 use agentelier_agent_host::EcsError;
 use bevy::{
@@ -18,6 +20,8 @@ use bevy_widgetry::{
 };
 use std::io;
 
+pub(super) use polar::{AngleUnit, point as polar_point};
+
 const WIDTH: f32 = 656.0;
 const HEIGHT: f32 = 291.0;
 const BOTTOM_LEFT: Vec2 = Vec2::new(-252.0, 105.0);
@@ -37,7 +41,9 @@ pub(super) const PALETTE: [[u8; 3]; 8] = [
 ];
 
 #[derive(Component, Clone, Default)]
-struct NativePlot;
+struct NativePlot {
+    size: Vec2,
+}
 
 #[derive(Clone, PartialEq)]
 pub(super) struct Legend {
@@ -128,6 +134,7 @@ pub(super) enum Style {
     Function,
     Implicit,
     Region,
+    Polar(AngleUnit),
 }
 
 pub(super) struct Rendered {
@@ -333,6 +340,7 @@ fn mount(
         Style::Function => "NativeFunctionPlot",
         Style::Implicit => "NativeImplicitPlot",
         Style::Region => "NativeInequalityPlot",
+        Style::Polar(_) => "NativePolarPlot",
     };
     let root = root(world, parent, name, content.title.as_deref())?;
     let result = decorate(world, root, content, style);
@@ -369,10 +377,15 @@ pub(super) fn document(world: &mut World, root: Entity) -> std::result::Result<E
 }
 
 pub(super) fn viewport(document: Entity) -> impl Scene {
+    viewport_with_width(document, WIDTH)
+}
+
+fn viewport_with_width(document: Entity, width: f32) -> impl Scene {
     bsn! {
         @CanvasView { @document: {Some(document)} }
-        NativePlot Name("NativePlotViewport") Pickable::IGNORE InteractionDisabled
-        Node { width: percent(100), min_width: px(0), min_height: px(140), aspect_ratio: {Some(WIDTH / HEIGHT)} }
+        NativePlot { size: {Vec2::new(width, HEIGHT)} }
+        Name("NativePlotViewport") Pickable::IGNORE InteractionDisabled
+        Node { width: percent(100), min_width: px(0), min_height: px(140), aspect_ratio: {Some(width / HEIGHT)} }
         template(|context| Ok(BackgroundColor(context.resource::<WidgetryTheme>().text_field.editable.normal.background)))
     }
 }
@@ -415,7 +428,10 @@ fn decorate(
     let ink = theme.text.normal.foreground;
     let grid = theme.text_field.editable.normal.border;
     let (layers, reference) = CanvasDocument::edit(world, document, |world, token| {
-        axes(world, token, &x, &y, ink, grid)?;
+        match style {
+            Style::Polar(unit) => polar::axes(world, token, &x, unit, ink, grid)?,
+            _ => axes(world, token, &x, &y, ink, grid)?,
+        }
         let reference = if let Some(baseline) = &baseline {
             let (path, paint) = baseline.geometry(ink);
             let entity =
@@ -459,13 +475,18 @@ fn decorate(
             @legend
         }
     });
+    let view_width = if matches!(style, Style::Polar(_)) {
+        366.0
+    } else {
+        WIDTH
+    };
     spawn_scene(world, bsn! {
         ChildOf(root)
         Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(6) }
         Children [
             @{title}--
             Text(y_name) WidgetryText TextLayout::linebreak(bevy::text::LineBreak::WordOrCharacter)--
-            @viewport(document)--
+            @viewport_with_width(document, view_width)--
             Text(x_name) WidgetryText TextLayout::linebreak(bevy::text::LineBreak::WordOrCharacter)
             Node { align_self: AlignSelf::Center }--
             @{legend}
@@ -815,10 +836,10 @@ fn clip_line(from: DVec2, to: DVec2) -> Option<(DVec2, DVec2)> {
 }
 
 fn fit(
-    plots: Query<(Entity, &ComputedNode), (With<NativePlot>, Changed<ComputedNode>)>,
+    plots: Query<(Entity, &ComputedNode, &NativePlot), Changed<ComputedNode>>,
     mut commands: Commands,
 ) {
-    for (entity, layout) in plots.iter() {
+    for (entity, layout, plot) in plots.iter() {
         let logical = layout.size() * layout.inverse_scale_factor();
         if logical.x <= 0.0 || logical.y <= 0.0 {
             continue;
@@ -826,7 +847,7 @@ fn fit(
         CanvasView::set_zoom(
             &mut commands,
             entity,
-            (logical.x / WIDTH).min(logical.y / HEIGHT).clamp(0.1, 10.0),
+            (logical / plot.size).min_element().clamp(0.1, 10.0),
         );
     }
 }
