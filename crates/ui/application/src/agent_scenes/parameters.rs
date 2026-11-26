@@ -417,7 +417,7 @@ impl Parameters {
                 Binding::MathParameter {
                     parameter,
                     variable,
-                } if scene.template == math::TEMPLATE && variables.insert(variable.as_str()) => {
+                } if math::supports(&scene.template) && variables.insert(variable.as_str()) => {
                     let value = math_value(parameter, &self.get(parameter)?.current)?;
                     math::bind_variable(scene, variable, value)?;
                 }

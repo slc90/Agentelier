@@ -124,6 +124,7 @@ pub(super) enum Style {
     BoxPlot,
     Combined,
     Function,
+    Implicit,
 }
 
 pub(super) struct Rendered {
@@ -327,6 +328,7 @@ fn mount(
         Style::BoxPlot => "NativeBoxPlot",
         Style::Combined => "NativeCombinedChart",
         Style::Function => "NativeFunctionPlot",
+        Style::Implicit => "NativeImplicitPlot",
     };
     let root = root(world, parent, name, content.title.as_deref())?;
     let result = decorate(world, root, content, style);
