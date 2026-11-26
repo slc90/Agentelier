@@ -4,6 +4,7 @@ compile_error!("This application supports Windows x64 only");
 mod ecs_access;
 mod host;
 
+pub use agentelier_bridge_connection::ecs_access::SceneTarget;
 pub use ecs_access::scenes::{mount_native_scene, patch_native_scene};
 
 pub use agentelier_bridge_connection::{

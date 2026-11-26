@@ -1,4 +1,4 @@
-use agentelier_agent_host::{mount_native_scene, patch_native_scene};
+use agentelier_agent_host::{SceneTarget, mount_native_scene, patch_native_scene};
 use agentelier_conversation_bridge::{PublishedScene, SessionId};
 use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::prelude::*;
@@ -34,7 +34,12 @@ pub(super) fn needs_revision(world: &World, parent: Entity, revision: u64) -> bo
         })
 }
 
-pub(super) fn reconcile(world: &mut World, parent: Entity, scene: PublishedScene) -> Result {
+pub(super) fn reconcile(
+    world: &mut World,
+    parent: Entity,
+    session: SessionId,
+    scene: PublishedScene,
+) -> Result {
     let Some(mut presentation) = world.get::<Presentation>(parent).cloned() else {
         return Ok(());
     };
@@ -48,7 +53,11 @@ pub(super) fn reconcile(world: &mut World, parent: Entity, scene: PublishedScene
     if let Some(error) = presentation.error.take() {
         world.despawn(error);
     }
-    match apply(world, parent, &scene, presentation.installed) {
+    let target = SceneTarget {
+        session,
+        artifact: scene.id,
+    };
+    match apply(world, parent, target, &scene, presentation.installed) {
         Ok(installed) => presentation.installed = Some(installed),
         Err(error) => {
             tracing::error!(artifact = %scene.id, revision = scene.revision, template = %scene.definition.template, %error, "聊天 Scene 呈现失败");
@@ -77,6 +86,7 @@ pub(super) fn reconcile(world: &mut World, parent: Entity, scene: PublishedScene
 fn apply(
     world: &mut World,
     parent: Entity,
+    target: SceneTarget,
     scene: &PublishedScene,
     installed: Option<Mounted>,
 ) -> Result<Mounted> {
@@ -92,7 +102,7 @@ fn apply(
             Node { display: Display::None, width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column }
         },
     ).map_err(|failure| failure.into_bevy_error())?;
-    let root = match mount_native_scene(world, container, &scene.definition) {
+    let root = match mount_native_scene(world, container, &scene.definition, target) {
         Ok(root) => root,
         Err(error) => {
             world.despawn(container);

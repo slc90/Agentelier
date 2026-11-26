@@ -226,7 +226,9 @@ pub(crate) async fn prepare_scene(
     operation: SceneOperation,
 ) -> ToolResult {
     use crate::ToolPayload;
-    use crate::ecs_access::{MAX_SCENE_DEFINITION_BYTES, SceneDefinition, SceneUpdate};
+    use crate::ecs_access::{
+        MAX_SCENE_DEFINITION_BYTES, SceneDefinition, SceneTarget, SceneUpdate,
+    };
 
     if !context.root || context.user_turn().memory_management || context.user_turn().background {
         return ToolResult::error(
@@ -253,7 +255,7 @@ pub(crate) async fn prepare_scene(
             serde_json::from_str::<Box<SceneUpdate>>(arguments).map(ToolPayload::UpdateScene)
         }
     };
-    let payload = match parsed {
+    let mut payload = match parsed {
         Ok(payload) => payload,
         Err(error) => {
             return ToolResult::error(
@@ -263,9 +265,15 @@ pub(crate) async fn prepare_scene(
             );
         }
     };
-    let definition = match &payload {
-        ToolPayload::PublishScene(definition) => definition,
-        ToolPayload::UpdateScene(update) => &update.definition,
+    let (definition, target) = match &mut payload {
+        ToolPayload::PublishScene(definition) => (definition, None),
+        ToolPayload::UpdateScene(update) => (
+            &mut update.definition,
+            Some(SceneTarget {
+                session: context.user_turn().session,
+                artifact: update.id,
+            }),
+        ),
         _ => {
             return ToolResult::error(ToolStatus::Unconfirmed, "scene_route", "Scene 操作缺少定义");
         }
@@ -274,15 +282,18 @@ pub(crate) async fn prepare_scene(
         return ToolResult::error(ToolStatus::Failed, error.code, &error.message);
     }
     match scripts
-        .validate_scene(definition.as_ref().clone(), cancel)
+        .validate_scene(definition.as_ref().clone(), target, cancel)
         .await
     {
-        Ok(()) if !cancel.is_cancelled() => ToolResult {
-            status: ToolStatus::Succeeded,
-            output: payload,
-            cleanup_failed: false,
-        },
-        Ok(()) => ToolResult::not_executed("stopped", "任务已停止，Scene 未发布"),
+        Ok(checked) if !cancel.is_cancelled() => {
+            **definition = checked;
+            ToolResult {
+                status: ToolStatus::Succeeded,
+                output: payload,
+                cleanup_failed: false,
+            }
+        }
+        Ok(_) => ToolResult::not_executed("stopped", "任务已停止，Scene 未发布"),
         Err(error) => ToolResult::error(
             if cancel.is_cancelled() {
                 ToolStatus::Cancelled

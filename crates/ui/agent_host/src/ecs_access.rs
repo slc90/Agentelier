@@ -125,7 +125,9 @@ fn execute(world: &mut World, operation: &EcsOperation) -> std::result::Result<V
         EcsOperation::Trigger(name, payload) => dispatch::event(world, name, payload),
         EcsOperation::WriteMessage(name, payload) => dispatch::message(world, name, payload),
         EcsOperation::SceneTemplates => Ok(scenes::templates(world)),
-        EcsOperation::SceneValidate(definition) => scenes::validate(world, definition),
+        EcsOperation::SceneValidate { definition, target } => {
+            scenes::validate(world, definition, *target)
+        }
         EcsOperation::SceneSpawn(name, parent, props) => scenes::spawn(world, name, *parent, props),
         EcsOperation::SceneDespawn(root) => scenes::despawn(world, *root),
     }

@@ -129,16 +129,17 @@ impl AgentHostPlugin {
         Ok(self)
     }
 
-    pub fn with_ecs_scene<P: serde::de::DeserializeOwned + 'static, S: Scene>(
+    pub fn with_ecs_scene<P: serde::de::DeserializeOwned + serde::Serialize + 'static, S: Scene>(
         mut self,
         name: &'static str,
         description: &'static str,
         parameters: &'static [(&'static str, &'static str)],
         build: fn(P) -> Result<S>,
         update: Option<fn(&mut World, Entity, P) -> Result>,
+        prepare: Option<fn(&World, Entity, P) -> Result<P>>,
     ) -> Result<Self> {
         self.ecs_scenes
-            .register(name, description, parameters, build, update)?;
+            .register(name, description, parameters, build, update, prepare)?;
         Ok(self)
     }
 }

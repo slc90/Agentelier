@@ -1,7 +1,7 @@
 use super::read;
-use agentelier_bridge_connection::ecs_access::{EcsEntity, EcsError, SceneDefinition};
+use agentelier_bridge_connection::ecs_access::{EcsEntity, EcsError, SceneDefinition, SceneTarget};
 use bevy::prelude::*;
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -12,6 +12,7 @@ type Properties = Map<String, Value>;
 type Result<T> = std::result::Result<T, EcsError>;
 type Factory = Arc<dyn Fn(&mut World, Entity, &Properties) -> Result<Entity> + Send + Sync>;
 type Patcher = Arc<dyn Fn(&mut World, Entity, &Properties) -> Result<()> + Send + Sync>;
+type PrepareUpdate = Arc<dyn Fn(&World, Entity, &Properties) -> Result<Properties> + Send + Sync>;
 
 #[derive(Clone)]
 struct Template {
@@ -19,6 +20,7 @@ struct Template {
     parameters: &'static [(&'static str, &'static str)],
     factory: Factory,
     patcher: Option<Patcher>,
+    prepare: Option<PrepareUpdate>,
 }
 
 #[derive(Clone, Default, Resource)]
@@ -30,14 +32,18 @@ struct Instance {
     owned: Box<[Entity]>,
 }
 
+#[derive(Component)]
+struct MountedScene(SceneTarget);
+
 impl Registry {
-    pub(crate) fn register<P: DeserializeOwned + 'static, S: Scene>(
+    pub(crate) fn register<P: DeserializeOwned + Serialize + 'static, S: Scene>(
         &mut self,
         name: &'static str,
         description: &'static str,
         parameters: &'static [(&'static str, &'static str)],
         build: fn(P) -> bevy::prelude::Result<S>,
         update: Option<fn(&mut World, Entity, P) -> bevy::prelude::Result<()>>,
+        prepare: Option<fn(&World, Entity, P) -> bevy::prelude::Result<P>>,
     ) -> Result<()> {
         let std::collections::btree_map::Entry::Vacant(entry) = self.0.entry(name) else {
             return Err(EcsError::new(
@@ -63,6 +69,18 @@ impl Registry {
                         .map_err(|error| EcsError::new("scene_update_failed", error.to_string()))
                 });
                 patcher
+            }),
+            prepare: prepare.map(|prepare| {
+                let prepare: PrepareUpdate = Arc::new(move |world, root, properties| {
+                    let properties = serde_json::from_value(Value::Object(properties.clone()))
+                        .map_err(invalid_props)?;
+                    let prepared = prepare(world, root, properties).map_err(invalid_props)?;
+                    match serde_json::to_value(prepared).map_err(invalid_props)? {
+                        Value::Object(properties) => Ok(properties),
+                        _ => Err(invalid_props("Scene Props 必须是对象")),
+                    }
+                });
+                prepare
             }),
         });
         Ok(())
@@ -94,7 +112,25 @@ pub(super) fn spawn(
     instance(world, name, parent, props).map(|root| json!(read::token(root)))
 }
 
-pub(super) fn validate(world: &mut World, definition: &SceneDefinition) -> Result<Value> {
+pub(super) fn validate(
+    world: &mut World,
+    definition: &SceneDefinition,
+    target: Option<SceneTarget>,
+) -> Result<Value> {
+    let mut definition = definition.clone();
+    if let Some(target) = target
+        && let Some(prepare) = world
+            .get_resource::<Registry>()
+            .and_then(|registry| registry.0.get(definition.template.as_str()))
+            .and_then(|template| template.prepare.clone())
+    {
+        let mut mounted = world.query::<(Entity, &MountedScene, &Instance)>();
+        if let Some((root, _, _)) = mounted.iter(world).find(|(_, scene, instance)| {
+            scene.0 == target && instance.template == definition.template
+        }) {
+            definition.props = prepare(world, root, &definition.props)?;
+        }
+    }
     definition.validate()?;
     let staging = bevy_widgetry::scene::spawn_scene(
         world,
@@ -103,12 +139,27 @@ pub(super) fn validate(world: &mut World, definition: &SceneDefinition) -> Resul
         },
     )
     .map_err(|error| EcsError::new("scene_validation_failed", error.to_string()))?;
-    let result = mount_native_scene(world, staging, definition);
+    let result = build_native_scene(world, staging, &definition);
     world.despawn(staging);
-    result.map(|_| json!(true))
+    result?;
+    serde_json::to_value(definition).map_err(invalid_props)
 }
 
 pub fn mount_native_scene(
+    world: &mut World,
+    parent: Entity,
+    definition: &SceneDefinition,
+    target: SceneTarget,
+) -> Result<Entity> {
+    let root = build_native_scene(world, parent, definition)?;
+    world
+        .get_entity_mut(root)
+        .map_err(|_| EcsError::new("scene_construction_failed", "Scene 根实体失效"))?
+        .insert(MountedScene(target));
+    Ok(root)
+}
+
+fn build_native_scene(
     world: &mut World,
     parent: Entity,
     definition: &SceneDefinition,

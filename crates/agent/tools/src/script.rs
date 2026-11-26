@@ -91,20 +91,25 @@ impl ScriptSession {
     pub(crate) async fn validate_scene(
         &self,
         definition: crate::ecs_access::SceneDefinition,
+        target: Option<crate::ecs_access::SceneTarget>,
         cancel: &CancellationToken,
-    ) -> Result<(), ToolFailure> {
+    ) -> Result<crate::ecs_access::SceneDefinition, ToolFailure> {
         let access = self.ecs_access.clone();
         let control = Control::new(cancel);
         let _cancel_on_drop = control.cancel.clone().drop_guard();
         tokio::task::spawn_blocking(move || {
             access
                 .call(
-                    crate::ecs_access::EcsOperation::SceneValidate(definition),
+                    crate::ecs_access::EcsOperation::SceneValidate { definition, target },
                     &control.cancel,
                     control.deadline,
                 )
-                .map(|_| ())
                 .map_err(|error| ToolFailure::new(error.code, error.message))
+                .and_then(|checked| {
+                    serde_json::from_value(checked).map_err(|error| {
+                        ToolFailure::new("scene_validation_failed", error.to_string())
+                    })
+                })
         })
         .await
         .map_err(worker_failure)?

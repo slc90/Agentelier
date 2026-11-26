@@ -1890,7 +1890,7 @@ fn reconcile_reply(
                 ReplyItemContent::NativeScene(artifact) => {
                     if crate::native_scene::needs_revision(world, entity, artifact.revision) {
                         world.commands().queue(move |world: &mut World| {
-                            crate::native_scene::reconcile(world, entity, artifact)
+                            crate::native_scene::reconcile(world, entity, session, artifact)
                         });
                     }
                 }
@@ -1937,7 +1937,7 @@ fn reconcile_reply(
                         })
                         .id();
                     commands.queue(move |world: &mut World| {
-                        crate::native_scene::reconcile(world, entity, artifact)
+                        crate::native_scene::reconcile(world, entity, session, artifact)
                     });
                     entity
                 }

@@ -26,6 +26,12 @@ pub struct SceneUpdate {
     pub definition: Box<SceneDefinition>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct SceneTarget {
+    pub session: uuid::Uuid,
+    pub artifact: uuid::Uuid,
+}
+
 impl SceneDefinition {
     pub fn validate(&self) -> Result<(), EcsError> {
         if self.template.trim().is_empty() || self.template.len() > MAX_SCENE_TEMPLATE_BYTES {
@@ -69,7 +75,10 @@ pub enum EcsOperation {
     Trigger(String, Map<String, Value>),
     WriteMessage(String, Map<String, Value>),
     SceneTemplates,
-    SceneValidate(SceneDefinition),
+    SceneValidate {
+        definition: SceneDefinition,
+        target: Option<SceneTarget>,
+    },
     SceneSpawn(String, EcsEntity, Map<String, Value>),
     SceneDespawn(EcsEntity),
 }

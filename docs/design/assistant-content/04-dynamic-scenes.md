@@ -29,9 +29,9 @@ flowchart TD
 
 ## 从独立控件到组合界面
 
-优先复用 Widgetry 现有控件：Button、Slider、Number Input、CheckBox、Radio Group、ComboBox、Toggle Button、Segmented Control、Text Field，以及适合数据展示的表格。按用途启用所需 Feature 并以公开 API 注册 Scene；现有 `chat_ui` 已接入其中一部分，`slider`、`number_input`、`canvas` 等尚需接入。不能只添加模板名称而不提供实际行为。
+Application 已注册 `agentelier.slider` 和 `agentelier.number_input`。两者接受可见标签、`integer` 或 `float` 类型、闭区间、正步进和初值。Number Input 的整数使用有符号 64 位，浮点使用双精度。Slider 使用 Widgetry 的单精度范围，整数值和跨度限于 2²⁴，且初值必须从某个端点按步进到达。
 
-标准控件的 Props 描述构造时的语义数据，例如滑块的数值类型、范围、步进、初始值；运行期值由持久 Component 和业务状态管理，使用 Widgetry 的真实事件及公开修改方法，不保留同义的 Props 副本。布局通过 BSN Scene/SceneList 组合。模板可以表达具体组合场景，例如函数探索器的公式区、绘图区、参数区和结果区；它的内部仍然是原生控件。
+两个控件的 Props 只在构造时初始化 Widgetry 状态。用户的拖动、编辑和步进经由 Widgetry 公开接口更新实际状态，控件从 `ValueChange` 投影带源实体、强类型值和交互结束标记的统一数值事件。布局通过 BSN Scene/SceneList 组合。离散选择、文本输入和表格将按用途接入其他 Widgetry 控件。
 
 这里的组合不要求预先为所有可能的应用实现一个完整的 Rust Scene。先具备可描述的布局位置及标准组件，进一步通过自定义脚本控件承载新行为。两者使用同一聊天内容归属与状态保存关系。
 
@@ -62,7 +62,7 @@ flowchart LR
 
 Chat UI 保留原产物位置和容器。相同 `agentelier.button` 模板通过其更新接口改写标签和样式，原按钮实体与焦点保持一致。结构替换先在隐藏子树准备并构造新实例，再公开新子树及回收旧实例。实际更新失败时在原位置显示说明并保留此前实例。
 
-引入带用户参数的模板后，更新仍然有效的参数值应保留。如果新定义保留某个参数，而其当前值不再满足类型、范围或选项，Agent 须在同一次更新提供有效新值。参数与定义共同校验和提交，缺少新值或新值无效时返回对应参数的结构化错误。
+数值模板在更新时允许省略 `value`。AgentHost 在同一 Session、同一产物的已挂载同类型控件中读取当前值，和新范围及步进一并校验，将生效值写入已确认的定义。当前值不满足新定义、更换控件或数值类型、或者实例未挂载时，Agent 必须提供有效的 `value`。普通用户交互值暂随当前挂载实例保留。
 
 用户和 Agent 按顺序操作同一个场景。Agent 修改场景时，用户可以等更新完成，再继续使用控件。也可以通过现有聊天交互让 Agent 停止，等任务停止后接手操作。
 

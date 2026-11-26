@@ -1,19 +1,21 @@
+mod numeric;
+
 use agentelier_agent_host::AgentHostPlugin;
 use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
 use bevy::prelude::*;
 use bevy_widgetry::text::WidgetryText;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const MAX_LABEL_BYTES: usize = 256;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ButtonProperties {
     label: String,
     style: ButtonStyle,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ButtonStyle {
     Primary,
@@ -26,7 +28,7 @@ enum ButtonStyle {
 struct NativeButtonLabel;
 
 pub(crate) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
-    host.with_ecs_scene(
+    let host = host.with_ecs_scene(
         "agentelier.button",
         "Create an Agentelier button with a Widgetry text label under a live UI Node.",
         &[
@@ -38,7 +40,13 @@ pub(crate) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         ],
         button,
         Some(update_button),
-    )
+        None,
+    )?;
+    numeric::register(host)
+}
+
+pub(crate) fn install(app: &mut App) {
+    numeric::install(app);
 }
 
 fn button(properties: ButtonProperties) -> Result<impl Scene> {
