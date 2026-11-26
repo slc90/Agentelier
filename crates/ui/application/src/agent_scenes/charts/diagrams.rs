@@ -1,6 +1,7 @@
 mod geometry;
 mod graph;
 mod input;
+mod proof;
 
 use super::{construction, plot};
 use agentelier_agent_host::{
@@ -34,12 +35,25 @@ struct Drawing {
 }
 
 pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
-    graph::register(geometry::register(host)?)
+    let host = geometry::register(host)?;
+    let host = graph::register(host)?;
+    proof::register(host)
 }
 
 pub(super) fn install(app: &mut App) {
     input::install(app);
     graph::install(app);
+    proof::install(app);
+}
+
+fn latex_source(source: &str) -> String {
+    let longest = source
+        .split(|c: char| c != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat((longest + 1).max(3));
+    format!("{fence}latex\n{source}\n{fence}")
 }
 
 pub(in crate::agent_scenes) fn saves_positions(template: &str) -> bool {

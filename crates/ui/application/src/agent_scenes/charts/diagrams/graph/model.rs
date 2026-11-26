@@ -228,13 +228,7 @@ impl Model {
             pieces.push("拖动描边节点可调整布局。".to_owned());
         }
         if let Some(original) = &self.source_tex {
-            let longest = original
-                .split(|c: char| c != '`')
-                .map(str::len)
-                .max()
-                .unwrap_or(0);
-            let fence = "`".repeat((longest + 1).max(3));
-            pieces.push(format!("{fence}latex\n{original}\n{fence}"));
+            pieces.push(super::super::latex_source(original));
         }
         pieces.join("\n\n")
     }
