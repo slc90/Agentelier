@@ -144,6 +144,7 @@ type ToolExecutor = dyn for<'a> Fn(
 enum Executor {
     Function(Arc<ToolExecutor>),
     CodexImage,
+    PublishAudio,
     Shell(crate::ProcessLifetime),
     Stdin,
     Computer,
@@ -341,6 +342,9 @@ impl ToolRegistration {
                     "专用工具被错误派至普通执行器",
                 )
             }),
+            Executor::PublishAudio => {
+                Box::pin(async move { execution::publish_audio(context, arguments, cancel) })
+            }
             Executor::Function(execute) => {
                 let execution = execute(context, arguments, cancel, origin);
                 Box::pin(async move {
@@ -409,6 +413,20 @@ impl ToolCatalog {
 
     fn builtins(image_input: Option<bool>) -> Vec<ToolRegistration> {
         vec![
+            ToolRegistration::process(
+                ToolDefinition {
+                    name: crate::PUBLISH_AUDIO_TOOL.into(),
+                    mode: ToolMode::Asynchronous,
+                    source: ToolSource::Builtin,
+                    strict: true,
+                    display_source: None,
+                    output_schema: None,
+                    description: "Publish one completed local MP3, FLAC or WAV file as an audio attachment in the current assistant reply. Relative paths resolve in the frozen conversation working directory. Full absolute Windows paths are also accepted. Validates and saves the original bytes; does not generate, transcribe, or play audio. Limit 20 MiB per file and 128 MiB per session.".into(),
+                    parameters: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
+                },
+                Executor::PublishAudio,
+                ToolAccess::SharedRead,
+            ),
             ToolRegistration {
                 definition: crate::script::tool_definition(),
                 executor: Executor::Computer,
@@ -636,6 +654,7 @@ impl ToolCatalog {
                     tool.executor,
                     Executor::TaskControl(_)
                         | Executor::CodexImage
+                        | Executor::PublishAudio
                         | Executor::Computer
                         | Executor::Ecs
                         | Executor::Shell(crate::ProcessLifetime::Background)

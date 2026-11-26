@@ -3,11 +3,12 @@ use agentelier_agent_host::AgentHost;
 use agentelier_controls::AgentelierButton;
 use agentelier_conversation_bridge::{AudioAttachmentView, SessionId};
 use bevy::prelude::*;
+use bevy::text::LineBreak;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
 use bevy_widgetry::text::WidgetryText;
 
-#[derive(Clone, Reflect)]
+#[derive(Clone, PartialEq, Reflect)]
 pub struct ChatAudio {
     pub id: SessionId,
     pub name: String,
@@ -34,12 +35,21 @@ impl ChatAudio {
     fn label(&self) -> String {
         let seconds = self.duration_ms as f64 / 1000.0;
         let kib = self.encoded_bytes as f64 / 1024.0;
-        let format = if self.mime == "audio/wav" {
-            "WAV"
-        } else {
-            "MP3"
+        let format = match self.mime.as_str() {
+            "audio/wav" => "WAV",
+            "audio/flac" => "FLAC",
+            _ => "MP3",
         };
         format!("{} · {format} · {seconds:.2} 秒 · {kib:.1} KiB", self.name)
+    }
+}
+
+pub(super) fn published_card(audio: ChatAudio) -> impl Scene {
+    let label = audio.label();
+    bsn! {
+        Name("ChatPublishedAudio") Text(label) WidgetryText
+        TextLayout::linebreak(LineBreak::AnyCharacter)
+        Node {width: percent(100), min_width: px(0)}
     }
 }
 

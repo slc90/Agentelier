@@ -165,7 +165,7 @@ pub(super) fn audio_file(name: &str) -> bool {
                 && digest
                     .bytes()
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-                && matches!(extension, "wav" | "mp3")
+                && matches!(extension, "wav" | "mp3" | "flac")
         })
 }
 

@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{self, Cursor, Read};
 use std::path::Path;
 use std::sync::Arc;
-use symphonia::core::codecs::audio::well_known::CODEC_ID_MP3;
+use symphonia::core::codecs::audio::well_known::{CODEC_ID_FLAC, CODEC_ID_MP3};
 use symphonia::core::formats::{TrackType, probe::Hint};
 use symphonia::core::io::MediaSourceStream;
 
@@ -19,7 +19,13 @@ pub(super) fn checksum(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-pub(super) fn import(path: &Path) -> io::Result<ImportedAudio> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Source {
+    Draft,
+    Published,
+}
+
+pub(super) fn import(path: &Path, source: Source) -> io::Result<ImportedAudio> {
     let name: String = path
         .file_name()
         .ok_or_else(|| io::Error::other("请选择音频文件"))?
@@ -43,16 +49,22 @@ pub(super) fn import(path: &Path) -> io::Result<ImportedAudio> {
         return Err(io::Error::other("所选音频文件超过 20 MiB"));
     }
     let mut bytes = Vec::new();
-    file.take(MAX_AUDIO_BYTES as u64 + 1)
+    (&file)
+        .take(MAX_AUDIO_BYTES as u64 + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() > MAX_AUDIO_BYTES {
         return Err(io::Error::other("所选音频文件超过 20 MiB"));
     }
-    if bytes.len() as u64 != metadata.len() || bytes.is_empty() {
+    let final_metadata = file.metadata()?;
+    if bytes.len() as u64 != metadata.len()
+        || bytes.is_empty()
+        || final_metadata.len() != metadata.len()
+        || final_metadata.modified()? != metadata.modified()?
+    {
         return Err(io::Error::other("音频为空或文件在读取期间变化"));
     }
     let bytes: Arc<[u8]> = bytes.into();
-    let (format, duration_ms) = inspect(bytes.clone())?;
+    let (format, duration_ms) = inspect(bytes.clone(), source)?;
     let attachment = AudioAttachment {
         id: AudioId::new_v4(),
         name,
@@ -65,7 +77,7 @@ pub(super) fn import(path: &Path) -> io::Result<ImportedAudio> {
     Ok(ImportedAudio { attachment, bytes })
 }
 
-fn inspect(bytes: Arc<[u8]>) -> io::Result<(AudioFormat, u64)> {
+fn inspect(bytes: Arc<[u8]>, source: Source) -> io::Result<(AudioFormat, u64)> {
     let wav = bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WAVE");
     if wav
         && let Some(header) = bytes
@@ -75,9 +87,9 @@ fn inspect(bytes: Arc<[u8]>) -> io::Result<(AudioFormat, u64)> {
     {
         return Err(io::Error::other("WAV 文件内容不完整"));
     }
-    let source = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
+    let stream = MediaSourceStream::new(Box::new(Cursor::new(bytes)), Default::default());
     let mut reader = symphonia::default::get_probe()
-        .probe(&Hint::new(), source, Default::default(), Default::default())
+        .probe(&Hint::new(), stream, Default::default(), Default::default())
         .map_err(|failure| invalid_audio(&failure))?;
     let track = reader
         .default_track(TrackType::Audio)
@@ -91,8 +103,13 @@ fn inspect(bytes: Arc<[u8]>) -> io::Result<(AudioFormat, u64)> {
         AudioFormat::Wav
     } else if parameters.codec == CODEC_ID_MP3 {
         AudioFormat::Mp3
+    } else if source == Source::Published && parameters.codec == CODEC_ID_FLAC {
+        AudioFormat::Flac
     } else {
-        return Err(io::Error::other("支持 PCM WAV 或 MP3 音频"));
+        return Err(io::Error::other(match source {
+            Source::Draft => "支持 PCM WAV 或 MP3 音频",
+            Source::Published => "支持 MP3、FLAC 或 WAV 音频",
+        }));
     };
     let id = track.id;
     let mut decoder = symphonia::default::get_codecs()

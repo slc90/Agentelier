@@ -1,5 +1,6 @@
 use agentelier_conversation::{
-    ActiveTurn, Conversation, ConversationFailure, InputReceipt, RecordEvent, SessionId,
+    ActiveTurn, AudioAttachment, Conversation, ConversationFailure, InputReceipt, RecordEvent,
+    SessionId,
 };
 use agentelier_tools::{ImagePayload, OriginalImage};
 use std::sync::Arc;
@@ -10,6 +11,7 @@ pub enum RunnerEvent {
     Record(Box<TurnRecord>),
     Image(TurnImage),
     GeneratedImage(TurnGeneratedImage),
+    PublishedAudio(TurnPublishedAudio),
     Progress,
     TaskProgress,
     Receipt(InputReceipt),
@@ -77,6 +79,13 @@ pub struct TurnGeneratedImage {
     pub call_id: String,
     pub image: Arc<OriginalImage>,
     pub reply: oneshot::Sender<Result<SavedGeneratedImage, ConversationFailure>>,
+}
+
+pub struct TurnPublishedAudio {
+    pub session: SessionId,
+    pub call_id: String,
+    pub path: std::path::PathBuf,
+    pub reply: oneshot::Sender<Result<AudioAttachment, ConversationFailure>>,
 }
 
 pub struct SavedGeneratedImage {
@@ -225,5 +234,26 @@ impl TurnAccess {
         result
             .await
             .map_err(|_| ConversationFailure::new("原图保存未返回结果"))?
+    }
+
+    pub(crate) async fn persist_published_audio(
+        &self,
+        session: SessionId,
+        call_id: String,
+        path: std::path::PathBuf,
+    ) -> Result<AudioAttachment, ConversationFailure> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(RunnerEvent::PublishedAudio(TurnPublishedAudio {
+                session,
+                call_id,
+                path,
+                reply,
+            }))
+            .await
+            .map_err(|_| ConversationFailure::new("助手音频保存接收端已关闭"))?;
+        result
+            .await
+            .map_err(|_| ConversationFailure::new("助手音频保存未返回结果"))?
     }
 }

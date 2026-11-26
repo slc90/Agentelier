@@ -528,6 +528,7 @@ fn replay(
     let mut notices = Vec::new();
     let mut historical_processes = BTreeMap::new();
     let mut tool_images = HashMap::new();
+    let mut published_audio = HashMap::new();
     let mut saved_tool_results = HashSet::new();
     let mut audio_draft: Option<crate::AudioAttachment> = None;
     let mut audio_ids = HashMap::<crate::AudioId, crate::AudioAttachment>::new();
@@ -1315,6 +1316,7 @@ fn replay(
                 status,
                 output,
                 generated_image,
+                published_audio: audio,
                 execution,
             } => {
                 if !matches!(
@@ -1379,6 +1381,16 @@ fn replay(
                         return Err(ConversationFailure::new("生成原图与存档工具结果身份不符"));
                     }
                     tool_images.insert(call_id.clone(), crate::ToolImage::Generated(image.image));
+                }
+                if let Some(audio) = audio {
+                    if !initial.settings.kind.is_user()
+                        || !tool.is_audio_publication()
+                        || status != ToolStatus::Succeeded
+                    {
+                        return Err(ConversationFailure::new("助手音频与存档调用不匹配"));
+                    }
+                    audio.validate()?;
+                    published_audio.insert(call_id.clone(), audio);
                 }
                 if matches!(
                     initial
@@ -1819,6 +1831,7 @@ fn replay(
         .filter(|tool| tool.retained)
     {
         tool.image = tool_images.remove(&tool.call_id);
+        tool.published_audio = published_audio.remove(&tool.call_id);
         tool.result_saved = saved_tool_results.remove(&tool.call_id);
     }
     state.context.refresh(

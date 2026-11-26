@@ -188,6 +188,8 @@ pub struct ToolView {
     #[serde(skip)]
     pub image: Option<ToolImage>,
     #[serde(skip)]
+    pub published_audio: Option<crate::AudioAttachment>,
+    #[serde(skip)]
     pub result_saved: bool,
     pub retained: bool,
 }
@@ -195,6 +197,10 @@ pub struct ToolView {
 impl ToolView {
     pub fn is_image_generation(&self) -> bool {
         self.name == agentelier_tools::GENERATE_IMAGE_TOOL
+    }
+
+    pub fn is_audio_publication(&self) -> bool {
+        self.name == agentelier_tools::PUBLISH_AUDIO_TOOL
     }
 }
 

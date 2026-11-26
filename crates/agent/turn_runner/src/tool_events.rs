@@ -733,6 +733,7 @@ async fn save_call(
     progress: &mpsc::Sender<RunnerEvent>,
     cancel: &CancellationToken,
 ) -> Result<(), ConversationFailure> {
+    let (result, published_audio) = persist_published_audio(active, session, call_id, result).await;
     let (result, generated_image) =
         persist_generated_image(active, session, call_id, result).await?;
     let (result, storage_failure) = if generated_image.is_some() {
@@ -749,6 +750,7 @@ async fn save_call(
     if let Some((status, output)) = outcome {
         let id = call_id.to_owned();
         let image_record = generated_image.clone();
+        let audio_record = published_audio.clone();
         let event = active
             .call(move |turn| {
                 Ok(RecordEvent::ToolReturned {
@@ -757,6 +759,7 @@ async fn save_call(
                     status,
                     output: agentelier_llm_model::ArchivedPayload::capture(&output),
                     generated_image: image_record,
+                    published_audio: audio_record,
                     execution,
                 })
             })
@@ -765,7 +768,14 @@ async fn save_call(
         let id = call_id.to_owned();
         if active
             .call(move |mut turn| {
-                turn.confirm_result_saved(&id, execution, status, sequence, generated_image)
+                turn.confirm_result_saved(
+                    &id,
+                    execution,
+                    status,
+                    sequence,
+                    generated_image,
+                    published_audio,
+                )
             })
             .await?
         {
@@ -773,6 +783,39 @@ async fn save_call(
         }
     }
     publish(progress, cancel).await
+}
+
+async fn persist_published_audio(
+    active: &TurnAccess,
+    session: agentelier_conversation::SessionId,
+    call_id: &str,
+    mut result: ToolResult,
+) -> (ToolResult, Option<agentelier_conversation::AudioAttachment>) {
+    let ToolPayload::PublishAudio(path) = result.output else {
+        return (result, None);
+    };
+    match active
+        .persist_published_audio(session, call_id.to_owned(), path)
+        .await
+    {
+        Ok(audio) => {
+            result.output = serde_json::json!({
+                "ok": true,
+                "audio": {
+                    "id": audio.id, "name": audio.name, "mime": audio.format.mime(),
+                    "sha256": audio.digest, "encoded_bytes": audio.encoded_bytes,
+                    "duration_ms": audio.duration_ms
+                }
+            })
+            .to_string()
+            .into();
+            (result, Some(audio))
+        }
+        Err(failure) => (
+            ToolResult::error(ToolStatus::Failed, "audio_publish", &failure.to_string()),
+            None,
+        ),
+    }
 }
 
 async fn persist_generated_image(

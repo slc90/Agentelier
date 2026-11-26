@@ -290,6 +290,16 @@ impl ActiveTurn<'_> {
             .ok_or_else(|| ConversationFailure::new("工具状态缺少来源调用"))
     }
 
+    pub fn check_audio_publication(&self, call_id: &str) -> Result<(), ConversationFailure> {
+        let (_, tool) = self.tool_source(call_id)?;
+        if !self.view.settings.kind.is_user() || !tool.is_audio_publication() {
+            return Err(ConversationFailure::new(
+                "音频发布不属于当前 Root 会话的调用",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn generated_image_turn(
         &self,
         call_id: &str,
@@ -378,6 +388,16 @@ impl ActiveTurn<'_> {
             && !image.matches(source, tool, status)
         {
             return Err(ConversationFailure::new("生成原图与工具结果身份不符"));
+        }
+        if let crate::RecordEvent::ToolReturned {
+            published_audio: Some(audio),
+            ..
+        } = event
+        {
+            if !tool.is_audio_publication() || status != ToolStatus::Succeeded {
+                return Err(ConversationFailure::new("助手音频与工具结果不匹配"));
+            }
+            audio.validate()?;
         }
         self.tasks.matching_transition(
             source,
@@ -869,6 +889,7 @@ impl ActiveTurn<'_> {
             status,
             output: None,
             image: None,
+            published_audio: None,
             result_saved: false,
             retained: false,
         };
@@ -1080,6 +1101,7 @@ impl ActiveTurn<'_> {
         status: ToolStatus,
         sequence: u64,
         generated_image: Option<crate::GeneratedImage>,
+        published_audio: Option<crate::AudioAttachment>,
     ) -> Result<bool, ConversationFailure> {
         let result = self
             .results
@@ -1109,6 +1131,7 @@ impl ActiveTurn<'_> {
             .find(|tool| tool.retained && tool.call_id == call_id)
             .ok_or_else(|| ConversationFailure::new("保存回执缺少工具调用"))?;
         tool.image = image;
+        tool.published_audio = published_audio;
         tool.result_saved = true;
         Ok(changed)
     }
@@ -1132,8 +1155,11 @@ impl ActiveTurn<'_> {
         call_id: &str,
         mut result: ToolResult,
     ) -> Result<Option<(ToolStatus, ToolPayload)>, ConversationFailure> {
-        if matches!(result.output, ToolPayload::GeneratedImage { .. }) {
-            return Err(ConversationFailure::new("生成原图缺少存储回执"));
+        if matches!(
+            result.output,
+            ToolPayload::GeneratedImage { .. } | ToolPayload::PublishAudio(_)
+        ) {
+            return Err(ConversationFailure::new("媒体产物缺少存储回执"));
         }
         let tool = self
             .view

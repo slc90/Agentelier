@@ -94,6 +94,7 @@ pub struct ToolView {
     pub status: String,
     pub output: Option<String>,
     pub image: Option<ToolImageView>,
+    pub published_audio: Option<AudioAttachmentView>,
     pub image_generation: bool,
     pub result_saved: bool,
     pub retained: bool,
@@ -796,6 +797,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
             .map(|tool| ToolView {
                 image_generation: tool.is_image_generation(),
                 result_saved: tool.result_saved,
+                published_audio: tool.published_audio.map(Into::into),
                 collaboration: tool.collaboration,
                 request_index: tool.request_index,
                 id: tool.id,

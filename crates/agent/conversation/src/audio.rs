@@ -149,6 +149,7 @@ impl crate::SessionView {
 pub enum AudioFormat {
     Wav,
     Mp3,
+    Flac,
 }
 
 impl AudioFormat {
@@ -156,6 +157,7 @@ impl AudioFormat {
         match self {
             Self::Wav => "wav",
             Self::Mp3 => "mp3",
+            Self::Flac => "flac",
         }
     }
 
@@ -163,6 +165,7 @@ impl AudioFormat {
         match self {
             Self::Wav => "audio/wav",
             Self::Mp3 => "audio/mpeg",
+            Self::Flac => "audio/flac",
         }
     }
 }

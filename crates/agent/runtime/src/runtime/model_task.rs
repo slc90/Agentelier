@@ -222,6 +222,38 @@ pub(super) fn progress(
             });
             Ok(())
         }
+        RunnerEvent::PublishedAudio(attachment) => {
+            let agentelier_turn_runner::TurnPublishedAudio {
+                session,
+                call_id,
+                path,
+                reply,
+            } = attachment;
+            let target = if id == 0 {
+                conversation.tool_turn()
+            } else {
+                conversation.active_turn(id)
+            };
+            let validated = target.and_then(|turn| {
+                if turn.session_id() != session {
+                    return Err(ConversationFailure::new("助手音频不属于当前会话"));
+                }
+                turn.check_audio_publication(&call_id)
+            });
+            if let Err(failure) = validated {
+                drop(reply.send(Err(failure)));
+                return Ok(());
+            }
+            let store = store.clone();
+            tokio::spawn(async move {
+                let result = store
+                    .save_published_audio(session, path)
+                    .await
+                    .map_err(|failure| ConversationFailure::new(failure.to_string()));
+                drop(reply.send(result));
+            });
+            Ok(())
+        }
         RunnerEvent::Progress => {
             if id == 0 {
                 conversation.tool_turn()?;

@@ -174,3 +174,37 @@ pub(crate) async fn image(
     }
     crate::image::run(arguments, context.directory.clone(), cancel).await
 }
+
+pub(crate) fn publish_audio(
+    context: &ExecutionContext,
+    arguments: &str,
+    cancel: &CancellationToken,
+) -> ToolResult {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Arguments {
+        path: String,
+    }
+    if cancel.is_cancelled() {
+        return ToolResult::not_executed("stopped", "任务已停止，音频未发布");
+    }
+    let args: Arguments = match serde_json::from_str(arguments) {
+        Ok(args) => args,
+        Err(failure) => {
+            return ToolResult::error(ToolStatus::Failed, "audio_arguments", &failure.to_string());
+        }
+    };
+    if args.path.trim().is_empty() {
+        return ToolResult::error(ToolStatus::Failed, "audio_path", "需要一个音频文件路径");
+    }
+    let path = crate::WorkingDirectory::validate(context.working_directory())
+        .and_then(|directory| directory.resolve(Path::new(&args.path)));
+    match path {
+        Ok(path) => ToolResult {
+            status: ToolStatus::Succeeded,
+            output: crate::ToolPayload::PublishAudio(path),
+            cleanup_failed: false,
+        },
+        Err(failure) => ToolResult::error(ToolStatus::Failed, "audio_path", &failure.to_string()),
+    }
+}

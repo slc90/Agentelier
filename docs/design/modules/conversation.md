@@ -27,6 +27,8 @@ Conversation 在 `ToolReturned` 持久确认后提供工具结果及其图片描
 
 文稿问答将已完成的文稿版本和音频来源绑定到输入。用户问题进入普通协议历史，文稿通过冻结请求的独立 developer 材料提供。恢复以同会话音频和转写记录核对版本与摘要，重试和压缩继续保留原绑定。文稿材料占用现有固定材料预算，全文由权威转写记录保管。
 
+`publish_audio` 把已确认的助手音频描述符与原调用一起写入 `ToolReturned`。Model History 记录发布结果的文本元数据，回复从原调用投影音频项。恢复使用同一会话的原件及摘要校验，用户草稿和转写继续由各自的输入附件驱动。
+
 ## 设置与生命周期
 
 Conversation 持有按 Session 隔离的内存 Agent Registry。新建与重置在初始存档获得确认后登记 Root，打开时由已有 Session UUID 重建同一个 Root Agent ID 和 Thread ID。重复登记同一 Root 幂等，其他身份冲突会拒绝打开。每次打开分配新的 Runtime Instance ID，Runner 的前台进度和终态必须匹配当前实例。

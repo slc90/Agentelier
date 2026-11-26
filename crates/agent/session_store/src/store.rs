@@ -70,6 +70,11 @@ enum Command {
         Option<crate::audio::ImportedAudio>,
         oneshot::Sender<io::Result<Option<AudioAttachment>>>,
     ),
+    SavePublishedAudio(
+        SessionId,
+        crate::audio::ImportedAudio,
+        oneshot::Sender<io::Result<AudioAttachment>>,
+    ),
     ReadAudio(
         SessionId,
         AudioAttachment,
@@ -187,9 +192,11 @@ impl SessionStoreClient {
     ) -> io::Result<Option<AudioAttachment>> {
         let audio = if let Some(path) = path {
             Some(
-                tokio::task::spawn_blocking(move || crate::audio::import(&path))
-                    .await
-                    .map_err(io::Error::other)??,
+                tokio::task::spawn_blocking(move || {
+                    crate::audio::import(&path, crate::audio::Source::Draft)
+                })
+                .await
+                .map_err(io::Error::other)??,
             )
         } else {
             None
@@ -202,6 +209,27 @@ impl SessionStoreClient {
         result
             .await
             .map_err(|_| io::Error::other("音频附件提交未返回结果"))?
+    }
+
+    pub async fn save_published_audio(
+        &self,
+        session: SessionId,
+        path: PathBuf,
+    ) -> io::Result<AudioAttachment> {
+        let session = self.attachment_session(session)?;
+        let audio = tokio::task::spawn_blocking(move || {
+            crate::audio::import(&path, crate::audio::Source::Published)
+        })
+        .await
+        .map_err(io::Error::other)??;
+        let (reply, result) = oneshot::channel();
+        self.0
+            .send(Command::SavePublishedAudio(session, audio, reply))
+            .await
+            .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
+        result
+            .await
+            .map_err(|_| io::Error::other("助手音频保存未返回结果"))?
     }
 
     pub fn delete(
@@ -580,6 +608,11 @@ impl SessionStore {
                         }
                         Command::ReadAudio(session, audio, reply) => {
                             let _closed = reply.send(crate::attachments::read_audio(&root, session, &audio));
+                        }
+                        Command::SavePublishedAudio(session, audio, reply) => {
+                            let result = crate::attachments::save_audio(&root, session, &audio)
+                                .map(|()| audio.attachment);
+                            let _closed = reply.send(result);
                         }
                         Command::Create(initial, project, reply) => {
                             let result = create(&root, *initial, project);

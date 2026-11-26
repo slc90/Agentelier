@@ -10,7 +10,7 @@ mod tool_events;
 
 pub use access::{
     GeneratedImageFeedback, InboxAction, InboxRequest, RunnerEvent, SavedGeneratedImage,
-    TurnGeneratedImage, TurnImage, TurnRecord,
+    TurnGeneratedImage, TurnImage, TurnPublishedAudio, TurnRecord,
 };
 pub use dispatch::{
     SessionTaskAction, SessionTaskCommand, SessionTaskOutcome, ToolAuthorization, ToolBatch,

@@ -106,7 +106,7 @@ image = { version = "0.25.9", default-features = false, features = [
   "png",
   "jpeg",
 ] }
-symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "wav", "pcm", "id3v2"] }
+symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "wav", "pcm", "id3v2", "flac"] }
 url = "2.5"
 percent-encoding = "2"
 uritemplate = { package = "uritemplate-next", version = "0.2.0" }
