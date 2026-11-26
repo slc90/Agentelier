@@ -355,6 +355,7 @@ async fn select_memory(
     active: &TurnAccess,
     client: Option<&agentelier_memory::MemoryClient>,
     directory: std::path::PathBuf,
+    input: String,
 ) -> Result<Option<Arc<agentelier_memory::ReadView>>, ConversationFailure> {
     let (continuation, (saved, legacy)) = active
         .call(|turn| Ok((turn.continuation().is_some(), turn.saved_memory_choice()?)))
@@ -377,7 +378,7 @@ async fn select_memory(
         }
     }
     let result = match client {
-        Some(client) => client.freeze(directory).await,
+        Some(client) => client.freeze(directory, input).await,
         None => Err(std::io::Error::other("长期记忆存储不可用")),
     };
     let (choice, view) = match result {
@@ -428,7 +429,14 @@ async fn run_task(
         .await?;
     let mut memory_view =
         if settings.kind.is_user() && child.is_none() && settings.background.is_none() {
-            match select_memory(active, memory.as_ref(), settings.working_directory.clone()).await {
+            match select_memory(
+                active,
+                memory.as_ref(),
+                settings.working_directory.clone(),
+                input.clone(),
+            )
+            .await
+            {
                 Ok(view) => view,
                 Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())),
             }

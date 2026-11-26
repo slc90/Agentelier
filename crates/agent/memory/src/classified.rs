@@ -1,4 +1,5 @@
 use crate::{
+    attention::{self, Attention},
     consolidation::sha256,
     observation::{Anchor, Category, EvidenceKind, Observation, Scope, State},
     revision::{Action, Revision, RevisionScope},
@@ -70,6 +71,8 @@ pub(crate) struct Entry {
     pub(crate) source: Provenance,
     pub(crate) supersedes: Option<String>,
     pub(crate) body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) attention: Option<Attention>,
 }
 
 impl Entry {
@@ -212,13 +215,25 @@ pub(crate) fn classify(
     observations: &[Observation],
     notes: &[Revision],
     excluded: &BTreeSet<String>,
+    ended_attention: &BTreeSet<String>,
 ) -> Vec<Entry> {
     let mut entries = Vec::new();
     let mut replacements = BTreeSet::new();
     for item in observations {
         let index = notes
             .iter()
-            .rposition(|note| affected(note, &item.scope) && exact_match(note, &item.body))
+            .rposition(|note| {
+                affected(note, &item.scope)
+                    && (exact_match(note, &item.body)
+                        || item.attention.as_ref().is_some_and(|attention| {
+                            exact_match(note, &attention.topic)
+                                || exact_match(note, &attention.question)
+                                || attention
+                                    .reason
+                                    .as_deref()
+                                    .is_some_and(|reason| exact_match(note, reason))
+                        }))
+            })
             .or_else(|| {
                 excluded
                     .contains(&item.id)
@@ -228,6 +243,9 @@ pub(crate) fn classify(
         let state = match index.map(|index| notes[index].action) {
             Some(Action::Forget) => Status::Forgotten,
             Some(Action::Correct) => Status::Corrected,
+            _ if item.category == Category::AttentionClue && item.attention.is_none() => {
+                Status::Historical
+            }
             _ if item.scope == Scope::Context
                 && item.category != Category::OriginSelfObservation =>
             {
@@ -259,6 +277,7 @@ pub(crate) fn classify(
             },
             supersedes,
             body,
+            attention: item.attention.clone().filter(|_| index.is_none()),
         });
     }
     for (index, note) in notes.iter().enumerate() {
@@ -293,6 +312,7 @@ pub(crate) fn classify(
             },
             supersedes: None,
             body: body.clone(),
+            attention: None,
         });
     }
     let mut support: BTreeMap<(&str, &str), BTreeSet<SessionId>> = BTreeMap::new();
@@ -324,6 +344,7 @@ pub(crate) fn classify(
             entry.state = Status::Supported;
         }
     }
+    attention::apply(&mut entries, ended_attention);
     entries.sort_by(|left, right| {
         right
             .at_ms
@@ -336,10 +357,9 @@ pub(crate) fn classify(
 
 pub(crate) fn personal_navigation(entries: &[Entry]) -> io::Result<String> {
     let mut navigation = String::new();
-    for entry in entries
-        .iter()
-        .filter(|entry| entry.state.usable() && entry.scope == Scope::Global)
-    {
+    for entry in entries.iter().filter(|entry| {
+        entry.state.usable() && entry.scope == Scope::Global && entry.attention.is_none()
+    }) {
         let (name, _, _) = entry.artifact()?;
         let body = entry.body.replace(['\r', '\n'], " ");
         let line = format!(

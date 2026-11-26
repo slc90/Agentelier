@@ -131,6 +131,7 @@ impl MemoryClient {
                 params![status, summary, slug, retry, claim.session, claim.sequence, claim.revision, claim.attempts, claim.epoch],
             )?;
             if count == 1 && !observations.is_empty() {
+                crate::attention::remember_boundaries(&tx, &observations)?;
                 merge(&tx, &claim.session, observations)?;
             }
             tx.commit()?;

@@ -1,4 +1,4 @@
-use crate::redaction::Redactor;
+use crate::{attention, redaction::Redactor};
 use agentelier_conversation::{SessionId, TurnId};
 use agentelier_session_store::MemorySourceSnapshot;
 use agentelier_tools::ToolStatus;
@@ -116,7 +116,7 @@ pub(crate) enum Location {
 }
 
 impl Location {
-    fn kind(&self) -> EvidenceKind {
+    pub(crate) fn kind(&self) -> EvidenceKind {
         match self {
             Self::Input | Self::Followup { .. } => EvidenceKind::UserStatement,
             Self::Reply { .. } => EvidenceKind::RootExpression,
@@ -156,6 +156,8 @@ pub struct Observation {
     pub(crate) evidence: EvidenceKind,
     pub(crate) state: State,
     pub(crate) supersedes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) attention: Option<attention::Attention>,
 }
 
 #[derive(Deserialize)]
@@ -175,6 +177,8 @@ pub(crate) struct Candidate {
     evidence: usize,
     inference: bool,
     replaces: Option<usize>,
+    #[serde(default)]
+    attention: Option<attention::Draft>,
 }
 
 pub(crate) fn validated(
@@ -190,7 +194,8 @@ pub(crate) fn validated(
         let Some(item) = evidence.get(candidate.evidence) else {
             continue;
         };
-        let Some(observation) = observation(source, item, &candidate, redactor, patterns) else {
+        let Some(observation) = observation(source, item, evidence, &candidate, redactor, patterns)
+        else {
             continue;
         };
         if seen.insert(observation.id.clone()) {
@@ -211,7 +216,13 @@ pub(crate) fn validated(
             .and_then(|index| prior.get(&(index, category)))
             .map(|&i| &entries[i].2)
             .filter(|older| {
-                older.scope == observation.scope && older.subject == observation.subject
+                older.scope == observation.scope
+                    && older.subject == observation.subject
+                    && older.attention.as_ref().map(|attention| &attention.id)
+                        == observation
+                            .attention
+                            .as_ref()
+                            .map(|attention| &attention.id)
             })
             .map(|older| older.id.clone());
         prior.insert((*index, category), i);
@@ -226,6 +237,7 @@ pub(crate) fn validated(
 fn observation(
     source: &MemorySourceSnapshot,
     item: &Evidence,
+    evidence: &[Evidence],
     candidate: &Candidate,
     redactor: &Redactor,
     patterns: &Patterns,
@@ -254,7 +266,9 @@ fn observation(
         }
         ScopeCandidate::Context => Scope::Context,
         ScopeCandidate::Global
-            if category == Category::UserPreference && patterns.global.is_match(&item.text) =>
+            if matches!(category, Category::UserPreference | Category::AttentionClue)
+                && kind == EvidenceKind::UserStatement
+                && patterns.global.is_match(&item.text) =>
         {
             Scope::Global
         }
@@ -279,7 +293,32 @@ fn observation(
         Location::Input | Location::Followup { .. } if !candidate.inference => State::Explicit,
         _ => State::Tentative,
     };
-    let id = serde_json::to_vec(&(source.session, anchor.turn, &anchor.location, category)).ok()?;
+    let kind = if candidate.inference {
+        EvidenceKind::Inference
+    } else {
+        kind
+    };
+    let attention = if category == Category::AttentionClue {
+        Some(
+            candidate
+                .attention
+                .as_ref()?
+                .validate(evidence, item, kind, &scope, source, redactor)?,
+        )
+    } else {
+        None
+    };
+    let id = match &attention {
+        Some(attention) => serde_json::to_vec(&(
+            source.session,
+            anchor.turn,
+            &anchor.location,
+            category,
+            &attention.id,
+        )),
+        None => serde_json::to_vec(&(source.session, anchor.turn, &anchor.location, category)),
+    }
+    .ok()?;
     Some(Observation {
         id: format!("{:x}", Sha256::digest(id)),
         category,
@@ -288,13 +327,10 @@ fn observation(
         body: redactor.clean(body, BODY_BYTES),
         session: source.session,
         source: anchor.clone(),
-        evidence: if candidate.inference {
-            EvidenceKind::Inference
-        } else {
-            kind
-        },
+        evidence: kind,
         state,
         supersedes: None,
+        attention,
     })
 }
 

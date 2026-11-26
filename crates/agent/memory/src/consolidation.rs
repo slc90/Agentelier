@@ -1,5 +1,5 @@
 use crate::{
-    MemoryClient, classified,
+    MemoryClient, attention, classified,
     observation::Observation,
     publication,
     redaction::Redactor,
@@ -25,6 +25,7 @@ pub struct Consolidation {
     pub(crate) deleted: Vec<String>,
     pub(crate) classified_hash: String,
     observations: Vec<Observation>,
+    ended_attention: BTreeSet<String>,
     pub(crate) revisions: Vec<Revision>,
 }
 
@@ -67,7 +68,11 @@ impl MemoryClient {
             let (read_generation, published_generation) =
                 crate::store::generations(connection).map_err(io::Error::other)?;
             let details = select(connection, &sessions)?;
-            let (classified_hash, observations) = classified::inputs(connection, &sessions)?;
+            let (observation_hash, observations) = classified::inputs(connection, &sessions)?;
+            let ended_attention = attention::ended_topics(connection, &sessions)?;
+            let attention_hash =
+                serde_json::to_string(&ended_attention).map_err(io::Error::other)?;
+            let classified_hash = sha256(&format!("{observation_hash}\n{attention_hash}"));
             let epoch = connection
                 .query_row(
                     "SELECT epoch FROM memory_state WHERE singleton = 1",
@@ -110,6 +115,7 @@ impl MemoryClient {
                 deleted,
                 classified_hash,
                 observations,
+                ended_attention,
                 revisions,
             }))
         })
@@ -222,6 +228,7 @@ impl Consolidation {
             &self.observations,
             &self.revisions,
             &result.excluded_observations,
+            &self.ended_attention,
         );
         let mut summary = classified::personal_navigation(&classified)?;
         if self.details.len() > excluded.len() {

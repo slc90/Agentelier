@@ -83,6 +83,7 @@ fn begin(connection: &mut Connection, cutoffs: Vec<MemoryCutoff>) -> io::Result<
          DELETE FROM publication;
          DELETE FROM revisions;
          DELETE FROM source_observations;
+         DELETE FROM attention_boundaries;
          DELETE FROM sources;",
     )
     .map_err(io::Error::other)?;

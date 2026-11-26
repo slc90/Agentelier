@@ -1,5 +1,7 @@
 use crate::{
-    MemoryClient, classified,
+    MemoryClient,
+    attention::Attention,
+    classified,
     consolidation::sha256,
     observation::{Category, Scope},
     publication::{DETAILS, detail_name, read_checked},
@@ -53,6 +55,8 @@ pub struct MemorySource {
     state: Option<classified::Status>,
     #[serde(skip_serializing_if = "Option::is_none")]
     provenance: Option<classified::Provenance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attention: Option<Box<Attention>>,
 }
 
 #[derive(Serialize)]
@@ -152,11 +156,21 @@ fn records(
     connection: &Connection,
     workspace: &Path,
     directory: Option<&Path>,
+    input: Option<&str>,
 ) -> io::Result<Vec<SearchRecord>> {
     let mut result = Vec::new();
     if let Some(publication) = current_publication(connection)? {
         for (name, hash, entry) in classified::saved(connection, None)? {
-            if !entry.visible_from(directory) || entry.body.is_empty() {
+            if !entry.visible_from(directory)
+                || entry.body.is_empty()
+                || entry.category == Category::AttentionClue
+                    && input.is_some_and(|input| {
+                        entry
+                            .attention
+                            .as_ref()
+                            .is_none_or(|attention| !attention.related(input))
+                    })
+            {
                 continue;
             }
             let body = entry.body.clone();
@@ -232,14 +246,18 @@ fn search_records(
 }
 
 impl MemoryClient {
-    pub async fn freeze(&self, directory: PathBuf) -> io::Result<Option<Arc<ReadView>>> {
+    pub async fn freeze(
+        &self,
+        directory: PathBuf,
+        input: String,
+    ) -> io::Result<Option<Arc<ReadView>>> {
         self.with_active_store(move |connection, workspace| {
             let generation = current_generation(connection)?;
             if current_publication(connection)?.is_none() {
                 return Ok(None);
             }
             let mut snapshot = crate::publication::committed_snapshot(connection)?;
-            let records = records(connection, workspace, Some(&directory))?;
+            let records = records(connection, workspace, Some(&directory), Some(&input))?;
             let mut references = Vec::new();
             let mut navigation = snapshot
                 .summary
@@ -252,8 +270,12 @@ impl MemoryClient {
                 let source = &entry.detail.source;
                 let global = source.scope == Some(Scope::Global);
                 let recorded_in_summary = navigation.contains(&source.record);
-                if !global {
+                if !global || source.attention.is_some() {
                     let label = source.category.map_or("工作摘要", Category::label);
+                    let label = source
+                        .attention
+                        .as_deref()
+                        .map_or_else(|| label.to_owned(), Attention::navigation);
                     let line = format!(
                         "- {label} · [{}](rollout_summaries/{})\n",
                         source.session_id, source.record
@@ -418,7 +440,11 @@ impl MemoryClient {
                 return search_records(&view.records, &query, &cancel);
             }
             current_generation(connection)?;
-            search_records(&records(connection, workspace, None)?, &query, &cancel)
+            search_records(
+                &records(connection, workspace, None, None)?,
+                &query,
+                &cancel,
+            )
         })
         .await
     }
@@ -543,6 +569,7 @@ fn classified_source(
         scope: Some(entry.scope),
         state: Some(entry.state),
         provenance: Some(entry.source),
+        attention: entry.attention.map(Box::new),
     })
 }
 
@@ -601,6 +628,7 @@ fn sources(connection: &Connection, record: Option<&str>) -> io::Result<Vec<Inde
                 scope: None,
                 state: None,
                 provenance: None,
+                attention: None,
             },
             scope: directory.filter(|_| directory_verified).map(PathBuf::from),
             hash,

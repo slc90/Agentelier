@@ -40,6 +40,15 @@ CREATE TABLE IF NOT EXISTS source_observations (
     observations TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS attention_boundaries (
+    topic_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    observed_ms INTEGER NOT NULL,
+    sequence INTEGER NOT NULL,
+    ended INTEGER NOT NULL CHECK (ended IN (0, 1)),
+    PRIMARY KEY (topic_id, session_id)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS classified_publication (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     input_hash TEXT NOT NULL
