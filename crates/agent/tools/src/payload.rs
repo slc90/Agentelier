@@ -148,6 +148,7 @@ pub const GENERATED_IMAGE_MODEL: &str = "gpt-image-2";
 pub const GENERATE_IMAGE_TOOL: &str = "generate_image";
 pub const PUBLISH_AUDIO_TOOL: &str = "publish_audio";
 pub const PUBLISH_SCENE_TOOL: &str = "publish_scene";
+pub const UPDATE_SCENE_TOOL: &str = "update_scene";
 pub const MAX_GENERATION_PROMPT_CHARS: usize = 8000;
 
 pub struct OriginalImage {
@@ -214,6 +215,7 @@ pub enum ToolPayload {
     },
     PublishAudio(std::path::PathBuf),
     PublishScene(Box<crate::ecs_access::SceneDefinition>),
+    UpdateScene(Box<crate::ecs_access::SceneUpdate>),
 }
 impl From<String> for ToolPayload {
     fn from(value: String) -> Self {
@@ -228,6 +230,7 @@ impl ToolPayload {
             Self::GeneratedImage { .. } => "图片已生成，等待保存原件",
             Self::PublishAudio(_) => "音频等待保存到会话",
             Self::PublishScene(_) => "Scene 等待保存到会话",
+            Self::UpdateScene(_) => "Scene 更新等待保存到会话",
         }
     }
     pub fn image(&self) -> Option<&Arc<ImagePayload>> {
@@ -236,7 +239,8 @@ impl ToolPayload {
             Self::Text(_)
             | Self::GeneratedImage { .. }
             | Self::PublishAudio(_)
-            | Self::PublishScene(_) => None,
+            | Self::PublishScene(_)
+            | Self::UpdateScene(_) => None,
         }
     }
 }

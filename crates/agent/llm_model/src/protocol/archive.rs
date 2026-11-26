@@ -23,7 +23,8 @@ impl ArchivedPayload {
             ToolPayload::Text(text) => Self::Text { text: text.clone() },
             ToolPayload::GeneratedImage { .. }
             | ToolPayload::PublishAudio(_)
-            | ToolPayload::PublishScene(_) => Self::Text {
+            | ToolPayload::PublishScene(_)
+            | ToolPayload::UpdateScene(_) => Self::Text {
                 text: payload.summary().into(),
             },
             ToolPayload::Image { summary, image } => Self::Image {

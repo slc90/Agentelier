@@ -11,19 +11,24 @@ const MAX_SCENE_ATTACHMENTS: usize = 4096;
 type Properties = Map<String, Value>;
 type Result<T> = std::result::Result<T, EcsError>;
 type Factory = Arc<dyn Fn(&mut World, Entity, &Properties) -> Result<Entity> + Send + Sync>;
+type Patcher = Arc<dyn Fn(&mut World, Entity, &Properties) -> Result<()> + Send + Sync>;
 
 #[derive(Clone)]
 struct Template {
     description: &'static str,
     parameters: &'static [(&'static str, &'static str)],
     factory: Factory,
+    patcher: Option<Patcher>,
 }
 
 #[derive(Clone, Default, Resource)]
 pub(crate) struct Registry(BTreeMap<&'static str, Template>);
 
 #[derive(Component)]
-struct Instance(Box<[Entity]>);
+struct Instance {
+    template: &'static str,
+    owned: Box<[Entity]>,
+}
 
 impl Registry {
     pub(crate) fn register<P: DeserializeOwned + 'static, S: Scene>(
@@ -32,6 +37,7 @@ impl Registry {
         description: &'static str,
         parameters: &'static [(&'static str, &'static str)],
         build: fn(P) -> bevy::prelude::Result<S>,
+        update: Option<fn(&mut World, Entity, P) -> bevy::prelude::Result<()>>,
     ) -> Result<()> {
         let std::collections::btree_map::Entry::Vacant(entry) = self.0.entry(name) else {
             return Err(EcsError::new(
@@ -49,6 +55,15 @@ impl Registry {
                 bevy_widgetry::scene::spawn_scene(world, bsn! { @scene ChildOf(parent) })
                     .map_err(|error| EcsError::new("scene_construction_failed", error.to_string()))
             }),
+            patcher: update.map(|update| {
+                let patcher: Patcher = Arc::new(move |world, root, properties| {
+                    let properties = serde_json::from_value(Value::Object(properties.clone()))
+                        .map_err(invalid_props)?;
+                    update(world, root, properties)
+                        .map_err(|error| EcsError::new("scene_update_failed", error.to_string()))
+                });
+                patcher
+            }),
         });
         Ok(())
     }
@@ -63,7 +78,7 @@ pub(super) fn templates(world: &World) -> Value {
         .iter()
         .map(|(name, template)| {
             let parameters: BTreeMap<_, _> = template.parameters.iter().copied().collect();
-            json!({"name": name, "description": template.description, "parameters": parameters})
+            json!({"name": name, "description": template.description, "parameters": parameters, "supports_in_place_update": template.patcher.is_some()})
         })
         .collect();
     json!(templates)
@@ -105,17 +120,16 @@ pub fn mount_native_scene(
 }
 
 fn instance(world: &mut World, name: &str, parent: Entity, props: &Properties) -> Result<Entity> {
-    let factory = world
+    let (template, factory) = world
         .get_resource::<Registry>()
-        .and_then(|registry| registry.0.get(name))
+        .and_then(|registry| registry.0.get_key_value(name))
+        .map(|(name, template)| (*name, template.factory.clone()))
         .ok_or_else(|| {
             EcsError::new(
                 "unknown_scene_template",
                 format!("未登记 Scene 模板 {name}"),
             )
-        })?
-        .factory
-        .clone();
+        })?;
     if world.get::<Node>(parent).is_none() {
         return Err(EcsError::new(
             "invalid_scene_parent",
@@ -133,8 +147,33 @@ fn instance(world: &mut World, name: &str, parent: Entity, props: &Properties) -
     world
         .get_entity_mut(root)
         .map_err(|_| EcsError::new("scene_construction_failed", "Scene 根实体在构造期间失效"))?
-        .insert(Instance(owned));
+        .insert(Instance { template, owned });
     Ok(root)
+}
+
+pub fn patch_native_scene(
+    world: &mut World,
+    root: Entity,
+    definition: &SceneDefinition,
+) -> Result<bool> {
+    let Some(instance) = world
+        .get::<Instance>(root)
+        .filter(|instance| instance.template == definition.template)
+    else {
+        return Ok(false);
+    };
+    let patcher = world
+        .get_resource::<Registry>()
+        .and_then(|registry| registry.0.get(instance.template))
+        .and_then(|template| template.patcher.clone());
+    let Some(patcher) = patcher else {
+        return Ok(false);
+    };
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        patcher(world, root, &definition.props)
+    }))
+    .map_err(|_| EcsError::new("scene_update_failed", "Scene 更新异常终止"))??;
+    Ok(true)
 }
 
 pub(super) fn despawn(world: &mut World, root: EcsEntity) -> Result<Value> {
@@ -147,7 +186,7 @@ pub(super) fn despawn(world: &mut World, root: EcsEntity) -> Result<Value> {
                 "目标并非已登记 Scene 实例的根实体",
             )
         })?
-        .0
+        .owned
         .clone();
     let external: Vec<_> = owned
         .iter()

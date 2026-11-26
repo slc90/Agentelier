@@ -145,7 +145,7 @@ enum Executor {
     Function(Arc<ToolExecutor>),
     CodexImage,
     PublishAudio,
-    PublishScene,
+    Scene(execution::SceneOperation),
     Shell(crate::ProcessLifetime),
     Stdin,
     Computer,
@@ -346,8 +346,9 @@ impl ToolRegistration {
             Executor::PublishAudio => {
                 Box::pin(async move { execution::publish_audio(context, arguments, cancel) })
             }
-            Executor::PublishScene => Box::pin(async move {
-                let result = execution::publish_scene(context, scripts, arguments, cancel).await;
+            Executor::Scene(operation) => Box::pin(async move {
+                let result =
+                    execution::prepare_scene(context, scripts, arguments, cancel, *operation).await;
                 drop(permit);
                 result
             }),
@@ -430,7 +431,21 @@ impl ToolCatalog {
                     description: "Publish one registered native Scene as a durable widget in this Root Agent reply. Use ecs_execute scene_templates() to discover names and semantic props. For a button use template agentelier.button with props containing label and style. Returns the durable artifact ID after validation and session commit.".into(),
                     parameters: json!({"type":"object","properties":{"template":{"type":"string"},"props":{"type":"object"}},"required":["template","props"],"additionalProperties":false}),
                 },
-                Executor::PublishScene,
+                Executor::Scene(execution::SceneOperation::Publish),
+                ToolAccess::Exclusive,
+            ),
+            ToolRegistration::process(
+                ToolDefinition {
+                    name: crate::UPDATE_SCENE_TOOL.into(),
+                    mode: ToolMode::Synchronous,
+                    source: ToolSource::Builtin,
+                    strict: false,
+                    display_source: None,
+                    output_schema: None,
+                    description: "Update a native Scene already published by this Root Agent session. Supply its stable id, expected_revision, and replacement definition containing template and props. Returns the new revision after validation and session commit. The widget remains in its original reply.".into(),
+                    parameters: json!({"type":"object","properties":{"id":{"type":"string"},"expected_revision":{"type":"integer","minimum":1},"definition":{"type":"object","properties":{"template":{"type":"string"},"props":{"type":"object"}},"required":["template","props"],"additionalProperties":false}},"required":["id","expected_revision","definition"],"additionalProperties":false}),
+                },
+                Executor::Scene(execution::SceneOperation::Update),
                 ToolAccess::Exclusive,
             ),
             ToolRegistration::process(
@@ -617,7 +632,7 @@ impl ToolCatalog {
             .iter()
             .filter(|tool| {
                 allowed.contains(&tool.definition.name)
-                    && !matches!(tool.executor, Executor::PublishScene)
+                    && !matches!(tool.executor, Executor::Scene(_))
                     && !(contract.is_flat() && matches!(&tool.executor, Executor::TaskControl(_)))
                     && !(image_input == Some(false) && tool.definition.name == "view_image")
             })
@@ -676,7 +691,7 @@ impl ToolCatalog {
                     Executor::TaskControl(_)
                         | Executor::CodexImage
                         | Executor::PublishAudio
-                        | Executor::PublishScene
+                        | Executor::Scene(_)
                         | Executor::Computer
                         | Executor::Ecs
                         | Executor::Shell(crate::ProcessLifetime::Background)

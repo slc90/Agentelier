@@ -733,7 +733,7 @@ async fn save_call(
     progress: &mpsc::Sender<RunnerEvent>,
     cancel: &CancellationToken,
 ) -> Result<(), ConversationFailure> {
-    let (result, published_scene) = published_scene_result(result, cancel);
+    let (result, scene) = scene_result(active, result, cancel).await?;
     let (result, published_audio) = persist_published_audio(active, session, call_id, result).await;
     let (result, generated_image) =
         persist_generated_image(active, session, call_id, result).await?;
@@ -752,7 +752,7 @@ async fn save_call(
         let id = call_id.to_owned();
         let image_record = generated_image.clone();
         let audio_record = published_audio.clone();
-        let scene_record = published_scene.clone();
+        let scene_record = scene.clone();
         let event = active
             .call(move |turn| {
                 Ok(RecordEvent::ToolReturned {
@@ -762,7 +762,8 @@ async fn save_call(
                     output: agentelier_llm_model::ArchivedPayload::capture(&output),
                     generated_image: image_record,
                     published_audio: audio_record,
-                    published_scene: scene_record,
+                    published_scene: scene_record.publication,
+                    scene_update: scene_record.update,
                     execution,
                 })
             })
@@ -778,7 +779,8 @@ async fn save_call(
                     sequence,
                     generated_image,
                     published_audio,
-                    published_scene,
+                    scene.publication,
+                    scene.update,
                 )
             })
             .await?
@@ -789,30 +791,86 @@ async fn save_call(
     publish(progress, cancel).await
 }
 
-fn published_scene_result(
+#[derive(Clone, Default)]
+struct SceneCommit {
+    publication: Option<agentelier_conversation::PublishedScene>,
+    update: Option<Box<agentelier_tools::ecs_access::SceneUpdate>>,
+}
+
+async fn scene_result(
+    active: &TurnAccess,
     mut result: ToolResult,
     cancel: &CancellationToken,
-) -> (ToolResult, Option<agentelier_conversation::PublishedScene>) {
-    let ToolPayload::PublishScene(definition) = result.output else {
-        return (result, None);
-    };
-    if cancel.is_cancelled() {
-        return (
-            ToolResult::error(
-                ToolStatus::Cancelled,
-                "cancelled",
-                "任务已停止，Scene 未发布",
-            ),
-            None,
-        );
+) -> Result<(ToolResult, SceneCommit), ConversationFailure> {
+    if !matches!(
+        result.output,
+        ToolPayload::PublishScene(_) | ToolPayload::UpdateScene(_)
+    ) {
+        return Ok((result, SceneCommit::default()));
     }
-    let id = agentelier_conversation::SessionId::new_v4();
-    result.output = serde_json::json!({"ok":true,"scene":{"id":id,"template":definition.template}})
-        .to_string()
-        .into();
+    if cancel.is_cancelled() {
+        return Ok(cancelled_scene());
+    }
+    let (id, revision, template, scene) = match result.output {
+        ToolPayload::PublishScene(definition) => {
+            let scene = agentelier_conversation::PublishedScene::new(
+                agentelier_conversation::SessionId::new_v4(),
+                definition,
+            );
+            (
+                scene.id,
+                scene.revision,
+                scene.definition.template.clone(),
+                SceneCommit {
+                    publication: Some(scene),
+                    update: None,
+                },
+            )
+        }
+        ToolPayload::UpdateScene(update) => {
+            let proposed = update.clone();
+            let revision = match active
+                .call(move |turn| Ok(turn.scene_update_revision(&proposed)))
+                .await?
+            {
+                Ok(revision) => revision,
+                Err(error) => {
+                    return Ok((
+                        ToolResult::error(ToolStatus::Failed, error.code, &error.message),
+                        SceneCommit::default(),
+                    ));
+                }
+            };
+            if cancel.is_cancelled() {
+                return Ok(cancelled_scene());
+            }
+            (
+                update.id,
+                revision,
+                update.definition.template.clone(),
+                SceneCommit {
+                    publication: None,
+                    update: Some(update),
+                },
+            )
+        }
+        _ => return Err(ConversationFailure::new("Scene 结果缺少待提交定义")),
+    };
+    result.output =
+        serde_json::json!({"ok":true,"scene":{"id":id,"revision":revision,"template":template}})
+            .to_string()
+            .into();
+    Ok((result, scene))
+}
+
+fn cancelled_scene() -> (ToolResult, SceneCommit) {
     (
-        result,
-        Some(agentelier_conversation::PublishedScene { id, definition }),
+        ToolResult::error(
+            ToolStatus::Cancelled,
+            "cancelled",
+            "任务已停止，Scene 操作未提交",
+        ),
+        SceneCommit::default(),
     )
 }
 

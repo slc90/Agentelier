@@ -18,6 +18,14 @@ pub struct SceneDefinition {
     pub props: Map<String, Value>,
 }
 
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SceneUpdate {
+    pub id: uuid::Uuid,
+    pub expected_revision: u64,
+    pub definition: Box<SceneDefinition>,
+}
+
 impl SceneDefinition {
     pub fn validate(&self) -> Result<(), EcsError> {
         if self.template.trim().is_empty() || self.template.len() > MAX_SCENE_TEMPLATE_BYTES {

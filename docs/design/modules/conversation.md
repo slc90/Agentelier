@@ -31,6 +31,8 @@ Conversation 在 `ToolReturned` 持久确认后提供工具结果及其图片描
 
 `publish_scene` 把由 AgentHost 验证过的语义 Scene 定义和稳定产物 ID 与原工具结果一起提交到 `ToolReturned`。Conversation 在收到存档回执后向当前回复提供产物，恢复时核对来源调用、当前会话及产物 ID。Chat UI 根据定义重新挂载实体。详见[动态 Scene](../assistant-content/04-dynamic-scenes.md)。
 
+`update_scene` 在同一会话按预期修订提交新定义。更新调用有自己的 `ToolReturned`，确认后修改原发布项的修订和定义。历史回放沿原发布身份应用连续的更新，回复中的来源位置保持稳定。工具可用性沿用会话创建时冻结的目录，旧会话的 Scene 定义仍可恢复。
+
 ## 设置与生命周期
 
 Conversation 持有按 Session 隔离的内存 Agent Registry。新建与重置在初始存档获得确认后登记 Root，打开时由已有 Session UUID 重建同一个 Root Agent ID 和 Thread ID。重复登记同一 Root 幂等，其他身份冲突会拒绝打开。每次打开分配新的 Runtime Instance ID，Runner 的前台进度和终态必须匹配当前实例。

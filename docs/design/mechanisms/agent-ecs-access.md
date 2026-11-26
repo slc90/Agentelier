@@ -183,6 +183,8 @@ Application 登记 `agentelier.button` 模板。它通过现有 `AgentelierButto
 
 Root Agent 的 `publish_scene` 通过进程内请求复用同一 Factory 验证语义定义。AgentHost 在临时父节点中构造，并在返回验证结果前释放该节点及其子树。持久定义提交成功后，Chat UI 使用同一个 Factory 在会话回复中挂载实例。详见[动态 Scene](../assistant-content/04-dynamic-scenes.md)。
 
+模板注册可提供原位更新函数，`scene_templates()` 在模板描述中提供 `supports_in_place_update`。`update_scene` 继续先通过 Factory 验证新定义，Chat UI 在收到已提交修订后调用已挂载同模板的更新函数。`agentelier.button` 原位更新标签和公开运行时样式。
+
 构造成功时在根实体记录该实例拥有的实体身份。清理时先解除后来挂入的外部子实体与该实例的关系，再销毁仍存活的实例实体。调用方提供的父实体和额外挂入的实体得以保留。
 
 这一机制允许 Agent 在运行时增加已有控件的实例、决定它们的父实体和组合方式。新增一种 Rust 控件类型仍然需要应用实现并注册相应 Scene；Rhai 不会在运行时生成新的 Rust 类型或 Observer / System。

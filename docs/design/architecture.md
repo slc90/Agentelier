@@ -156,7 +156,7 @@ Connection 只包装和调用对应业务转换，返回带 operation_id 的 Bri
 
 AgentHost 在建立 Connection 时把 ECS 请求发送端交给 Runtime，再传入各会话的 Rhai 执行者。`ecs_execute` 从阻塞工作线程发送有界请求，由 AgentHost 在 Bevy 主线程处理。`computer_execute` 与它共用会话脚本状态，各自拥有执行上下文。关闭应用时 Bevy 主循环持续运行至 Runtime 回收，随后释放请求接收端。详见[Agent 自主 ECS 访问与动态 UI 构造](mechanisms/agent-ecs-access.md)。
 
-Root Agent 发布原生 Scene 时，经同一个 ECS 请求入口验证模板。Turn Runner 等待带定义的工具结果落盘，Conversation 交付产物身份和定义，Chat UI 再调用 AgentHost 的 Factory。已保存定义随会话恢复，构造出的实体随当前回复子树回收。详见[动态 Scene](assistant-content/04-dynamic-scenes.md)。
+Root Agent 发布或更新原生 Scene 时，经同一个 ECS 请求入口验证模板。Turn Runner 等待带定义的工具结果落盘，Conversation 交付产物身份和已确认修订，Chat UI 再调用 AgentHost 的 Factory 或原位更新函数。已保存定义随会话恢复，构造出的实体随当前回复子树回收。详见[动态 Scene](assistant-content/04-dynamic-scenes.md)。
 
 命令队列容量为四，退出控制队列为一，结果队列为三十二。账号操作和模型目录请求由共享运行宿主管理。聊天执行按 Session ID 隔离，每个会话最多有一轮生成在途，多个会话可以并行。补充输入、回复和停止以会话与操作身份关联。应用退出时逐会话回收任务。保存重试沿用原操作 ID，全局 SessionStatus 使用保留 ID 0。满队列、通道关闭、通知失败和意外停止形成明确错误。
 

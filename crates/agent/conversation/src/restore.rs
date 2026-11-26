@@ -530,7 +530,7 @@ fn replay(
     let mut tool_images = HashMap::new();
     let mut published_audio = HashMap::new();
     let mut published_scenes = HashMap::new();
-    let mut scene_ids = std::collections::HashSet::new();
+    let mut scene_owners = HashMap::new();
     let mut saved_tool_results = HashSet::new();
     let mut audio_draft: Option<crate::AudioAttachment> = None;
     let mut audio_ids = HashMap::<crate::AudioId, crate::AudioAttachment>::new();
@@ -1320,6 +1320,7 @@ fn replay(
                 generated_image,
                 published_audio: audio,
                 published_scene: scene,
+                scene_update,
                 execution,
             } => {
                 if !matches!(
@@ -1398,12 +1399,22 @@ fn replay(
                 if let Some(scene) = scene {
                     if !initial.settings.kind.is_user()
                         || initial.settings.background.is_some()
-                        || !scene_ids.insert(scene.id)
+                        || scene_owners.insert(scene.id, call_id.clone()).is_some()
                     {
                         return Err(ConversationFailure::new("Scene 产物的会话或身份无效"));
                     }
                     scene.validate(tool, status)?;
                     published_scenes.insert(call_id.clone(), scene);
+                }
+                if let Some(update) = scene_update {
+                    crate::native_scene::validate_update_source(tool, status)?;
+                    let scene = scene_owners
+                        .get(&update.id)
+                        .and_then(|source| published_scenes.get_mut(source))
+                        .ok_or_else(|| ConversationFailure::new("Scene 更新缺少原存档产物"))?;
+                    scene
+                        .apply(*update)
+                        .map_err(|error| ConversationFailure::new(error.to_string()))?;
                 }
                 if matches!(
                     initial

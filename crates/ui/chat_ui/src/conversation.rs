@@ -1886,7 +1886,14 @@ fn reconcile_reply(
                 ReplyItemContent::Image(artifact) => {
                     crate::generated_image::reconcile(world, entity, artifact)?
                 }
-                ReplyItemContent::Audio(_) | ReplyItemContent::NativeScene(_) => {}
+                ReplyItemContent::Audio(_) => {}
+                ReplyItemContent::NativeScene(artifact) => {
+                    if crate::native_scene::needs_revision(world, entity, artifact.revision) {
+                        world.commands().queue(move |world: &mut World| {
+                            crate::native_scene::reconcile(world, entity, artifact)
+                        });
+                    }
+                }
             }
             entity
         } else {
@@ -1930,7 +1937,7 @@ fn reconcile_reply(
                         })
                         .id();
                     commands.queue(move |world: &mut World| {
-                        crate::native_scene::mount(world, entity, artifact)
+                        crate::native_scene::reconcile(world, entity, artifact)
                     });
                     entity
                 }

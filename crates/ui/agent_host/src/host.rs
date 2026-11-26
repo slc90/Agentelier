@@ -135,9 +135,10 @@ impl AgentHostPlugin {
         description: &'static str,
         parameters: &'static [(&'static str, &'static str)],
         build: fn(P) -> Result<S>,
+        update: Option<fn(&mut World, Entity, P) -> Result>,
     ) -> Result<Self> {
         self.ecs_scenes
-            .register(name, description, parameters, build)?;
+            .register(name, description, parameters, build, update)?;
         Ok(self)
     }
 }

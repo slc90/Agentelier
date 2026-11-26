@@ -212,19 +212,27 @@ pub(crate) fn publish_audio(
     }
 }
 
-pub(crate) async fn publish_scene(
+#[derive(Clone, Copy)]
+pub(crate) enum SceneOperation {
+    Publish,
+    Update,
+}
+
+pub(crate) async fn prepare_scene(
     context: &ExecutionContext,
     scripts: &crate::ScriptSession,
     arguments: &str,
     cancel: &CancellationToken,
+    operation: SceneOperation,
 ) -> ToolResult {
-    use crate::ecs_access::{MAX_SCENE_DEFINITION_BYTES, SceneDefinition};
+    use crate::ToolPayload;
+    use crate::ecs_access::{MAX_SCENE_DEFINITION_BYTES, SceneDefinition, SceneUpdate};
 
     if !context.root || context.user_turn().memory_management || context.user_turn().background {
         return ToolResult::error(
             ToolStatus::NotExecuted,
             "scene_owner",
-            "原生 Scene 由用户会话的 Root Agent 发布",
+            "原生 Scene 由用户会话的 Root Agent 操作",
         );
     }
     if cancel.is_cancelled() {
@@ -237,8 +245,16 @@ pub(crate) async fn publish_scene(
             "Scene 定义超过 32 KiB",
         );
     }
-    let definition: SceneDefinition = match serde_json::from_str(arguments) {
-        Ok(definition) => definition,
+    let parsed = match operation {
+        SceneOperation::Publish => {
+            serde_json::from_str::<Box<SceneDefinition>>(arguments).map(ToolPayload::PublishScene)
+        }
+        SceneOperation::Update => {
+            serde_json::from_str::<Box<SceneUpdate>>(arguments).map(ToolPayload::UpdateScene)
+        }
+    };
+    let payload = match parsed {
+        Ok(payload) => payload,
         Err(error) => {
             return ToolResult::error(
                 ToolStatus::Failed,
@@ -247,13 +263,23 @@ pub(crate) async fn publish_scene(
             );
         }
     };
+    let definition = match &payload {
+        ToolPayload::PublishScene(definition) => definition,
+        ToolPayload::UpdateScene(update) => &update.definition,
+        _ => {
+            return ToolResult::error(ToolStatus::Unconfirmed, "scene_route", "Scene 操作缺少定义");
+        }
+    };
     if let Err(error) = definition.validate() {
         return ToolResult::error(ToolStatus::Failed, error.code, &error.message);
     }
-    match scripts.validate_scene(definition.clone(), cancel).await {
+    match scripts
+        .validate_scene(definition.as_ref().clone(), cancel)
+        .await
+    {
         Ok(()) if !cancel.is_cancelled() => ToolResult {
             status: ToolStatus::Succeeded,
-            output: crate::ToolPayload::PublishScene(Box::new(definition)),
+            output: payload,
             cleanup_failed: false,
         },
         Ok(()) => ToolResult::not_executed("stopped", "任务已停止，Scene 未发布"),

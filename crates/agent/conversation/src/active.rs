@@ -409,6 +409,15 @@ impl ActiveTurn<'_> {
             }
             scene.validate(tool, status)?;
         }
+        if let crate::RecordEvent::ToolReturned {
+            scene_update: Some(update),
+            ..
+        } = event
+        {
+            crate::native_scene::validate_update_source(tool, status)?;
+            self.scene_update_revision(update)
+                .map_err(|error| ConversationFailure::new(error.to_string()))?;
+        }
         self.tasks.matching_transition(
             source,
             tool.request_index,
@@ -1114,6 +1123,7 @@ impl ActiveTurn<'_> {
         generated_image: Option<crate::GeneratedImage>,
         published_audio: Option<crate::AudioAttachment>,
         published_scene: Option<crate::PublishedScene>,
+        scene_update: Option<Box<agentelier_tools::ecs_access::SceneUpdate>>,
     ) -> Result<bool, ConversationFailure> {
         let result = self
             .results
@@ -1146,7 +1156,43 @@ impl ActiveTurn<'_> {
         tool.published_audio = published_audio;
         tool.published_scene = published_scene;
         tool.result_saved = true;
+        if let Some(update) = scene_update {
+            let scene = self
+                .view
+                .turn
+                .iter_mut()
+                .map(Box::as_mut)
+                .chain(&mut self.view.previous_turns)
+                .flat_map(|turn| &mut turn.tools)
+                .filter_map(|tool| tool.published_scene.as_mut())
+                .find(|scene| scene.id == update.id)
+                .ok_or_else(|| ConversationFailure::new("Scene 更新回执缺少原产物"))?;
+            scene
+                .apply(*update)
+                .map_err(|error| ConversationFailure::new(error.to_string()))?;
+        }
         Ok(changed)
+    }
+
+    pub fn scene_update_revision(
+        &self,
+        update: &agentelier_tools::ecs_access::SceneUpdate,
+    ) -> Result<u64, agentelier_tools::ecs_access::EcsError> {
+        use agentelier_tools::ecs_access::EcsError;
+        if !self.view.settings.kind.is_user() || self.view.settings.background.is_some() {
+            return Err(EcsError::new("scene_owner", "Scene 更新需要原用户会话"));
+        }
+        let scene = self
+            .view
+            .turn
+            .iter()
+            .map(Box::as_ref)
+            .chain(&self.view.previous_turns)
+            .flat_map(|turn| &turn.tools)
+            .filter_map(|tool| tool.published_scene.as_ref())
+            .find(|scene| scene.id == update.id)
+            .ok_or_else(|| EcsError::new("scene_not_found", "当前会话没有此 Scene 产物"))?;
+        scene.next_revision(update)
     }
 
     pub fn tool_started(&mut self, call_id: &str) -> Result<(), ConversationFailure> {
@@ -1173,6 +1219,7 @@ impl ActiveTurn<'_> {
             ToolPayload::GeneratedImage { .. }
                 | ToolPayload::PublishAudio(_)
                 | ToolPayload::PublishScene(_)
+                | ToolPayload::UpdateScene(_)
         ) {
             return Err(ConversationFailure::new("产物缺少会话存储处理"));
         }
