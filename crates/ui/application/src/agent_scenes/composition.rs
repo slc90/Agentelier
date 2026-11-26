@@ -1,5 +1,5 @@
 use super::{
-    charts::math::space_view,
+    charts::{diagrams::geometry, math::space_view},
     parameters::{Binding, Definition, Parameters},
 };
 use agentelier_agent_host::{
@@ -122,6 +122,7 @@ fn restore(mut props: Properties, state: &SceneState) -> Result<Properties> {
     for part in &mut props.parts {
         if let Some(values) = state.part_values.get(&part.id) {
             space_view::restore_definition(&mut part.scene, values)?;
+            geometry::restore_definition(&mut part.scene, values, true)?;
         }
     }
     Ok(props)
@@ -144,6 +145,17 @@ fn prepare_unmounted(mut props: Properties, stored: &SceneStored) -> Result<Prop
             .and_then(|old| old.scene.props.get("view"))
         {
             part.scene.props.insert("view".into(), view.clone());
+        }
+    }
+    for part in props
+        .parts
+        .iter_mut()
+        .filter(|part| part.scene.template == geometry::TEMPLATE)
+    {
+        if let Some(values) = stored.part_values.get(&part.id) {
+            geometry::restore_definition(&mut part.scene, values, false)?;
+        } else if let Some(old) = previous.parts.iter().find(|old| old.id == part.id) {
+            geometry::inherit_definition(&mut part.scene, &old.scene)?;
         }
     }
     Ok(props)
@@ -171,7 +183,9 @@ pub(super) fn schedule_save(world: &mut World, root: Entity) {
         .0
         .iter()
         .filter_map(|part| {
-            space_view::snapshot(world, part.root).map(|values| (part.placement.id.clone(), values))
+            space_view::snapshot(world, part.root)
+                .or_else(|| geometry::snapshot(world, part.root))
+                .map(|values| (part.placement.id.clone(), values))
         })
         .collect();
     let state = SceneState {
@@ -326,6 +340,15 @@ fn prepare(world: &World, root: Entity, mut props: Properties) -> Result<Propert
     }
     let current = composition(world, root)?;
     for placement in &mut props.parts {
+        if placement.scene.template == geometry::TEMPLATE
+            && let Some(previous) = current
+                .0
+                .iter()
+                .find(|part| part.placement.id == placement.id)
+            && let Some(values) = geometry::snapshot(world, previous.root)
+        {
+            geometry::restore_definition(&mut placement.scene, &values, false)?;
+        }
         if inherits_view(placement)
             && let Some(values) = current
                 .0

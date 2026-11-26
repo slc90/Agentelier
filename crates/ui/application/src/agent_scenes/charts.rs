@@ -3,6 +3,7 @@ mod axis;
 pub(super) mod bars;
 pub(super) mod boxplot;
 pub(super) mod combined;
+pub(super) mod diagrams;
 pub(super) mod heatmap;
 pub(super) mod histogram;
 pub(super) mod math;
@@ -64,11 +65,13 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
     .and_then(histogram::register)
     .and_then(boxplot::register)
     .and_then(combined::register)
+    .and_then(diagrams::register)
     .and_then(math::register)
 }
 
 pub(super) fn install(app: &mut App) {
     plot::install(app);
+    diagrams::install(app);
     math::install(app);
 }
 
