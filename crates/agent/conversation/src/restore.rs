@@ -925,14 +925,44 @@ fn replay(
                     ));
                 }
                 if pending.has_barrier()
+                    || state
+                        .turn
+                        .as_ref()
+                        .filter(|prior| prior.id == turn.id)
+                        .and_then(|prior| prior.memory.as_ref())
+                        .is_some_and(|prior| {
+                            Some(prior) != turn.memory.as_ref()
+                                && !matches!(
+                                    (prior, &turn.memory),
+                                    (
+                                        crate::TurnMemory::Frozen { .. },
+                                        Some(crate::TurnMemory::Withdrawn { .. })
+                                    )
+                                )
+                        })
                     || (prepared
                         && fact
                             .task_registration_cutoff
                             .is_some_and(|cutoff| cutoff != tasks.revision()))
                     || fact.projection.tool_contract != initial.settings.tool_contract
-                    || fact.projection.memory.as_ref().is_some_and(|material| {
-                        Some(&material.snapshot) != initial.settings.memory.as_ref()
-                    })
+                    || match &turn.memory {
+                        Some(choice) => {
+                            !choice.matches(
+                                fact.projection
+                                    .memory
+                                    .as_ref()
+                                    .map(|material| &material.snapshot),
+                            ) || fact
+                                .projection
+                                .memory
+                                .as_ref()
+                                .and_then(|material| material.snapshot.scope.as_ref())
+                                .is_some_and(|scope| scope.directory != working_directory)
+                        }
+                        None => fact.projection.memory.as_ref().is_some_and(|material| {
+                            Some(&material.snapshot) != initial.settings.memory.as_ref()
+                        }),
+                    }
                     || fact.request != turn.request_index
                     || fact.window != incoming.context.window
                     || fact.publication != publications.last().map(|publication| publication.id)

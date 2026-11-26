@@ -25,7 +25,9 @@ pub use generation::{
     GenerationConnection, GenerationRequest, MAX_REQUEST_BYTES, PreparedGeneration,
     RecordedModelSource, RequestCompaction, RequestHistory, RequestProjection, generate, prepare,
 };
-pub use memory::{MAX_MEMORY_SUMMARY_BYTES, MemoryMaterial, MemorySnapshot};
+pub use memory::{
+    MAX_MEMORY_SUMMARY_BYTES, MemoryMaterial, MemoryReference, MemoryScope, MemorySnapshot,
+};
 pub use protocol::{
     ArchivedPayload, HistoryAppend, ProtocolArchive, ProtocolHistory, ProtocolItemSummary,
     ProtocolOutput,

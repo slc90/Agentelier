@@ -105,6 +105,46 @@ impl Memory {
 }
 
 impl MemoryClient {
+    pub async fn invalidate_current(&self) -> io::Result<()> {
+        self.with_connection(|connection| invalidate_reads(connection))
+            .await?;
+        self.revision_signal.notify_one();
+        Ok(())
+    }
+
+    pub async fn invalidate_sources(
+        &self,
+        sessions: Vec<agentelier_conversation::SessionId>,
+    ) -> io::Result<()> {
+        let changed = self
+            .with_connection(move |connection| {
+                let published: Vec<String> = connection
+                    .prepare(
+                        "SELECT session_id FROM published_sources
+                 UNION SELECT json_extract(metadata, '$.session') FROM published_classified
+                 WHERE json_extract(metadata, '$.source.kind') = 'observation'",
+                    )?
+                    .query_map([], |row| row.get(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+                if published.iter().any(|id| {
+                    agentelier_conversation::SessionId::parse_str(id)
+                        .map_or(true, |id| !sessions.contains(&id))
+                }) {
+                    let (current, published) = generations(connection)?;
+                    if current == published {
+                        invalidate_reads(connection)?;
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            })
+            .await?;
+        if changed {
+            self.revision_signal.notify_one();
+        }
+        Ok(())
+    }
+
     pub fn epoch(&self) -> Option<i64> {
         let epoch = self.active_epoch.load(Ordering::Acquire);
         (epoch >= 0).then_some(epoch)
@@ -181,6 +221,22 @@ impl MemoryClient {
         .await
         .map_err(io::Error::other)?
     }
+}
+
+pub(crate) fn generations(connection: &Connection) -> rusqlite::Result<(i64, i64)> {
+    connection.query_row(
+        "SELECT generation, published_generation FROM memory_read_guard WHERE singleton = 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+}
+
+pub(crate) fn invalidate_reads(connection: &Connection) -> rusqlite::Result<()> {
+    connection.execute(
+        "UPDATE memory_read_guard SET generation = generation + 1 WHERE singleton = 1",
+        [],
+    )?;
+    Ok(())
 }
 
 pub(crate) fn check_path(path: &Path, directory: bool) -> io::Result<()> {

@@ -44,6 +44,7 @@ fn memory_tools(client: Option<MemoryClient>, read_mode: ToolMode) -> Vec<ToolRe
                 let user = context.user_turn();
                 let directory = (!user.memory_management).then(|| context.working_directory().to_owned());
                 let epoch = user.memory_epoch;
+                let view = user.memory_view.clone();
                 Box::pin(async move {
                     let Some(client) = client else {
                         return unavailable();
@@ -53,7 +54,7 @@ fn memory_tools(client: Option<MemoryClient>, read_mode: ToolMode) -> Vec<ToolRe
                     };
                     result(
                         client
-                            .search(epoch, directory, arguments.query, cancel.clone())
+                            .search(epoch, directory, view, arguments.query, cancel.clone())
                             .await,
                         SEARCH,
                     )
@@ -73,6 +74,7 @@ fn memory_tools(client: Option<MemoryClient>, read_mode: ToolMode) -> Vec<ToolRe
                 let user = context.user_turn();
                 let directory = (!user.memory_management).then(|| context.working_directory().to_owned());
                 let epoch = user.memory_epoch;
+                let view = user.memory_view.clone();
                 Box::pin(async move {
                     let Some(client) = client else {
                         return unavailable();
@@ -82,7 +84,7 @@ fn memory_tools(client: Option<MemoryClient>, read_mode: ToolMode) -> Vec<ToolRe
                     };
                     result(
                         client
-                            .read_for_task(epoch, directory, arguments.record, cancel.clone())
+                            .read_for_task(epoch, directory, view, arguments.record, cancel.clone())
                             .await,
                         READ,
                     )

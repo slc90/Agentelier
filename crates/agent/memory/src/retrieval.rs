@@ -6,11 +6,15 @@ use crate::{
     redaction::Redactor,
     store::check_path,
 };
-use agentelier_conversation::SessionId;
+use agentelier_conversation::{MemoryWithdrawal, SessionId};
+use agentelier_llm_model::{
+    MAX_MEMORY_SUMMARY_BYTES, MemoryReference, MemoryScope, MemorySnapshot,
+};
 use rusqlite::{Connection, params};
 use serde::Serialize;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -86,7 +90,231 @@ struct IndexedSource {
     content: String,
 }
 
+pub struct ReadView {
+    pub snapshot: MemorySnapshot,
+    records: Vec<SearchRecord>,
+}
+
+struct SearchRecord {
+    detail: MemoryDetail,
+    body: String,
+}
+
+type ViewHandle = Arc<dyn std::any::Any + Send + Sync>;
+
+fn active_view<'a>(
+    handle: &'a Option<ViewHandle>,
+    directory: &Path,
+) -> io::Result<Option<&'a ReadView>> {
+    match handle {
+        None => Ok(None),
+        Some(current) => current
+            .downcast_ref::<ReadView>()
+            .filter(|view| {
+                view.snapshot
+                    .scope
+                    .as_ref()
+                    .is_some_and(|scope| scope.directory == directory)
+            })
+            .map(Some)
+            .ok_or_else(invisible),
+    }
+}
+
+fn current_generation(connection: &Connection) -> io::Result<i64> {
+    let (current, published) = crate::store::generations(connection).map_err(io::Error::other)?;
+    if current != published {
+        return Err(io::Error::new(
+            io::ErrorKind::WouldBlock,
+            "长期记忆修订等待发布",
+        ));
+    }
+    Ok(current)
+}
+
+fn bound_generation(connection: &Connection, view: &ReadView) -> io::Result<()> {
+    let (current, _) = crate::store::generations(connection).map_err(io::Error::other)?;
+    if view
+        .snapshot
+        .scope
+        .as_ref()
+        .is_none_or(|scope| scope.generation != current)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "此轮长期记忆发布已撤下",
+        ));
+    }
+    Ok(())
+}
+
+fn records(
+    connection: &Connection,
+    workspace: &Path,
+    directory: Option<&Path>,
+) -> io::Result<Vec<SearchRecord>> {
+    let mut result = Vec::new();
+    if let Some(publication) = current_publication(connection)? {
+        for (name, hash, entry) in classified::saved(connection, None)? {
+            if !entry.visible_from(directory) || entry.body.is_empty() {
+                continue;
+            }
+            let body = entry.body.clone();
+            let detail = classified_detail(workspace, name, hash, entry, publication.clone())?;
+            result.push(SearchRecord { detail, body });
+        }
+    }
+    for indexed in sources(connection, None)? {
+        if directory.is_some_and(|directory| indexed.scope.as_deref() != Some(directory)) {
+            continue;
+        }
+        let body = indexed
+            .content
+            .split_once("\n\n")
+            .and_then(|(_, rest)| rest.split_once("\n\n"))
+            .map_or(indexed.content.as_str(), |(_, body)| body)
+            .to_owned();
+        let detail = detail(workspace, indexed)?;
+        result.push(SearchRecord { detail, body });
+    }
+    Ok(result)
+}
+
+fn search_records(
+    records: &[SearchRecord],
+    query: &str,
+    cancel: &CancellationToken,
+) -> io::Result<Vec<MemoryMatch>> {
+    let mut category = None;
+    let mut scope = None;
+    let mut words = Vec::new();
+    for word in query.split_whitespace() {
+        if let Some(value) = word.strip_prefix("category:") {
+            category = Some(value);
+        } else if let Some(value) = word.strip_prefix("scope:") {
+            scope = Some(value);
+        } else {
+            words.push(word);
+        }
+    }
+    let mut matches = Vec::new();
+    for entry in records {
+        check_cancel(cancel)?;
+        let source = &entry.detail.source;
+        let scope_name = match &source.scope {
+            Some(Scope::Context) => "context",
+            Some(Scope::Global) => "global",
+            _ => "project",
+        };
+        if category.is_some_and(|category| {
+            source
+                .category
+                .is_none_or(|value| category != value.label())
+        }) || scope.is_some_and(|scope| scope != scope_name)
+            || !contains_words(&entry.body, &words)
+        {
+            continue;
+        }
+        let excerpt = entry
+            .body
+            .lines()
+            .find(|line| words.iter().any(|word| line.to_lowercase().contains(word)))
+            .unwrap_or(&entry.body);
+        matches.push(MemoryMatch {
+            source: source.clone(),
+            excerpt: excerpt[..excerpt.floor_char_boundary(MAX_EXCERPT_BYTES)].to_owned(),
+        });
+        if matches.len() == MAX_MATCHES {
+            break;
+        }
+    }
+    Ok(matches)
+}
+
 impl MemoryClient {
+    pub async fn freeze(&self, directory: PathBuf) -> io::Result<Option<Arc<ReadView>>> {
+        self.with_active_store(move |connection, workspace| {
+            let generation = current_generation(connection)?;
+            if current_publication(connection)?.is_none() {
+                return Ok(None);
+            }
+            let mut snapshot = crate::publication::committed_snapshot(connection)?;
+            let records = records(connection, workspace, Some(&directory))?;
+            let mut references = Vec::new();
+            let mut navigation = snapshot
+                .summary
+                .split_once("\n\n## 项目工作记忆")
+                .map_or(snapshot.summary.as_str(), |(global, _)| global)
+                .trim()
+                .to_owned();
+            let mut project_heading = false;
+            for entry in &records {
+                let source = &entry.detail.source;
+                let global = source.scope == Some(Scope::Global);
+                let recorded_in_summary = navigation.contains(&source.record);
+                if !global {
+                    let label = source.category.map_or("工作摘要", Category::label);
+                    let line = format!(
+                        "- {label} · [{}](rollout_summaries/{})\n",
+                        source.session_id, source.record
+                    );
+                    if navigation.len() + line.len() + 80 > MAX_MEMORY_SUMMARY_BYTES {
+                        break;
+                    }
+                    if !project_heading {
+                        navigation.push_str("\n\n## 当前工作目录的记忆\n\n");
+                        project_heading = true;
+                    }
+                    navigation.push_str(&line);
+                } else if !recorded_in_summary {
+                    continue;
+                }
+                references.push(MemoryReference {
+                    session: source.session_id,
+                    record: source.record.clone(),
+                    revision: source.revision.clone(),
+                    category: source.category.map(|category| category.label().to_owned()),
+                    global,
+                });
+            }
+            if navigation.trim().is_empty() {
+                navigation.push_str("当前发布没有适用于此工作目录的记忆正文。");
+            }
+            snapshot.hash = sha256(&navigation);
+            snapshot.summary = navigation;
+            snapshot.scope = Some(MemoryScope {
+                generation,
+                directory,
+                sources: references,
+            });
+            snapshot.validate().map_err(io::Error::other)?;
+            Ok(Some(Arc::new(ReadView { snapshot, records })))
+        })
+        .await
+    }
+
+    pub async fn view_withdrawal(&self, view: Arc<ReadView>) -> Option<MemoryWithdrawal> {
+        let epoch = view.snapshot.epoch;
+        if self.epoch() != Some(epoch) {
+            return Some(MemoryWithdrawal::EpochChanged);
+        }
+        let valid = self
+            .with_active_store(move |connection, _| {
+                let (current, _) =
+                    crate::store::generations(connection).map_err(io::Error::other)?;
+                Ok(view
+                    .snapshot
+                    .scope
+                    .as_ref()
+                    .is_some_and(|scope| scope.generation == current))
+            })
+            .await;
+        match valid {
+            Ok(true) => None,
+            Ok(false) => Some(MemoryWithdrawal::PublicationRevoked),
+            Err(_) => Some(MemoryWithdrawal::StorageUnavailable),
+        }
+    }
     pub async fn inspect(&self, processing: bool) -> io::Result<MemoryInspection> {
         self.with_active_store(move |connection, workspace| {
             let (snapshot, mut notice) = match crate::publication::snapshot(connection, workspace) {
@@ -169,6 +397,7 @@ impl MemoryClient {
         &self,
         epoch: Option<i64>,
         directory: Option<PathBuf>,
+        view: Option<ViewHandle>,
         query: String,
         cancel: CancellationToken,
     ) -> io::Result<Vec<MemoryMatch>> {
@@ -179,83 +408,17 @@ impl MemoryClient {
                 "记忆查询需为 1 至 256 字节",
             ));
         }
-        self.with_epoch(epoch, move |connection, _| {
+        self.with_epoch(epoch, move |connection, workspace| {
             check_cancel(&cancel)?;
-            let mut category = None;
-            let mut scope = None;
-            let mut words = Vec::new();
-            for word in query.split_whitespace() {
-                if let Some(value) = word.strip_prefix("category:") {
-                    category = Some(value);
-                } else if let Some(value) = word.strip_prefix("scope:") {
-                    scope = Some(value);
-                } else {
-                    words.push(word);
-                }
+            if let Some(directory) = &directory {
+                let Some(view) = active_view(&view, directory)? else {
+                    return Ok(Vec::new());
+                };
+                bound_generation(connection, view)?;
+                return search_records(&view.records, &query, &cancel);
             }
-            let mut matches = Vec::new();
-            if let Some(publication) = current_publication(connection)? {
-                for (name, _, entry) in classified::saved(connection, None)? {
-                    check_cancel(&cancel)?;
-                    let scope_name = match &entry.scope {
-                        Scope::Context => "context",
-                        Scope::Project { .. } => "project",
-                        Scope::Global => "global",
-                    };
-                    if !entry.visible_from(directory.as_deref())
-                        || entry.body.is_empty()
-                        || category.is_some_and(|category| category != entry.category.label())
-                        || scope.is_some_and(|scope| scope != scope_name)
-                        || !contains_words(&entry.body, &words)
-                    {
-                        continue;
-                    }
-                    let excerpt =
-                        entry.body[..entry.body.floor_char_boundary(MAX_EXCERPT_BYTES)].to_owned();
-                    matches.push(MemoryMatch {
-                        source: classified_source(name, entry, publication.clone())?,
-                        excerpt,
-                    });
-                    if matches.len() == MAX_MATCHES {
-                        return Ok(matches);
-                    }
-                }
-            }
-            if category.is_some() || scope.is_some_and(|scope| scope != "project") {
-                return Ok(matches);
-            }
-            for indexed in sources(connection, None)? {
-                check_cancel(&cancel)?;
-                if directory
-                    .as_ref()
-                    .is_some_and(|directory| indexed.scope.as_deref() != Some(directory.as_path()))
-                {
-                    continue;
-                }
-                let body = indexed
-                    .content
-                    .split_once("\n\n")
-                    .and_then(|(_, rest)| rest.split_once("\n\n"))
-                    .map_or(indexed.content.as_str(), |(_, body)| body);
-                if contains_words(body, &words) {
-                    let line = body
-                        .lines()
-                        .find(|line| {
-                            let line = line.to_lowercase();
-                            words.iter().any(|word| line.contains(word))
-                        })
-                        .unwrap_or(body);
-                    let excerpt = &line[..line.floor_char_boundary(MAX_EXCERPT_BYTES)];
-                    matches.push(MemoryMatch {
-                        source: indexed.source,
-                        excerpt: excerpt.to_owned(),
-                    });
-                }
-                if matches.len() == MAX_MATCHES {
-                    break;
-                }
-            }
-            Ok(matches)
+            current_generation(connection)?;
+            search_records(&records(connection, workspace, None)?, &query, &cancel)
         })
         .await
     }
@@ -264,23 +427,31 @@ impl MemoryClient {
         &self,
         epoch: Option<i64>,
         directory: Option<PathBuf>,
+        view: Option<ViewHandle>,
         record: String,
         cancel: CancellationToken,
     ) -> io::Result<MemoryDetail> {
+        if !detail_name(&record) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "记忆记录标识格式无效",
+            ));
+        }
         self.with_epoch(epoch, move |connection, workspace| {
             check_cancel(&cancel)?;
-            let detail = if let Some((name, hash, entry)) = classified::saved(connection, Some(&record))?.pop() {
-                let publication = current_publication(connection)?.ok_or_else(|| io::Error::other("分类记忆缺少发布身份"))?;
-                if !entry.visible_from(directory.as_deref()) {
-                    return Err(invisible());
-                }
-                classified_detail(workspace, name, hash, entry, publication)?
+            let detail = if let Some(directory) = &directory {
+                let view = active_view(&view, directory)?.ok_or_else(invisible)?;
+                bound_generation(connection, view)?;
+                view.records.iter().find(|entry| entry.detail.source.record == record)
+                    .map(|entry| entry.detail.clone()).ok_or_else(invisible)?
             } else {
-                let indexed = source(connection, &record)?;
-                if directory.as_ref().is_some_and(|directory| indexed.scope.as_deref() != Some(directory.as_path())) {
-                    return Err(invisible());
+                current_generation(connection)?;
+                if let Some((name, hash, entry)) = classified::saved(connection, Some(&record))?.pop() {
+                    let publication = current_publication(connection)?.ok_or_else(|| io::Error::other("分类记忆缺少发布身份"))?;
+                    classified_detail(workspace, name, hash, entry, publication)?
+                } else {
+                    detail(workspace, source(connection, &record)?)?
                 }
-                detail(workspace, indexed)?
             };
             check_cancel(&cancel)?;
             let now = i64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)
@@ -300,6 +471,7 @@ impl MemoryClient {
     ) -> io::Result<Option<String>> {
         self.with_epoch(epoch, move |connection, workspace| {
             check_cancel(&cancel)?;
+            current_generation(connection)?;
             Ok(crate::publication::snapshot(connection, workspace)?
                 .map(|published| published.summary))
         })

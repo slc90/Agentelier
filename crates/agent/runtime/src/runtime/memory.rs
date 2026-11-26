@@ -273,6 +273,8 @@ impl Worker {
 
     async fn consolidate(&self, models: &mut Option<AvailableModels>) -> io::Result<bool> {
         let sessions = self.store.memory_sessions().await?;
+        self.memory.invalidate_sources(sessions.clone()).await?;
+        self.memory.resume_if_ready().await?;
         let Some(work) = self.memory.prepare_consolidation(&sessions).await? else {
             return Ok(true);
         };

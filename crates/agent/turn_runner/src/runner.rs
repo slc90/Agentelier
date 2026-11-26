@@ -8,7 +8,7 @@ use crate::{
 use agentelier_account::{CredentialClient, ExecutionIdentity};
 use agentelier_conversation::RecordEvent;
 use agentelier_conversation::{
-    ConversationFailure, InputDecision, MAX_TURN_REQUESTS, SteerInput, TurnStatus,
+    ConversationFailure, InputDecision, MAX_TURN_REQUESTS, SteerInput, TurnMemory, TurnStatus,
 };
 use agentelier_llm_model::{
     GenerationConnection, GenerationResult, ModelFailure, ModelFailureKind,
@@ -351,6 +351,63 @@ pub async fn run_idle(
     publish(&progress, &cancel).await
 }
 
+async fn select_memory(
+    active: &TurnAccess,
+    client: Option<&agentelier_memory::MemoryClient>,
+    directory: std::path::PathBuf,
+) -> Result<Option<Arc<agentelier_memory::ReadView>>, ConversationFailure> {
+    let (continuation, (saved, legacy)) = active
+        .call(|turn| Ok((turn.continuation().is_some(), turn.saved_memory_choice()?)))
+        .await?;
+    if continuation && saved.is_none() && legacy {
+        return Err(ConversationFailure::new(
+            "旧轮次的记忆读视图无法恢复，请开始新的请求",
+        ));
+    }
+    if continuation {
+        match saved.as_ref() {
+            Some(TurnMemory::Frozen { .. }) => {}
+            _ => {
+                let choice = saved.unwrap_or(TurnMemory::Empty);
+                active
+                    .call(move |mut turn| turn.install_memory(choice, None))
+                    .await?;
+                return Ok(None);
+            }
+        }
+    }
+    let result = match client {
+        Some(client) => client.freeze(directory).await,
+        None => Err(std::io::Error::other("长期记忆存储不可用")),
+    };
+    let (choice, view) = match result {
+        Ok(Some(view)) => {
+            let choice = TurnMemory::captured(&view.snapshot)
+                .ok_or_else(|| ConversationFailure::new("记忆读视图缺少范围"))?;
+            (choice, Some(view))
+        }
+        Ok(None) => (TurnMemory::Empty, None),
+        Err(failure) => {
+            tracing::debug!(error = %failure, "当前轮次未取得长期记忆");
+            (TurnMemory::Unavailable, None)
+        }
+    };
+    let snapshot = view.as_ref().map(|view| view.snapshot.clone());
+    if continuation
+        && saved
+            .as_ref()
+            .is_some_and(|saved| !saved.matches(snapshot.as_ref()))
+    {
+        return Err(ConversationFailure::new(
+            "已保存的记忆发布和当前读视图不同，无法续接此轮",
+        ));
+    }
+    active
+        .call(move |mut turn| turn.install_memory(choice, snapshot))
+        .await?;
+    Ok(view)
+}
+
 async fn run_task(
     active: &TurnAccess,
     dispatcher: &ToolDispatcher,
@@ -369,6 +426,15 @@ async fn run_task(
     let (settings, input, child) = active
         .call(|turn| Ok((turn.settings(), turn.input()?, turn.child_materials())))
         .await?;
+    let mut memory_view =
+        if settings.kind.is_user() && child.is_none() && settings.background.is_none() {
+            match select_memory(active, memory.as_ref(), settings.working_directory.clone()).await {
+                Ok(view) => view,
+                Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())),
+            }
+        } else {
+            None
+        };
     if settings.kind.is_user()
         && !active
             .call(|turn| Ok(turn.continuation().is_some()))
@@ -515,15 +581,21 @@ async fn run_task(
         }
         active.apply_inbox().await?;
         requests_used += 1;
+        if let (Some(client), Some(view)) = (&memory, &memory_view)
+            && let Some(reason) = client.view_withdrawal(view.clone()).await
+        {
+            tracing::debug!(publication = %view.snapshot.publication_id, ?reason, "此轮长期记忆已撤下");
+            active
+                .call(move |mut turn| turn.install_memory(TurnMemory::Withdrawn { reason }, None))
+                .await?;
+            memory_view = None;
+        }
         let epoch = memory
             .as_ref()
             .and_then(agentelier_memory::MemoryClient::epoch);
-        let user_turn = active
-            .call(move |mut turn| {
-                turn.use_memory_epoch(epoch);
-                turn.tool_user_turn(epoch)
-            })
-            .await?;
+        let user_turn = active.call(move |turn| turn.tool_user_turn(epoch)).await?;
+        let mut user_turn = user_turn;
+        user_turn.memory_view = memory_view.clone().map(|view| view as _);
         let context = Arc::new(ExecutionContext::new(
             settings.working_directory.clone(),
             settings.image_input,

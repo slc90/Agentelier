@@ -348,7 +348,18 @@ impl AgentRuntime {
                         let memory = tokio::task::spawn_blocking(move || Memory::open(&memory_root))
                             .await.map_err(io::Error::other).and_then(|result| result);
                         match &memory {
-                            Ok(_) => debug!(path = %data_root.display(), "记忆存储已打开"),
+                            Ok(memory) => {
+                                let client = memory.client();
+                                let checked = match store.client().memory_sessions().await {
+                                    Ok(sessions) => client.invalidate_sources(sessions).await,
+                                    Err(failure) => Err(failure),
+                                };
+                                if let Err(failure) = checked {
+                                    client.suspend();
+                                    error!(error = %failure, "无法核对已发布记忆的会话来源");
+                                }
+                                debug!(path = %data_root.display(), "记忆存储已打开");
+                            }
                             Err(failure) => error!(path = %data_root.display(), error = %failure, "记忆存储不可用"),
                         }
                         let (memory_work, mut memory_status) = tokio::sync::watch::channel(MemoryWorkState::Idle);
@@ -862,6 +873,13 @@ impl AgentRuntime {
                                         let id = pending.id;
                                         let event = pending.complete(result, conversation);
                                         if matches!(&event, ConversationEvent::Deleted { .. }) {
+                                            if let Ok(memory) = &memory {
+                                                let client = memory.client();
+                                                if let Err(failure) = client.invalidate_current().await {
+                                                    client.suspend();
+                                                    error!(error = %failure, "会话已删除，旧记忆读视图无法正常撤下");
+                                                }
+                                            }
                                             if let Some((_, tools)) = session_tools.take() {
                                                 tools.join("session_deleted").await?;
                                             }
@@ -1288,15 +1306,6 @@ impl AgentRuntime {
                                                     emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
                                                     continue;
                                                 }
-                                                let snapshot = if let Ok(memory) = &memory {
-                                                    match memory.client().snapshot().await {
-                                                        Ok(snapshot) => snapshot,
-                                                        Err(failure) => {
-                                                            error!(operation_id = id, error = %failure, "无法取得已发布的会话记忆");
-                                                            None
-                                                        }
-                                                    }
-                                                } else { None };
                                                 let tools = mcp_connections.registrations();
                                                 let (request, first) = match request {
                                                     ConversationRequest::CreateAndSend { create, input } => (ConversationRequest::Create(create), Some(input)),
@@ -1328,7 +1337,7 @@ impl AgentRuntime {
                                                 let prepared = match resolved {
                                                     Ok((settings, project)) => creation::freeze_origin(settings, &data_root)
                                                         .await
-                                                        .and_then(|settings| next.conversation.prepare(settings, &tools, snapshot))
+                                                        .and_then(|settings| next.conversation.prepare(settings, &tools, None))
                                                         .map(|prepared| (prepared, project)),
                                                     Err(failure) => Err(failure),
                                                 };

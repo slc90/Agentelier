@@ -1,6 +1,6 @@
 use crate::control::{MAX_PENDING_STEERS, SteerInput, SteerState, SteerView};
 use crate::conversation::{
-    ConversationFailure, SessionView, TaskPhase, ToolView, TurnStatus, TurnView,
+    ConversationFailure, SessionView, TaskPhase, ToolView, TurnMemory, TurnStatus, TurnView,
 };
 use agentelier_llm_model::{
     FunctionCall, GenerationRequest, GenerationResult, HistoryAppend, OutputText, ProtocolHistory,
@@ -176,20 +176,49 @@ impl ActiveTurn<'_> {
         self.view.execution_blocked = true;
     }
 
-    pub fn use_memory_epoch(&mut self, epoch: Option<i64>) {
-        if self
+    pub fn saved_memory_choice(&self) -> Result<(Option<TurnMemory>, bool), ConversationFailure> {
+        let turn = self
+            .view
+            .turn
+            .as_ref()
+            .ok_or_else(|| ConversationFailure::new("活动任务缺少轮次"))?;
+        let legacy = turn
+            .requests
+            .iter()
+            .any(|request| request.projection.memory.is_some());
+        Ok((turn.memory.clone(), legacy))
+    }
+
+    pub fn install_memory(
+        &mut self,
+        choice: TurnMemory,
+        snapshot: Option<agentelier_llm_model::MemorySnapshot>,
+    ) -> Result<(), ConversationFailure> {
+        if !choice.matches(snapshot.as_ref()) {
+            return Err(ConversationFailure::new("轮次记忆选择与材料身份不一致"));
+        }
+        let previous = self
             .state
             .memory
+            .take()
+            .map_or(0, |memory| memory.estimated_tokens());
+        let current = snapshot
             .as_ref()
-            .is_some_and(|memory| Some(memory.epoch) != epoch)
-            && let Some(memory) = self.state.memory.take()
-        {
-            self.view.context.task_material_tokens = self
-                .view
-                .context
-                .task_material_tokens
-                .saturating_sub(memory.estimated_tokens());
-        }
+            .map_or(0, agentelier_llm_model::MemorySnapshot::estimated_tokens);
+        self.view.context.task_material_tokens = self
+            .view
+            .context
+            .task_material_tokens
+            .saturating_sub(previous)
+            .saturating_add(current);
+        self.state.memory = snapshot.map(Arc::new);
+        let turn = self
+            .view
+            .turn
+            .as_mut()
+            .ok_or_else(|| ConversationFailure::new("活动任务缺少轮次"))?;
+        turn.memory = Some(choice);
+        Ok(())
     }
 
     pub fn tool_user_turn(
@@ -213,6 +242,7 @@ impl ActiveTurn<'_> {
             .collect();
         Ok(agentelier_tools::ToolUserTurn {
             memory_epoch,
+            memory_view: None,
             memory_management: !self.view.settings.kind.is_user(),
             background: self.view.settings.background.is_some(),
             session: self.view.id,
@@ -395,6 +425,18 @@ impl ActiveTurn<'_> {
         } else {
             self.history.clone()
         };
+        let can_read_current = matches!(turn.memory, Some(TurnMemory::Frozen { .. }))
+            || (!self.view.settings.kind.is_user()
+                && !turn.tools.iter().any(|tool| {
+                    tool.name == "revise_memory" && tool.status == ToolStatus::Succeeded
+                }));
+        let allowed = turn
+            .tools
+            .iter()
+            .filter(|_| can_read_current)
+            .map(|tool| tool.call_id.as_str())
+            .collect();
+        let (context, retired_memory_outputs) = context.retire_memory_outputs(&allowed);
         let reserved_result_bytes = if context.has_open_calls() || skip_compaction {
             self.check_result_capacity(&context, 0, &Default::default(), false)?
                 .wire_reserve()
@@ -424,6 +466,7 @@ impl ActiveTurn<'_> {
             reserved_result_bytes,
             behavior,
             memory: self.state.memory.as_deref().cloned(),
+            retired_memory_outputs,
             transcript,
             selected_skills: turn.selected_skills.clone(),
             skill_catalog: turn

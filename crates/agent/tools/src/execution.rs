@@ -14,6 +14,7 @@ const ERROR_MESSAGE_BYTES: usize = 8192;
 #[derive(Clone)]
 pub struct ToolUserTurn {
     pub memory_epoch: Option<i64>,
+    pub memory_view: Option<Arc<dyn std::any::Any + Send + Sync>>,
     pub memory_management: bool,
     pub background: bool,
     pub session: uuid::Uuid,

@@ -71,6 +71,7 @@ fn begin(connection: &mut Connection, cutoffs: Vec<MemoryCutoff>) -> io::Result<
     }
     tx.execute_batch(
         "UPDATE memory_state SET epoch = epoch + 1;
+         UPDATE memory_read_guard SET generation = 0, published_generation = 0;
          INSERT INTO pending_reset (singleton) VALUES (1);
          DELETE FROM pending_publication;
          DELETE FROM consolidation_inputs;

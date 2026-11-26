@@ -14,26 +14,6 @@ use std::path::Path;
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-impl crate::MemoryClient {
-    pub async fn snapshot(&self) -> io::Result<Option<MemorySnapshot>> {
-        self.with_active_store(|connection, workspace| {
-            let current: bool = connection
-                .query_row(
-                    "SELECT EXISTS (SELECT 1 FROM classified_publication)",
-                    [],
-                    |row| row.get(0),
-                )
-                .map_err(io::Error::other)?;
-            if current {
-                snapshot(connection, workspace)
-            } else {
-                Ok(None)
-            }
-        })
-        .await
-    }
-}
-
 pub(crate) fn snapshot(
     connection: &Connection,
     workspace: &Path,
@@ -57,6 +37,7 @@ pub(crate) fn snapshot(
         hash,
         epoch,
         summary,
+        scope: None,
     };
     snapshot.validate().map_err(io::Error::other)?;
     Ok(Some(snapshot))
@@ -80,6 +61,7 @@ pub(crate) fn committed_snapshot(connection: &Connection) -> io::Result<MemorySn
         hash,
         epoch,
         summary,
+        scope: None,
     };
     snapshot.validate().map_err(io::Error::other)?;
     Ok(snapshot)
@@ -241,6 +223,10 @@ pub(crate) fn publish(
     let notes = crate::revision::revisions(workspace, epoch)?;
     if work.previous_id != current.id
         || work.epoch != epoch
+        || work.read_generation
+            != crate::store::generations(connection)
+                .map_err(io::Error::other)?
+                .0
         || !notes
             .iter()
             .map(|note| &note.id)
@@ -277,6 +263,11 @@ fn commit(
     .map_err(io::Error::other)?;
     tx.execute_batch("DELETE FROM consolidation_inputs; DELETE FROM revisions;")
         .map_err(io::Error::other)?;
+    tx.execute(
+        "UPDATE memory_read_guard SET published_generation = ?1 WHERE singleton = 1",
+        [work.read_generation],
+    )
+    .map_err(io::Error::other)?;
     tx.execute(
         "INSERT INTO classified_publication (singleton, input_hash) VALUES (1, ?1)
          ON CONFLICT(singleton) DO UPDATE SET input_hash = excluded.input_hash",

@@ -210,12 +210,74 @@ pub(crate) fn is_collaboration_tool(tool: &agentelier_tools::ToolDefinition) -> 
     matches!(&tool.source, agentelier_tools::ToolSource::Extension { provider, .. }
         if provider == "agentelier.collaboration")
 }
+#[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum TurnMemory {
+    Frozen {
+        publication: SessionId,
+        epoch: i64,
+        generation: i64,
+        hash: String,
+    },
+    Empty,
+    Unavailable,
+    Withdrawn {
+        reason: MemoryWithdrawal,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryWithdrawal {
+    EpochChanged,
+    PublicationRevoked,
+    StorageUnavailable,
+}
+
+impl TurnMemory {
+    pub fn captured(snapshot: &agentelier_llm_model::MemorySnapshot) -> Option<Self> {
+        snapshot.scope.as_ref().map(|scope| Self::Frozen {
+            publication: snapshot.publication_id,
+            epoch: snapshot.epoch,
+            generation: scope.generation,
+            hash: snapshot.hash.clone(),
+        })
+    }
+
+    pub fn matches(&self, snapshot: Option<&agentelier_llm_model::MemorySnapshot>) -> bool {
+        match (self, snapshot) {
+            (
+                Self::Frozen {
+                    publication,
+                    epoch,
+                    generation,
+                    hash,
+                },
+                Some(snapshot),
+            ) => {
+                snapshot.publication_id == *publication
+                    && snapshot.epoch == *epoch
+                    && snapshot.hash == *hash
+                    && snapshot
+                        .scope
+                        .as_ref()
+                        .is_some_and(|scope| scope.generation == *generation)
+            }
+            (Self::Frozen { .. }, None) => false,
+            (_, None) => true,
+            (_, Some(_)) => false,
+        }
+    }
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct TurnView {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub result_continuation: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction_continuation: Option<CompactionContinuation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<TurnMemory>,
     #[serde(default)]
     pub selected_skills: Vec<agentelier_skills::SelectedSkill>,
     #[serde(default)]
@@ -958,6 +1020,7 @@ impl Conversation {
         session.view.turn = Some(Box::new(TurnView {
             result_continuation,
             compaction_continuation: None,
+            memory: None,
             selected_skills: Vec::new(),
             skills: None,
             requests: Vec::new(),

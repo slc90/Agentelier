@@ -82,6 +82,31 @@ impl ProtocolOutput {
 pub struct ProtocolHistory(Vec<ProtocolItem>);
 
 impl ProtocolHistory {
+    pub fn retire_memory_outputs(mut self, allowed: &HashSet<&str>) -> (Self, Vec<String>) {
+        let retired = self
+            .0
+            .iter()
+            .filter_map(|item| match item {
+                ProtocolItem::FunctionCall { call_id, name, .. }
+                    if memory_read_tool(name) && !allowed.contains(call_id.as_str()) =>
+                {
+                    Some(call_id.clone())
+                }
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        let mut applied = Vec::new();
+        for item in &mut self.0 {
+            if let ProtocolItem::FunctionResult { call_id, output } = item
+                && retired.contains(call_id)
+            {
+                *output = r#"{"ok":false,"error":{"code":"memory_view_expired","message":"Earlier derived memory is not part of the current turn's read view."}}"#.to_owned().into();
+                applied.push(call_id.clone());
+            }
+        }
+        (self, applied)
+    }
+
     pub fn fork_at(&self, boundary: &[ProtocolItemSummary]) -> Result<Self, crate::ModelFailure> {
         let prefix = self
             .0
@@ -380,6 +405,13 @@ impl ProtocolHistory {
             })
             .collect()
     }
+}
+
+pub(crate) fn memory_read_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "search_memory" | "read_memory" | "read_memory_summary"
+    )
 }
 
 enum BoundaryItem<'a> {

@@ -216,6 +216,7 @@ impl MemoryClient {
             temporary.write_all(content.as_bytes())?;
             temporary.as_file().sync_all()?;
             check_cancel(&cancel)?;
+            crate::store::invalidate_reads(connection).map_err(io::Error::other)?;
             temporary.persist_noclobber(path).map_err(|failure| failure.error)?;
             Ok((RevisionReceipt { revision_id: note.id, state: "saved_pending_consolidation" }, true))
         }).await?;

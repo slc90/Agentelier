@@ -36,6 +36,7 @@ impl std::io::Write for RequestBytes {
 pub struct GenerationRequest {
     pub behavior: Option<String>,
     pub memory: Option<crate::MemorySnapshot>,
+    pub retired_memory_outputs: Vec<String>,
     pub transcript: Option<crate::TranscriptEvidence>,
     pub selected_skills: Vec<agentelier_skills::SelectedSkill>,
     pub skill_catalog: Option<String>,
@@ -78,6 +79,8 @@ pub struct RequestProjection {
     pub skill_materials: Vec<SkillMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<crate::MemoryMaterial>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired_memory_outputs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript: Option<crate::TranscriptMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -159,6 +162,17 @@ impl RequestProjection {
             .is_some_and(|fixed| fixed > self.payload_bytes)
         {
             return Err(crate::model::protocol("冻结请求的固定材料超出请求大小"));
+        }
+        let mut retired = std::collections::HashSet::new();
+        for retired_id in &self.retired_memory_outputs {
+            if !retired.insert(retired_id) || !self.items.iter().any(|item| {
+                matches!(item, crate::ProtocolItemSummary::FunctionCall { call_id, name }
+                    if call_id == retired_id && crate::protocol::memory_read_tool(name))
+            }) || !self.items.iter().any(|item| {
+                matches!(item, crate::ProtocolItemSummary::FunctionResult { call_id } if call_id == retired_id)
+            }) {
+                return Err(crate::model::protocol("已撤下记忆结果缺少对应的工具调用"));
+            }
         }
         if let Some(history) = &self.history {
             let covered = self.items.len();
@@ -413,6 +427,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         behavior,
         skill_materials,
         memory,
+        retired_memory_outputs: generation.retired_memory_outputs,
         transcript,
         history: Some(history),
         items,

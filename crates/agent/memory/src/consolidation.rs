@@ -20,6 +20,7 @@ use agentelier_llm_model::MAX_MEMORY_SUMMARY_BYTES;
 pub struct Consolidation {
     pub(crate) previous_id: Option<String>,
     pub(crate) epoch: i64,
+    pub(crate) read_generation: i64,
     pub(crate) details: BTreeMap<String, Detail>,
     pub(crate) deleted: Vec<String>,
     pub(crate) classified_hash: String,
@@ -63,6 +64,8 @@ impl MemoryClient {
             .collect::<BTreeSet<_>>();
         self.with_store(move |connection, workspace| {
             let baseline = publication::restore(connection, workspace)?;
+            let (read_generation, published_generation) =
+                crate::store::generations(connection).map_err(io::Error::other)?;
             let details = select(connection, &sessions)?;
             let (classified_hash, observations) = classified::inputs(connection, &sessions)?;
             let epoch = connection
@@ -91,7 +94,8 @@ impl MemoryClient {
                 .filter(|id| id.as_ref().map_or(true, |id| !sessions.contains(id)))
                 .collect::<rusqlite::Result<Vec<_>>>()
                 .map_err(io::Error::other)?;
-            if all_revisions_published
+            if read_generation == published_generation
+                && all_revisions_published
                 && unchanged
                 && baseline.classified_hash.as_deref() == Some(&classified_hash)
                 && deleted.is_empty()
@@ -101,6 +105,7 @@ impl MemoryClient {
             Ok(Some(Consolidation {
                 previous_id: baseline.id,
                 epoch,
+                read_generation,
                 details,
                 deleted,
                 classified_hash,

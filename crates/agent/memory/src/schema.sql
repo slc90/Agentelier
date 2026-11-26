@@ -4,6 +4,13 @@ CREATE TABLE IF NOT EXISTS memory_state (
 ) STRICT;
 INSERT OR IGNORE INTO memory_state (singleton) VALUES (1);
 
+CREATE TABLE IF NOT EXISTS memory_read_guard (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    generation INTEGER NOT NULL DEFAULT 0,
+    published_generation INTEGER NOT NULL DEFAULT 0
+) STRICT;
+INSERT OR IGNORE INTO memory_read_guard (singleton) VALUES (1);
+
 CREATE TABLE IF NOT EXISTS sources (
     session_id TEXT PRIMARY KEY,
     sequence INTEGER NOT NULL CHECK (sequence > 0),
