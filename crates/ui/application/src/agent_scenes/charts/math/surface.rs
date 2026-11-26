@@ -15,7 +15,7 @@ use bevy_widgetry::scene::spawn_scene;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io};
 
-pub(super) const TEMPLATE: &str = space_view::SURFACE_TEMPLATE;
+pub(super) const TEMPLATE: &str = "agentelier.surface_plot";
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

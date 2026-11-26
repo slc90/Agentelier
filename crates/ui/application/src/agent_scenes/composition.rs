@@ -150,7 +150,7 @@ fn prepare_unmounted(mut props: Properties, stored: &SceneStored) -> Result<Prop
 }
 
 fn inherits_view(part: &Placement) -> bool {
-    part.scene.template == space_view::SURFACE_TEMPLATE
+    space_view::supports_orientation(&part.scene)
         && part
             .scene
             .props

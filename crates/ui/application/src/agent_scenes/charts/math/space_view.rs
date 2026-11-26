@@ -22,8 +22,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::{collections::BTreeSet, io};
 
-pub(in crate::agent_scenes) const SURFACE_TEMPLATE: &str = "agentelier.surface_plot";
-
 #[derive(Clone, Copy, Component, Reflect, PartialEq, Deserialize, Serialize)]
 #[reflect(Component)]
 #[serde(deny_unknown_fields)]
@@ -505,10 +503,19 @@ pub(in crate::agent_scenes) fn restore_definition(
     scene: &mut SceneDefinition,
     values: &Map<String, Value>,
 ) -> Result {
-    if scene.template == SURFACE_TEMPLATE {
+    if supports_orientation(scene) {
         scene
             .props
             .insert("view".into(), serde_json::to_value(orientation(values)?)?);
     }
     Ok(())
+}
+
+pub(in crate::agent_scenes) fn supports_orientation(scene: &SceneDefinition) -> bool {
+    scene.template == super::surface::TEMPLATE
+        || (scene.template == super::vector_field::TEMPLATE
+            && scene
+                .props
+                .get("z_axis")
+                .is_some_and(|axis| !axis.is_null()))
 }

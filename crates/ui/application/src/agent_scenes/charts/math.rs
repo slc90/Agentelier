@@ -9,6 +9,7 @@ mod region_mesh;
 pub(in crate::agent_scenes) mod space_view;
 mod surface;
 mod trace;
+mod vector_field;
 
 use super::{
     axis::{Axis, AxisKind, AxisSpec, Range},
@@ -102,7 +103,8 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
     let host = region::register(host)?;
     let host = polar::register(host)?;
     let host = parametric::register(host)?;
-    surface::register(host)
+    let host = surface::register(host)?;
+    vector_field::register(host)
 }
 
 pub(super) fn install(app: &mut App) {
@@ -119,6 +121,7 @@ pub(in crate::agent_scenes) fn supports(template: &str) -> bool {
             | polar::TEMPLATE
             | parametric::TEMPLATE
             | surface::TEMPLATE
+            | vector_field::TEMPLATE
     )
 }
 
@@ -147,6 +150,9 @@ pub(in crate::agent_scenes) fn set_variable(
 ) -> Result {
     if world.get::<surface::Surface>(root).is_some() {
         return surface::set_variable(world, root, variable, value);
+    }
+    if world.get::<vector_field::Field>(root).is_some() {
+        return vector_field::set_variable(world, root, variable, value);
     }
     let mut state = world
         .get_mut::<MathPlot>(root)
