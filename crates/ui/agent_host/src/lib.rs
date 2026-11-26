@@ -11,10 +11,10 @@ pub use agentelier_bridge_connection::{
 pub use agentelier_bridge_connection::{SkillEntry, SkillRequest, SkillSnapshot, UserSkillId};
 
 pub use host::{
-    AccountEvent, AgentHost, AgentHostPlugin, ConversationEvent, GlobalTaskNotificationEvent,
-    GlobalTasksEvent, HostActivity, HostFailed, ImageAttachmentEvent, McpConfigEvent,
-    McpMaterialEvent, McpStatusEvent, MemoryEvent, MemoryWorkEvent, ModelEvent, ReceiveAgentEvents,
-    SkillsEvent,
+    AccountEvent, AgentHost, AgentHostPlugin, AudioPlaybackEvent, ConversationEvent,
+    GlobalTaskNotificationEvent, GlobalTasksEvent, HostActivity, HostFailed, ImageAttachmentEvent,
+    McpConfigEvent, McpMaterialEvent, McpStatusEvent, MemoryEvent, MemoryWorkEvent, ModelEvent,
+    ReceiveAgentEvents, SkillsEvent,
 };
 
 pub use agentelier_bridge_connection::{ConfigChange, Server, ServerId, ServerSettings, Transport};

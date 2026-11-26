@@ -18,6 +18,7 @@ serde.workspace = true
 serde_json.workspace = true
 futures-timer.workspace = true
 bevy.workspace = true
+rodio.workspace = true
 bevy_widgetry = { workspace = true, features = [
   "combo_box",
   "collapsible",

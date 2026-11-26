@@ -4,6 +4,7 @@ compile_error!("This application supports Windows x64 only");
 mod active_input;
 mod archives;
 mod audio_attachment;
+mod audio_playback;
 mod background_tasks;
 pub use archives::{ArchiveChoice, ArchiveState};
 mod conversation;

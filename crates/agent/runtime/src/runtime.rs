@@ -72,6 +72,7 @@ pub enum AgentEventKind {
     MemoryProgress(Box<agentelier_conversation::SessionView>),
     MemoryWork(MemoryWorkState),
     ImageAttachment(Result<ImageAttachmentReply, String>),
+    AudioPlayback(Result<Arc<[u8]>, String>),
 }
 #[derive(Debug)]
 pub enum RuntimeFailure {
@@ -131,6 +132,11 @@ enum SourceSettlement {
     Logout(u64),
 }
 
+enum AttachmentReply {
+    Image(io::Result<ImageAttachmentReply>),
+    Audio(io::Result<Arc<[u8]>>),
+}
+
 enum Command {
     McpMaterial(u64, agentelier_mcp::MaterialRequest),
     CancelMcpMaterial(u64),
@@ -138,7 +144,8 @@ enum Command {
     MemoryDialogue(memory_dialogue::Signal),
     MemoryWork(MemoryWorkState),
     ImageAttachment(u64, SessionId, String, ImageAttachmentAction),
-    ImageAttachmentFinished(u64, io::Result<ImageAttachmentReply>),
+    AudioPlayback(u64, SessionId, AudioId),
+    AttachmentFinished(u64, AttachmentReply),
     AudioDraft(u64, SessionId, Option<PathBuf>),
     TranscribeAudio(u64, SessionId, AudioId),
     CancelTranscription(u64, SessionId),
@@ -368,7 +375,7 @@ impl AgentRuntime {
                         ));
                         let mut mcp_settings = agentelier_mcp::ConfigStore::open(&data_root);
                         let mut material: Option<PendingMaterial> = None;
-                        let mut image_attachments = tokio::task::JoinSet::new();
+                        let mut attachments = tokio::task::JoinSet::new();
                         let mut audio_jobs = tokio::task::JoinSet::new();
                         let mut audio_cancel: Option<(u64, SessionId, CancellationToken)> = None;
                         let mut mcp_connections = agentelier_mcp::Connections::default();
@@ -538,10 +545,10 @@ impl AgentRuntime {
                                             .map_err(|_| RuntimeFailure::ModelState)?;
                                         Command::SkillsFinished(id, result)
                                     },
-                                    result = image_attachments.join_next(), if !image_attachments.is_empty() => {
+                                    result = attachments.join_next(), if !attachments.is_empty() => {
                                         let (id, result) = result.ok_or(RuntimeFailure::ModelState)?
                                             .map_err(|_| RuntimeFailure::ModelState)?;
-                                        Command::ImageAttachmentFinished(id, result)
+                                        Command::AttachmentFinished(id, result)
                                     },
                                     result = audio_jobs.join_next(), if !audio_jobs.is_empty() => {
                                         let (id, session, result) = result.ok_or(RuntimeFailure::ModelState)?
@@ -715,18 +722,41 @@ impl AgentRuntime {
                                         if let Some(image) = conversation.tool_image(session, &call) {
                                             let client = store.client();
                                             let root = data_root.clone();
-                                            image_attachments.spawn(async move {
-                                                (id, image_attachment::execute(client, root, session, image, action).await)
+                                            attachments.spawn(async move {
+                                                let result = image_attachment::execute(client, root, session, image, action).await;
+                                                (id, AttachmentReply::Image(result))
                                             });
                                         } else {
                                             emit(&publish, id, AgentEventKind::ImageAttachment(Err("当前会话没有这张已确认的图片".into())))?;
                                         }
                                     }
-                                    Command::ImageAttachmentFinished(id, result) => {
-                                        if let Err(failure) = &result {
-                                            error!(operation_id = id, error = %failure, "处理生成图片附件失败");
+                                    Command::AudioPlayback(id, session, audio) => {
+                                        if let Some(audio) = conversation.playback_audio(session, audio).filter(|_| !deleting_target) {
+                                            let client = store.client();
+                                            attachments.spawn(async move {
+                                                let result = client.read_audio(session, audio).await.map(Arc::from);
+                                                (id, AttachmentReply::Audio(result))
+                                            });
+                                        } else {
+                                            emit(&publish, id, AgentEventKind::AudioPlayback(Err("当前会话没有此音频附件".into())))?;
                                         }
-                                        emit(&publish, id, AgentEventKind::ImageAttachment(result.map_err(|failure| failure.to_string())))?;
+                                    }
+                                    Command::AttachmentFinished(id, reply) => {
+                                        let kind = match reply {
+                                            AttachmentReply::Image(result) => {
+                                                if let Err(failure) = &result {
+                                                    error!(operation_id = id, error = %failure, "处理生成图片附件失败");
+                                                }
+                                                AgentEventKind::ImageAttachment(result.map_err(|failure| failure.to_string()))
+                                            }
+                                            AttachmentReply::Audio(result) => {
+                                                if let Err(failure) = &result {
+                                                    error!(operation_id = id, error = %failure, "读取播放音频失败");
+                                                }
+                                                AgentEventKind::AudioPlayback(result.map_err(|failure| failure.to_string()))
+                                            }
+                                        };
+                                        emit(&publish, id, kind)?;
                                     }
                                     Command::Memory(id, MemoryRequest::OpenChat { slug, effort }) => {
                                         let result = async {
@@ -1544,11 +1574,11 @@ impl AgentRuntime {
                                 Ok((_, Ok(_))) => {}
                             }
                         }
-                        while let Some(result) = image_attachments.join_next().await {
+                        while let Some(result) = attachments.join_next().await {
                             match result {
-                                Ok((id, Err(failure))) => error!(operation_id = id, error = %failure, "关闭期间处理生成图片附件失败"),
-                                Err(failure) => error!(error = %failure, "关闭期间生成图片附件任务异常结束"),
-                                Ok((_, Ok(_))) => {}
+                                Ok((id, AttachmentReply::Image(Err(failure)) | AttachmentReply::Audio(Err(failure)))) => error!(operation_id = id, error = %failure, "关闭期间处理媒体附件失败"),
+                                Err(failure) => error!(error = %failure, "关闭期间媒体附件任务异常结束"),
+                                Ok(_) => {}
                             }
                         }
                         if let Some((_, _, cancel)) = audio_cancel { cancel.cancel(); }
@@ -1706,6 +1736,15 @@ impl AgentRuntime {
         path: Option<PathBuf>,
     ) -> Result<(), RuntimeFailure> {
         self.submit(Command::AudioDraft(id, session, path))
+    }
+
+    pub fn request_audio_playback(
+        &self,
+        id: u64,
+        session: SessionId,
+        audio: AudioId,
+    ) -> Result<(), RuntimeFailure> {
+        self.submit(Command::AudioPlayback(id, session, audio))
     }
 
     pub fn transcribe_audio(

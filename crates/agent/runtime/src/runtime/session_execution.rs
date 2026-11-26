@@ -222,6 +222,7 @@ pub(super) async fn next(
 pub(super) fn target(command: &Command) -> Option<SessionId> {
     match command {
         Command::AudioDraft(_, session, _)
+        | Command::AudioPlayback(_, session, _)
         | Command::TranscribeAudio(_, session, _)
         | Command::CancelTranscription(_, session)
         | Command::AudioFinished(

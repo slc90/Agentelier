@@ -72,6 +72,12 @@ pub struct ImageAttachmentEvent {
 }
 
 #[derive(Message)]
+pub struct AudioPlaybackEvent {
+    pub operation_id: u64,
+    pub result: std::result::Result<std::sync::Arc<[u8]>, String>,
+}
+
+#[derive(Message)]
 pub struct McpConfigEvent {
     pub operation_id: u64,
     pub result: std::result::Result<agentelier_bridge_connection::ConfigSnapshot, String>,
@@ -153,6 +159,7 @@ impl Plugin for AgentHostPlugin {
             .add_message::<MemoryEvent>()
             .add_message::<MemoryWorkEvent>()
             .add_message::<ImageAttachmentEvent>()
+            .add_message::<AudioPlaybackEvent>()
             .add_message::<McpStatusEvent>()
             .add_message::<McpMaterialEvent>()
             .add_systems(
@@ -246,6 +253,10 @@ impl AgentHost {
         action: agentelier_bridge_connection::ImageAttachmentAction,
     ) -> Result<u64> {
         self.submit(|connection| connection.request_image_attachment(session, call, action))
+    }
+
+    pub fn request_audio_playback(&self, session: SessionId, audio: SessionId) -> Result<u64> {
+        self.submit(|connection| connection.request_audio_playback(session, audio))
     }
 
     pub fn change_audio_draft(&self, session: SessionId, path: Option<PathBuf>) -> Result<u64> {
@@ -469,6 +480,12 @@ fn receive(world: &mut World) -> Result {
             }
             BridgeEventKind::ImageAttachment(result) => {
                 world.write_message(ImageAttachmentEvent {
+                    operation_id: event.operation_id,
+                    result,
+                });
+            }
+            BridgeEventKind::AudioPlayback(result) => {
+                world.write_message(AudioPlaybackEvent {
                     operation_id: event.operation_id,
                     result,
                 });

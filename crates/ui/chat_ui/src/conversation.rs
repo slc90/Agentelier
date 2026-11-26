@@ -1754,7 +1754,7 @@ pub(super) fn reconcile_list(
             );
             let entity = match content {
                     RowContent::Audio(audio) => world.commands().spawn_scene_with_error_handler(bsn! {
-                        @crate::audio_attachment::card(audio)
+                        @crate::audio_attachment::card(key.session, audio)
                         Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
                     }).id(),
                     RowContent::Reply(content) => {
@@ -1901,7 +1901,7 @@ fn reconcile_reply(
                 ReplyItemContent::Audio(audio) => world
                     .commands()
                     .spawn_scene_with_error_handler(bsn! {
-                        @crate::audio_attachment::published_card(audio)
+                        @crate::audio_attachment::published_card(session, audio)
                         ChildOf(body) template(move |_| Ok(key.clone()))
                     })
                     .id(),

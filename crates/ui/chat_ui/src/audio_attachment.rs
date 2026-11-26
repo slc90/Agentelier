@@ -44,12 +44,13 @@ impl ChatAudio {
     }
 }
 
-pub(super) fn published_card(audio: ChatAudio) -> impl Scene {
+pub(super) fn published_card(session: SessionId, audio: ChatAudio) -> impl Scene {
     let label = audio.label();
+    let controls = super::audio_playback::controls(session, audio.id, audio.duration_ms);
     bsn! {
-        Name("ChatPublishedAudio") Text(label) WidgetryText
-        TextLayout::linebreak(LineBreak::AnyCharacter)
-        Node {width: percent(100), min_width: px(0)}
+        Name("ChatPublishedAudio")
+        Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(4) }
+        Children [Text(label) WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter)-- @controls]
     }
 }
 
@@ -79,6 +80,7 @@ struct RemoveAudio;
 struct AudioDraftText;
 
 pub(crate) fn install(app: &mut App) {
+    super::audio_playback::install(app);
     app.init_resource::<AudioDraftState>()
         .add_systems(Update, synchronize);
 }
@@ -95,12 +97,13 @@ pub(crate) fn draft_panel() -> impl Scene {
     }
 }
 
-pub(crate) fn card(audio: ChatAudio) -> impl Scene {
+pub(crate) fn card(session: SessionId, audio: ChatAudio) -> impl Scene {
     let metadata = audio.label();
     let id = audio.id;
+    let controls = super::audio_playback::controls(session, id, audio.duration_ms);
     bsn! {
         Node { flex_direction: FlexDirection::Column, padding: UiRect::all(px(8)), row_gap: px(4), align_self: AlignSelf::Start, max_width: percent(100), flex_shrink: 0.0 }
-        Children [Text("音频附件") WidgetryText-- Text(metadata) WidgetryText--
+        Children [Text("音频附件") WidgetryText-- Text(metadata) WidgetryText-- @controls--
             @crate::transcription::panel(crate::transcription::Target::Saved(id))]
     }
 }

@@ -12,14 +12,14 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/ui/assets/` | `bevy_app_assets` | 应用 Asset 的统一注册与原生图标素材 |
 | `crates/ui/controls/` | `agentelier_controls` | 应用主题、跨页面基础控件与所属 Widgetry 窗口的关闭支持 |
 | `crates/ui/markdown/` | `agentelier_markdown` | 原生 Markdown 解析、块更新、行内样式、原文复制与用户主动链接交互 |
-| `crates/ui/chat_ui/` | `agentelier_chat_ui` | 主窗口工作区布局、模型准备、会话导航、按会话隔离的草稿与阅读状态、多轮流式聊天和相应交互投影 |
+| `crates/ui/chat_ui/` | `agentelier_chat_ui` | 主窗口工作区布局、模型准备、会话导航、按会话隔离的草稿与阅读状态、多轮流式聊天、媒体展示与单实例音频播放 |
 | `crates/ui/agent_host/` | `agentelier_agent_host` | 唯一 Connection、Winit 唤醒、命令提交、业务消息分发、主线程 ECS 请求处理、Event / Message 适配器、Scene 模板登记与实例收尾 |
 | `crates/ui/login_ui/` | `agentelier_login_ui` | 数据目录、Codex 账号界面及 Bevy/Bridge 衔接 |
 | `crates/agent/login/` | `agentelier_login` | 数据环境、Codex 浏览器 OAuth、凭据持久化与身份摘要 |
 | `crates/agent/account/` | `agentelier_account` | Codex 来源状态、共享凭据请求、执行身份门控和账号额度 |
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录与窗口能力、Responses 的 HTTP/SSE 与 WebSocket 传输、响应使用量和模型错误语义 |
 | `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的聊天会话、Turn 身份、工作窗口计量、压缩检查点及恢复、展示记录与结果收敛 |
-| `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话日志、项目定义与会话归属、恢复读取、执行事件追加、不可变图片附件、单写入者、提交确认与存储收尾 |
+| `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话日志、项目定义与会话归属、恢复读取、执行事件追加、不可变媒体附件、单写入者、提交确认与存储收尾 |
 | `crates/agent/memory/` | `agentelier_memory` | 数据目录级 SQLite、会话提取证据及状态、全局记忆候选选择、Markdown 发布与恢复、历史记忆检索、详情读取与显式修订工具，已发布材料的安全展示数据 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
 | `crates/agent/project_context/` | `agentelier_project_context` | 会话适用的项目规则发现、有界 UTF-8 读取、来源快照与确定性表示 |
@@ -103,7 +103,7 @@ flowchart TD
     Account --> Login
 ```
 
-图中为内部 Crate 的直接依赖。UI 库另依赖 Bevy、Widgetry 及路径转换库；Login 直接依赖只使用标准库的 `bevy_widgetry_path_display`，复用 Shell 路径前缀简化。application 按配置安装 BRP Runtime。Agent 与 Bridge 不依赖 Bevy，不访问 Entity、Component 或 World，也不安装日志 Subscriber。
+图中为内部 Crate 的直接依赖。UI 库另依赖 Bevy、Widgetry 及路径转换库。Login 直接依赖只使用标准库的 `bevy_widgetry_path_display`，复用 Shell 路径前缀简化。Application 通过 Bevy 装配原生音频并按配置安装 BRP Runtime。Chat UI 使用 Bevy 底层的 Rodio 解码器预检音频。Agent 与 Bridge 不依赖 Bevy，不访问 Entity、Component 或 World，也不安装日志 Subscriber。
 
 `app/Cargo.toml` 通过 `[package.metadata.bevy_brp].apps` 登记 `agentelier` 二进制，BRP MCP 据此发现入口，Bevy 与 BRP 的实际装配仍由 application 负责。
 
