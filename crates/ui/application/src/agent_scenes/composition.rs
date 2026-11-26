@@ -1,10 +1,11 @@
 use super::{
-    charts::{diagrams, math::space_view},
+    charts::{diagrams, drawing, math::space_view},
     parameters::{Binding, Definition, Parameters},
 };
 use agentelier_agent_host::{
     AgentHostPlugin, EcsError, MountedScene, SceneDefinition, SceneState, SceneStateWrites,
-    SceneStored, mount_scene_child, prepare_scene_definition, replace_scene_children,
+    SceneStored, mount_scene_child, patch_native_scene, prepare_scene_definition,
+    replace_scene_children,
 };
 use bevy::prelude::*;
 use bevy_widgetry::{scene::spawn_scene, text::WidgetryText, theme::WidgetryTheme};
@@ -424,12 +425,42 @@ fn update_parts(
             parts.push(part);
         }
     }
-    let retired: Vec<_> = existing
-        .iter()
-        .filter(|part| parts.iter().all(|next| next.root != part.root))
-        .map(|part| part.root)
-        .collect();
-    replace_scene_children(world, root, &retired, &new)?;
+    let mut patched = Vec::new();
+    let install = (|| {
+        for part in &mut parts {
+            if part.placement.scene.template != drawing::TEMPLATE || !new.contains(&part.root) {
+                continue;
+            }
+            let Some(previous) = existing.iter().find(|old| {
+                old.placement.id == part.placement.id
+                    && old.placement.scene.template == drawing::TEMPLATE
+                    && world.entities().contains_spawned(old.root)
+            }) else {
+                continue;
+            };
+            if patch_native_scene(world, previous.root, &part.placement.scene)
+                .map_err(|error| part_error(&part.placement.id, error))?
+            {
+                patched.push(previous);
+                new.retain(|&entity| entity != part.root);
+                part.root = previous.root;
+            }
+        }
+        let retired: Vec<_> = existing
+            .iter()
+            .filter(|part| parts.iter().all(|next| next.root != part.root))
+            .map(|part| part.root)
+            .collect();
+        replace_scene_children(world, root, &retired, &new)
+    })();
+    if let Err(error) = install {
+        for part in patched.into_iter().rev() {
+            if let Err(failure) = patch_native_scene(world, part.root, &part.placement.scene) {
+                tracing::warn!(part = %part.placement.id, %failure, "无法恢复脚本画布的上一版绘制");
+            }
+        }
+        return Err(error);
+    }
     arrange(world, areas, &parts);
     attach(world, root, parts, parameters);
     Ok(())

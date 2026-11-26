@@ -4,6 +4,7 @@ pub(super) mod bars;
 pub(super) mod boxplot;
 pub(super) mod combined;
 pub(super) mod diagrams;
+pub(super) mod drawing;
 pub(super) mod heatmap;
 pub(super) mod histogram;
 pub(super) mod math;
@@ -66,6 +67,7 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
     .and_then(boxplot::register)
     .and_then(combined::register)
     .and_then(diagrams::register)
+    .and_then(drawing::register)
     .and_then(math::register)
 }
 
