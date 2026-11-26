@@ -9,6 +9,7 @@ use serde_json::{Value as Json, json};
 use std::{collections::BTreeMap, io};
 
 use super::{
+    charts::scatter,
     discrete::{DiscreteChange, DiscreteValue},
     numeric::{NumericChange, NumericValue},
     text_input::TextChange,
@@ -95,6 +96,10 @@ pub(super) enum Binding {
     },
     Visible {
         parameter: String,
+    },
+    SeriesFilter {
+        parameter: String,
+        all: Option<String>,
     },
     Reset,
 }
@@ -205,7 +210,9 @@ impl Parameters {
 
     pub(super) fn can_reuse(&self, previous: &Self, bindings: &[Binding]) -> bool {
         bindings.iter().all(|binding| match binding {
-            Binding::Input { parameter } | Binding::Text { parameter, .. } => {
+            Binding::Input { parameter }
+            | Binding::Text { parameter, .. }
+            | Binding::SeriesFilter { parameter, .. } => {
                 self.values.get(parameter).map(|v| &v.current)
                     == previous.values.get(parameter).map(|v| &v.current)
             }
@@ -217,6 +224,7 @@ impl Parameters {
         let mut input = false;
         let mut text = false;
         let mut visible = false;
+        let mut series_filter = false;
         let mut reset = false;
         for binding in bindings {
             match binding {
@@ -243,6 +251,28 @@ impl Parameters {
                     if !matches!(self.get(parameter)?.current, Value::Boolean(_)) {
                         return Err(parameter_error(parameter, "显隐需要布尔值"));
                     }
+                }
+                Binding::SeriesFilter { parameter, all }
+                    if !series_filter && scene.template == scatter::TEMPLATE =>
+                {
+                    series_filter = true;
+                    let Parameter {
+                        domain: Domain::Choice { options },
+                        current: Value::Choice(current),
+                        ..
+                    } = self.get(parameter)?
+                    else {
+                        return Err(parameter_error(parameter, "系列筛选需要选择值"));
+                    };
+                    let selected = (all.as_ref() != Some(current)).then_some(current);
+                    scene
+                        .props
+                        .insert("selected_series".into(), json!(selected));
+                    scatter::validate_choices(
+                        scene,
+                        options.iter().map(|option| option.value.as_str()),
+                        all.as_deref(),
+                    )?;
                 }
                 Binding::Reset if !reset && scene.template == "agentelier.button" => reset = true,
                 _ => {
@@ -567,6 +597,12 @@ fn project(
                 Binding::Visible { parameter } if parameter == name => {
                     if let Value::Boolean(value) = value {
                         set_visible(world, root, *value);
+                    }
+                }
+                Binding::SeriesFilter { parameter, all } if parameter == name => {
+                    if let Value::Choice(value) = value {
+                        let selected = (all.as_ref() != Some(value)).then_some(value.as_str());
+                        scatter::filter(world, root, selected)?;
                     }
                 }
                 _ => {}

@@ -1,5 +1,6 @@
 mod axis;
 mod plot;
+pub(super) mod scatter;
 
 use agentelier_agent_host::{AgentHostPlugin, EcsError};
 use bevy::{math::DVec2, prelude::*};
@@ -42,6 +43,7 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         None,
         None,
     )
+    .and_then(scatter::register)
 }
 
 pub(super) fn install(app: &mut App) {
@@ -83,10 +85,22 @@ fn line(
             plot::Mark {
                 legend: series.legend,
                 commands,
+                width: plot::LINE_WIDTH,
             }
         })
         .collect();
-    plot::mount(world, parent, title, x, y, plots)
+    plot::mount(
+        world,
+        parent,
+        plot::Content {
+            title,
+            x,
+            y,
+            marks: plots,
+        },
+        plot::Style::Line,
+    )
+    .map(|plot| plot.root)
 }
 
 fn prepare(

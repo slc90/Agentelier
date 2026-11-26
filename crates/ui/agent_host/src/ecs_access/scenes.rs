@@ -17,7 +17,7 @@ const MAX_SCENE_ATTACHMENTS: usize = 4096;
 type Properties = Map<String, Value>;
 type Result<T> = std::result::Result<T, EcsError>;
 type Factory = Arc<dyn Fn(&mut World, Entity, &Properties) -> Result<Entity> + Send + Sync>;
-type Patcher = Arc<dyn Fn(&mut World, Entity, &Properties) -> Result<()> + Send + Sync>;
+type Patcher = Arc<dyn Fn(&mut World, Entity, &Properties) -> Result<bool> + Send + Sync>;
 type PrepareUpdate = Arc<dyn Fn(&World, Entity, &Properties) -> Result<Properties> + Send + Sync>;
 type Restore = Arc<dyn Fn(&Properties, &SceneState) -> Result<Properties> + Send + Sync>;
 type PrepareUnmounted = Arc<dyn Fn(&Properties, &SceneStored) -> Result<Properties> + Send + Sync>;
@@ -77,6 +77,7 @@ impl Registry {
                     let properties = serde_json::from_value(Value::Object(properties.clone()))
                         .map_err(invalid_props)?;
                     update(world, root, properties)
+                        .map(|()| true)
                         .map_err(|error| EcsError::new("scene_update_failed", error.to_string()))
                 });
                 patcher
@@ -96,6 +97,26 @@ impl Registry {
             restore: None,
             prepare_unmounted: None,
         });
+        Ok(())
+    }
+
+    pub(crate) fn register_conditional_update<P: DeserializeOwned + 'static>(
+        &mut self,
+        name: &'static str,
+        update: fn(&mut World, Entity, P) -> bevy::prelude::Result<bool>,
+    ) -> Result<()> {
+        let template = self.0.get_mut(name).ok_or_else(|| {
+            EcsError::new(
+                "unknown_scene_template",
+                format!("未登记 Scene 模板 {name}"),
+            )
+        })?;
+        template.patcher = Some(Arc::new(move |world, root, properties| {
+            let properties =
+                serde_json::from_value(Value::Object(properties.clone())).map_err(invalid_props)?;
+            update(world, root, properties)
+                .map_err(|error| EcsError::new("scene_update_failed", error.to_string()))
+        }));
         Ok(())
     }
 
@@ -314,8 +335,7 @@ pub fn patch_native_scene(
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         patcher(world, root, &definition.props)
     }))
-    .map_err(|_| EcsError::new("scene_update_failed", "Scene 更新异常终止"))??;
-    Ok(true)
+    .map_err(|_| EcsError::new("scene_update_failed", "Scene 更新异常终止"))?
 }
 
 pub(super) fn despawn(world: &mut World, root: EcsEntity) -> Result<Value> {

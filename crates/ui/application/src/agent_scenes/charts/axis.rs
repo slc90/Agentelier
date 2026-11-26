@@ -39,18 +39,20 @@ pub(super) struct AxisSpec<T> {
     pub range: Option<[T; 2]>,
 }
 
+#[derive(Clone, PartialEq)]
 pub(super) struct Axis {
     pub range: Range,
     pub name: String,
     pub ticks: Vec<Tick>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(super) struct Range {
     min: f64,
     span: f64,
 }
 
+#[derive(Clone, PartialEq)]
 pub(super) struct Tick {
     pub fraction: f64,
     pub label: String,

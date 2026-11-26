@@ -177,6 +177,16 @@ impl AgentHostPlugin {
             .register_restore(name, restore, prepare_unmounted)?;
         Ok(self)
     }
+
+    /// A false result requests a fresh mount and must leave the existing scene untouched.
+    pub fn with_conditional_ecs_scene_update<P: serde::de::DeserializeOwned + 'static>(
+        mut self,
+        name: &'static str,
+        update: fn(&mut World, Entity, P) -> Result<bool>,
+    ) -> Result<Self> {
+        self.ecs_scenes.register_conditional_update(name, update)?;
+        Ok(self)
+    }
 }
 
 impl Plugin for AgentHostPlugin {

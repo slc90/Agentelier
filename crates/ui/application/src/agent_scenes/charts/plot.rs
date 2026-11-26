@@ -7,8 +7,8 @@ use bevy::{
 };
 use bevy_widgetry::{
     canvas::{
-        CanvasDocument, CanvasEditToken, CanvasLineCap, CanvasLineJoin, CanvasPaint, CanvasPath,
-        CanvasPathCommand, CanvasPlugin, CanvasStroke, CanvasTextStyle, CanvasView,
+        CanvasDocument, CanvasEditToken, CanvasLayerId, CanvasLineCap, CanvasLineJoin, CanvasPaint,
+        CanvasPath, CanvasPathCommand, CanvasPlugin, CanvasStroke, CanvasTextStyle, CanvasView,
     },
     job::JobFailure,
     scene::spawn_scene,
@@ -21,7 +21,7 @@ const HEIGHT: f32 = 291.0;
 const BOTTOM_LEFT: Vec2 = Vec2::new(-252.0, 105.0);
 const TOP_RIGHT: Vec2 = Vec2::new(272.0, -127.0);
 const TICK_FONT: f32 = 15.0;
-const SERIES_WIDTH: f32 = 2.2;
+pub(super) const LINE_WIDTH: f32 = 2.2;
 
 pub(super) const PALETTE: [[u8; 3]; 8] = [
     [37, 103, 79],
@@ -37,6 +37,7 @@ pub(super) const PALETTE: [[u8; 3]; 8] = [
 #[derive(Component, Clone, Default)]
 struct NativePlot;
 
+#[derive(Clone, PartialEq)]
 pub(super) struct Legend {
     pub name: String,
     pub color: Color,
@@ -45,6 +46,57 @@ pub(super) struct Legend {
 pub(super) struct Mark {
     pub legend: Legend,
     pub commands: Vec<CanvasPathCommand>,
+    pub width: f32,
+}
+
+impl Mark {
+    pub fn geometry(&self) -> (CanvasPath, CanvasPaint) {
+        if self.commands.is_empty() {
+            return (
+                CanvasPath {
+                    commands: vec![
+                        CanvasPathCommand::MoveTo(Vec2::ZERO),
+                        CanvasPathCommand::LineTo(Vec2::X),
+                    ],
+                },
+                CanvasPaint {
+                    fill: None,
+                    ..default()
+                },
+            );
+        }
+        (
+            CanvasPath {
+                commands: self.commands.clone(),
+            },
+            stroke_paint(self.legend.color, self.width),
+        )
+    }
+}
+
+pub(super) struct Content {
+    pub title: Option<String>,
+    pub x: Axis,
+    pub y: Axis,
+    pub marks: Vec<Mark>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum Style {
+    Line,
+    Scatter,
+}
+
+pub(super) struct Rendered {
+    pub root: Entity,
+    pub document: Entity,
+    pub layers: Vec<Layer>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct Layer {
+    pub id: CanvasLayerId,
+    pub path: Entity,
 }
 
 pub(super) fn palette(index: usize) -> Color {
@@ -60,37 +112,39 @@ pub(super) fn install(app: &mut App) {
 pub(super) fn mount(
     world: &mut World,
     parent: Entity,
-    title: Option<String>,
-    x: Axis,
-    y: Axis,
-    marks: Vec<Mark>,
-) -> std::result::Result<Entity, EcsError> {
-    if title
+    content: Content,
+    style: Style,
+) -> std::result::Result<Rendered, EcsError> {
+    if content
+        .title
         .as_ref()
         .is_some_and(|title| title.trim().is_empty() || title.len() > 256)
     {
         return Err(invalid("title 必须非空且最多 256 字节"));
     }
+    let name = match style {
+        Style::Line => "NativeLineChart",
+        Style::Scatter => "NativeScatterChart",
+    };
     let root = spawn_scene(world, bsn! {
-        ChildOf(parent) Name("NativeLineChart")
+        ChildOf(parent) Name(name)
         Node { width: percent(100), min_width: px(0), max_width: px(880), flex_direction: FlexDirection::Column, row_gap: px(5) }
     }).map_err(construction)?;
-    let result = decorate(world, root, title, x, y, marks);
+    let result = decorate(world, root, content, style);
     if let Err(error) = result {
         world.despawn(root);
         return Err(error);
     }
-    Ok(root)
+    result
 }
 
 fn decorate(
     world: &mut World,
     root: Entity,
-    title: Option<String>,
-    x: Axis,
-    y: Axis,
-    marks: Vec<Mark>,
-) -> std::result::Result<(), EcsError> {
+    content: Content,
+    style: Style,
+) -> std::result::Result<Rendered, EcsError> {
+    let Content { title, x, y, marks } = content;
     let document = spawn_scene(
         world,
         bsn! { ChildOf(root) Name("ChartDocument") template(|_| Ok(CanvasDocument)) },
@@ -100,23 +154,32 @@ fn decorate(
     let ink = theme.text.normal.foreground;
     let grid = theme.text_field.editable.normal.border;
     CanvasDocument::set_history_capacity(world, document, 0).map_err(construction)?;
-    CanvasDocument::edit(world, document, |world, token| {
+    let layers = CanvasDocument::edit(world, document, |world, token| {
         axes(world, token, &x, &y, ink, grid)?;
+        let mut layers = Vec::new();
         for (index, mark) in marks.iter().enumerate() {
-            if !mark.commands.is_empty() {
-                let path = stroke(
-                    world,
-                    token,
-                    mark.commands.clone(),
-                    mark.legend.color,
-                    SERIES_WIDTH,
-                )?;
-                world
-                    .entity_mut(path)
-                    .insert(Name::new(format!("ChartSeries-{index}")));
-            }
+            let (geometry, paint) = mark.geometry();
+            let transform = Transform::default();
+            let path = match style {
+                Style::Line if mark.commands.is_empty() => continue,
+                Style::Line => {
+                    CanvasDocument::create_path(world, token, geometry, transform, paint)?
+                }
+                Style::Scatter => {
+                    let id =
+                        CanvasDocument::create_layer(world, token, index + 1, &mark.legend.name)?;
+                    let path = CanvasDocument::create_path_in_layer(
+                        world, token, id, geometry, transform, paint,
+                    )?;
+                    layers.push(Layer { id, path });
+                    path
+                }
+            };
+            world
+                .entity_mut(path)
+                .insert(Name::new(format!("ChartSeries-{index}")));
         }
-        Ok(())
+        Ok(layers)
     })
     .map_err(construction)?;
     let y_name = y.name;
@@ -127,7 +190,10 @@ fn decorate(
             TextFont { font_size: bevy::text::FontSize::Px(19.0) }
         }
     });
-    let legend: Vec<_> = marks.into_iter().map(|mark| legend(mark.legend)).collect();
+    let legend: Vec<_> = marks
+        .into_iter()
+        .map(|mark| legend(mark.legend, style))
+        .collect();
     let legend = bevy::scene::RelatedScenes::<Children>::new(legend);
     spawn_scene(world, bsn! {
         ChildOf(root)
@@ -145,17 +211,25 @@ fn decorate(
             @legend
         ]
     }).map_err(construction)?;
-    Ok(())
+    Ok(Rendered {
+        root,
+        document,
+        layers,
+    })
 }
 
-fn legend(item: Legend) -> impl Scene {
+fn legend(item: Legend, style: Style) -> impl Scene {
     let Legend { name, color } = item;
+    let (width, height) = match style {
+        Style::Line => (18., 3.),
+        Style::Scatter => (8., 8.),
+    };
     bsn! {
-        Node { min_width: px(0), max_width: percent(100), align_items: AlignItems::Center, column_gap: px(6) }
+        Node { min_width: px(0), max_width: percent(100), align_items: AlignItems::Center, column_gap: px(6), overflow: Overflow::clip_x() }
         Children [
-            Node { width: px(18), height: px(3), flex_shrink: 0.0, border_radius: BorderRadius::MAX }
+            Node { width: px(width), height: px(height), flex_shrink: 0.0, border_radius: BorderRadius::MAX }
             BackgroundColor(color)--
-            Text(name) WidgetryText TextLayout::linebreak(bevy::text::LineBreak::WordOrCharacter)
+            Text(name) WidgetryText TextLayout::linebreak(bevy::text::LineBreak::WordBoundary)
             Node { min_width: px(0) }
         ]
     }
@@ -259,17 +333,21 @@ fn stroke(
         token,
         CanvasPath { commands },
         Transform::default(),
-        CanvasPaint {
-            fill: None,
-            stroke: Some(CanvasStroke {
-                color,
-                width,
-                cap: CanvasLineCap::Round,
-                join: CanvasLineJoin::Round,
-            }),
-            ..default()
-        },
+        stroke_paint(color, width),
     )
+}
+
+fn stroke_paint(color: Color, width: f32) -> CanvasPaint {
+    CanvasPaint {
+        fill: None,
+        stroke: Some(CanvasStroke {
+            color,
+            width,
+            cap: CanvasLineCap::Round,
+            join: CanvasLineJoin::Round,
+        }),
+        ..default()
+    }
 }
 
 fn draw_straight(commands: &mut Vec<CanvasPathCommand>, from: Vec2, to: Vec2) {
@@ -277,7 +355,7 @@ fn draw_straight(commands: &mut Vec<CanvasPathCommand>, from: Vec2, to: Vec2) {
     commands.push(CanvasPathCommand::LineTo(to));
 }
 
-fn map(normalized: DVec2) -> Vec2 {
+pub(super) fn map(normalized: DVec2) -> Vec2 {
     BOTTOM_LEFT + normalized.as_vec2() * (TOP_RIGHT - BOTTOM_LEFT)
 }
 

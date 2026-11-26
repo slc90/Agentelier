@@ -98,7 +98,7 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         TEMPLATE,
         "Arrange registered native scenes in one reply artifact, with stable part IDs and semantic areas.",
         &[
-            ("parts", "Required array of 1 to 16 objects {id, area, scene, bindings?}. id is a unique stable string of up to 64 bytes. area is intro, controls, content, or footer. scene is {template, props}. Optional bindings are objects with kind input, text, visible, or reset. The first three require parameter. text optionally accepts format value or square. reset is for buttons."),
+            ("parts", "Required array of 1 to 16 objects {id, area, scene, bindings?}. id is a unique stable string of up to 64 bytes. area is intro, controls, content, or footer. scene is {template, props}. Bindings are objects with kind input, text, visible, series_filter, or reset. Each except reset requires parameter. text optionally accepts format value or square. series_filter routes choice values to a scatter chart's series names and accepts an optional all value. reset is for buttons."),
             ("parameters", "Optional object keyed by parameter name. Each value is {domain, default, current?}. domain is {kind, ...}: integer/float with min,max,step; boolean; choice with options [{value,label}]; or text with max_length. A bound input takes its range/options/initial value from the parameter. Omit current on update only to retain an eligible current value."),
         ],
         build,
