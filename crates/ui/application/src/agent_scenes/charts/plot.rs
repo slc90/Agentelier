@@ -9,7 +9,7 @@ use bevy_widgetry::{
     canvas::{
         CanvasDocument, CanvasEditToken, CanvasGeometry, CanvasLayerId, CanvasLineCap,
         CanvasLineJoin, CanvasPaint, CanvasPath, CanvasPathCommand, CanvasPlugin, CanvasStroke,
-        CanvasTextStyle, CanvasView,
+        CanvasText, CanvasTextStyle, CanvasView,
     },
     job::JobFailure,
     scene::spawn_scene,
@@ -65,6 +65,7 @@ pub(super) struct Content {
     pub baseline: Option<Baseline>,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct Baseline {
     pub fraction: f64,
     pub value: f64,
@@ -102,6 +103,7 @@ pub(super) enum Style {
     Line,
     Scatter,
     Area,
+    Bars,
 }
 
 pub(super) struct Rendered {
@@ -162,6 +164,32 @@ impl RetainedPlot {
         world
             .get::<Self>(root)
             .ok_or_else(|| io::Error::other("图表缺少绘图状态").into())
+    }
+
+    pub fn select_series(world: &mut World, root: Entity, selected: Option<&str>) -> Result {
+        let chart = Self::get(world, root)?;
+        let document = chart.rendered.document;
+        let layers = CanvasDocument::layers(world, document)?;
+        let affected: Vec<_> = chart
+            .rendered
+            .layers
+            .iter()
+            .zip(&chart.legends)
+            .filter_map(|(layer, legend)| {
+                let visible = selected.is_none_or(|name| name == legend.name);
+                let current = layers.iter().find(|entry| entry.id() == layer.id)?;
+                (visible != current.visible()).then_some((layer.id, visible))
+            })
+            .collect();
+        if !affected.is_empty() {
+            CanvasDocument::edit(world, document, |world, token| {
+                for (layer, visible) in affected {
+                    CanvasDocument::set_layer_visible(world, token, layer, visible)?;
+                }
+                Ok(())
+            })?;
+        }
+        Ok(())
     }
 
     pub fn update(world: &mut World, root: Entity, content: &Content) -> Result<bool> {
@@ -260,6 +288,7 @@ pub(super) fn mount(
         Style::Line => "NativeLineChart",
         Style::Scatter => "NativeScatterChart",
         Style::Area => "NativeAreaChart",
+        Style::Bars => "NativeBarChart",
     };
     let root = spawn_scene(world, bsn! {
         ChildOf(parent) Name(name)
@@ -317,7 +346,7 @@ fn decorate(
                 Style::Line => {
                     CanvasDocument::create_path(world, token, geometry, transform, paint)?
                 }
-                Style::Scatter | Style::Area => {
+                Style::Scatter | Style::Area | Style::Bars => {
                     let id =
                         CanvasDocument::create_layer(world, token, index + 1, &mark.legend.name)?;
                     let path = CanvasDocument::create_path_in_layer(
@@ -387,6 +416,7 @@ fn legend(item: Legend, style: Style) -> impl Scene {
         Style::Line => (18., 3.),
         Style::Scatter => (8., 8.),
         Style::Area => (18., 8.),
+        Style::Bars => (11., 11.),
     };
     bsn! {
         Node { min_width: px(0), max_width: percent(100), align_items: AlignItems::Center, column_gap: px(6), overflow: Overflow::clip_x() }
@@ -437,6 +467,8 @@ fn axes(
             &tick.label,
             Vec2::new(at, BOTTOM_LEFT.y + 17.0),
             ink,
+            x.category_count
+                .map(|count| (TOP_RIGHT.x - BOTTOM_LEFT.x) * 0.93 / count as f32),
         )?;
     }
     for tick in &y.ticks {
@@ -457,6 +489,7 @@ fn axes(
             &tick.label,
             Vec2::new(BOTTOM_LEFT.x - 40.0, at),
             ink,
+            y.category_count.map(|_| 66.0),
         )?;
     }
     stroke(world, token, grid_lines, grid, 0.7)?;
@@ -470,8 +503,9 @@ fn label(
     text: &str,
     at: Vec2,
     color: Color,
+    width: Option<f32>,
 ) -> std::result::Result<(), JobFailure> {
-    CanvasDocument::create_text(
+    let entity = CanvasDocument::create_text(
         world,
         token,
         CanvasTextStyle {
@@ -482,6 +516,15 @@ fn label(
         },
         Transform::from_translation(at.extend(0.0)),
     )?;
+    if let Some(width) = width
+        && let Some(text) = world.get::<CanvasText>(entity)
+        && text.size().x > width
+    {
+        let scale = width / text.size().x;
+        let transform =
+            Transform::from_translation(at.extend(0.0)).with_scale(Vec3::new(scale, scale, 1.0));
+        CanvasDocument::update_transform(world, token, entity, transform)?;
+    }
     Ok(())
 }
 

@@ -5,7 +5,7 @@ use super::{
 };
 use agentelier_agent_host::{AgentHostPlugin, EcsError, SceneDefinition};
 use bevy::{math::DVec2, prelude::*};
-use bevy_widgetry::canvas::{CanvasDocument, CanvasPathCommand};
+use bevy_widgetry::canvas::CanvasPathCommand;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, io};
 
@@ -56,7 +56,7 @@ fn build(
     let selected = properties.selected_series.clone();
     let content = prepare(properties).map_err(invalid)?;
     let root = RetainedPlot::build(world, parent, content, Style::Scatter)?;
-    if let Err(error) = filter(world, root, selected.as_deref()) {
+    if let Err(error) = RetainedPlot::select_series(world, root, selected.as_deref()) {
         world.despawn(root);
         return Err(super::construction(error));
     }
@@ -69,7 +69,7 @@ fn update(world: &mut World, root: Entity, properties: Properties) -> Result<boo
     if !RetainedPlot::update(world, root, &content)? {
         return Ok(false);
     }
-    filter(world, root, selected.as_deref())?;
+    RetainedPlot::select_series(world, root, selected.as_deref())?;
     Ok(true)
 }
 
@@ -173,28 +173,5 @@ pub(in crate::agent_scenes) fn validate_choices<'a>(
             io::Error::other("系列筛选选项必须对应数据系列，全部选项不能与系列重名").into(),
         );
     }
-    Ok(())
-}
-
-pub(in crate::agent_scenes) fn filter(
-    world: &mut World,
-    root: Entity,
-    selected: Option<&str>,
-) -> Result {
-    let chart = RetainedPlot::get(world, root)?;
-    let document = chart.rendered.document;
-    let visibility: Vec<_> = chart
-        .rendered
-        .layers
-        .iter()
-        .zip(&chart.legends)
-        .map(|(layer, legend)| (layer.id, selected.is_none_or(|name| name == legend.name)))
-        .collect();
-    CanvasDocument::edit(world, document, |world, token| {
-        for (layer, visible) in visibility {
-            CanvasDocument::set_layer_visible(world, token, layer, visible)?;
-        }
-        Ok(())
-    })?;
     Ok(())
 }

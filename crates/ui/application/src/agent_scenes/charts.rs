@@ -1,5 +1,6 @@
 mod area;
 mod axis;
+pub(super) mod bars;
 mod plot;
 pub(super) mod scatter;
 
@@ -46,10 +47,15 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
     )
     .and_then(scatter::register)
     .and_then(area::register)
+    .and_then(bars::register)
 }
 
 pub(super) fn install(app: &mut App) {
     plot::install(app);
+}
+
+pub(super) fn select_series(world: &mut World, root: Entity, selected: Option<&str>) -> Result {
+    plot::RetainedPlot::select_series(world, root, selected)
 }
 
 struct Series {

@@ -44,6 +44,7 @@ pub(super) struct Axis {
     pub range: Range,
     pub name: String,
     pub ticks: Vec<Tick>,
+    pub category_count: Option<usize>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -100,6 +101,26 @@ impl Range {
 }
 
 impl Axis {
+    pub(super) fn categories(label: String, labels: &[String]) -> Result<Self> {
+        let count = labels.len();
+        let range = Range::new(Some([0.0, count as f64]), [], AxisKind::Number)?;
+        let name = axis_name(label, None, AxisKind::Number)?;
+        let ticks = labels
+            .iter()
+            .enumerate()
+            .map(|(index, label)| Tick {
+                fraction: range.fraction(index as f64 + 0.5),
+                label: label.clone(),
+            })
+            .collect();
+        Ok(Self {
+            range,
+            name,
+            ticks,
+            category_count: Some(count),
+        })
+    }
+
     pub(super) fn new(
         label: String,
         unit: Option<String>,
@@ -107,20 +128,7 @@ impl Axis {
         kind: AxisKind,
         divisions: u8,
     ) -> Result<Self> {
-        if label.trim().is_empty()
-            || label.len() > 96
-            || unit
-                .as_ref()
-                .is_some_and(|unit| unit.trim().is_empty() || unit.len() > 32)
-        {
-            return Err(io::Error::other("轴标签必须非空且最多 96 字节，单位最多 32 字节").into());
-        }
-        let name = match (kind, unit) {
-            (AxisKind::Time, Some(unit)) => format!("{label} ({unit}, UTC)"),
-            (AxisKind::Time, None) => format!("{label} (UTC)"),
-            (AxisKind::Number, Some(unit)) => format!("{label} ({unit})"),
-            (AxisKind::Number, None) => label,
-        };
+        let name = axis_name(label, unit, kind)?;
         let target = range.span / f64::from(divisions);
         let step = match kind {
             AxisKind::Number => nice_step(target),
@@ -161,8 +169,30 @@ impl Axis {
                 ticks.push(Tick { fraction, label });
             }
         }
-        Ok(Self { range, name, ticks })
+        Ok(Self {
+            range,
+            name,
+            ticks,
+            category_count: None,
+        })
     }
+}
+
+fn axis_name(label: String, unit: Option<String>, kind: AxisKind) -> Result<String> {
+    if label.trim().is_empty()
+        || label.len() > 96
+        || unit
+            .as_ref()
+            .is_some_and(|unit| unit.trim().is_empty() || unit.len() > 32)
+    {
+        return Err(io::Error::other("轴标签必须非空且最多 96 字节，单位最多 32 字节").into());
+    }
+    Ok(match (kind, unit) {
+        (AxisKind::Time, Some(unit)) => format!("{label} ({unit}, UTC)"),
+        (AxisKind::Time, None) => format!("{label} (UTC)"),
+        (AxisKind::Number, Some(unit)) => format!("{label} ({unit})"),
+        (AxisKind::Number, None) => label,
+    })
 }
 
 fn nice_step(target: f64) -> f64 {

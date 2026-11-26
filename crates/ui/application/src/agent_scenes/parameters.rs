@@ -9,7 +9,7 @@ use serde_json::{Value as Json, json};
 use std::{collections::BTreeMap, io};
 
 use super::{
-    charts::scatter,
+    charts::{bars, scatter, select_series},
     discrete::{DiscreteChange, DiscreteValue},
     numeric::{NumericChange, NumericValue},
     text_input::TextChange,
@@ -98,6 +98,10 @@ pub(super) enum Binding {
         parameter: String,
     },
     SeriesFilter {
+        parameter: String,
+        all: Option<String>,
+    },
+    CategoryFilter {
         parameter: String,
         all: Option<String>,
     },
@@ -212,7 +216,8 @@ impl Parameters {
         bindings.iter().all(|binding| match binding {
             Binding::Input { parameter }
             | Binding::Text { parameter, .. }
-            | Binding::SeriesFilter { parameter, .. } => {
+            | Binding::SeriesFilter { parameter, .. }
+            | Binding::CategoryFilter { parameter, .. } => {
                 self.values.get(parameter).map(|v| &v.current)
                     == previous.values.get(parameter).map(|v| &v.current)
             }
@@ -225,6 +230,7 @@ impl Parameters {
         let mut text = false;
         let mut visible = false;
         let mut series_filter = false;
+        let mut category_filter = false;
         let mut reset = false;
         for binding in bindings {
             match binding {
@@ -253,26 +259,37 @@ impl Parameters {
                     }
                 }
                 Binding::SeriesFilter { parameter, all }
-                    if !series_filter && scene.template == scatter::TEMPLATE =>
-                {
-                    series_filter = true;
+                | Binding::CategoryFilter { parameter, all } => {
+                    let by_category = matches!(binding, Binding::CategoryFilter { .. });
+                    let (seen, property) = if by_category {
+                        (&mut category_filter, "selected_category")
+                    } else {
+                        (&mut series_filter, "selected_series")
+                    };
+                    if *seen {
+                        return Err(parameter_error(parameter, "筛选绑定重复"));
+                    }
+                    *seen = true;
                     let Parameter {
                         domain: Domain::Choice { options },
                         current: Value::Choice(current),
                         ..
                     } = self.get(parameter)?
                     else {
-                        return Err(parameter_error(parameter, "系列筛选需要选择值"));
+                        return Err(parameter_error(parameter, "图表筛选需要选择值"));
                     };
                     let selected = (all.as_ref() != Some(current)).then_some(current);
-                    scene
-                        .props
-                        .insert("selected_series".into(), json!(selected));
-                    scatter::validate_choices(
-                        scene,
-                        options.iter().map(|option| option.value.as_str()),
-                        all.as_deref(),
-                    )?;
+                    let values = options.iter().map(|option| option.value.as_str());
+                    scene.props.insert(property.into(), json!(selected));
+                    match scene.template.as_str() {
+                        bars::TEMPLATE => {
+                            bars::validate_choices(scene, values, all.as_deref(), by_category)?
+                        }
+                        scatter::TEMPLATE if !by_category => {
+                            scatter::validate_choices(scene, values, all.as_deref())?
+                        }
+                        _ => return Err(parameter_error(parameter, "图表模板不支持该筛选")),
+                    }
                 }
                 Binding::Reset if !reset && scene.template == "agentelier.button" => reset = true,
                 _ => {
@@ -602,7 +619,13 @@ fn project(
                 Binding::SeriesFilter { parameter, all } if parameter == name => {
                     if let Value::Choice(value) = value {
                         let selected = (all.as_ref() != Some(value)).then_some(value.as_str());
-                        scatter::filter(world, root, selected)?;
+                        select_series(world, root, selected)?;
+                    }
+                }
+                Binding::CategoryFilter { parameter, all } if parameter == name => {
+                    if let Value::Choice(value) = value {
+                        let selected = (all.as_ref() != Some(value)).then_some(value.as_str());
+                        bars::filter_category(world, root, selected)?;
                     }
                 }
                 _ => {}
