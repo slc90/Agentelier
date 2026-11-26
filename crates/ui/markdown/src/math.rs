@@ -14,6 +14,7 @@ use resvg::{tiny_skia, usvg};
 use std::sync::OnceLock;
 
 pub(crate) mod inline;
+mod notation;
 
 const DISPLAY_EM_PT: i64 = 15;
 const SVG_PIXELS_PER_POINT: f32 = 96.0 / 72.0;
@@ -259,7 +260,7 @@ fn rasterize(
         .get_or_init(|| MathFont::stix_two_math().map_err(|error| error.to_string()))
         .as_ref()
         .map_err(Clone::clone)?;
-    let ast = latex_rust::parse(latex).map_err(|error| error.to_string())?;
+    let ast = notation::parse(latex)?;
     let layout = latex_rust::layout_with_em_size_pt(&ast, font, math_style, &em)
         .map_err(|error| error.to_string())?;
     let [red, green, blue] = style.ink;

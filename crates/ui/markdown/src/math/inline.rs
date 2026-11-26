@@ -62,6 +62,7 @@ fn refresh(
     siblings: Query<&Children>,
     mut spans: Query<&mut LineHeight>,
     sources: Query<(&Source, Option<&InlineBox>)>,
+    mut fallback: Query<(&Source, &mut TextSpan)>,
     mut paints: Query<(&Paint, &mut ImageNode)>,
     theme: Res<WidgetryTheme>,
     mut images: ResMut<Assets<Image>>,
@@ -112,6 +113,20 @@ fn refresh(
                         *image = ImageNode::default().with_color(Color::NONE);
                     }
                 }
+            }
+            for child in children.iter() {
+                let Ok((source, text)) = fallback.get_mut(child) else {
+                    continue;
+                };
+                let Some(formula) = paragraph.formulas.get(source.0) else {
+                    continue;
+                };
+                let shown = if rendered.get(source.0).is_some_and(Option::is_some) {
+                    formula.original.clone()
+                } else {
+                    format!("{}〔公式无法排版〕", formula.original)
+                };
+                text.map_unchanged(|text| &mut text.0).set_if_neq(shown);
             }
             state.metrics = rendered
                 .into_iter()

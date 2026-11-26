@@ -48,7 +48,11 @@ MathJax 可以作为覆盖范围及复杂数学布局的参照，支持 SVG 输�
 | 数理物理 | 张量、多重指标、算符、Dirac bra-ket 及物理常用宏 |
 | 证明与范畴论 | 多行推导、证明树、交换图、带标签的箭头与节点 |
 
-例如 `\operatorname{Hom}(V,W)` 需要正确的算符和间距，`\begin{pmatrix}a&b\\c&d\end{pmatrix}` 需要矩阵排版，`\langle\psi|\hat{H}|\psi\rangle` 需要准确的符号、间距和字体。专业符号还涉及 `ams`、`mathtools`、`braket`、`physics`、`unicode`、`units` 等宏和环境。实现应具有明确的可扩展记号配置，利用引擎所支持的宏和字形映射补齐实际需要的符号，而不是把所有未识别命令变成空字符串。
+LaTeX-Rust 处理 `\operatorname{Hom}(V,W)` 的算符间距、`pmatrix` 与 `vmatrix` 的布局以及 `\langle\psi|\hat{H}|\psi\rangle` 的符号和字体。行内与独立公式共用启用 Unicode 符号的解析配置。`math::notation` 在交给引擎之前扩展受支持命令的 TeX Token，原始 Markdown 和复制仍使用用户看到的输入。
+
+宏表提供 `\abs`、`\norm`、`\set`、`\bra`、`\ket`、`\braket`、`\ketbra`、`\dv`、`\pdv` 和 `\mathbbm`。单位表达支持 `\qty{数值}{单位}`、`\SI`、`\unit`、`\si` 以及常见 SI 单位、`\per`、`\squared` 和 `\cubed`。参数使用花括号分组，允许在受限深度内嵌套。文本参数内部保留原有文本字面量。
+
+未知命令、未登记环境和缺字均回退到原始定界符及 TeX。独立公式显示错误说明，行内公式在对应源文后提示排版失败，周围正常正文和其他公式继续呈现。
 
 MathJax 的 `amscd`、`bussproofs` 等扩展说明有些需求属于多对象结构排版。复杂交换图和证明树可由数学示意 Scene 原生表达，普通 LaTeX 源文仍保持可阅读；化学结构等非数学领域若以后需要，同样可选用专门的可视化组件。本次不承诺整个 LaTeX 文档生态或化学排版支持。
 
