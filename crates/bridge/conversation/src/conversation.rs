@@ -459,6 +459,7 @@ fn project_context(state: agentelier_conversation::ProjectContextState) -> Proje
 }
 
 pub enum ConversationEvent {
+    SceneStateSaved(agentelier_conversation::SceneStateReceipt),
     AudioDraft {
         session: SessionId,
         result: Result<Option<AudioAttachmentView>, String>,
@@ -889,6 +890,9 @@ fn tool_status(status: agentelier_conversation::ToolStatus) -> &'static str {
 
 pub fn convert(event: agentelier_conversation::ConversationEvent) -> ConversationEvent {
     match event {
+        agentelier_conversation::ConversationEvent::SceneStateSaved(receipt) => {
+            ConversationEvent::SceneStateSaved(receipt)
+        }
         agentelier_conversation::ConversationEvent::IdleUpdated(state) => {
             ConversationEvent::IdleUpdated(view(state))
         }

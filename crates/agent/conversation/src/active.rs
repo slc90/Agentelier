@@ -1183,16 +1183,37 @@ impl ActiveTurn<'_> {
             return Err(EcsError::new("scene_owner", "Scene 更新需要原用户会话"));
         }
         let scene = self
-            .view
+            .published_scene(update.id)
+            .ok_or_else(|| EcsError::new("scene_not_found", "当前会话没有此 Scene 产物"))?;
+        scene.next_revision(update)
+    }
+
+    pub fn scene_source(
+        &self,
+        target: agentelier_tools::ecs_access::SceneTarget,
+        revision: u64,
+    ) -> Option<agentelier_tools::ecs_access::SceneStored> {
+        if target.session != self.session_id() {
+            return None;
+        }
+        let scene = self
+            .published_scene(target.artifact)
+            .filter(|scene| scene.revision == revision)?;
+        Some(agentelier_tools::ecs_access::SceneStored {
+            definition: scene.definition.clone(),
+            values: scene.state.as_ref().map(|state| state.values.clone()),
+        })
+    }
+
+    fn published_scene(&self, id: crate::SessionId) -> Option<&crate::PublishedScene> {
+        self.view
             .turn
             .iter()
             .map(Box::as_ref)
             .chain(&self.view.previous_turns)
             .flat_map(|turn| &turn.tools)
             .filter_map(|tool| tool.published_scene.as_ref())
-            .find(|scene| scene.id == update.id)
-            .ok_or_else(|| EcsError::new("scene_not_found", "当前会话没有此 Scene 产物"))?;
-        scene.next_revision(update)
+            .find(|scene| scene.id == id)
     }
 
     pub fn tool_started(&mut self, call_id: &str) -> Result<(), ConversationFailure> {

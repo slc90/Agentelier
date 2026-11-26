@@ -52,7 +52,7 @@ pub use global_tasks::{
     TaskNotification, TaskNotificationKind,
 };
 pub use memory_evidence::{MemorySourceTurn, memory_evidence};
-pub use native_scene::PublishedScene;
+pub use native_scene::{PublishedScene, SceneState, SceneStateReceipt};
 pub use processes::ProcessLedger;
 pub use restore::{RestoredChild, RestoredSession, restore, restore_child};
 pub use session_model::{PreparedModelChange, StoredSessionModel};

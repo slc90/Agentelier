@@ -3,7 +3,9 @@ use serde_json::json;
 use std::{
     error::Error,
     fmt,
+    future::Future,
     path::{Path, PathBuf},
+    pin::Pin,
     sync::Arc,
 };
 use tokio_util::sync::CancellationToken;
@@ -29,7 +31,12 @@ pub struct ExecutionContext {
     user_turn: Arc<ToolUserTurn>,
     request: u32,
     root: bool,
+    scene_source: Option<SceneSource>,
 }
+
+type SceneLookup =
+    Pin<Box<dyn Future<Output = Result<Option<crate::ecs_access::SceneStored>, String>> + Send>>;
+type SceneSource = Arc<dyn Fn(crate::ecs_access::SceneTarget, u64) -> SceneLookup + Send + Sync>;
 
 impl ExecutionContext {
     pub fn new(
@@ -45,6 +52,7 @@ impl ExecutionContext {
             user_turn,
             request,
             root,
+            scene_source: None,
         }
     }
 
@@ -62,6 +70,19 @@ impl ExecutionContext {
 
     pub fn working_directory(&self) -> &Path {
         &self.directory
+    }
+
+    pub fn with_scene_source<F, Fut>(mut self, source: F) -> Self
+    where
+        F: Fn(crate::ecs_access::SceneTarget, u64) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Option<crate::ecs_access::SceneStored>, String>>
+            + Send
+            + 'static,
+    {
+        self.scene_source = Some(Arc::new(move |target, revision| {
+            Box::pin(source(target, revision))
+        }));
+        self
     }
 }
 
@@ -269,10 +290,13 @@ pub(crate) async fn prepare_scene(
         ToolPayload::PublishScene(definition) => (definition, None),
         ToolPayload::UpdateScene(update) => (
             &mut update.definition,
-            Some(SceneTarget {
-                session: context.user_turn().session,
-                artifact: update.id,
-            }),
+            Some((
+                SceneTarget {
+                    session: context.user_turn().session,
+                    artifact: update.id,
+                },
+                update.expected_revision,
+            )),
         ),
         _ => {
             return ToolResult::error(ToolStatus::Unconfirmed, "scene_route", "Scene 操作缺少定义");
@@ -281,8 +305,26 @@ pub(crate) async fn prepare_scene(
     if let Err(error) = definition.validate() {
         return ToolResult::error(ToolStatus::Failed, error.code, &error.message);
     }
+    let stored = match (target, context.scene_source.as_ref()) {
+        (Some((target, revision)), Some(source)) => {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return ToolResult::not_executed("stopped", "任务已停止，Scene 未发布"),
+                result = source(target, revision) => match result {
+                    Ok(stored) => stored,
+                    Err(error) => return ToolResult::error(ToolStatus::Failed, "scene_state_unavailable", &error),
+                },
+            }
+        }
+        _ => None,
+    };
     match scripts
-        .validate_scene(definition.as_ref().clone(), target, cancel)
+        .validate_scene(
+            definition.as_ref().clone(),
+            target.map(|(target, _)| target),
+            stored,
+            cancel,
+        )
         .await
     {
         Ok(checked) if !cancel.is_cancelled() => {

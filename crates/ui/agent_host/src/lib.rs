@@ -3,12 +3,17 @@ compile_error!("This application supports Windows x64 only");
 
 mod ecs_access;
 mod host;
+mod scene_state;
 
-pub use agentelier_bridge_connection::ecs_access::{EcsError, SceneDefinition, SceneTarget};
-pub use ecs_access::scenes::{
-    mount_native_scene, mount_scene_child, patch_native_scene, prepare_scene_definition,
-    replace_scene_children,
+pub use agentelier_bridge_connection::ecs_access::{
+    EcsError, SceneDefinition, SceneStored, SceneTarget,
 };
+pub use agentelier_conversation_bridge::SceneState;
+pub use ecs_access::scenes::{
+    MountedScene, mount_native_scene, mount_scene_child, patch_native_scene,
+    prepare_scene_definition, replace_scene_children, restore_scene_definition,
+};
+pub use scene_state::{SceneSaveError, SceneStateWrites, flush_scene_state};
 
 pub use agentelier_bridge_connection::{
     ImageAttachmentAction, ImageAttachmentReply, MemoryDetail, MemoryInspection, MemoryReply,

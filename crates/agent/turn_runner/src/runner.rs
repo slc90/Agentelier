@@ -607,13 +607,25 @@ async fn run_task(
         let user_turn = active.call(move |turn| turn.tool_user_turn(epoch)).await?;
         let mut user_turn = user_turn;
         user_turn.memory_view = memory_view.clone().map(|view| view as _);
-        let context = Arc::new(ExecutionContext::new(
-            settings.working_directory.clone(),
-            settings.image_input,
-            Arc::new(user_turn),
-            request_index,
-            child.is_none(),
-        ));
+        let for_scene = active.clone();
+        let context = Arc::new(
+            ExecutionContext::new(
+                settings.working_directory.clone(),
+                settings.image_input,
+                Arc::new(user_turn),
+                request_index,
+                child.is_none(),
+            )
+            .with_scene_source(move |target, revision| {
+                let active = for_scene.clone();
+                async move {
+                    active
+                        .call(move |turn| Ok(turn.scene_source(target, revision)))
+                        .await
+                        .map_err(|failure| failure.to_string())
+                }
+            }),
+        );
         jobs.boundary(active, dispatcher, progress, cancel).await?;
         let (result, next_connection) = match request_once(
             active,

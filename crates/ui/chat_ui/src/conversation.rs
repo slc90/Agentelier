@@ -320,6 +320,7 @@ pub(crate) fn install(app: &mut App) {
     crate::audio_attachment::install(app);
     crate::transcription::install(app);
     crate::queue::install(app);
+    crate::native_scene::install(app);
     app.init_resource::<SessionUiStates>()
         .init_resource::<ChatState>()
         .init_resource::<InputIntents>()
@@ -475,6 +476,7 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
 }
 
 fn switch_draft(world: &mut World, target: ChatTarget) -> Result {
+    agentelier_agent_host::flush_scene_state(world);
     let mut previous = std::mem::take(&mut *world.resource_mut::<ChatState>());
     if let Some(clear) = world.resource_mut::<InputIntents>().clear_accepted.take() {
         previous.clear_saved_draft(clear);
@@ -1301,6 +1303,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             | ConversationEvent::AudioDraft { .. }
             | ConversationEvent::AudioTranscription { .. }
             | ConversationEvent::IdleUpdated(_)
+            | ConversationEvent::SceneStateSaved(_)
             | ConversationEvent::Processes(_)
             | ConversationEvent::TaskAction(_)
             | ConversationEvent::Updated(_)

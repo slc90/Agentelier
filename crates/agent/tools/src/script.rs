@@ -92,6 +92,7 @@ impl ScriptSession {
         &self,
         definition: crate::ecs_access::SceneDefinition,
         target: Option<crate::ecs_access::SceneTarget>,
+        stored: Option<crate::ecs_access::SceneStored>,
         cancel: &CancellationToken,
     ) -> Result<crate::ecs_access::SceneDefinition, ToolFailure> {
         let access = self.ecs_access.clone();
@@ -100,7 +101,11 @@ impl ScriptSession {
         tokio::task::spawn_blocking(move || {
             access
                 .call(
-                    crate::ecs_access::EcsOperation::SceneValidate { definition, target },
+                    crate::ecs_access::EcsOperation::SceneValidate {
+                        definition,
+                        target,
+                        stored,
+                    },
                     &control.cancel,
                     control.deadline,
                 )

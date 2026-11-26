@@ -1,7 +1,7 @@
 use super::parameters::{Binding, Definition, Parameters};
 use agentelier_agent_host::{
-    AgentHostPlugin, EcsError, SceneDefinition, mount_scene_child, prepare_scene_definition,
-    replace_scene_children,
+    AgentHostPlugin, EcsError, SceneDefinition, SceneState, SceneStored, mount_scene_child,
+    prepare_scene_definition, replace_scene_children,
 };
 use bevy::prelude::*;
 use bevy_widgetry::{scene::spawn_scene, text::WidgetryText, theme::WidgetryTheme};
@@ -104,7 +104,39 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         build,
         Some(update),
         Some(prepare),
-    )
+    )?
+    .with_ecs_scene_restore(TEMPLATE, restore, prepare_unmounted)
+}
+
+fn restore(mut props: Properties, state: &SceneState) -> Result<Properties> {
+    restore_values(&mut props.parameters, &state.values)?;
+    Ok(props)
+}
+
+fn prepare_unmounted(mut props: Properties, stored: &SceneStored) -> Result<Properties> {
+    let mut previous: Properties =
+        serde_json::from_value(serde_json::Value::Object(stored.definition.props.clone()))?;
+    if let Some(values) = &stored.values {
+        restore_values(&mut previous.parameters, values)?;
+    }
+    Parameters::new(previous.parameters)?.retain(&mut props.parameters)?;
+    Ok(props)
+}
+
+fn restore_values(
+    definitions: &mut BTreeMap<String, Definition>,
+    values: &serde_json::Map<String, serde_json::Value>,
+) -> Result {
+    if definitions.len() != values.len() {
+        return Err(io::Error::other("保存的 Scene 参数集合与定义不匹配").into());
+    }
+    for (name, definition) in definitions {
+        let value = values
+            .get(name)
+            .ok_or_else(|| io::Error::other(format!("保存的 Scene 状态缺少参数 {name}")))?;
+        definition.restore_current(name, value)?;
+    }
+    Ok(())
 }
 
 pub(super) fn install(app: &mut App) {

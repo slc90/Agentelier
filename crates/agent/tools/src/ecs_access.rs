@@ -26,10 +26,15 @@ pub struct SceneUpdate {
     pub definition: Box<SceneDefinition>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SceneTarget {
     pub session: uuid::Uuid,
     pub artifact: uuid::Uuid,
+}
+
+pub struct SceneStored {
+    pub definition: Box<SceneDefinition>,
+    pub values: Option<Map<String, Value>>,
 }
 
 impl SceneDefinition {
@@ -78,6 +83,7 @@ pub enum EcsOperation {
     SceneValidate {
         definition: SceneDefinition,
         target: Option<SceneTarget>,
+        stored: Option<SceneStored>,
     },
     SceneSpawn(String, EcsEntity, Map<String, Value>),
     SceneDespawn(EcsEntity),

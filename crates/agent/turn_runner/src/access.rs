@@ -99,6 +99,7 @@ pub enum GeneratedImageFeedback {
     Unavailable(String),
 }
 
+#[derive(Clone)]
 pub(crate) struct TurnAccess {
     sender: mpsc::Sender<RunnerEvent>,
 }

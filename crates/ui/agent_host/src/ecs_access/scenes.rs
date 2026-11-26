@@ -1,5 +1,8 @@
 use super::read;
-use agentelier_bridge_connection::ecs_access::{EcsEntity, EcsError, SceneDefinition, SceneTarget};
+use agentelier_bridge_connection::ecs_access::{
+    EcsEntity, EcsError, SceneDefinition, SceneStored, SceneTarget,
+};
+use agentelier_conversation_bridge::SceneState;
 use bevy::prelude::*;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
@@ -16,6 +19,8 @@ type Result<T> = std::result::Result<T, EcsError>;
 type Factory = Arc<dyn Fn(&mut World, Entity, &Properties) -> Result<Entity> + Send + Sync>;
 type Patcher = Arc<dyn Fn(&mut World, Entity, &Properties) -> Result<()> + Send + Sync>;
 type PrepareUpdate = Arc<dyn Fn(&World, Entity, &Properties) -> Result<Properties> + Send + Sync>;
+type Restore = Arc<dyn Fn(&Properties, &SceneState) -> Result<Properties> + Send + Sync>;
+type PrepareUnmounted = Arc<dyn Fn(&Properties, &SceneStored) -> Result<Properties> + Send + Sync>;
 
 #[derive(Clone)]
 struct Template {
@@ -24,6 +29,8 @@ struct Template {
     factory: Factory,
     patcher: Option<Patcher>,
     prepare: Option<PrepareUpdate>,
+    restore: Option<Restore>,
+    prepare_unmounted: Option<PrepareUnmounted>,
 }
 
 #[derive(Clone, Default, Resource)]
@@ -35,8 +42,11 @@ struct Instance {
     owned: Box<[Entity]>,
 }
 
-#[derive(Component)]
-struct MountedScene(SceneTarget);
+#[derive(Component, Clone, Copy)]
+pub struct MountedScene {
+    pub target: SceneTarget,
+    pub revision: u64,
+}
 
 impl Registry {
     pub(crate) fn register<P: DeserializeOwned + Serialize + 'static>(
@@ -83,7 +93,42 @@ impl Registry {
                 });
                 prepare
             }),
+            restore: None,
+            prepare_unmounted: None,
         });
+        Ok(())
+    }
+
+    pub(crate) fn register_restore<P: DeserializeOwned + Serialize + 'static>(
+        &mut self,
+        name: &'static str,
+        restore: fn(P, &SceneState) -> bevy::prelude::Result<P>,
+        prepare_unmounted: fn(P, &SceneStored) -> bevy::prelude::Result<P>,
+    ) -> Result<()> {
+        let template = self.0.get_mut(name).ok_or_else(|| {
+            EcsError::new(
+                "unknown_scene_template",
+                format!("未登记 Scene 模板 {name}"),
+            )
+        })?;
+        template.restore = Some(Arc::new(move |properties, state| {
+            let properties =
+                serde_json::from_value(Value::Object(properties.clone())).map_err(invalid_props)?;
+            let restored = restore(properties, state).map_err(invalid_props)?;
+            match serde_json::to_value(restored).map_err(invalid_props)? {
+                Value::Object(properties) => Ok(properties),
+                _ => Err(invalid_props("Scene Props 必须是对象")),
+            }
+        }));
+        template.prepare_unmounted = Some(Arc::new(move |properties, stored| {
+            let properties =
+                serde_json::from_value(Value::Object(properties.clone())).map_err(invalid_props)?;
+            let prepared = prepare_unmounted(properties, stored).map_err(invalid_props)?;
+            match serde_json::to_value(prepared).map_err(invalid_props)? {
+                Value::Object(properties) => Ok(properties),
+                _ => Err(invalid_props("Scene Props 必须是对象")),
+            }
+        }));
         Ok(())
     }
 }
@@ -117,14 +162,23 @@ pub(super) fn validate(
     world: &mut World,
     definition: &SceneDefinition,
     target: Option<SceneTarget>,
+    stored: Option<&SceneStored>,
 ) -> Result<Value> {
     let mut definition = definition.clone();
     if let Some(target) = target {
         let mut mounted = world.query::<(Entity, &MountedScene, &Instance)>();
         if let Some((root, _, _)) = mounted.iter(world).find(|(_, scene, instance)| {
-            scene.0 == target && instance.template == definition.template
+            scene.target == target && instance.template == definition.template
         }) {
             prepare_scene_definition(world, root, &mut definition)?;
+        } else if let Some(stored) =
+            stored.filter(|stored| stored.definition.template == definition.template)
+            && let Some(prepare) = world
+                .get_resource::<Registry>()
+                .and_then(|registry| registry.0.get(definition.template.as_str()))
+                .and_then(|template| template.prepare_unmounted.as_ref())
+        {
+            definition.props = prepare(&definition.props, stored)?;
         }
     }
     definition.validate()?;
@@ -171,14 +225,29 @@ pub fn mount_native_scene(
     world: &mut World,
     parent: Entity,
     definition: &SceneDefinition,
-    target: SceneTarget,
+    mount: MountedScene,
 ) -> Result<Entity> {
     let root = build_native_scene(world, parent, definition)?;
     world
         .get_entity_mut(root)
         .map_err(|_| EcsError::new("scene_construction_failed", "Scene 根实体失效"))?
-        .insert(MountedScene(target));
+        .insert(mount);
     Ok(root)
+}
+
+pub fn restore_scene_definition(
+    world: &World,
+    definition: &SceneDefinition,
+    state: &SceneState,
+) -> Result<SceneDefinition> {
+    let restore = world
+        .get_resource::<Registry>()
+        .and_then(|registry| registry.0.get(definition.template.as_str()))
+        .and_then(|template| template.restore.as_ref())
+        .ok_or_else(|| invalid_props("此 Scene 模板不支持恢复用户状态"))?;
+    let mut definition = definition.clone();
+    definition.props = restore(&definition.props, state)?;
+    Ok(definition)
 }
 
 fn build_native_scene(

@@ -109,6 +109,7 @@ pub struct Connection {
     pending_memory: HashSet<u64>,
     pending_projects: HashSet<u64>,
     pending_session_models: HashMap<u64, SessionId>,
+    pending_scene_states: HashMap<u64, (crate::ecs_access::SceneTarget, u64)>,
     pending_images: HashSet<u64>,
     pending_saved_audio: HashSet<u64>,
     pending_audio: HashMap<u64, SessionId>,
@@ -225,6 +226,7 @@ impl Connection {
             pending_memory: HashSet::new(),
             pending_projects: HashSet::new(),
             pending_session_models: HashMap::new(),
+            pending_scene_states: HashMap::new(),
             pending_images: HashSet::new(),
             pending_saved_audio: HashSet::new(),
             pending_audio: HashMap::new(),
@@ -523,6 +525,26 @@ impl Connection {
         Ok(id)
     }
 
+    pub fn save_scene_state(
+        &mut self,
+        target: crate::ecs_access::SceneTarget,
+        state: agentelier_conversation_bridge::SceneState,
+    ) -> Result<u64, BridgeFailure> {
+        if self.stopping || self.failure.is_some() {
+            return Err(BridgeFailure("当前执行连接不能接纳 Scene 状态保存".into()));
+        }
+        let id = self
+            .operations
+            .allocate()
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        let revision = state.revision;
+        self.runtime
+            .save_scene_state(id, target, state)
+            .map_err(|failure| BridgeFailure(failure.to_string()))?;
+        self.pending_scene_states.insert(id, (target, revision));
+        Ok(id)
+    }
+
     pub fn change_session_metadata(
         &mut self,
         session: SessionId,
@@ -707,6 +729,17 @@ impl Connection {
                         return Ok(Some(event));
                     }
                     let kind = kind.as_ref();
+                    if let agentelier_conversation_bridge::ConversationEvent::SceneStateSaved(
+                        receipt,
+                    ) = kind
+                    {
+                        if self.pending_scene_states.remove(&event.operation_id)
+                            != Some((receipt.target, receipt.revision))
+                        {
+                            return self.protocol_failure();
+                        }
+                        return Ok(Some(event));
+                    }
                     if matches!(
                         kind,
                         agentelier_conversation_bridge::ConversationEvent::GlobalTasks(_)

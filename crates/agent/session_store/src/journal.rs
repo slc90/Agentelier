@@ -19,12 +19,14 @@ struct Cursor {
     renamed: bool,
     poisoned: bool,
     kind: agentelier_conversation::SessionKind,
+    scene_revisions: HashMap<SessionId, u64>,
 }
 
 #[derive(Default)]
 pub(super) struct Writer(HashMap<SessionId, Cursor>);
 
 fn update(cursor: &mut Cursor, record: &SessionRecord) {
+    track_scene_revisions(&mut cursor.scene_revisions, &record.event);
     let input = match &record.event {
         RecordEvent::Accepted { state } => state.turn.as_ref().map(|turn| turn.input.as_str()),
         RecordEvent::QueueChanged {
@@ -50,11 +52,41 @@ fn update(cursor: &mut Cursor, record: &SessionRecord) {
     }
 }
 
+fn track_scene_revisions(revisions: &mut HashMap<SessionId, u64>, event: &RecordEvent) {
+    let RecordEvent::ToolReturned {
+        published_scene,
+        scene_update,
+        ..
+    } = event
+    else {
+        return;
+    };
+    if let Some(scene) = published_scene {
+        revisions.insert(scene.id, scene.revision);
+    }
+    if let Some(update) = scene_update
+        && let Some(revision) = revisions.get_mut(&update.id)
+        && *revision == update.expected_revision
+        && let Some(next) = revision.checked_add(1)
+    {
+        *revision = next;
+    }
+}
+
 pub(super) fn summarize(
     initial: &agentelier_conversation::InitialSession,
     records: &[SessionRecord],
     sequence: u64,
 ) -> (SessionSummary, bool) {
+    let cursor = summarized_cursor(initial, records, sequence);
+    (cursor.summary, cursor.titled)
+}
+
+fn summarized_cursor(
+    initial: &agentelier_conversation::InitialSession,
+    records: &[SessionRecord],
+    sequence: u64,
+) -> Cursor {
     let mut cursor = Cursor {
         sequence,
         length: 0,
@@ -63,11 +95,12 @@ pub(super) fn summarize(
         renamed: false,
         poisoned: false,
         kind: initial.settings.kind,
+        scene_revisions: HashMap::new(),
     };
     for record in records {
         update(&mut cursor, record);
     }
-    (cursor.summary, cursor.titled)
+    cursor
 }
 
 fn load_cursor(directory: &Path, session: SessionId) -> io::Result<Cursor> {
@@ -79,16 +112,12 @@ fn load_cursor(directory: &Path, session: SessionId) -> io::Result<Cursor> {
         .initial
         .as_ref()
         .ok_or_else(|| io::Error::other("会话缺少初始记录"))?;
-    let (_, titled) = summarize(initial, &parsed.records, parsed.sequence);
-    Ok(Cursor {
-        sequence: parsed.sequence,
-        length: parsed.file_length,
-        summary: parsed.summary,
-        titled: titled || parsed.manual_title.is_some(),
-        renamed: parsed.manual_title.is_some(),
-        poisoned: false,
-        kind: initial.settings.kind,
-    })
+    let mut cursor = summarized_cursor(initial, &parsed.records, parsed.sequence);
+    cursor.length = parsed.file_length;
+    cursor.summary = parsed.summary;
+    cursor.renamed = parsed.manual_title.is_some();
+    cursor.titled |= cursor.renamed;
+    Ok(cursor)
 }
 
 impl Writer {
@@ -198,6 +227,18 @@ impl Writer {
             .ok_or_else(|| io::Error::other("会话记录序号已耗尽"))?;
         if cursor.summary.deleted {
             return Err(io::Error::other("会话已删除"));
+        }
+        if let RecordKind::Event(record) = &kind
+            && let RecordEvent::SceneState {
+                artifact, state, ..
+            } = &record.event
+        {
+            state.validate().map_err(io::Error::other)?;
+            if !cursor.kind.is_user()
+                || cursor.scene_revisions.get(artifact) != Some(&state.revision)
+            {
+                return Err(io::Error::other("保存的产物定义修订已改变"));
+            }
         }
         let record = Record {
             format: FORMAT.into(),

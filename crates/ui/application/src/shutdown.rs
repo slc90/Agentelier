@@ -1,5 +1,5 @@
 use crate::splash;
-use agentelier_agent_host::AgentHost;
+use agentelier_agent_host::{AgentHost, SceneStateWrites};
 use bevy::app::OnAppExitSystems;
 use bevy::prelude::*;
 use bevy::window::{CursorSystems, ExitSystems};
@@ -16,6 +16,7 @@ const JOB_SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[derive(Resource, Default)]
 struct ExitState {
     requested: Option<AppExit>,
+    agent_stopping: bool,
     agent_finished: bool,
     jobs: Option<ShutdownHandle>,
     failed_jobs: bool,
@@ -66,13 +67,13 @@ fn coordinate(
     mut exits: ResMut<Messages<AppExit>>,
     mut state: ResMut<ExitState>,
     backend: Res<AgentHost>,
+    mut scene_states: ResMut<SceneStateWrites>,
     manager: Res<JobManager>,
     proxy: Res<EventLoopProxyWrapper>,
 ) {
     if state.complete {
         return;
     }
-    let first_request = state.requested.is_none();
     // Winit observes AppExit after Last. Hold requests until their owners have joined.
     for request in exits.drain() {
         if state.requested.is_none() || request.is_error() {
@@ -82,8 +83,15 @@ fn coordinate(
     if state.requested.is_none() {
         return;
     }
-    if first_request && let Err(failure) = backend.begin_shutdown() {
-        fail(&mut state, failure);
+    if !state.agent_stopping {
+        if !scene_states.prepare_exit(&backend) {
+            wake(&proxy, &mut state);
+            return;
+        }
+        state.agent_stopping = true;
+        if let Err(failure) = backend.begin_shutdown() {
+            fail(&mut state, failure);
+        }
     }
     if !state.agent_finished {
         match backend.is_finished() {

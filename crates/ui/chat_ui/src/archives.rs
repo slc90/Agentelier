@@ -470,6 +470,7 @@ fn select(event: On<WidgetryTreeEvent>, entries: Query<&NavigatorEntry>, mut com
         if world.resource::<ArchiveState>().loading {
             return Ok(());
         }
+        agentelier_agent_host::flush_scene_state(world);
         match world
             .resource::<AgentHost>()
             .request_conversation(ConversationRequest::Open { session })

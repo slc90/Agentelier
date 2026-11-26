@@ -341,6 +341,7 @@ pub struct SessionView {
 }
 pub enum ConversationEvent {
     IdleUpdated(SessionView),
+    SceneStateSaved(crate::SceneStateReceipt),
     AudioDraft {
         session: SessionId,
         result: Result<Option<crate::AudioAttachment>, String>,

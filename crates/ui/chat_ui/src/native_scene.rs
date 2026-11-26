@@ -1,4 +1,7 @@
-use agentelier_agent_host::{SceneTarget, mount_native_scene, patch_native_scene};
+use agentelier_agent_host::{
+    MountedScene, SceneSaveError, SceneTarget, mount_native_scene, patch_native_scene,
+    restore_scene_definition,
+};
 use agentelier_conversation_bridge::{PublishedScene, SessionId};
 use bevy::input_focus::{FocusCause, InputFocus};
 use bevy::prelude::*;
@@ -17,10 +20,48 @@ struct Mounted {
     root: Entity,
 }
 
+#[derive(Component, Clone, Default)]
+struct SaveFeedback;
+
 pub(super) fn card(id: SessionId) -> impl Scene {
     bsn! {
         Name(format!("ChatNativeScene-{id}")) Presentation
         Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column }
+        Children [
+            SaveFeedback Name("ChatSceneSaveFeedback") Text::default() WidgetryText
+            TextLayout::linebreak(bevy::text::LineBreak::AnyCharacter)
+            Node { display: Display::None, width: percent(100), min_width: px(0) }
+        ]
+    }
+}
+
+pub(super) fn install(app: &mut App) {
+    app.add_systems(
+        PostUpdate,
+        sync_save_feedback.before(bevy::ui::UiSystems::Content),
+    );
+}
+
+fn sync_save_feedback(
+    mut feedbacks: Query<(&ChildOf, &mut Text, &mut Node), With<SaveFeedback>>,
+    presentations: Query<&Presentation>,
+    errors: Query<&SceneSaveError>,
+) {
+    for (parent, mut text, node) in &mut feedbacks {
+        let feedback = presentations
+            .get(parent.parent())
+            .ok()
+            .and_then(|presentation| presentation.installed)
+            .and_then(|installed| errors.get(installed.root).ok())
+            .map(|error| format!("控件状态未保存：{}", error.0));
+        let display = if feedback.is_some() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        node.map_unchanged(|node| &mut node.display)
+            .set_if_neq(display);
+        text.set_if_neq(Text(feedback.unwrap_or_default()));
     }
 }
 
@@ -90,9 +131,20 @@ fn apply(
     scene: &PublishedScene,
     installed: Option<Mounted>,
 ) -> Result<Mounted> {
+    let restored = scene
+        .state
+        .as_ref()
+        .map(|state| restore_scene_definition(world, &scene.definition, state))
+        .transpose()?;
+    let definition = restored.as_ref().unwrap_or(&scene.definition);
+    let mount = MountedScene {
+        target,
+        revision: scene.revision,
+    };
     if let Some(installed) = installed
-        && patch_native_scene(world, installed.root, &scene.definition)?
+        && patch_native_scene(world, installed.root, definition)?
     {
+        world.entity_mut(installed.root).insert(mount);
         return Ok(installed);
     }
     let container = spawn_scene(
@@ -102,7 +154,7 @@ fn apply(
             Node { display: Display::None, width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column }
         },
     ).map_err(|failure| failure.into_bevy_error())?;
-    let root = match mount_native_scene(world, container, &scene.definition, target) {
+    let root = match mount_native_scene(world, container, definition, mount) {
         Ok(root) => root,
         Err(error) => {
             world.despawn(container);

@@ -1,4 +1,4 @@
-use agentelier_agent_host::SceneDefinition;
+use agentelier_agent_host::{MountedScene, SceneDefinition, SceneState, SceneStateWrites};
 use bevy::{prelude::*, ui_widgets::Activate};
 use bevy_widgetry::{
     number_input::WidgetryNumberInput, slider::WidgetrySliderHeadless,
@@ -21,6 +21,16 @@ pub(super) struct Definition {
     default: Json,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     current: Option<Json>,
+}
+
+impl Definition {
+    pub(super) fn restore_current(&mut self, name: &str, value: &Json) -> Result {
+        if self.domain.decode(value).is_none() {
+            return Err(parameter_error(name, "保存的当前值超出定义"));
+        }
+        self.current = Some(value.clone());
+        Ok(())
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -382,7 +392,27 @@ pub(super) fn install(app: &mut App) {
         .add_observer(on_number)
         .add_observer(on_discrete)
         .add_observer(on_text)
-        .add_observer(on_reset);
+        .add_observer(on_reset)
+        .add_observer(schedule_save);
+}
+
+fn schedule_save(
+    event: On<ParameterChanged>,
+    mounted: Query<(&MountedScene, &Parameters)>,
+    mut writes: ResMut<SceneStateWrites>,
+) {
+    let Ok((mount, parameters)) = mounted.get(event.entity) else {
+        return;
+    };
+    let state = SceneState {
+        revision: mount.revision,
+        values: parameters
+            .values
+            .iter()
+            .map(|(name, parameter)| (name.clone(), parameter.current.json()))
+            .collect(),
+    };
+    writes.schedule(event.entity, *mount, state);
 }
 
 fn on_number(event: On<NumericChange>, mut commands: Commands) {

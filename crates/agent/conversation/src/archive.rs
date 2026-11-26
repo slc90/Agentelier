@@ -211,6 +211,11 @@ pub enum RecordEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         execution: Option<crate::TaskExecution>,
     },
+    SceneState {
+        session: SessionId,
+        artifact: SessionId,
+        state: crate::SceneState,
+    },
     ResultAppended {
         state: StoredState,
         call_id: String,
@@ -259,6 +264,7 @@ impl RecordEvent {
             | Self::AudioDraft { session, .. }
             | Self::WorkingDirectoryChanged { session, .. }
             | Self::SessionModelChanged { session, .. }
+            | Self::SceneState { session, .. }
             | Self::TranscriptionStarted { session, .. }
             | Self::TranscriptionFinished { session, .. } => *session,
             _ => self.state().map_or(SessionId::nil(), |state| state.session),
@@ -276,6 +282,7 @@ impl RecordEvent {
             | Self::Process { .. }
             | Self::WorkingDirectoryChanged { .. }
             | Self::SessionModelChanged { .. }
+            | Self::SceneState { .. }
             | Self::AudioDraft { .. }
             | Self::TranscriptionStarted { .. }
             | Self::TranscriptionFinished { .. } => None,

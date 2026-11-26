@@ -166,6 +166,17 @@ impl AgentHostPlugin {
             .register(name, description, parameters, build, update, prepare)?;
         Ok(self)
     }
+
+    pub fn with_ecs_scene_restore<P: serde::de::DeserializeOwned + serde::Serialize + 'static>(
+        mut self,
+        name: &'static str,
+        restore: fn(P, &agentelier_conversation_bridge::SceneState) -> Result<P>,
+        prepare_unmounted: fn(P, &crate::SceneStored) -> Result<P>,
+    ) -> Result<Self> {
+        self.ecs_scenes
+            .register_restore(name, restore, prepare_unmounted)?;
+        Ok(self)
+    }
 }
 
 impl Plugin for AgentHostPlugin {
@@ -174,6 +185,7 @@ impl Plugin for AgentHostPlugin {
             .insert_resource(self.ecs_dispatch.clone())
             .insert_resource(self.ecs_scenes.clone())
             .init_resource::<HostActivity>()
+            .init_resource::<crate::SceneStateWrites>()
             .add_message::<AccountEvent>()
             .add_message::<ModelEvent>()
             .add_message::<ConversationEvent>()
@@ -193,7 +205,8 @@ impl Plugin for AgentHostPlugin {
                 (receive, crate::ecs_access::process)
                     .chain()
                     .in_set(ReceiveAgentEvents),
-            );
+            )
+            .add_systems(Update, crate::scene_state::update.after(ReceiveAgentEvents));
     }
 }
 
@@ -345,6 +358,13 @@ impl AgentHost {
     pub fn refresh_archives(&self) -> Result {
         self.submit(|connection| connection.refresh_archives())
     }
+    pub fn save_scene_state(
+        &self,
+        target: crate::SceneTarget,
+        state: agentelier_conversation_bridge::SceneState,
+    ) -> Result<u64> {
+        self.submit(|connection| connection.save_scene_state(target, state))
+    }
     pub fn change_project(
         &self,
         change: agentelier_conversation_bridge::ProjectChange,
@@ -462,9 +482,16 @@ fn receive(world: &mut World) -> Result {
                 });
             }
             BridgeEventKind::Conversation(kind) => {
-                let busy = host.submit(|connection| Ok(connection.model_busy()))?;
-                host.state()?.model_busy = busy;
+                if failure.is_none() {
+                    let busy = host.submit(|connection| Ok(connection.model_busy()))?;
+                    host.state()?.model_busy = busy;
+                }
                 match *kind {
+                    agentelier_conversation_bridge::ConversationEvent::SceneStateSaved(receipt) => {
+                        world
+                            .resource_mut::<crate::SceneStateWrites>()
+                            .receive(event.operation_id, receipt);
+                    }
                     agentelier_conversation_bridge::ConversationEvent::GlobalTasks(snapshot) => {
                         world.write_message(GlobalTasksEvent(snapshot));
                     }
@@ -532,8 +559,10 @@ fn receive(world: &mut World) -> Result {
                 });
             }
             BridgeEventKind::Model(kind) => {
-                let busy = host.submit(|connection| Ok(connection.model_busy()))?;
-                host.state()?.model_busy = busy;
+                if failure.is_none() {
+                    let busy = host.submit(|connection| Ok(connection.model_busy()))?;
+                    host.state()?.model_busy = busy;
+                }
                 world.write_message(ModelEvent {
                     operation_id: event.operation_id,
                     kind,
@@ -543,6 +572,9 @@ fn receive(world: &mut World) -> Result {
     }
     if let Some(reason) = failure {
         host.state()?.model_busy = false;
+        world
+            .resource_mut::<crate::SceneStateWrites>()
+            .connection_failed(&reason);
         world.write_message(HostFailed { reason });
     }
     let busy = host.model_busy()?;

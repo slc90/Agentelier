@@ -4,8 +4,8 @@ compile_error!("This application supports Windows x64 only");
 mod conversation;
 pub use agentelier_conversation::{
     BackgroundStatus, BackgroundTask, GlobalTask, GlobalTaskGroup, GlobalTaskProcess,
-    GlobalTaskStatus, GlobalTasks, PublishedScene, TaskDelivery, TaskNotification,
-    TaskNotificationKind,
+    GlobalTaskStatus, GlobalTasks, PublishedScene, SceneState, SceneStateReceipt, TaskDelivery,
+    TaskNotification, TaskNotificationKind,
 };
 pub use agentelier_conversation::{
     Project, ProjectCatalog, ProjectChange, ProjectId, ProjectView, SessionLocation,

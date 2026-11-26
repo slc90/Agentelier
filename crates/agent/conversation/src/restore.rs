@@ -706,6 +706,7 @@ fn replay(
                             | RecordEvent::Mailbox { .. }
                             | RecordEvent::WorkingDirectoryChanged { .. }
                             | RecordEvent::SessionModelChanged { .. }
+                            | RecordEvent::SceneState { .. }
                     )
                 {
                     return Err(ConversationFailure::new(
@@ -759,6 +760,19 @@ fn replay(
                     }
                 }
                 audio_draft = attachment;
+            }
+            RecordEvent::SceneState {
+                artifact, state, ..
+            } => {
+                if !initial.settings.kind.is_user() || initial.settings.background.is_some() {
+                    return Err(ConversationFailure::new("Scene 状态缺少用户 Root 会话"));
+                }
+                let scene: &mut crate::PublishedScene = scene_owners
+                    .get(&artifact)
+                    .and_then(|source| published_scenes.get_mut(source))
+                    .ok_or_else(|| ConversationFailure::new("Scene 状态缺少原存档产物"))?;
+                scene.validate_state(&state)?;
+                scene.state = Some(state);
             }
             RecordEvent::TranscriptionStarted { source, .. } => {
                 if source.id.is_nil()

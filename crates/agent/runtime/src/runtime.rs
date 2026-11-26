@@ -26,6 +26,7 @@ pub use memory::{MemoryReply, MemoryRequest, MemoryWorkState};
 mod memory_dialogue;
 mod model_task;
 mod recording;
+mod scene_state;
 mod session_execution;
 mod session_metadata;
 mod session_model;
@@ -138,6 +139,11 @@ enum AttachmentReply {
 }
 
 enum Command {
+    SaveSceneState(
+        u64,
+        agentelier_tools::ecs_access::SceneTarget,
+        agentelier_conversation::SceneState,
+    ),
     McpMaterial(u64, agentelier_mcp::MaterialRequest),
     CancelMcpMaterial(u64),
     Memory(u64, MemoryRequest),
@@ -613,6 +619,15 @@ impl AgentRuntime {
                                     records, receipts: task_receipts, pending_model: pending_session_model, ..
                                 } = owner;
                                 match command {
+                                    Command::SaveSceneState(id, target, state) => {
+                                        let revision = state.revision;
+                                        let result = scene_state::save(conversation, &store.client(), target, state).await;
+                                        emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::SceneStateSaved(agentelier_conversation::SceneStateReceipt {
+                                            target,
+                                            revision,
+                                            result: result.map_err(|failure| failure.to_string()),
+                                        })))?;
+                                    }
                                     Command::SpawnAgent(invocation) => {
                                         children.spawn(*invocation, conversation, model.as_ref(), spawn_agent::SpawnEnvironment {
                                             ecs_access: &ecs_access,
@@ -1906,6 +1921,15 @@ impl AgentRuntime {
                 mpsc::error::TrySendError::Closed(_) => AccountFailure::Closed,
             })?;
         Ok(())
+    }
+
+    pub fn save_scene_state(
+        &self,
+        id: u64,
+        target: agentelier_tools::ecs_access::SceneTarget,
+        state: agentelier_conversation::SceneState,
+    ) -> Result<(), RuntimeFailure> {
+        self.submit(Command::SaveSceneState(id, target, state))
     }
 
     pub fn steer_conversation(&self, input: SteerInput) -> Result<(), RuntimeFailure> {
