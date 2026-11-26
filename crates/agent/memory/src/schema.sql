@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS consolidation_inputs (
     content_hash TEXT NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS source_observations (
+    session_id TEXT PRIMARY KEY,
+    observations TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS publication (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     publication_id TEXT NOT NULL,

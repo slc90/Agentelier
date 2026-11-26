@@ -372,6 +372,15 @@ pub struct StoredSettings {
     pub tools: Vec<StoredTool>,
 }
 
+impl StoredSettings {
+    pub fn is_origin(&self) -> bool {
+        self.instructions
+            .instructions
+            .iter()
+            .any(|instruction| instruction.slot == agentelier_prompts::InstructionSlot::Origin)
+    }
+}
+
 fn user_session(kind: &crate::SessionKind) -> bool {
     kind.is_user()
 }

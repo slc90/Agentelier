@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod consolidation;
 mod extraction;
+mod observation;
 mod publication;
 mod redaction;
 mod reset;
@@ -12,7 +13,7 @@ mod store;
 mod tools;
 
 pub use consolidation::Consolidation;
-pub use extraction::{SourceClaim, SourceCompletion, extraction_prompt, parse_extraction};
+pub use extraction::{Extraction, SourceClaim, SourceCompletion, extraction_prompt};
 pub use retrieval::{MemoryDetail, MemoryInspection, MemorySource, PublishedSummary};
 pub use store::{Memory, MemoryClient};
 pub use tools::{management_registrations, registrations};

@@ -1,8 +1,14 @@
-use crate::{MemoryClient, redaction::Redactor};
-use agentelier_conversation::{SteerState, TurnStatus, TurnView};
+use crate::{
+    MemoryClient,
+    observation::{
+        Anchor, Candidate, Evidence, Location, Observation, Patterns, merge, patterns, validated,
+    },
+    redaction::Redactor,
+};
+use agentelier_conversation::{MemorySourceTurn, SteerState, TurnStatus};
 use agentelier_session_store::MemorySourceSnapshot;
 use rusqlite::{OptionalExtension, params};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::io;
 
 const EVIDENCE_BYTES: usize = 36 * 1024;
@@ -27,9 +33,15 @@ impl SourceClaim {
 }
 
 pub enum SourceCompletion {
-    Summary { text: String, slug: Option<String> },
+    Summary {
+        text: String,
+        slug: Option<String>,
+        observations: Vec<Observation>,
+    },
     Empty,
-    Retry { at_ms: u64 },
+    Retry {
+        at_ms: u64,
+    },
     Release,
 }
 
@@ -85,20 +97,31 @@ impl MemoryClient {
         claim: SourceClaim,
         completion: SourceCompletion,
     ) -> io::Result<bool> {
-        let (status, summary, slug, retry) = match completion {
-            SourceCompletion::Summary { text, slug } => ("summary", Some(text), slug, None),
-            SourceCompletion::Empty => ("empty", None, None, None),
-            SourceCompletion::Retry { at_ms } => ("failed", None, None, Some(sql_integer(at_ms)?)),
-            SourceCompletion::Release => ("pending", None, None, None),
+        let (status, summary, slug, retry, observations) = match completion {
+            SourceCompletion::Summary {
+                text,
+                slug,
+                observations,
+            } => ("summary", Some(text), slug, None, observations),
+            SourceCompletion::Empty => ("empty", None, None, None, Vec::new()),
+            SourceCompletion::Retry { at_ms } => {
+                ("failed", None, None, Some(sql_integer(at_ms)?), Vec::new())
+            }
+            SourceCompletion::Release => ("pending", None, None, None, Vec::new()),
         };
         self.with_connection(move |connection| {
-            let count = connection.execute(
+            let tx = connection.transaction()?;
+            let count = tx.execute(
                 "UPDATE sources SET status = ?1, summary = ?2, slug = ?3, retry_at_ms = ?4,
                    attempts = CASE WHEN ?1 = 'pending' THEN attempts - 1 ELSE attempts END
                  WHERE session_id = ?5 AND sequence = ?6 AND revision = ?7 AND attempts = ?8 AND status = 'processing'
                    AND ?9 = (SELECT epoch FROM memory_state WHERE singleton = 1)",
                 params![status, summary, slug, retry, claim.session, claim.sequence, claim.revision, claim.attempts, claim.epoch],
             )?;
+            if count == 1 && !observations.is_empty() {
+                merge(&tx, &claim.session, observations)?;
+            }
+            tx.commit()?;
             Ok(count == 1)
         }).await
     }
@@ -108,33 +131,38 @@ fn sql_integer(value: u64) -> io::Result<i64> {
     i64::try_from(value).map_err(io::Error::other)
 }
 
-#[derive(Serialize)]
-struct Evidence {
-    role: &'static str,
-    text: String,
+pub struct Extraction {
+    prompt: String,
+    evidence: Vec<Evidence>,
+}
+
+impl Extraction {
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
 }
 
 pub fn extraction_prompt(
     source: &MemorySourceSnapshot,
     claim: &SourceClaim,
-) -> io::Result<Option<String>> {
+) -> io::Result<Option<Extraction>> {
     let redactor = Redactor::new()?;
+    let patterns = patterns()?;
     let mut evidence = Vec::new();
     let mut used = 0;
-    for source_turn in source.turns.iter().rev().filter(|turn| {
+    'turns: for source_turn in source.turns.iter().rev().filter(|turn| {
         turn.input_sequence > claim.cutoff && turn.turn.input_id.0 > claim.cutoff_turn
     }) {
-        let turn = &source_turn.turn;
-        let mut items = turn_evidence(turn, &redactor, claim.cutoff == 0);
+        let mut items = turn_evidence(source_turn, &redactor, patterns, claim.cutoff == 0);
         while let Some(item) = items.pop() {
-            let size = serde_json::to_vec(&item).map_err(io::Error::other)?.len() + 1;
+            let size = serde_json::to_vec(&item).map_err(io::Error::other)?.len() + 24;
             if used + size > EVIDENCE_BYTES {
-                break;
+                break 'turns;
             }
             used += size;
             evidence.push(item);
         }
-        if !items.is_empty() || used + EVIDENCE_ITEM_BYTES > EVIDENCE_BYTES {
+        if used + EVIDENCE_ITEM_BYTES > EVIDENCE_BYTES {
             break;
         }
     }
@@ -142,22 +170,65 @@ pub fn extraction_prompt(
         return Ok(None);
     }
     evidence.reverse();
-    Ok(Some(serde_json::json!({
+    let messages = evidence
+        .iter()
+        .enumerate()
+        .map(|(id, item)| {
+            serde_json::json!({
+                "id": id,
+                "turn": item.anchor.as_ref().map(|anchor| anchor.turn),
+                "project": item.project,
+                "fictional_context": item.fictional_context,
+                "role": item.role,
+                "text": item.text,
+            })
+        })
+        .collect::<Vec<_>>();
+    let prompt = serde_json::json!({
         "session_id": source.session.to_string(),
         "project": redactor.clean(&source.work_directory.to_string_lossy(), EVIDENCE_ITEM_BYTES),
+        "origin": source.origin,
         "sequence": source.sequence,
-        "messages": evidence,
-    }).to_string()))
+        "messages": messages,
+    })
+    .to_string();
+    Ok(Some(Extraction { prompt, evidence }))
 }
 
-fn turn_evidence(turn: &TurnView, redactor: &Redactor, include_assistant: bool) -> Vec<Evidence> {
-    let item = |role, text: &str| Evidence {
+fn turn_evidence(
+    source: &MemorySourceTurn,
+    redactor: &Redactor,
+    patterns: &Patterns,
+    include_assistant: bool,
+) -> Vec<Evidence> {
+    let turn = &source.turn;
+    let project = redactor.clean(
+        &source.work_directory.to_string_lossy(),
+        EVIDENCE_ITEM_BYTES,
+    );
+    let item = |role, text: &str, anchor| Evidence {
         role,
         text: redactor.clean(text, EVIDENCE_ITEM_BYTES),
+        anchor,
+        fictional_context: false,
+        project: project.clone(),
+        work_directory: source.work_directory.clone(),
+    };
+    let anchor = |sequence, location| {
+        Some(Anchor {
+            turn: turn.id,
+            sequence,
+            at_ms: source.activity_ms,
+            location,
+        })
     };
     let mut items = Vec::new();
     if !turn.result_continuation {
-        items.push(item("user", &turn.input));
+        items.push(item(
+            "user",
+            &turn.input,
+            anchor(source.input_sequence, Location::Input),
+        ));
     }
     let mut ordered = Vec::new();
     for steer in &turn.steers {
@@ -171,14 +242,21 @@ fn turn_evidence(turn: &TurnView, redactor: &Redactor, include_assistant: bool) 
         ordered.push((
             steer.applied_request.unwrap_or(u32::MAX),
             0,
-            item(role, &steer.text),
+            item(
+                role,
+                &steer.text,
+                steer.applied_request.and_then(|_| {
+                    anchor(
+                        source.finished_sequence,
+                        Location::Followup { id: steer.id },
+                    )
+                }),
+            ),
         ));
     }
-    for tool in turn
-        .tools
-        .iter()
-        .filter(|tool| tool.retained && !crate::tools::is_memory_tool(&tool.name))
-    {
+    for tool in turn.tools.iter().filter(|tool| {
+        tool.retained && !tool.collaboration && !crate::tools::is_memory_tool(&tool.name)
+    }) {
         let text = format!(
             "{} [{:?}] {}",
             tool.name,
@@ -188,16 +266,45 @@ fn turn_evidence(turn: &TurnView, redactor: &Redactor, include_assistant: bool) 
         ordered.push((
             tool.request_index,
             tool.output_index.saturating_add(1),
-            item("tool_observation", &text),
+            item(
+                "tool_observation",
+                &text,
+                source
+                    .tool_sequences
+                    .get(&tool.call_id)
+                    .and_then(|sequence| {
+                        anchor(
+                            *sequence,
+                            Location::Tool {
+                                call: tool.call_id.clone(),
+                                status: tool.status,
+                            },
+                        )
+                    }),
+            ),
         ));
     }
     if include_assistant && matches!(turn.status, TurnStatus::Completed) {
-        for message in &turn.messages {
+        for message in turn
+            .messages
+            .iter()
+            .filter(|message| message.phase.as_deref() != Some("commentary"))
+        {
             for part in &message.content {
                 ordered.push((
                     message.request_index,
                     message.output_index.saturating_add(1),
-                    item("assistant", &part.text),
+                    item(
+                        "assistant",
+                        &part.text,
+                        anchor(
+                            source.finished_sequence,
+                            Location::Reply {
+                                message: message.id.clone(),
+                                content: part.content_index,
+                            },
+                        ),
+                    ),
                 ));
             }
         }
@@ -209,15 +316,24 @@ fn turn_evidence(turn: &TurnView, redactor: &Redactor, include_assistant: bool) 
             "进程 {} 回收已确认={} {}",
             process.session_id, process.cleanup_confirmed, process.output
         );
-        item("process_observation", &text)
+        item("process_observation", &text, None)
     }));
     items.push(match &turn.status {
-        TurnStatus::Completed => item("status", "completed"),
-        TurnStatus::Cancelled => item("status", "cancelled"),
-        TurnStatus::Limited => item("status", "budget limited"),
-        TurnStatus::Failed(message) => item("failed", message),
-        TurnStatus::Running => item("status", "running"),
+        TurnStatus::Completed => item("status", "completed", None),
+        TurnStatus::Cancelled => item("status", "cancelled", None),
+        TurnStatus::Limited => item("status", "budget limited", None),
+        TurnStatus::Failed(message) => item("failed", message, None),
+        TurnStatus::Running => item("status", "running", None),
     });
+    let fictional_context = items.iter().any(|item| {
+        matches!(item.role, "user" | "user_applied_followup")
+            && patterns.fictional.is_match(&item.text)
+    });
+    if fictional_context {
+        items
+            .iter_mut()
+            .for_each(|item| item.fictional_context = true);
+    }
     items
 }
 
@@ -227,33 +343,58 @@ struct Extracted {
     #[serde(deserialize_with = "Deserialize::deserialize")]
     rollout_summary: Option<String>,
     slug: Option<String>,
+    #[serde(default)]
+    observations: Vec<Candidate>,
 }
 
-pub fn parse_extraction(text: &str) -> io::Result<SourceCompletion> {
-    if text.len() > SUMMARY_BYTES * 2 {
-        return Err(io::Error::other("来源记忆响应超出大小限制"));
-    }
-    let result: Extracted = serde_json::from_str(text)
-        .map_err(|_| io::Error::other("来源记忆响应缺少有效 JSON 结构"))?;
-    let Some(summary) = result.rollout_summary else {
-        if result.slug.is_some() {
-            return Err(io::Error::other("空来源记忆携带了标识"));
+impl Extraction {
+    pub fn complete(
+        &self,
+        source: &MemorySourceSnapshot,
+        text: &str,
+    ) -> io::Result<SourceCompletion> {
+        if text.len() > SUMMARY_BYTES * 3 {
+            return Err(io::Error::other("来源记忆响应超出大小限制"));
         }
-        return Ok(SourceCompletion::Empty);
-    };
-    let summary = summary.trim();
-    if summary.is_empty() || summary.len() > SUMMARY_BYTES {
-        return Err(io::Error::other("来源记忆正文为空或超出大小限制"));
+        let result: Extracted = serde_json::from_str(text)
+            .map_err(|_| io::Error::other("来源记忆响应缺少有效 JSON 结构"))?;
+        let redactor = Redactor::new()?;
+        let observations = validated(
+            source,
+            &self.evidence,
+            result.observations,
+            &redactor,
+            patterns()?,
+        );
+        let Some(summary) = result.rollout_summary else {
+            if result.slug.is_some() {
+                return Err(io::Error::other("空来源记忆携带了标识"));
+            }
+            return Ok(if observations.is_empty() {
+                SourceCompletion::Empty
+            } else {
+                SourceCompletion::Summary {
+                    text: "此来源保存了有证据的结构化观察。".to_owned(),
+                    slug: None,
+                    observations,
+                }
+            });
+        };
+        let summary = summary.trim();
+        if summary.is_empty() || summary.len() > SUMMARY_BYTES {
+            return Err(io::Error::other("来源记忆正文为空或超出大小限制"));
+        }
+        let slug = result.slug.filter(|slug| {
+            !slug.is_empty()
+                && slug.len() <= SLUG_BYTES
+                && slug
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        });
+        Ok(SourceCompletion::Summary {
+            text: redactor.clean(summary, SUMMARY_BYTES),
+            slug,
+            observations,
+        })
     }
-    let slug = result.slug.filter(|slug| {
-        !slug.is_empty()
-            && slug.len() <= SLUG_BYTES
-            && slug
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-    });
-    Ok(SourceCompletion::Summary {
-        text: Redactor::new()?.clean(summary, SUMMARY_BYTES),
-        slug,
-    })
 }

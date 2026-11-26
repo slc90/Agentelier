@@ -3,11 +3,15 @@ use crate::{
 };
 use agentelier_tools::{ProcessChange, ProcessCleanup, ToolStatus};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 pub struct MemorySourceTurn {
     pub input_sequence: u64,
     pub evidence_sequence: u64,
     pub activity_ms: u64,
+    pub finished_sequence: u64,
+    pub work_directory: PathBuf,
+    pub tool_sequences: BTreeMap<String, u64>,
     pub turn: Box<TurnView>,
 }
 
@@ -16,8 +20,10 @@ struct Evidence {
     input_sequence: Option<u64>,
     evidence_sequence: u64,
     activity_ms: u64,
+    finished_sequence: u64,
+    work_directory: Option<PathBuf>,
     finished: Option<Box<TurnView>>,
-    calls: BTreeMap<String, Option<ToolView>>,
+    calls: BTreeMap<String, Option<(u64, ToolView)>>,
     processes: BTreeMap<String, ProcessEvidence>,
 }
 
@@ -43,10 +49,16 @@ impl Evidence {
         self.activity_ms = self.activity_ms.max(at_ms);
     }
 
-    fn install_returns(&mut self, turn: &TurnView) {
+    fn install_returns(&mut self, turn: &TurnView, sequence: u64) {
         for tool in &turn.tools {
             if tool.retained && terminal(tool.status) {
-                self.calls.insert(tool.call_id.clone(), Some(tool.clone()));
+                let saved = self.calls.entry(tool.call_id.clone()).or_default();
+                if saved
+                    .as_ref()
+                    .is_none_or(|(_, last)| last.status != tool.status)
+                {
+                    *saved = Some((sequence, tool.clone()));
+                }
             }
         }
     }
@@ -59,12 +71,21 @@ impl Evidence {
         {
             return None;
         }
+        let mut tool_sequences = BTreeMap::new();
         for tool in &mut turn.tools {
-            if let Some(Some(saved)) = self.calls.remove(&tool.call_id) {
+            if let Some(Some((sequence, saved))) = self.calls.remove(&tool.call_id) {
+                tool_sequences.insert(tool.call_id.clone(), sequence);
                 *tool = saved;
             }
         }
-        turn.tools.extend(self.calls.into_values().flatten());
+        for (id, (sequence, saved)) in self
+            .calls
+            .into_iter()
+            .filter_map(|(id, saved)| saved.map(|saved| (id, saved)))
+        {
+            tool_sequences.insert(id, sequence);
+            turn.tools.push(saved);
+        }
         for exit in self
             .processes
             .into_values()
@@ -87,6 +108,9 @@ impl Evidence {
             input_sequence,
             evidence_sequence: self.evidence_sequence,
             activity_ms: self.activity_ms,
+            finished_sequence: self.finished_sequence,
+            work_directory: self.work_directory?,
+            tool_sequences,
             turn,
         })
     }
@@ -109,17 +133,22 @@ fn turns(state: &StoredState) -> impl Iterator<Item = &TurnView> {
 
 pub fn memory_evidence(
     records: Vec<SessionRecord>,
+    mut work_directory: PathBuf,
 ) -> Result<Vec<MemorySourceTurn>, ConversationFailure> {
     let mut sources = BTreeMap::<u64, Evidence>::new();
     for record in records {
         let sequence = record.sequence;
         let at_ms = record.at_ms;
         match record.event {
+            RecordEvent::WorkingDirectoryChanged { directory, .. } => work_directory = directory,
             RecordEvent::Accepted { state }
             | RecordEvent::ContinuedWithoutCompaction { state, .. } => {
                 if let Some(turn) = state.turn {
                     let source = sources.entry(turn.id.0).or_default();
                     source.input_sequence.get_or_insert(sequence);
+                    source
+                        .work_directory
+                        .get_or_insert_with(|| work_directory.clone());
                     source.finished = None;
                     source.observe(sequence, at_ms);
                 }
@@ -157,7 +186,7 @@ pub fn memory_evidence(
                 let source = sources.entry(turn.id.0).or_default();
                 let mut saved = tool.clone();
                 saved.retained = true;
-                source.calls.insert(call_id, Some(saved));
+                source.calls.insert(call_id, Some((sequence, saved)));
                 source.observe(sequence, at_ms);
             }
             RecordEvent::Process { fact } => {
@@ -195,7 +224,7 @@ pub fn memory_evidence(
             RecordEvent::Sealed { state, .. } => {
                 if let Some(turn) = state.turn {
                     let source = sources.entry(turn.id.0).or_default();
-                    source.install_returns(&turn);
+                    source.install_returns(&turn, sequence);
                     source.observe(sequence, at_ms);
                 }
             }
@@ -205,6 +234,7 @@ pub fn memory_evidence(
                 {
                     let source = sources.entry(turn.id.0).or_default();
                     source.finished = Some(turn);
+                    source.finished_sequence = sequence;
                     source.observe(sequence, at_ms);
                 }
             }
@@ -236,8 +266,11 @@ pub fn memory_evidence(
                         }
                     }
                     if changed {
-                        source.install_returns(&turn);
+                        source.install_returns(&turn, sequence);
                         if !matches!(turn.status, TurnStatus::Running) {
+                            if source.finished.is_none() {
+                                source.finished_sequence = sequence;
+                            }
                             source.finished = Some(turn);
                         }
                         source.observe(sequence, at_ms);

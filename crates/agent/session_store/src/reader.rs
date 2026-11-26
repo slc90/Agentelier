@@ -434,6 +434,7 @@ pub struct MemorySourceSnapshot {
     pub activity_ms: u64,
     pub work_directory: PathBuf,
     pub model: String,
+    pub origin: bool,
     pub turns: Vec<agentelier_conversation::MemorySourceTurn>,
 }
 
@@ -527,8 +528,11 @@ pub(super) fn memory_source(
     if !initial.settings.kind.is_user() || initial.settings.background.is_some() {
         return Ok(None);
     }
-    let turns =
-        agentelier_conversation::memory_evidence(parsed.records).map_err(io::Error::other)?;
+    let turns = agentelier_conversation::memory_evidence(
+        parsed.records,
+        initial.settings.working_directory.clone(),
+    )
+    .map_err(io::Error::other)?;
     if turns.is_empty() {
         return Ok(None);
     }
@@ -545,6 +549,7 @@ pub(super) fn memory_source(
         sequence: parsed.sequence,
         revision: revision.finalize().into(),
         activity_ms,
+        origin: initial.settings.is_origin(),
         work_directory: initial.settings.working_directory,
         model: initial.settings.slug,
         turns,
