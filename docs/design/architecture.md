@@ -27,7 +27,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/mcp/` | `agentelier_mcp` | MCP 配置、stdio 与 Streamable HTTP 连接、工具和材料协议 |
 | `crates/agent/tools/` | `agentelier_tools` | 固定工具目录、工作目录解析、PowerShell 进程会话与回收、UTF-8 文件补丁、不可变图片结果与有界展示，以及 Windows 桌面 Driver、Rhai 脚本会话、会话级 UI Automation Runtime 和无 Bevy 依赖的 ECS 请求契约 |
 | `crates/agent/turn_runner/` | `agentelier_turn_runner` | 独占活动任务记录，推进聊天请求、封闭边界自动压缩与检查点提交、正文增量和受控取消 |
-| `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型任务取消/回收及执行收尾 |
+| `crates/agent/runtime/` | `agentelier_agent_runtime` | Tokio 线程、跨业务队列、模型与 Rhai 控件作业调度及执行收尾 |
 | `crates/bridge/account/` | `agentelier_account_bridge` | Codex 凭据安全摘要及账号事件转换 |
 | `crates/bridge/llm_model/` | `agentelier_llm_model_bridge` | 模型结果、错误分类、取消和完成状态转换 |
 | `crates/bridge/conversation/` | `agentelier_conversation_bridge` | 聊天命令、会话/轮次和安全展示投影转换 |
@@ -36,6 +36,8 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 跨领域允许 `ui → agent`、`ui → bridge`、`bridge → agent`，禁止反向依赖。UI 可直接使用 Agent 的能力，例如数据环境；需要业务转换或跨运行边界协调时使用 Bridge。新增功能先判断所属领域，再按实际职责复用或新建库，不继续扩大聚合总库，也不预设占位库。
 
 数学三维 Scene 在 `agentelier_application` 启用 Bevy 的 `bevy_pbr` 渲染能力。UI 持有每个视口的相机、网格与离屏纹理，运行边界只传输数学定义和可恢复的数值视角。
+
+原生脚本控件的 Rhai 在 Runtime 的阻塞工作者上执行，沿现有 ECS Access、取消及执行预算请求 UI。Bevy 按检查过的组合定义构造原生子 Scene，工作者回执通过 Connection 唤醒主线程。
 
 ```mermaid
 flowchart TD

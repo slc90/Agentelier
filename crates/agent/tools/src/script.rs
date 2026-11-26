@@ -1,6 +1,7 @@
 mod computer;
 mod ecs;
 mod tool;
+pub mod widget;
 
 pub(crate) use tool::{definition as tool_definition, ecs_definition, execute as execute_tool};
 
@@ -54,18 +55,8 @@ struct ScriptState {
 
 impl Default for ScriptState {
     fn default() -> Self {
-        let mut engine = Engine::new();
-        engine
-            .set_max_operations(MAX_OPERATIONS)
-            .set_max_call_levels(MAX_CALL_LEVELS)
-            .set_max_expr_depths(MAX_EXPRESSION_DEPTH, MAX_EXPRESSION_DEPTH)
-            .set_max_functions(MAX_FUNCTIONS)
-            .set_max_variables(MAX_VARIABLES)
-            .set_max_string_size(MAX_STRING_BYTES)
-            .set_max_array_size(MAX_COLLECTION_SIZE)
-            .set_max_map_size(MAX_COLLECTION_SIZE);
+        let mut engine = engine();
         computer::register(&mut engine);
-        ecs::register(&mut engine);
         Self {
             engine,
             scope: Scope::new(),
@@ -74,6 +65,21 @@ impl Default for ScriptState {
             uia: Arc::default(),
         }
     }
+}
+
+fn engine() -> Engine {
+    let mut engine = Engine::new();
+    engine
+        .set_max_operations(MAX_OPERATIONS)
+        .set_max_call_levels(MAX_CALL_LEVELS)
+        .set_max_expr_depths(MAX_EXPRESSION_DEPTH, MAX_EXPRESSION_DEPTH)
+        .set_max_functions(MAX_FUNCTIONS)
+        .set_max_variables(MAX_VARIABLES)
+        .set_max_string_size(MAX_STRING_BYTES)
+        .set_max_array_size(MAX_COLLECTION_SIZE)
+        .set_max_map_size(MAX_COLLECTION_SIZE);
+    ecs::register(&mut engine);
+    engine
 }
 
 impl ScriptSession {
@@ -90,11 +96,14 @@ impl ScriptSession {
 
     pub(crate) async fn validate_scene(
         &self,
-        definition: crate::ecs_access::SceneDefinition,
+        mut definition: crate::ecs_access::SceneDefinition,
         target: Option<crate::ecs_access::SceneTarget>,
         stored: Option<crate::ecs_access::SceneStored>,
         cancel: &CancellationToken,
     ) -> Result<crate::ecs_access::SceneDefinition, ToolFailure> {
+        if definition.template == widget::TEMPLATE {
+            widget::prepare(&mut definition, self.ecs_access.clone(), cancel).await?;
+        }
         let access = self.ecs_access.clone();
         let control = Control::new(cancel);
         let _cancel_on_drop = control.cancel.clone().drop_guard();

@@ -2,6 +2,7 @@
 compile_error!("This application supports Windows x64 only");
 
 pub use agentelier_tools::ecs_access;
+pub use agentelier_tools::widget;
 
 mod operations;
 mod runtime;

@@ -4,6 +4,7 @@ mod data_table;
 mod discrete;
 mod numeric;
 mod parameters;
+mod scripted_widget;
 mod text_input;
 
 use agentelier_agent_host::AgentHostPlugin;
@@ -49,11 +50,13 @@ pub(crate) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         None,
     )?;
     let host = text_input::register(discrete::register(numeric::register(host)?)?)?;
-    charts::register(data_table::register(composition::register(host)?)?)
+    let host = charts::register(data_table::register(composition::register(host)?)?)?;
+    scripted_widget::register(host)
 }
 
 pub(crate) fn install(app: &mut App) -> Result {
     charts::install(app);
+    scripted_widget::install(app);
     composition::install(app);
     data_table::install(app)?;
     numeric::install(app);

@@ -18,6 +18,7 @@ mod task_control;
 
 pub use environment::WorkingDirectory;
 pub use image::from_mcp_bytes;
+pub use script::widget;
 pub use script::{ScriptOutput, ScriptSession};
 
 pub use catalog::{

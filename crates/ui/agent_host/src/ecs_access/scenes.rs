@@ -210,10 +210,19 @@ pub(super) fn validate(
         },
     )
     .map_err(|error| EcsError::new("scene_validation_failed", error.to_string()))?;
+    world.insert_resource(SceneValidation);
     let result = build_native_scene(world, staging, &definition);
+    world.remove_resource::<SceneValidation>();
     world.despawn(staging);
     result?;
     serde_json::to_value(definition).map_err(invalid_props)
+}
+
+#[derive(Resource)]
+struct SceneValidation;
+
+pub fn validating_scene(world: &World) -> bool {
+    world.contains_resource::<SceneValidation>()
 }
 
 pub fn prepare_scene_definition(

@@ -50,6 +50,8 @@ sequenceDiagram
 
 ## 控件的程序、事件和绘制
 
+`agentelier.scripted_widget` 的独立 Rhai 源定义 `init(ctx)`。`ctx.parameters` 和 `ctx.resources` 是持久定义中的 JSON 映射，返回值包含 `parts` 和可序列化的 `state`。`parts` 使用已登记的原生组合子项格式，包含稳定 ID、区域及 Scene 定义。发布时工作者运行初始化，主线程实际构造子 Scene 并将结果交给发布工具。展示或重开时另起工作者调用 `restore(ctx)`，其中 `ctx.state` 带入已检查的初始状态，源没有恢复函数时使用 `init(ctx)`。构造成功后，原生子实体继续由回复产物管理。
+
 程序需要表达这些行为，而非指定一套新的固定语言：
 
 - 初始化：接受定义、参数和初始或已恢复状态，创建自己的原生 Scene 与图形。

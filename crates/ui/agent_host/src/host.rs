@@ -375,6 +375,13 @@ impl AgentHost {
     ) -> Result<u64> {
         self.submit(|connection| connection.save_scene_state(target, state))
     }
+    pub fn restore_widget(
+        &self,
+        definition: crate::widget::Definition,
+        state: crate::widget::State,
+    ) -> Result<crate::widget::Ticket> {
+        self.submit(|connection| connection.restore_widget(definition, state))
+    }
     pub fn change_project(
         &self,
         change: agentelier_conversation_bridge::ProjectChange,
