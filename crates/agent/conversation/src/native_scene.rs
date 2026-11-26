@@ -1,7 +1,7 @@
 use crate::{Conversation, ConversationFailure, RecordEvent, SessionId, ToolView};
 use agentelier_tools::{
     PUBLISH_SCENE_TOOL, ToolStatus, UPDATE_SCENE_TOOL,
-    ecs_access::{EcsError, SceneDefinition, SceneTarget, SceneUpdate},
+    ecs_access::{EcsError, SceneDefinition, ScenePartValues, SceneTarget, SceneUpdate},
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,8 @@ pub struct PublishedScene {
 pub struct SceneState {
     pub revision: u64,
     pub values: serde_json::Map<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "ScenePartValues::is_empty")]
+    pub part_values: ScenePartValues,
 }
 
 pub struct SceneStateReceipt {
@@ -31,11 +33,10 @@ pub struct SceneStateReceipt {
 impl SceneState {
     pub fn validate(&self) -> Result<(), ConversationFailure> {
         if self.revision == 0
-            || self.values.is_empty()
-            || self.values.iter().any(|(name, value)| {
-                name.trim().is_empty()
-                    || name.len() > 64
-                    || !(value.is_boolean() || value.is_number() || value.is_string())
+            || (self.values.is_empty() && self.part_values.is_empty())
+            || !valid_values(&self.values)
+            || self.part_values.iter().any(|(id, values)| {
+                id.trim().is_empty() || id.len() > 64 || values.is_empty() || !valid_values(values)
             })
         {
             return Err(ConversationFailure::new("Scene 状态修订或参数值无效"));
@@ -47,6 +48,14 @@ impl SceneState {
         }
         Ok(())
     }
+}
+
+fn valid_values(values: &serde_json::Map<String, serde_json::Value>) -> bool {
+    values.iter().all(|(name, value)| {
+        !name.trim().is_empty()
+            && name.len() <= 64
+            && (value.is_boolean() || value.is_number() || value.is_string())
+    })
 }
 
 fn first_revision() -> u64 {

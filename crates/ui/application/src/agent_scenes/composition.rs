@@ -1,7 +1,10 @@
-use super::parameters::{Binding, Definition, Parameters};
+use super::{
+    charts::math::space_view,
+    parameters::{Binding, Definition, Parameters},
+};
 use agentelier_agent_host::{
-    AgentHostPlugin, EcsError, SceneDefinition, SceneState, SceneStored, mount_scene_child,
-    prepare_scene_definition, replace_scene_children,
+    AgentHostPlugin, EcsError, MountedScene, SceneDefinition, SceneState, SceneStateWrites,
+    SceneStored, mount_scene_child, prepare_scene_definition, replace_scene_children,
 };
 use bevy::prelude::*;
 use bevy_widgetry::{scene::spawn_scene, text::WidgetryText, theme::WidgetryTheme};
@@ -116,6 +119,11 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
 
 fn restore(mut props: Properties, state: &SceneState) -> Result<Properties> {
     restore_values(&mut props.parameters, &state.values)?;
+    for part in &mut props.parts {
+        if let Some(values) = state.part_values.get(&part.id) {
+            space_view::restore_definition(&mut part.scene, values)?;
+        }
+    }
     Ok(props)
 }
 
@@ -126,7 +134,54 @@ fn prepare_unmounted(mut props: Properties, stored: &SceneStored) -> Result<Prop
         restore_values(&mut previous.parameters, values)?;
     }
     Parameters::new(previous.parameters)?.retain(&mut props.parameters)?;
+    for part in props.parts.iter_mut().filter(|part| inherits_view(part)) {
+        if let Some(values) = stored.part_values.get(&part.id) {
+            space_view::restore_definition(&mut part.scene, values)?;
+        } else if let Some(view) = previous
+            .parts
+            .iter()
+            .find(|old| old.id == part.id && old.scene.template == part.scene.template)
+            .and_then(|old| old.scene.props.get("view"))
+        {
+            part.scene.props.insert("view".into(), view.clone());
+        }
+    }
     Ok(props)
+}
+
+fn inherits_view(part: &Placement) -> bool {
+    part.scene.template == space_view::SURFACE_TEMPLATE
+        && part
+            .scene
+            .props
+            .get("view")
+            .is_none_or(serde_json::Value::is_null)
+}
+
+pub(super) fn schedule_save(world: &mut World, root: Entity) {
+    let (Some(&mount), Some(parameters), Some(parts)) = (
+        world.get::<MountedScene>(root),
+        world.get::<Parameters>(root),
+        world.get::<Composition>(root),
+    ) else {
+        return;
+    };
+    let values = parameters.snapshot();
+    let part_values = parts
+        .0
+        .iter()
+        .filter_map(|part| {
+            space_view::snapshot(world, part.root).map(|values| (part.placement.id.clone(), values))
+        })
+        .collect();
+    let state = SceneState {
+        revision: mount.revision,
+        values,
+        part_values,
+    };
+    world
+        .resource_mut::<SceneStateWrites>()
+        .schedule(root, mount, state);
 }
 
 fn restore_values(
@@ -271,6 +326,15 @@ fn prepare(world: &World, root: Entity, mut props: Properties) -> Result<Propert
     }
     let current = composition(world, root)?;
     for placement in &mut props.parts {
+        if inherits_view(placement)
+            && let Some(values) = current
+                .0
+                .iter()
+                .find(|part| part.placement.id == placement.id)
+                .and_then(|part| space_view::snapshot(world, part.root))
+        {
+            space_view::restore_definition(&mut placement.scene, &values)?;
+        }
         if let Some(existing) = current
             .0
             .iter()

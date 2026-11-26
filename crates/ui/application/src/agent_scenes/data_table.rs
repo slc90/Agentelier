@@ -479,6 +479,7 @@ fn on_widgetry_selection(event: On<WidgetryTableEvent>, mut commands: Commands) 
                         let state = SceneState {
                             revision: mount.revision,
                             values: Map::from_iter([(SELECTED.into(), json!(selected))]),
+                            part_values: Default::default(),
                         };
                         world
                             .resource_mut::<SceneStateWrites>()

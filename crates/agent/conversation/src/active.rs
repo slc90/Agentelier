@@ -1202,6 +1202,11 @@ impl ActiveTurn<'_> {
         Some(agentelier_tools::ecs_access::SceneStored {
             definition: scene.definition.clone(),
             values: scene.state.as_ref().map(|state| state.values.clone()),
+            part_values: scene
+                .state
+                .as_ref()
+                .map(|state| state.part_values.clone())
+                .unwrap_or_default(),
         })
     }
 

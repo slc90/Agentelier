@@ -8,7 +8,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 
 | 目录 | Package | 当前职责 |
 | --- | --- | --- |
-| `crates/ui/application/` | `agentelier_application` | 通用宿主、配置、日志、诊断、窗口装配与整体生命周期 |
+| `crates/ui/application/` | `agentelier_application` | 通用宿主、配置、日志、诊断、窗口装配、动态 Scene 模板与整体生命周期 |
 | `crates/ui/assets/` | `bevy_app_assets` | 应用 Asset 的统一注册与原生图标素材 |
 | `crates/ui/controls/` | `agentelier_controls` | 应用主题、跨页面基础控件与所属 Widgetry 窗口的关闭支持 |
 | `crates/ui/markdown/` | `agentelier_markdown` | 原生 Markdown 解析、块更新、行内样式、原文复制与用户主动链接交互 |
@@ -34,6 +34,8 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/bridge/connection/` | `agentelier_bridge_connection` | 命令/事件传递、操作关联、互斥、唤醒与连接生命周期 |
 
 跨领域允许 `ui → agent`、`ui → bridge`、`bridge → agent`，禁止反向依赖。UI 可直接使用 Agent 的能力，例如数据环境；需要业务转换或跨运行边界协调时使用 Bridge。新增功能先判断所属领域，再按实际职责复用或新建库，不继续扩大聚合总库，也不预设占位库。
+
+数学三维 Scene 在 `agentelier_application` 启用 Bevy 的 `bevy_pbr` 渲染能力。UI 持有每个视口的相机、网格与离屏纹理，运行边界只传输数学定义和可恢复的数值视角。
 
 ```mermaid
 flowchart TD

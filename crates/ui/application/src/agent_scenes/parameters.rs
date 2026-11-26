@@ -1,4 +1,4 @@
-use agentelier_agent_host::{MountedScene, SceneDefinition, SceneState, SceneStateWrites};
+use agentelier_agent_host::SceneDefinition;
 use bevy::{prelude::*, ui_widgets::Activate};
 use bevy_widgetry::{
     number_input::WidgetryNumberInput, slider::WidgetrySliderHeadless,
@@ -191,6 +191,13 @@ pub(super) fn controls_table(world: &World, root: Entity) -> bool {
 }
 
 impl Parameters {
+    pub(super) fn snapshot(&self) -> serde_json::Map<String, Json> {
+        self.values
+            .iter()
+            .map(|(name, parameter)| (name.clone(), parameter.current.json()))
+            .collect()
+    }
+
     pub(super) fn new(definitions: BTreeMap<String, Definition>) -> Result<Self> {
         let mut parameters = BTreeMap::new();
         for (name, definition) in definitions {
@@ -573,23 +580,9 @@ pub(super) fn install(app: &mut App) {
         .add_observer(schedule_save);
 }
 
-fn schedule_save(
-    event: On<ParameterChanged>,
-    mounted: Query<(&MountedScene, &Parameters)>,
-    mut writes: ResMut<SceneStateWrites>,
-) {
-    let Ok((mount, parameters)) = mounted.get(event.entity) else {
-        return;
-    };
-    let state = SceneState {
-        revision: mount.revision,
-        values: parameters
-            .values
-            .iter()
-            .map(|(name, parameter)| (name.clone(), parameter.current.json()))
-            .collect(),
-    };
-    writes.schedule(event.entity, *mount, state);
+fn schedule_save(event: On<ParameterChanged>, mut commands: Commands) {
+    let root = event.entity;
+    commands.queue(move |world: &mut World| super::composition::schedule_save(world, root));
 }
 
 fn on_number(event: On<NumericChange>, mut commands: Commands) {

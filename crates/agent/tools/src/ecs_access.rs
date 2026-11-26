@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
@@ -35,7 +36,10 @@ pub struct SceneTarget {
 pub struct SceneStored {
     pub definition: Box<SceneDefinition>,
     pub values: Option<Map<String, Value>>,
+    pub part_values: ScenePartValues,
 }
+
+pub type ScenePartValues = BTreeMap<String, Map<String, Value>>;
 
 impl SceneDefinition {
     pub fn validate(&self) -> Result<(), EcsError> {

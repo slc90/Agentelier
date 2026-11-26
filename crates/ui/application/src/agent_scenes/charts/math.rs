@@ -6,6 +6,8 @@ mod parametric;
 mod polar;
 mod region;
 mod region_mesh;
+pub(in crate::agent_scenes) mod space_view;
+mod surface;
 mod trace;
 
 use super::{
@@ -99,10 +101,12 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
     let host = implicit::register(host)?;
     let host = region::register(host)?;
     let host = polar::register(host)?;
-    parametric::register(host)
+    let host = parametric::register(host)?;
+    surface::register(host)
 }
 
 pub(super) fn install(app: &mut App) {
+    space_view::install(app);
     app.add_systems(PostUpdate, resample_viewports.after(UiSystems::Layout));
 }
 
@@ -114,6 +118,7 @@ pub(in crate::agent_scenes) fn supports(template: &str) -> bool {
             | region::TEMPLATE
             | polar::TEMPLATE
             | parametric::TEMPLATE
+            | surface::TEMPLATE
     )
 }
 
@@ -140,6 +145,9 @@ pub(in crate::agent_scenes) fn set_variable(
     variable: &str,
     value: f64,
 ) -> Result {
+    if world.get::<surface::Surface>(root).is_some() {
+        return surface::set_variable(world, root, variable, value);
+    }
     let mut state = world
         .get_mut::<MathPlot>(root)
         .ok_or_else(|| io::Error::other("数学图形缺少当前变量"))?;
