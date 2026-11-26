@@ -180,7 +180,7 @@ fn prepare(world: &World, root: Entity, mut props: Properties) -> Result<Propert
     Ok(props)
 }
 
-fn control(world: &World, root: Entity) -> Result<Entity> {
+pub(super) fn control(world: &World, root: Entity) -> Result<Entity> {
     world
         .get::<Children>(root)
         .into_iter()
@@ -296,7 +296,7 @@ fn publish_text(
     }
 }
 
-fn single_line(character: char) -> bool {
+pub(super) fn single_line(character: char) -> bool {
     !matches!(
         character,
         '\n' | '\r' | '\u{000b}' | '\u{000c}' | '\u{0085}' | '\u{2028}' | '\u{2029}'

@@ -187,6 +187,7 @@ dependencies = [
  "bevy_widgetry_path_display",
  "ron",
  "serde",
+ "serde_json",
  "tempfile",
  "tracing",
  "winsafe",

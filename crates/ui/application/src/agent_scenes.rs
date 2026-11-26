@@ -1,6 +1,7 @@
 mod composition;
 mod discrete;
 mod numeric;
+mod parameters;
 mod text_input;
 
 use agentelier_agent_host::AgentHostPlugin;
@@ -52,6 +53,7 @@ pub(crate) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
 pub(crate) fn install(app: &mut App) -> Result {
     composition::install(app);
     numeric::install(app);
+    parameters::install(app);
     text_input::install(app);
     discrete::install(app)
 }

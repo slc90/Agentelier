@@ -281,7 +281,7 @@ fn prepare_number(
     })
 }
 
-fn numeric_control(world: &World, root: Entity) -> Result<Entity> {
+pub(super) fn numeric_control(world: &World, root: Entity) -> Result<Entity> {
     world
         .get::<Children>(root)
         .into_iter()
@@ -306,10 +306,11 @@ fn slider_changed(
             let value = event.value as i64;
             (NumericValue::Integer(value), value.to_string())
         }
-        Kind::Float => (
-            NumericValue::Float(f64::from(event.value)),
-            event.value.to_string(),
-        ),
+        Kind::Float => {
+            let display = event.value.to_string();
+            let value = display.parse::<f64>().unwrap_or(f64::from(event.value));
+            (NumericValue::Float(value), display)
+        }
     };
     if let Some(text) = children
         .iter_descendants(parent.parent())

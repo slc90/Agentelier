@@ -386,6 +386,68 @@ fn prepare_boolean(
     Ok(properties)
 }
 
+pub(super) fn set_bound_boolean(world: &mut World, root: Entity, value: bool) -> Result {
+    if world.get::<WidgetryToggleButton>(root).is_some() {
+        bevy_widgetry::toggle_button::WidgetryToggleButtonHeadless::set_selected_in_world(
+            world, root, value,
+        )
+        .map_err(|error| error.into_bevy_error())?;
+    } else {
+        let mut entity = world.get_entity_mut(root)?;
+        if value {
+            entity.insert(Checked);
+        } else {
+            entity.remove::<Checked>();
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn set_bound_choice(world: &mut World, root: Entity, value: &str) -> Result {
+    let controls = world
+        .get::<Children>(root)
+        .ok_or_else(|| io::Error::other("原生选择场景缺少控件"))?;
+    if let Some(model) = world.get::<WidgetryListModel<Choice>>(root) {
+        let control = controls
+            .iter()
+            .find(|entity| world.get::<WidgetryComboBox<Choice>>(*entity).is_some())
+            .ok_or_else(|| io::Error::other("原生选择场景缺少下拉控件"))?;
+        let id = (0..model.len())
+            .find(|index| {
+                model
+                    .get(*index)
+                    .is_some_and(|option| option.value == value)
+            })
+            .and_then(|index| model.id(index))
+            .ok_or_else(|| io::Error::other("下拉控件缺少绑定的选项"))?;
+        WidgetryComboBox::<Choice>::select_id(&mut world.commands(), control, id);
+    } else {
+        let control = controls
+            .iter()
+            .find(|entity| {
+                world.get::<WidgetryRadioGroupHeadless>(*entity).is_some()
+                    || world.get::<WidgetrySegmentedHeadless>(*entity).is_some()
+            })
+            .ok_or_else(|| io::Error::other("原生选择场景缺少选择组"))?;
+        let index = world
+            .get::<Children>(control)
+            .into_iter()
+            .flatten()
+            .position(|child| {
+                world
+                    .get::<ChoiceValue>(*child)
+                    .is_some_and(|option| option.0 == value)
+            })
+            .ok_or_else(|| io::Error::other("选择组缺少绑定的选项"))?;
+        if world.get::<WidgetryRadioGroupHeadless>(control).is_some() {
+            WidgetryRadioGroupHeadless::set_selected(&mut world.commands(), control, index);
+        } else {
+            WidgetrySegmentedHeadless::set_selected(&mut world.commands(), control, index);
+        }
+    }
+    Ok(())
+}
+
 fn group_changed(
     event: On<ValueChange<usize>>,
     groups: Query<&Children>,

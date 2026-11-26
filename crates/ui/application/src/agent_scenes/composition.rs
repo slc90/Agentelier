@@ -1,3 +1,4 @@
+use super::parameters::{Binding, Definition, Parameters};
 use agentelier_agent_host::{
     AgentHostPlugin, EcsError, SceneDefinition, mount_scene_child, prepare_scene_definition,
     replace_scene_children,
@@ -5,7 +6,10 @@ use agentelier_agent_host::{
 use bevy::prelude::*;
 use bevy_widgetry::{scene::spawn_scene, text::WidgetryText, theme::WidgetryTheme};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, io};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io,
+};
 
 const TEMPLATE: &str = "agentelier.composition";
 const MAX_PARTS: usize = 16;
@@ -16,6 +20,8 @@ const MAX_TEXT_BYTES: usize = 8192;
 #[serde(deny_unknown_fields)]
 struct Properties {
     parts: Vec<Placement>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    parameters: BTreeMap<String, Definition>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -24,6 +30,8 @@ struct Placement {
     id: String,
     area: Area,
     scene: SceneDefinition,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    bindings: Vec<Binding>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -89,7 +97,10 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
     .with_ecs_scene_factory(
         TEMPLATE,
         "Arrange registered native scenes in one reply artifact, with stable part IDs and semantic areas.",
-        &[("parts", "Required array of 1 to 16 objects {id, area, scene}. id is a unique stable string of up to 64 bytes. area is intro, controls, content, or footer. scene is {template, props} for a registered leaf template. Parts keep their array order within each area.")],
+        &[
+            ("parts", "Required array of 1 to 16 objects {id, area, scene, bindings?}. id is a unique stable string of up to 64 bytes. area is intro, controls, content, or footer. scene is {template, props}. Optional bindings are objects with kind input, text, visible, or reset. The first three require parameter. text optionally accepts format value or square. reset is for buttons."),
+            ("parameters", "Optional object keyed by parameter name. Each value is {domain, default, current?}. domain is {kind, ...}: integer/float with min,max,step; boolean; choice with options [{value,label}]; or text with max_length. A bound input takes its range/options/initial value from the parameter. Omit current on update only to retain an eligible current value."),
+        ],
         build,
         Some(update),
         Some(prepare),
@@ -112,7 +123,7 @@ fn text(props: TextProperties) -> Result<impl Scene> {
 }
 
 fn build(world: &mut World, parent: Entity, props: Properties) -> SceneResult<Entity> {
-    props.validate().map_err(invalid)?;
+    let (placements, parameters) = props.materialize().map_err(invalid)?;
     let root = spawn_scene(world, bsn! {
         Name("NativeComposition") ChildOf(parent)
         Node {
@@ -131,13 +142,12 @@ fn build(world: &mut World, parent: Entity, props: Properties) -> SceneResult<En
     }).map_err(construction)?;
     let result = (|| {
         let areas = get_areas(world, root)?;
-        let parts = props
-            .parts
+        let parts = placements
             .into_iter()
             .map(|placement| mount_part(world, root, placement))
             .collect::<SceneResult<Vec<_>>>()?;
         arrange(world, areas, &parts);
-        world.entity_mut(root).insert(Composition(parts));
+        attach(world, root, parts, parameters);
         Ok(root)
     })();
     if result.is_err() {
@@ -171,10 +181,23 @@ impl Properties {
         }
         Ok(())
     }
+
+    fn materialize(self) -> Result<(Vec<Placement>, Parameters)> {
+        self.validate()?;
+        let parameters = Parameters::new(self.parameters)?;
+        let mut parts = self.parts;
+        for part in &mut parts {
+            parameters.specialize(&mut part.scene, &part.bindings)?;
+        }
+        Ok((parts, parameters))
+    }
 }
 
 fn prepare(world: &World, root: Entity, mut props: Properties) -> Result<Properties> {
     props.validate()?;
+    if let Some(parameters) = world.get::<Parameters>(root) {
+        parameters.retain(&mut props.parameters)?;
+    }
     let current = composition(world, root)?;
     for placement in &mut props.parts {
         if let Some(existing) = current
@@ -182,6 +205,10 @@ fn prepare(world: &World, root: Entity, mut props: Properties) -> Result<Propert
             .iter()
             .find(|part| part.placement.id == placement.id)
             && placement.scene != existing.placement.scene
+            && !placement
+                .bindings
+                .iter()
+                .any(|binding| matches!(binding, Binding::Input { .. }))
         {
             prepare_scene_definition(world, existing.root, &mut placement.scene)
                 .map_err(|error| part_error(&placement.id, error))?;
@@ -191,7 +218,7 @@ fn prepare(world: &World, root: Entity, mut props: Properties) -> Result<Propert
 }
 
 fn update(world: &mut World, root: Entity, props: Properties) -> Result {
-    props.validate()?;
+    let (placements, parameters) = props.materialize()?;
     let areas = get_areas(world, root)?;
     let existing = composition(world, root)?.0.clone();
     let staging = spawn_scene(
@@ -199,7 +226,9 @@ fn update(world: &mut World, root: Entity, props: Properties) -> Result {
         bsn! { ChildOf(root) Node { display: Display::None } },
     )
     .map_err(|error| error.into_bevy_error())?;
-    let result = update_parts(world, root, areas, staging, &existing, props.parts);
+    let result = update_parts(
+        world, root, areas, staging, &existing, placements, parameters,
+    );
     world.despawn(staging);
     result.map_err(Into::into)
 }
@@ -211,6 +240,7 @@ fn update_parts(
     staging: Entity,
     existing: &[Part],
     placements: Vec<Placement>,
+    parameters: Parameters,
 ) -> SceneResult<()> {
     let mut parts = Vec::with_capacity(placements.len());
     let mut new = Vec::new();
@@ -218,7 +248,11 @@ fn update_parts(
         if let Some(part) = existing.iter().find(|part| {
             part.placement.id == placement.id
                 && part.placement.scene == placement.scene
+                && part.placement.bindings == placement.bindings
                 && world.entities().contains_spawned(part.root)
+                && world
+                    .get::<Parameters>(root)
+                    .is_some_and(|before| parameters.can_reuse(before, &placement.bindings))
         }) {
             parts.push(Part {
                 placement,
@@ -237,8 +271,16 @@ fn update_parts(
         .collect();
     replace_scene_children(world, root, &retired, &new)?;
     arrange(world, areas, &parts);
-    world.entity_mut(root).insert(Composition(parts));
+    attach(world, root, parts, parameters);
     Ok(())
+}
+
+fn attach(world: &mut World, root: Entity, parts: Vec<Part>, parameters: Parameters) {
+    let bindings = parts
+        .iter()
+        .map(|part| (part.root, part.placement.bindings.clone()));
+    parameters.attach(world, root, bindings);
+    world.entity_mut(root).insert(Composition(parts));
 }
 
 fn mount_part(world: &mut World, parent: Entity, placement: Placement) -> SceneResult<Part> {
