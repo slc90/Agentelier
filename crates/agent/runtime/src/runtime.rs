@@ -139,7 +139,7 @@ enum AttachmentReply {
 }
 
 enum Command {
-    RestoreWidget(agentelier_tools::widget::Job, Box<dyn FnOnce() + Send>),
+    RunWidget(agentelier_tools::widget::Job, Box<dyn FnOnce() + Send>),
     SaveSceneState(
         u64,
         agentelier_tools::ecs_access::SceneTarget,
@@ -620,7 +620,7 @@ impl AgentRuntime {
                                     records, receipts: task_receipts, pending_model: pending_session_model, ..
                                 } = owner;
                                 match command {
-                                    Command::RestoreWidget(job, wake) => {
+                                    Command::RunWidget(job, wake) => {
                                         let access = ecs_access.clone();
                                         let shutdown = runtime_shutdown.clone();
                                         let _worker = tokio::spawn(async move {
@@ -1941,12 +1941,12 @@ impl AgentRuntime {
         self.submit(Command::SaveSceneState(id, target, state))
     }
 
-    pub fn restore_widget(
+    pub fn run_widget(
         &self,
         job: agentelier_tools::widget::Job,
         wake: impl FnOnce() + Send + 'static,
     ) -> Result<(), RuntimeFailure> {
-        self.submit(Command::RestoreWidget(job, Box::new(wake)))
+        self.submit(Command::RunWidget(job, Box::new(wake)))
     }
 
     pub fn steer_conversation(&self, input: SteerInput) -> Result<(), RuntimeFailure> {

@@ -115,15 +115,13 @@ pub struct Connection {
     pending_audio: HashMap<u64, SessionId>,
 }
 impl Connection {
-    pub fn restore_widget(
+    pub fn run_widget(
         &mut self,
-        definition: crate::widget::Definition,
-        state: crate::widget::State,
+        (job, ticket): (crate::widget::Job, crate::widget::Ticket),
     ) -> Result<crate::widget::Ticket, BridgeFailure> {
-        let (job, ticket) = crate::widget::Job::restore(definition, state);
         let wake = self.wake.clone();
         self.runtime
-            .restore_widget(job, move || {
+            .run_widget(job, move || {
                 let _signal = wake.signal();
             })
             .map_err(|error| BridgeFailure(error.to_string()))?;

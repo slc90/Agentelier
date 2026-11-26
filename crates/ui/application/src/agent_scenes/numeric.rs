@@ -3,7 +3,7 @@ use agentelier_agent_host::AgentHostPlugin;
 use bevy::{prelude::*, ui_widgets::ValueChange};
 use bevy_widgetry::{
     number_input::{WidgetryNumber, WidgetryNumberInput, WidgetryNumberInputPlugin},
-    slider::{WidgetrySlider, WidgetrySliderHeadless, WidgetrySliderPlugin},
+    slider::{SliderDragEnded, WidgetrySlider, WidgetrySliderHeadless, WidgetrySliderPlugin},
     text::WidgetryText,
 };
 use serde::{Deserialize, Serialize};
@@ -170,6 +170,7 @@ fn slider(properties: Properties<f32>) -> Result<impl Scene> {
         Name("NativeNumericSlider") template(move |_| Ok(kind))
         Node { width: percent(100), max_width: px(320) }
         on(slider_changed)
+        on(slider_ended)
     };
     Ok(bsn! {
         Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(4) }
@@ -301,17 +302,7 @@ fn slider_changed(
     let Ok((kind, parent)) = controls.get(event.source) else {
         return;
     };
-    let (value, display) = match kind {
-        Kind::Integer => {
-            let value = event.value as i64;
-            (NumericValue::Integer(value), value.to_string())
-        }
-        Kind::Float => {
-            let display = event.value.to_string();
-            let value = display.parse::<f64>().unwrap_or(f64::from(event.value));
-            (NumericValue::Float(value), display)
-        }
-    };
+    let (value, display) = slider_value(*kind, event.value);
     if let Some(text) = children
         .iter_descendants(parent.parent())
         .find(|child| texts.contains(*child))
@@ -324,6 +315,31 @@ fn slider_changed(
         value,
         is_final: event.is_final,
     });
+}
+
+fn slider_ended(event: On<SliderDragEnded>, controls: Query<&Kind>, mut commands: Commands) {
+    if let Ok(&kind) = controls.get(event.entity) {
+        let (value, _) = slider_value(kind, event.value);
+        commands.trigger(NumericChange {
+            source: event.entity,
+            value,
+            is_final: true,
+        });
+    }
+}
+
+fn slider_value(kind: Kind, raw: f32) -> (NumericValue, String) {
+    match kind {
+        Kind::Integer => {
+            let value = raw as i64;
+            (NumericValue::Integer(value), value.to_string())
+        }
+        Kind::Float => {
+            let display = raw.to_string();
+            let value = display.parse::<f64>().unwrap_or(f64::from(raw));
+            (NumericValue::Float(value), display)
+        }
+    }
 }
 
 fn number_changed<T: WidgetryNumber + EventValue>(

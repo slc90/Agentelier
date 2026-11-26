@@ -1,10 +1,13 @@
+mod input;
+
 use agentelier_agent_host::{
-    AgentHost, AgentHostPlugin, EcsError, SceneDefinition, mount_scene_child, validating_scene,
-    widget,
+    AgentHost, AgentHostPlugin, EcsError, SceneDefinition, mount_scene_child, patch_native_scene,
+    replace_scene_children, validating_scene, widget,
 };
 use bevy::prelude::*;
 use bevy_widgetry::{scene::spawn_scene, text::WidgetryText};
 use serde_json::{Map, Value};
+use std::{collections::VecDeque, io};
 
 #[derive(Component)]
 struct ScriptedWidget {
@@ -14,8 +17,17 @@ struct ScriptedWidget {
 
 enum Load {
     Queued(Box<widget::Definition>),
-    Running(widget::Ticket),
+    Building(widget::Ticket),
+    Live(Box<Live>),
     Done,
+}
+
+struct Live {
+    native: Entity,
+    program: widget::Program,
+    view: widget::View,
+    events: VecDeque<widget::Event>,
+    pending: Option<widget::Ticket>,
 }
 
 pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
@@ -27,6 +39,7 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
             ("parameters", "Optional serializable map furnished to both callbacks."),
             ("resources", "Optional serializable resource snapshots furnished to both callbacks."),
             ("parts returned by source", "1 to 16 native composition parts, each #{id, area, scene: #{template, props}}. area is intro, controls, content, or footer. Use actual registered Scene props. Host owns their native lifetimes."),
+            ("on_event callback", "Optional fn on_event(ctx, event), called locally in real input order; return () to ignore or return a new #{parts, state}. ctx.state holds the last successfully displayed state. event.part is a stable part ID. event.kind is click, number, selection, text, key, or drag. Number and text carry value and is_final; selection carries value; key carries key, pressed, repeat; drag carries phase (start/move/end), position and delta."),
         ],
         build,
         None,
@@ -35,6 +48,7 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
 }
 
 pub(super) fn install(app: &mut App) {
+    input::install(app);
     app.add_systems(
         Update,
         advance.after(agentelier_agent_host::ReceiveAgentEvents),
@@ -81,69 +95,153 @@ fn build(
 }
 
 fn mount_view(world: &mut World, root: Entity, view: widget::View) -> Result<Entity, EcsError> {
-    let definition = SceneDefinition {
+    mount_scene_child(world, root, &layout(view.parts))
+}
+
+fn layout(parts: Vec<Value>) -> SceneDefinition {
+    SceneDefinition {
         template: "agentelier.composition".into(),
-        props: Map::from_iter([("parts".into(), Value::Array(view.parts))]),
-    };
-    mount_scene_child(world, root, &definition)
+        props: Map::from_iter([("parts".into(), Value::Array(parts))]),
+    }
 }
 
 fn advance(world: &mut World) {
-    let mut ready = Vec::new();
-    let mut start = Vec::new();
-    for (entity, mut runtime) in world
-        .query::<(Entity, &mut ScriptedWidget)>()
-        .iter_mut(world)
-    {
-        match &runtime.load {
-            Load::Queued(_) => {
-                if let Load::Queued(definition) = std::mem::replace(&mut runtime.load, Load::Done) {
-                    start.push((entity, runtime.status, definition));
-                }
-            }
-            Load::Running(ticket) => {
-                if let Some(result) = ticket.poll() {
-                    ready.push((entity, runtime.status, result));
-                    runtime.load = Load::Done;
-                }
-            }
-            Load::Done => {}
-        }
+    let roots: Vec<_> = world
+        .query::<(Entity, &ScriptedWidget)>()
+        .iter(world)
+        .filter_map(|(entity, state)| {
+            let work = match &state.load {
+                Load::Queued(_) | Load::Building(_) => true,
+                Load::Live(live) => live.pending.is_some() || !live.events.is_empty(),
+                Load::Done => false,
+            };
+            work.then_some(entity)
+        })
+        .collect();
+    if roots.is_empty() {
+        return;
     }
     let host = world.resource::<AgentHost>().clone();
-    for (root, status, definition) in start {
-        let state = definition
-            .prepared
-            .as_ref()
-            .map(|view| view.state.clone())
-            .unwrap_or_default();
-        match host.restore_widget(*definition, state) {
-            Ok(ticket) => {
-                if let Some(mut widget) = world.get_mut::<ScriptedWidget>(root) {
-                    widget.load = Load::Running(ticket);
-                }
+    for root in roots {
+        let (status, load) = {
+            let Some(mut state) = world.get_mut::<ScriptedWidget>(root) else {
+                continue;
+            };
+            (state.status, std::mem::replace(&mut state.load, Load::Done))
+        };
+        let next = match load {
+            Load::Queued(definition) => begin(&host, *definition).unwrap_or_else(|error| {
+                feedback(world, status, Some(format!("脚本控件无法构建：{error}")));
+                Load::Done
+            }),
+            Load::Building(ticket) => match ticket.poll() {
+                None => Load::Building(ticket),
+                Some(reply) => match reply.map_err(|error| error.to_string()).and_then(|reply| {
+                    mount_live(world, root, reply).map_err(|error| error.to_string())
+                }) {
+                    Ok(live) => {
+                        feedback(world, status, None);
+                        Load::Live(Box::new(live))
+                    }
+                    Err(error) => {
+                        feedback(world, status, Some(format!("脚本控件无法构建：{error}")));
+                        Load::Done
+                    }
+                },
+            },
+            Load::Live(mut live) => {
+                run_event(world, status, &mut live, &host);
+                Load::Live(live)
             }
-            Err(error) => fail(world, status, &error.to_string()),
-        }
-    }
-    for (root, status, result) in ready {
-        match result
-            .map_err(|error| error.to_string())
-            .and_then(|view| mount_view(world, root, view).map_err(|error| error.to_string()))
-        {
-            Ok(_) => {
-                if let Some(mut node) = world.get_mut::<Node>(status) {
-                    node.display = Display::None;
-                }
-            }
-            Err(error) => fail(world, status, &error),
+            Load::Done => Load::Done,
+        };
+        if let Some(mut state) = world.get_mut::<ScriptedWidget>(root) {
+            state.load = next;
         }
     }
 }
 
-fn fail(world: &mut World, status: Entity, error: &str) {
+fn begin(host: &AgentHost, definition: widget::Definition) -> Result<Load> {
+    let state = definition
+        .prepared
+        .as_ref()
+        .map(|view| view.state.clone())
+        .unwrap_or_default();
+    host.run_widget(widget::Job::restore(definition, state))
+        .map(Load::Building)
+}
+
+fn mount_live(world: &mut World, root: Entity, reply: widget::Reply) -> Result<Live> {
+    let view = reply
+        .view
+        .ok_or_else(|| io::Error::other("脚本控件没有返回原生定义"))?;
+    let native = mount_scene_child(world, root, &layout(view.parts.clone()))?;
+    if let Err(error) = replace_scene_children(world, root, &[], &[native]) {
+        world.despawn(native);
+        return Err(error.into());
+    }
+    Ok(Live {
+        native,
+        program: reply.program,
+        view,
+        events: VecDeque::new(),
+        pending: None,
+    })
+}
+
+fn run_event(world: &mut World, status: Entity, live: &mut Live, host: &AgentHost) {
+    if let Some(ticket) = &live.pending {
+        let Some(result) = ticket.poll() else {
+            return;
+        };
+        live.pending = None;
+        let applied = result.map_err(|error| error.to_string()).and_then(|reply| {
+            if let Some(view) = reply.view {
+                if view.parts != live.view.parts {
+                    let definition = layout(view.parts.clone());
+                    definition.validate().map_err(|error| error.to_string())?;
+                    let updated = patch_native_scene(world, live.native, &definition)
+                        .map_err(|error| error.to_string())?;
+                    if !updated {
+                        return Err("脚本控件原生布局已失效".to_owned());
+                    }
+                }
+                live.view = view;
+                feedback(world, status, None);
+            }
+            Ok(())
+        });
+        if let Err(error) = applied {
+            feedback(world, status, Some(format!("脚本控件事件失败：{error}")));
+        }
+    }
+    if let Some(event) = live.events.front().cloned() {
+        let job = widget::Job::event(live.program.clone(), live.view.state.clone(), event);
+        match host.run_widget(job) {
+            Ok(ticket) => {
+                live.pending = Some(ticket);
+                live.events.pop_front();
+            }
+            Err(error) => feedback(
+                world,
+                status,
+                Some(format!("脚本控件暂时无法处理输入：{error}")),
+            ),
+        }
+    }
+}
+
+fn feedback(world: &mut World, status: Entity, error: Option<String>) {
+    let display = if error.is_some() {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    if let Some(mut node) = world.get_mut::<Node>(status) {
+        node.display = display;
+    }
     if let Some(mut text) = world.get_mut::<Text>(status) {
-        text.0 = format!("脚本控件无法构建：{error}");
+        text.0 = error.unwrap_or_default();
     }
 }
 
