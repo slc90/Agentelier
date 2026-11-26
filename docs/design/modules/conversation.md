@@ -45,7 +45,7 @@ Composer 根据当前 Session 设置和存档条目显示只读状态。新聊�
 
 每轮请求从同一 Session 捕获设置及历史快照。新会话的 SessionSettings 固定 Codex 主体与工作区。任务在首次请求前取得匹配的 ExecutionIdentity，普通请求、自动压缩和工具反馈共用该身份。账号变化保留历史。缺少可核对绑定的旧会话以只读方式恢复，原始工具结果继续归属原调用。普通请求携带服务端 Inline 压缩阈值，完整响应与工具结果封闭后持久保存检查点；失败保留已提交记录，不使用文本摘要重试。
 
-SessionSettings 还持有已解析的完整 InstructionSnapshot，创建时核对版本内容哈希及基础槽位。每轮请求克隆该快照，TurnView 另保留其有序请求指令消息。指令不提交进 ProtocolHistory，LLM Model 在历史前单独注入；多轮不会累计重复指令。重置复制当前会话设置，重试也不重新解析准备区。类型及材料保存关系见[提示词管理](prompts.md)。
+SessionSettings 还持有已解析的完整 InstructionSnapshot。普通 Root 创建前读取本地 Origin 人格并冻结在独立槽位，Conversation 核对正文哈希与指令顺序。每轮请求克隆该快照，TurnView 另保留其有序请求指令消息。LLM Model 在协议历史前注入指令。重置复制当前设置并解析当前 Origin 人格，重试与恢复沿用会话中保存的快照。类型及材料保存关系见[提示词版本与快照](prompts.md)。
 
 Runtime 按 Session ID 持有会话执行状态。每个 Session 独立管理一轮生成、工具工作者、子 Agent、提交回执和队列。多个 Session 可以同时推进，一个 Session 的轮次仍按顺序执行。初始设置、执行过程和图片附件可以从本地存档恢复。工具任务最多 32 次请求及 64 次调用，同一响应可提出多项调用，经会话许可独立执行并保存实际终态。同一 Turn 的下一请求等待同步调用的结果确认入史。开放的异步调用可以继续执行。生成与展示的传递、关闭与回收关系见[总体架构](../architecture.md#内存聊天与流式投影)。
 
@@ -61,7 +61,7 @@ Turn 的 input_id 将同一输入的多次尝试归组，id 与 operation_id 每
 
 ## 空白会话
 
-Create 接受准备区快照；Reset 核对当前 Session 身份并从执行侧复制其设置。运行中的 Turn 拒绝替换；空闲时准备新的 UUID 身份与初始快照，Session Store 确认权威初始记录落盘后才替换当前 Session，并将展示与 ProtocolHistory 置空。写入失败保留原会话和草稿，Reset 不删除旧存档。UI 在提交替换前持有待确认设置，用户确认后才发请求；取消确认不改变原记录，原会话草稿随 Session ID 暂存在本次运行中，新会话使用独立空草稿。
+Create 接受准备区快照。Reset 核对当前 Session 身份并从执行侧复制其设置。两者都在创建新 UUID 前加载当前数据目录的 Origin 人格。运行中的 Turn 拒绝替换，Session Store 确认权威初始记录落盘后才替换当前 Session，并将展示与 ProtocolHistory 置空。加载或写入失败时保留原会话和草稿，Reset 保留旧存档。UI 在提交替换前持有待确认设置，用户确认后才发请求。原会话草稿随 Session ID 暂存在本次运行中，新会话使用独立空草稿。
 
 持久初始设置包含模型 slug、显示名称、推理设置、图片能力、完整指令版本与内容哈希、固定工作目录及工具名称、描述、参数契约，不记录账号主体或凭据。账号一致性只在任务内核对，不作为会话所有权。存储的序号、提交与收尾见[会话存储](session-store.md)。
 

@@ -1,7 +1,7 @@
 use super::ModelControl;
 use agentelier_conversation::{
     AgentId, Conversation, ConversationEvent, ConversationFailure, PreparedSession, ProjectId,
-    RecordEvent, SessionId, SessionView, SteerInput,
+    RecordEvent, SessionId, SessionSettings, SessionView, SteerInput,
 };
 use agentelier_session_store::{Commit, SessionStore};
 use std::io;
@@ -21,6 +21,20 @@ pub(super) struct FirstMessage {
     pub(super) input: String,
     pub(super) steers: mpsc::Receiver<SteerInput>,
     pub(super) task_actions: mpsc::Receiver<agentelier_turn_runner::SessionTaskCommand>,
+}
+
+pub(super) async fn freeze_origin(
+    mut settings: SessionSettings,
+    data_root: &Path,
+) -> Result<SessionSettings, ConversationFailure> {
+    let path = data_root.join("persona").join("origin.md");
+    let snapshot = settings.instructions.clone();
+    settings.instructions = tokio::task::spawn_blocking(move || snapshot.with_origin(&path))
+        .await
+        .map_err(|failure| ConversationFailure::new(format!("Origin 人格加载任务失败：{failure}")))?
+        .map_err(|failure| ConversationFailure::new(failure.to_string()))?
+        .into();
+    Ok(settings)
 }
 
 pub(super) async fn save_working_directory(

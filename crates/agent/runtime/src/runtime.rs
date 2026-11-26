@@ -1002,7 +1002,7 @@ impl AgentRuntime {
                                     Command::ModelFinished(result) => {
                                         let task =
                                             model.take().ok_or(RuntimeFailure::ModelState)?;
-                                        task.check_instance(&conversation)?;
+                                        task.check_instance(conversation)?;
                                         *stopping_root = None;
                                         if let Some(bound) = task.control.turn.get() {
                                             children.clear_wait(agentelier_conversation::AgentId::for_root(bound.session));
@@ -1084,7 +1084,7 @@ impl AgentRuntime {
                                         }
                                     }
                                     Command::TaskActionFinished(id, receipt) => {
-                                        model_task::publish_tasks(&conversation, &publish)?;
+                                            model_task::publish_tasks(conversation, &publish)?;
                                         emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::TaskAction(receipt)))?;
                                     }
                                     Command::TaskAction { id, session, action } => {
@@ -1107,7 +1107,7 @@ impl AgentRuntime {
                                                 .as_ref()
                                                 .filter(|task| task.chat)
                                                 .ok_or(RuntimeFailure::ModelState)?;
-                                            task.check_instance(&conversation)?;
+                                            task.check_instance(conversation)?;
                                             if matches!(&event, RunnerEvent::Receipt(receipt) if matches!(receipt.decision, agentelier_conversation::InputDecision::Accepted))
                                                 && let Some(bound) = task.control.turn.get() {
                                                 children.steer_wait(agentelier_conversation::AgentId::for_root(bound.session));
@@ -1237,7 +1237,7 @@ impl AgentRuntime {
                                                     request => (request, None),
                                                 };
                                                 let next = make_owner()?;
-                                                let prepared = match request {
+                                                let resolved = match request {
                                                     ConversationRequest::Create(create) => async {
                                                         use agentelier_conversation::SessionLocation;
                                                         let (_, models) = model_catalog.as_ref()
@@ -1251,15 +1251,20 @@ impl AgentRuntime {
                                                                 (Some(*project), directory_override.clone().unwrap_or(directory))
                                                             }
                                                         };
-                                                        let settings = create.resolve(source, models, directory)?;
-                                                        next.conversation.prepare(settings, &tools, snapshot).map(|prepared| (prepared, project))
+                                                        create.resolve(source, models, directory).map(|settings| (settings, project))
                                                     }.await,
                                                     ConversationRequest::Reset { session } => conversation.current()
                                                         .filter(|view| view.id == session)
                                                         .ok_or_else(|| ConversationFailure::new("要重置的会话已变化"))
-                                                        .and_then(|view| next.conversation.prepare(*view.settings, &tools, snapshot))
-                                                        .map(|prepared| (prepared, None)),
+                                                        .map(|view| (*view.settings, None)),
                                                     _ => return Err(RuntimeFailure::ModelState),
+                                                };
+                                                let prepared = match resolved {
+                                                    Ok((settings, project)) => creation::freeze_origin(settings, &data_root)
+                                                        .await
+                                                        .and_then(|settings| next.conversation.prepare(settings, &tools, snapshot))
+                                                        .map(|prepared| (prepared, project)),
+                                                    Err(failure) => Err(failure),
                                                 };
                                                 let started = prepared.and_then(|(prepared, project)| {
                                                     if let Some(input) = &first {
@@ -1286,7 +1291,7 @@ impl AgentRuntime {
                                                 }
                                                 match conversation.start(id, request) {
                                                     Ok(view) => {
-                                                        let tools = tool_jobs::SessionTools::for_session(session_tools, &view, &conversation, store.client(), &ecs_access);
+                                                        let tools = tool_jobs::SessionTools::for_session(session_tools, &view, conversation, store.client(), &ecs_access);
                                                         control.bind_root(conversation, &view)?;
                                                         owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.insert(id, control.clone());
                                                         emit(

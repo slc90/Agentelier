@@ -2,7 +2,11 @@ use crate::library::{Library, PromptRef, PromptRevision};
 use crate::{CollaborationMode, RoleSnapshot};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io;
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::Path;
+
+const ORIGIN_PERSONA_MAX_BYTES: usize = 16 * 1024;
 
 pub fn content_hash(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
@@ -26,6 +30,7 @@ pub struct InstructionConfig {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InstructionSlot {
     Base,
+    Origin,
     Supplement,
     Collaboration,
     SubAgent,
@@ -83,6 +88,29 @@ impl Library {
 }
 
 impl InstructionSnapshot {
+    pub fn with_origin(&self, path: &Path) -> io::Result<Self> {
+        self.validate()?;
+        let revision = origin_revision(path).map_err(|failure| {
+            io::Error::new(
+                failure.kind(),
+                format!("无法加载 Origin 人格文件 {}：{failure}", path.display()),
+            )
+        })?;
+        let mut snapshot = self.clone();
+        snapshot
+            .instructions
+            .retain(|instruction| instruction.slot != InstructionSlot::Origin);
+        snapshot.instructions.insert(
+            usize::from(snapshot.base_overridden),
+            ResolvedInstruction {
+                slot: InstructionSlot::Origin,
+                revision,
+            },
+        );
+        snapshot.validate()?;
+        Ok(snapshot)
+    }
+
     pub fn for_child(&self, role: &RoleSnapshot) -> io::Result<Self> {
         self.validate()?;
         let mut snapshot = Self {
@@ -111,6 +139,7 @@ impl InstructionSnapshot {
             instruction.revision.validate()?;
             match instruction.slot {
                 InstructionSlot::Base if order == 0 => bases += 1,
+                InstructionSlot::Origin if order == usize::from(self.base_overridden) => {}
                 InstructionSlot::Supplement => {}
                 InstructionSlot::Collaboration if instructions.peek().is_none() => {}
                 InstructionSlot::SubAgent => {
@@ -148,4 +177,31 @@ impl InstructionSnapshot {
             })
             .collect()
     }
+}
+
+fn origin_revision(path: &Path) -> io::Result<PromptRevision> {
+    let mut bytes = Vec::new();
+    File::open(path)?
+        .take(ORIGIN_PERSONA_MAX_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > ORIGIN_PERSONA_MAX_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "人格正文超过 16 KiB",
+        ));
+    }
+    let text = String::from_utf8(bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "人格正文不是有效的 UTF-8"))?;
+    if text.trim().is_empty() {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "人格正文为空"));
+    }
+    let mut revision = PromptRevision::custom(
+        "Origin".into(),
+        text,
+        "zh".into(),
+        path.display().to_string(),
+    );
+    revision.reference.id = "agentelier.origin".into();
+    revision.readonly = true;
+    Ok(revision)
 }

@@ -20,7 +20,9 @@ flowchart LR
 
 Chat UI 通过数据目录就绪事件取得当前存储路径；Widgetry JobManager 执行加载、保存及导入，接收回复并确认 JobOutcome 后更新投影。当前同一时间只有一个文件操作，操作期间禁用编辑提交。读写失败显示错误并保留已有库；应用整体收尾沿宿主的辅助 Job 生命周期进行，不改变认证运行体系。
 
-新建会话从准备区解析快照，通过 Conversation Bridge 逐字段传入 SessionSettings。Conversation 在创建时核对并固定快照，每轮生成请求克隆同一快照；重置复制旧 SessionSettings，重试复用同一设置。指令独立于 ProtocolHistory，每次只在请求前部注入一次，不随成功轮次累计。原有历史提交、失败展示、取消和任务回收语义保持原有边界。
+准备区解析基础、补充和协作配置，通过 Conversation Bridge 提交创建设置。Runtime 在普通 Root 的 Create、CreateAndSend 与 Reset 落盘前，从应用数据目录读取 `persona/origin.md`，由 Prompts 生成 Origin 槽位及 SHA-256。快照中现有基础覆盖在最前面，Origin 紧随其后，无基础覆盖时位于首位，补充与协作槽位依序跟随。新建会话缺少有效且非空的 UTF-8 正文时显示文件路径和失败原因，正文上限为 16 KiB。
+
+Conversation 在创建时核对并固定快照。Reset 复制设置并替换 Origin 槽位，重试及恢复旧会话使用保存的快照。指令独立于 ProtocolHistory，每次只在请求前部注入一次。Origin 的本地文件独立于可编辑版本库，源文件更新时，已存储会话继续使用固定正文与摘要。
 
 TurnView 保留其请求所用的指令消息，Bridge 传递完整安全投影。Chat UI 的反射状态保存 JSON 形式的会话快照及最近请求指令，供用户查看和 BRP 只读核对；该 JSON 不参与网络请求构造。诊断不包含凭据、账号认证头或加密 reasoning 原文，日志不输出提示词及聊天正文。
 
@@ -37,4 +39,4 @@ Root 在创建时将策略解析为独立的 `Collaboration` 指令，按固定�
 
 提示词库提供 `general`、`research`、`implementation` 和 `review` 四个内置角色。`roles` 可声明自定义角色，每项有唯一 `id`、非零 `version` 和对提示词版本的 `instructions` 引用，可附带 `model`、`reasoning` 及 `allowed_tools`。未知角色、空配置及缺失的版本引用会返回配置错误。工具白名单必须是父级工具权限的子集。
 
-子 Agent 指令快照复用基础和补充指令，再附加独立的 `SubAgent` 通用约束及 `Role` 指令。Role 指令包含解析时的完整正文与哈希，原任务通过自己的输入路径提交。角色声明和快照构造属于 Prompts，实际子 Agent 创建在 Runtime 接入。
+子 Agent 指令快照只从 Root 继承基础和补充指令，再附加独立的 `SubAgent` 通用约束及 `Role` 指令。Role 指令包含解析时的完整正文与哈希，原任务通过自己的输入路径提交。角色声明和快照构造属于 Prompts，实际子 Agent 创建在 Runtime 接入。

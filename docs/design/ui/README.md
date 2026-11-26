@@ -147,6 +147,8 @@ flowchart TB
 
 默认模型为 `gpt-6.2-sol`，默认推理强度为 `high`。这两个默认值只在创建新 Session 时注入 `SessionSettings`；已有 Session 保留自己的模型和推理强度。用户在 D 区切换模型只改变当前 Session。
 
+新建普通聊天时由 Runtime 加载应用数据目录的 Origin 人格。文件读取或校验失败时，原聊天保留并显示失败原因，首次发送的草稿保留。指令来源和摘要沿用会话的请求核对入口。
+
 发送、Steer、Queue、Stop、Retry 和结果续接继续走现有 Conversation / Runtime 语义。Composer 不拥有 Turn、任务或协议历史。
 
 ## Session 条目显示执行状态

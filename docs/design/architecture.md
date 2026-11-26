@@ -227,7 +227,7 @@ Markdown 的原文、解析块和原生布局由独立 UI crate 管理，不依�
 
 Prompts 是无 Bevy、网络和线程依赖的业务库，管理来源与派生版本、基础覆盖及有序补充配置、预设解析和完整快照。应用内置来源数据由 Assets 提供，Chat UI 在启动数据目录就绪后，通过 Widgetry JobManager 加载该目录的 `prompts.json`；保存和 UTF-8 导入同样使用辅助 Job，并等待真实终态后更新 UI。来源版本与旧版本不被编辑覆盖，文件原子替换不接触账号凭据。
 
-Chat UI 管理提示词库、组合预览和会话核对界面，并在创建 Session 时提交解析后的完整 InstructionSnapshot。Conversation 固定快照；重置复制当前设置，重试沿用原快照。LLM Model 在每次请求中将快照转换为有序 `developer` 消息，置于已提交协议历史和本轮输入之前，避免把指令重复写入历史。Bridge 传递快照与请求指令安全投影；UI 可核对文本、来源版本、哈希、角色及顺序，不公开凭据或加密推理内容。详见[提示词管理](modules/prompts.md)。
+Chat UI 提交准备区解析的指令，Runtime 在普通 Root 新建和 Reset 时从当前数据目录的 `persona/origin.md` 注入 Origin 槽位。Prompts 校验正文并计算摘要，Conversation 固定完整快照。重试和恢复沿用原快照。LLM Model 在每次请求中将快照转换为有序 `developer` 消息，置于协议历史和本轮输入之前。Bridge 传递安全投影，UI 可核对指令的文本、来源版本、哈希、角色和顺序。详见[提示词版本与快照](modules/prompts.md)。
 
 Runner 接收取消并结束网络等待，工具按实际结果收尾。Runtime 等待真实回收，Conversation 保留已确认的历史和最新展示。异常退出或提交不确定时阻止发送与重试，用户可重新加载存档。
 
