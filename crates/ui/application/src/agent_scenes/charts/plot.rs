@@ -58,17 +58,19 @@ pub(super) enum LegendSymbol {
     Point,
     Fill,
     Column,
+    Hidden,
 }
 
 impl LegendSymbol {
-    fn scene(self, item: Legend) -> impl Scene {
+    fn scene(self, item: Legend) -> Option<impl Scene> {
         let (width, height, radius) = match self {
             Self::Line => (18., 3., BorderRadius::MAX),
             Self::Point => (8., 8., BorderRadius::MAX),
             Self::Fill => (18., 8., BorderRadius::all(px(2))),
             Self::Column => (11., 11., BorderRadius::all(px(2))),
+            Self::Hidden => return None,
         };
-        legend_swatch(item, width, height, radius)
+        Some(legend_swatch(item, width, height, radius))
     }
 }
 
@@ -125,6 +127,7 @@ pub(super) enum Style {
     Combined,
     Function,
     Implicit,
+    Region,
 }
 
 pub(super) struct Rendered {
@@ -329,6 +332,7 @@ fn mount(
         Style::Combined => "NativeCombinedChart",
         Style::Function => "NativeFunctionPlot",
         Style::Implicit => "NativeImplicitPlot",
+        Style::Region => "NativeInequalityPlot",
     };
     let root = root(world, parent, name, content.title.as_deref())?;
     let result = decorate(world, root, content, style);
@@ -446,7 +450,7 @@ fn decorate(
     let title = title.map(heading);
     let legend: Vec<_> = marks
         .into_iter()
-        .map(|mark| mark.symbol.scene(mark.legend))
+        .filter_map(|mark| mark.symbol.scene(mark.legend))
         .collect();
     let legend = bevy::scene::RelatedScenes::<Children>::new(legend);
     let legend = (!matches!(style, Style::Histogram)).then(|| {

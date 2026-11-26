@@ -2,6 +2,8 @@ mod expression;
 mod function;
 mod implicit;
 mod level_grid;
+mod region;
+mod region_mesh;
 mod trace;
 
 use super::{
@@ -91,7 +93,7 @@ impl Variables {
 }
 
 pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
-    implicit::register(function::register(host)?)
+    region::register(implicit::register(function::register(host)?)?)
 }
 
 pub(super) fn install(app: &mut App) {
@@ -99,7 +101,10 @@ pub(super) fn install(app: &mut App) {
 }
 
 pub(in crate::agent_scenes) fn supports(template: &str) -> bool {
-    matches!(template, function::TEMPLATE | implicit::TEMPLATE)
+    matches!(
+        template,
+        function::TEMPLATE | implicit::TEMPLATE | region::TEMPLATE
+    )
 }
 
 pub(in crate::agent_scenes) fn bind_variable(

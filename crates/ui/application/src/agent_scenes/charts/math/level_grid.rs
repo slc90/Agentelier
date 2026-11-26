@@ -8,6 +8,16 @@ pub(super) struct Sample {
     pub value: Option<f64>,
 }
 
+impl Sample {
+    pub(super) fn at(position: DVec2, value: Option<f64>) -> Self {
+        Self {
+            index: usize::MAX,
+            position,
+            value,
+        }
+    }
+}
+
 pub(super) struct Grid {
     columns: usize,
     rows: usize,
@@ -117,14 +127,14 @@ pub(super) fn edge_crossing(
 ) -> Option<DVec2> {
     let (mut a, mut b) = (first.position, last.position);
     let (mut fa, mut fb) = (first.value?, last.value?);
-    if (fa >= 0.0) == (fb >= 0.0) {
-        return None;
-    }
     if fa == 0.0 {
         return Some(a);
     }
     if fb == 0.0 {
         return Some(b);
+    }
+    if (fa >= 0.0) == (fb >= 0.0) {
+        return None;
     }
     let initial_minimum = fa.abs().min(fb.abs());
     let initial_maximum = fa.abs().max(fb.abs());
