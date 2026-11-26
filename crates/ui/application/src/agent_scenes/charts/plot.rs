@@ -277,29 +277,60 @@ pub(super) fn mount(
     content: Content,
     style: Style,
 ) -> std::result::Result<Rendered, EcsError> {
-    if content
-        .title
-        .as_ref()
-        .is_some_and(|title| title.trim().is_empty() || title.len() > 256)
-    {
-        return Err(invalid("title 必须非空且最多 256 字节"));
-    }
     let name = match style {
         Style::Line => "NativeLineChart",
         Style::Scatter => "NativeScatterChart",
         Style::Area => "NativeAreaChart",
         Style::Bars => "NativeBarChart",
     };
-    let root = spawn_scene(world, bsn! {
-        ChildOf(parent) Name(name)
-        Node { width: percent(100), min_width: px(0), max_width: px(880), flex_direction: FlexDirection::Column, row_gap: px(5) }
-    }).map_err(construction)?;
+    let root = root(world, parent, name, content.title.as_deref())?;
     let result = decorate(world, root, content, style);
     if let Err(error) = result {
         world.despawn(root);
         return Err(error);
     }
     result
+}
+
+pub(super) fn root(
+    world: &mut World,
+    parent: Entity,
+    name: &'static str,
+    title: Option<&str>,
+) -> std::result::Result<Entity, EcsError> {
+    if title.is_some_and(|title| title.trim().is_empty() || title.len() > 256) {
+        return Err(invalid("title 必须非空且最多 256 字节"));
+    }
+    spawn_scene(world, bsn! {
+        ChildOf(parent) Name(name)
+        Node { width: percent(100), min_width: px(0), max_width: px(880), flex_direction: FlexDirection::Column, row_gap: px(5) }
+    }).map_err(construction)
+}
+
+pub(super) fn document(world: &mut World, root: Entity) -> std::result::Result<Entity, EcsError> {
+    let document = spawn_scene(
+        world,
+        bsn! { ChildOf(root) Name("ChartDocument") template(|_| Ok(CanvasDocument)) },
+    )
+    .map_err(construction)?;
+    CanvasDocument::set_history_capacity(world, document, 0).map_err(construction)?;
+    Ok(document)
+}
+
+pub(super) fn viewport(document: Entity) -> impl Scene {
+    bsn! {
+        @CanvasView { @document: {Some(document)} }
+        NativePlot Name("NativePlotViewport") Pickable::IGNORE InteractionDisabled
+        Node { width: percent(100), min_width: px(0), min_height: px(140), aspect_ratio: {Some(WIDTH / HEIGHT)} }
+        template(|context| Ok(BackgroundColor(context.resource::<WidgetryTheme>().text_field.editable.normal.background)))
+    }
+}
+
+pub(super) fn heading(title: String) -> impl Scene {
+    bsn! {
+        Text(title) WidgetryText TextLayout::linebreak(bevy::text::LineBreak::WordOrCharacter)
+        TextFont { font_size: bevy::text::FontSize::Px(19.0) }
+    }
 }
 
 fn decorate(
@@ -315,15 +346,10 @@ fn decorate(
         marks,
         baseline,
     } = content;
-    let document = spawn_scene(
-        world,
-        bsn! { ChildOf(root) Name("ChartDocument") template(|_| Ok(CanvasDocument)) },
-    )
-    .map_err(construction)?;
+    let document = document(world, root)?;
     let theme = world.resource::<WidgetryTheme>();
     let ink = theme.text.normal.foreground;
     let grid = theme.text_field.editable.normal.border;
-    CanvasDocument::set_history_capacity(world, document, 0).map_err(construction)?;
     let (layers, reference) = CanvasDocument::edit(world, document, |world, token| {
         axes(world, token, &x, &y, ink, grid)?;
         let reference = if let Some(baseline) = &baseline {
@@ -365,15 +391,16 @@ fn decorate(
     .map_err(construction)?;
     let y_name = y.name;
     let x_name = x.name;
-    let title = title.map(|title| {
-        bsn! {
-            Text(title) WidgetryText TextLayout::linebreak(bevy::text::LineBreak::WordOrCharacter)
-            TextFont { font_size: bevy::text::FontSize::Px(19.0) }
-        }
-    });
+    let title = title.map(heading);
+    let (legend_width, legend_height) = match style {
+        Style::Line => (18., 3.),
+        Style::Scatter => (8., 8.),
+        Style::Area => (18., 8.),
+        Style::Bars => (11., 11.),
+    };
     let legend: Vec<_> = marks
         .into_iter()
-        .map(|mark| legend(mark.legend, style))
+        .map(|mark| legend(mark.legend, legend_width, legend_height))
         .collect();
     let legend = bevy::scene::RelatedScenes::<Children>::new(legend);
     spawn_scene(world, bsn! {
@@ -382,10 +409,7 @@ fn decorate(
         Children [
             @{title}--
             Text(y_name) WidgetryText TextLayout::linebreak(bevy::text::LineBreak::WordOrCharacter)--
-            @CanvasView { @document: {Some(document)} }
-            NativePlot Name("NativePlotViewport") Pickable::IGNORE InteractionDisabled
-            Node { width: percent(100), min_width: px(0), min_height: px(140), aspect_ratio: {Some(WIDTH / HEIGHT)} }
-            template(|context| Ok(BackgroundColor(context.resource::<WidgetryTheme>().text_field.editable.normal.background)))--
+            @viewport(document)--
             Text(x_name) WidgetryText TextLayout::linebreak(bevy::text::LineBreak::WordOrCharacter)
             Node { align_self: AlignSelf::Center }--
             Node { min_width: px(0), column_gap: px(14), row_gap: px(4), flex_wrap: FlexWrap::Wrap }
@@ -410,20 +434,14 @@ fn decorate(
     })
 }
 
-fn legend(item: Legend, style: Style) -> impl Scene {
+pub(super) fn legend(item: Legend, width: f32, height: f32) -> impl Scene {
     let Legend { name, color } = item;
-    let (width, height) = match style {
-        Style::Line => (18., 3.),
-        Style::Scatter => (8., 8.),
-        Style::Area => (18., 8.),
-        Style::Bars => (11., 11.),
-    };
     bsn! {
         Node { min_width: px(0), max_width: percent(100), align_items: AlignItems::Center, column_gap: px(6), overflow: Overflow::clip_x() }
         Children [
             Node { width: px(width), height: px(height), flex_shrink: 0.0, border_radius: BorderRadius::MAX }
             BackgroundColor(color)--
-            Text(name) WidgetryText TextLayout::linebreak(bevy::text::LineBreak::WordBoundary)
+            Text(name) WidgetryText TextLayout::linebreak(bevy::text::LineBreak::NoWrap)
             Node { min_width: px(0) }
         ]
     }
@@ -497,7 +515,7 @@ fn axes(
     Ok(())
 }
 
-fn label(
+pub(super) fn label(
     world: &mut World,
     token: CanvasEditToken,
     text: &str,

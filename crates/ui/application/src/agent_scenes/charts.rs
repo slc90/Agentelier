@@ -1,6 +1,7 @@
 mod area;
 mod axis;
 pub(super) mod bars;
+mod pie;
 mod plot;
 pub(super) mod scatter;
 
@@ -48,6 +49,7 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
     .and_then(scatter::register)
     .and_then(area::register)
     .and_then(bars::register)
+    .and_then(pie::register)
 }
 
 pub(super) fn install(app: &mut App) {
