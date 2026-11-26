@@ -174,7 +174,7 @@ fn normal_component(part: Component<'_>) -> Result<&std::ffi::OsStr, Failure> {
     }
 }
 
-fn pin(path: &Path) -> Result<File, Failure> {
+pub(super) fn pin(path: &Path) -> Result<File, Failure> {
     let file = OpenOptions::new()
         .read(true)
         .share_mode(SHARE_READ_WRITE)

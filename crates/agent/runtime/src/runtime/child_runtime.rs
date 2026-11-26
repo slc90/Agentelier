@@ -9,7 +9,6 @@ use agentelier_conversation::{
 };
 use agentelier_llm_model::ProtocolArchive;
 use agentelier_session_store::SessionStoreClient;
-use std::path::PathBuf;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -81,7 +80,7 @@ pub(super) struct Execution {
     pub(super) store: SessionStoreClient,
     pub(super) credentials: CredentialClient,
     pub(super) ecs_access: crate::ecs_access::EcsAccess,
-    pub(super) skills_root: PathBuf,
+    pub(super) skills: agentelier_skills::UserSkills,
     pub(super) stop: CancellationToken,
     pub(super) parent_stop: CancellationToken,
     pub(super) commands: mpsc::Receiver<Preparation>,
@@ -162,6 +161,7 @@ impl Execution {
             &conversation,
             store.clone(),
             &self.ecs_access,
+            &self.skills,
         );
         let (control, steers, task_actions) = ModelControl::new(operation);
         let (progress, incoming) = mpsc::channel(model_task::PROGRESS_CAPACITY);
@@ -173,7 +173,7 @@ impl Execution {
                 progress,
                 steers,
                 task_actions,
-                self.skills_root,
+                self.skills.root_path().to_owned(),
                 None,
                 tools.clone(),
             ),

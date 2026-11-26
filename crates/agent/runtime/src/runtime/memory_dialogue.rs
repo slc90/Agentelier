@@ -25,6 +25,7 @@ const INSTRUCTIONS: &str = "This is the user's global memory management conversa
 pub(super) struct Dialogue {
     credentials: CredentialClient,
     ecs_access: crate::ecs_access::EcsAccess,
+    skills: agentelier_skills::UserSkills,
     memory: Option<MemoryClient>,
     conversation: Conversation,
     model: Option<ModelTask>,
@@ -42,10 +43,12 @@ impl Dialogue {
         credentials: CredentialClient,
         memory: Option<MemoryClient>,
         ecs_access: crate::ecs_access::EcsAccess,
+        skills: agentelier_skills::UserSkills,
     ) -> Self {
         Self {
             credentials,
             ecs_access,
+            skills,
             conversation: Conversation::with_extensions(
                 agentelier_memory::management_registrations(memory.clone()),
             ),
@@ -129,6 +132,7 @@ impl Dialogue {
             &self.conversation,
             store.client(),
             &self.ecs_access,
+            &self.skills,
         );
         let (control, steers, actions) = ModelControl::new(id);
         control.bind_root(&mut self.conversation, &view)?;

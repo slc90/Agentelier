@@ -524,6 +524,7 @@ impl<P: Fn(AgentEvent) -> Result<(), DeliveryFailure>> Environment<'_, P> {
             &owner.conversation,
             self.store.client(),
             self.ecs,
+            self.skills,
         );
         control
             .bind_root(&mut owner.conversation, &view)
@@ -548,7 +549,7 @@ impl<P: Fn(AgentEvent) -> Result<(), DeliveryFailure>> Environment<'_, P> {
                 progress,
                 steers,
                 task_actions,
-                self.data_root.join("skills"),
+                self.skills.root_path().to_owned(),
                 self.memory.clone(),
                 tools,
             ),

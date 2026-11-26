@@ -1,5 +1,6 @@
 use agentelier_conversation::ProcessLedger;
 use agentelier_llm_model::FunctionCall;
+use agentelier_skills::UserSkills;
 use agentelier_tools::{
     ExecutionContext, ProcessSessions, ScriptSession, ToolAccess, ToolAdmission, ToolCatalog,
     ToolMode, ToolResult, ToolStatus, ecs_access::EcsAccess,
@@ -37,6 +38,7 @@ impl SessionTools {
         conversation: &agentelier_conversation::Conversation,
         store: agentelier_session_store::SessionStoreClient,
         ecs_access: &EcsAccess,
+        skills: &UserSkills,
     ) -> Self {
         let session = view.id;
         if let Some((id, tools)) = active
@@ -82,7 +84,7 @@ impl SessionTools {
             processes.clone(),
             process_views.clone(),
             admission.clone(),
-            ecs_access.clone(),
+            ScriptSession::new(ecs_access.clone(), skills.clone()),
         ));
         let tools = Self {
             model_connection: Arc::default(),
@@ -496,7 +498,7 @@ async fn run(
     processes: Arc<ProcessSessions>,
     process_views: watch::Receiver<ProcessLedger>,
     admission: ToolAdmission,
-    ecs_access: EcsAccess,
+    scripts: ScriptSession,
 ) -> RetainedResults {
     let mut execution = Execution {
         calls: JoinSet::new(),
@@ -504,7 +506,7 @@ async fn run(
         identities: HashMap::new(),
         processes,
         process_views,
-        scripts: ScriptSession::new(ecs_access),
+        scripts,
         admission,
         ordinary: None,
         controls: None,

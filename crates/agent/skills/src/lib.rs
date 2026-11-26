@@ -15,7 +15,7 @@ pub use builtin::{
 
 pub use native::{
     Initialized, InterfacePatch, MetadataUpdate, ResourceDirectory, SkillEntry, SkillRequest,
-    SkillSnapshot, UserSkillId, UserSkills, Validation, normalize_name,
+    SkillScript, SkillSnapshot, UserSkillId, UserSkills, Validation, normalize_name,
 };
 pub use parser::parse;
 use serde::{Deserialize, Serialize};

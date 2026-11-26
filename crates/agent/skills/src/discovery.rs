@@ -9,6 +9,10 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) fn read_file(path: &Path, limit: usize) -> Result<String, Failure> {
     let file = File::open(path).map_err(|e| Failure(format!("{}：{e}", path.display())))?;
+    read_open_file(file, limit)
+}
+
+pub(crate) fn read_open_file(file: File, limit: usize) -> Result<String, Failure> {
     if !file
         .metadata()
         .map_err(|e| Failure(e.to_string()))?
@@ -28,6 +32,10 @@ pub(crate) fn read_file(path: &Path, limit: usize) -> Result<String, Failure> {
 
 fn read_frontmatter(path: &Path, bytes_used: &mut usize) -> Result<String, Failure> {
     let file = File::open(path).map_err(|e| Failure(e.to_string()))?;
+    read_open_frontmatter(file, bytes_used)
+}
+
+pub(crate) fn read_open_frontmatter(file: File, bytes_used: &mut usize) -> Result<String, Failure> {
     let metadata = file.metadata().map_err(|e| Failure(e.to_string()))?;
     if !metadata.is_file() || metadata.len() > crate::MAX_SKILL_BYTES as u64 {
         return Err(Failure("SKILL.md 不是普通文件或超过 256 KiB".into()));

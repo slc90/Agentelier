@@ -1,10 +1,12 @@
 mod management;
 mod metadata;
+mod script;
 mod validation;
 
 use crate::{Failure, MAX_SKILL_BYTES, Metadata, check, discovery::read_file, parse};
 pub use management::{SkillEntry, SkillRequest, SkillSnapshot, UserSkillId};
 pub use metadata::{InterfacePatch, MetadataUpdate};
+pub use script::SkillScript;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
@@ -61,6 +63,10 @@ impl UserSkills {
             root,
             writes: Arc::new(Mutex::new(())),
         }
+    }
+
+    pub fn root_path(&self) -> &Path {
+        &self.root
     }
 
     fn guard(&self) -> Result<MutexGuard<'_, ()>, Failure> {

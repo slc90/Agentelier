@@ -5,6 +5,7 @@ use agentelier_conversation::{
 };
 use agentelier_llm_model::{ModelFailure, ModelFailureKind, ModelRequest, ModelResult};
 use agentelier_session_store::SessionStoreClient;
+use agentelier_skills::UserSkills;
 use agentelier_tools::OriginalImage;
 use agentelier_turn_runner::{GeneratedImageFeedback, RunnerEvent, SavedGeneratedImage};
 use std::{io, sync::Arc};
@@ -570,7 +571,7 @@ pub(super) fn start_queued(
     shared: &SharedModel,
     credentials: &CredentialClient,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
-    user_skills_root: &std::path::Path,
+    skills: &UserSkills,
     memory: Option<agentelier_memory::MemoryClient>,
     session_tools: &mut Option<(
         agentelier_conversation::SessionId,
@@ -592,6 +593,7 @@ pub(super) fn start_queued(
         conversation,
         store.client(),
         ecs_access,
+        skills,
     );
     control.bind_root(conversation, &view)?;
     shared
@@ -613,7 +615,7 @@ pub(super) fn start_queued(
             sender,
             steers,
             task_actions,
-            user_skills_root.to_owned(),
+            skills.root_path().to_owned(),
             memory,
             tools,
         ),

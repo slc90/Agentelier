@@ -17,6 +17,8 @@ A workflow Skill can consist of a single `SKILL.md`. Add supporting resources wh
 
 A newly written Skill becomes discoverable on the next task. Creating files does not update the current task's frozen catalog or selected body. If the current task must use the new workflow immediately, explicitly read its file through the normal tools. Report only actual writes, checks, helper execution, and subsequent invocation results. Do not reset authentication or change the application's data directory to validate a Skill.
 
+When asked to package a working Rhai widget, put its program in `scripts/widget.rhai` and document its parameters, native Scene requirements, and saved-state contract in `SKILL.md`. Use a self-contained program with `init(ctx)` and `restore(ctx)` for compatible saved state. For reuse, publish `agentelier.scripted_widget` with `props.skill.directory` set to the exact directory relative to the user Skills root and pass the requested `props.parameters`. Only set `props.skill.entry` for a different relative Rhai entry. To link an existing widget, use `update_scene` with its artifact ID, current revision, and the same association.
+
 ## Core Principles
 
 **Assume Codex is already capable.** Include only information that changes its decisions or improves its work. Remove generic advice, repeated instructions, speculative edge cases, and examples that do not materially clarify the task.

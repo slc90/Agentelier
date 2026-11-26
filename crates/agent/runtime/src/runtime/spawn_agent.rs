@@ -17,7 +17,7 @@ use agentelier_tools::{
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -222,7 +222,7 @@ pub(super) struct SpawnEnvironment<'a> {
     pub(super) store: &'a SessionStoreClient,
     pub(super) credentials: &'a CredentialClient,
     pub(super) operations: &'a crate::OperationSequence,
-    pub(super) skills_root: &'a Path,
+    pub(super) skills: &'a agentelier_skills::UserSkills,
     pub(super) mailbox_commands: &'a mpsc::Sender<mailbox::Command>,
 }
 

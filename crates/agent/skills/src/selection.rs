@@ -1,4 +1,5 @@
 use crate::{Catalog, Failure, Skill, SkillResource, Source, check, discovery::read_file, parse};
+use pulldown_cmark::{Event, Options, Parser};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -14,26 +15,45 @@ pub struct SelectedSkill {
 }
 
 pub fn mentions(input: &str) -> Vec<String> {
-    let characters: Vec<char> = input.chars().collect();
+    if !input.contains('$') {
+        return Vec::new();
+    }
+    let mut math = Parser::new_ext(input, Options::ENABLE_MATH)
+        .into_offset_iter()
+        .filter_map(|(event, range)| {
+            matches!(event, Event::InlineMath(_) | Event::DisplayMath(_)).then_some(range)
+        })
+        .peekable();
+    let characters: Vec<_> = input.char_indices().collect();
     let mut names = Vec::new();
     let mut seen = BTreeSet::new();
-    for (index, character) in characters.iter().enumerate() {
-        if *character != '$'
+    for (index, (offset, character)) in characters.iter().copied().enumerate() {
+        if character != '$'
             || index > 0
-                && (characters[index - 1].is_alphanumeric() || characters[index - 1] == '\\')
+                && (characters[index - 1].1.is_alphanumeric()
+                    || matches!(characters[index - 1].1, '\\' | '$'))
         {
+            continue;
+        }
+        while math.peek().is_some_and(|range| range.end <= offset) {
+            math.next();
+        }
+        if math.peek().is_some_and(|range| range.contains(&offset)) {
             continue;
         }
         let end = characters[index + 1..]
             .iter()
-            .take_while(|c| c.is_alphanumeric() || **c == '-' || **c == '_')
+            .take_while(|(_, c)| c.is_alphanumeric() || matches!(c, '-' | '_'))
             .count()
             + index
             + 1;
-        if end == index + 1 || characters.get(end) == Some(&':') {
+        if end == index + 1 || characters.get(end).is_some_and(|(_, c)| *c == ':') {
             continue;
         }
-        let name: String = characters[index + 1..end].iter().collect();
+        let end_offset = characters
+            .get(end)
+            .map_or(input.len(), |(offset, _)| *offset);
+        let name = input[offset + 1..end_offset].to_owned();
         if seen.insert(name.clone()) {
             names.push(name);
         }

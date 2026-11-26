@@ -1,8 +1,9 @@
 use super::{Control, MAX_SCRIPT_BYTES, TaggedEngine, ecs, engine, worker_failure};
 use crate::{
     ToolFailure,
-    ecs_access::{EcsAccess, SceneDefinition},
+    ecs_access::{EcsAccess, SceneDefinition, SceneStored},
 };
+use agentelier_skills::{SkillScript, UserSkills};
 use rhai::{AST, Dynamic, Engine, Scope};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -37,7 +38,10 @@ pub fn decode_state(values: &State) -> Result<State, ToolFailure> {
 #[derive(Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Definition {
+    #[serde(default)]
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill: Option<SkillScript>,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub parameters: Map<String, Value>,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
@@ -149,9 +153,14 @@ pub struct Timer {
 
 enum Invocation {
     Init(Box<Definition>),
-    Restore(Box<Definition>, State),
+    Restore(Box<Definition>, State, RestoreSource),
     Event(Program, State, Event),
     Tick(Program, State, Timer),
+}
+
+enum RestoreSource {
+    Snapshot,
+    CurrentSkill,
 }
 
 pub struct Job {
@@ -193,7 +202,11 @@ impl Ticket {
 impl Job {
     pub fn restore(mut definition: Definition, state: State) -> (Self, Ticket) {
         definition.prepared = None;
-        Self::new(Invocation::Restore(Box::new(definition), state))
+        Self::new(Invocation::Restore(
+            Box::new(definition),
+            state,
+            RestoreSource::CurrentSkill,
+        ))
     }
 
     pub fn event(program: Program, state: State, event: Event) -> (Self, Ticket) {
@@ -220,7 +233,7 @@ impl Job {
         )
     }
 
-    pub async fn run(self, access: EcsAccess, shutdown: CancellationToken) {
+    pub async fn run(self, access: EcsAccess, skills: UserSkills, shutdown: CancellationToken) {
         let Self {
             invocation,
             result,
@@ -234,7 +247,7 @@ impl Job {
                 () = tokio::time::sleep_until(timer.due.into()) => {}
             }
         }
-        let task = evaluate(invocation, access, &cancel);
+        let task = evaluate(invocation, access, skills, &cancel);
         tokio::pin!(task);
         let value = tokio::select! {
             biased;
@@ -247,19 +260,51 @@ impl Job {
 
 pub(super) async fn prepare(
     scene: &mut SceneDefinition,
+    stored: Option<&SceneStored>,
     state: Option<State>,
     access: EcsAccess,
+    skills: UserSkills,
     cancel: &CancellationToken,
 ) -> Result<Program, ToolFailure> {
     let mut definition: Definition = serde_json::from_value(Value::Object(scene.props.clone()))
         .map_err(|error| ToolFailure::new("invalid_scene_props", error.to_string()))?;
+    let previous = stored
+        .filter(|stored| stored.definition.template == TEMPLATE)
+        .and_then(|stored| stored.definition.props.get("skill"))
+        .filter(|skill| !skill.is_null())
+        .cloned()
+        .map(serde_json::from_value::<SkillScript>)
+        .transpose()
+        .map_err(|error| ToolFailure::new("invalid_scene_props", error.to_string()))?;
+    if definition.skill.is_none() {
+        definition.skill = previous.clone();
+    }
+    let mut selected = None;
+    if let Some(skill) = &definition.skill
+        && (previous.as_ref() != Some(skill) || definition.source.trim().is_empty())
+    {
+        let source = skill.clone();
+        let reader = skills.clone();
+        let request = cancel.child_token();
+        let _cancel_on_drop = request.clone().drop_guard();
+        definition.source =
+            tokio::task::spawn_blocking(move || read_skill(&reader, &source, &request))
+                .await
+                .map_err(worker_failure)??
+                .ok_or_else(|| {
+                    ToolFailure::new("widget_skill_missing", format!("找不到 Skill 脚本 {skill}"))
+                })?;
+        selected = Some(skill.clone());
+    }
     definition.prepared = None;
     let source = Box::new(definition.clone());
     let invocation = match state {
-        Some(state) => Invocation::Restore(source, state),
+        Some(state) => Invocation::Restore(source, state, RestoreSource::Snapshot),
         None => Invocation::Init(source),
     };
-    let initial = evaluate(invocation, access, cancel).await?;
+    let initial = evaluate(invocation, access, skills, cancel)
+        .await
+        .map_err(|error| skill_error(selected.as_ref(), error))?;
     definition.prepared = initial.view;
     scene.props = serde_json::from_value(serde_json::to_value(definition).map_err(output_error)?)
         .map_err(output_error)?;
@@ -269,9 +314,7 @@ pub(super) async fn prepare(
     Ok(initial.program)
 }
 
-pub(super) fn prior_state(
-    stored: Option<&crate::ecs_access::SceneStored>,
-) -> Result<Option<State>, ToolFailure> {
+pub(super) fn prior_state(stored: Option<&SceneStored>) -> Result<Option<State>, ToolFailure> {
     let Some(stored) = stored.filter(|stored| stored.definition.template == TEMPLATE) else {
         return Ok(None);
     };
@@ -287,20 +330,60 @@ pub(super) fn prior_state(
 async fn evaluate(
     invocation: Invocation,
     access: EcsAccess,
+    skills: UserSkills,
     cancel: &CancellationToken,
 ) -> Result<Reply, ToolFailure> {
     let control = Control::new(cancel);
     let _cancel_on_drop = control.cancel.clone().drop_guard();
-    tokio::task::spawn_blocking(move || run(invocation, access, control))
+    tokio::task::spawn_blocking(move || run(invocation, access, &skills, control))
         .await
         .map_err(worker_failure)?
 }
 
-fn run(invocation: Invocation, access: EcsAccess, control: Control) -> Result<Reply, ToolFailure> {
+fn read_skill(
+    skills: &UserSkills,
+    source: &SkillScript,
+    cancel: &CancellationToken,
+) -> Result<Option<String>, ToolFailure> {
+    skills
+        .read_script(source, MAX_SCRIPT_BYTES, cancel)
+        .map_err(|error| {
+            ToolFailure::new(
+                "widget_skill_read_failed",
+                format!("Skill 脚本 {source}：{error}"),
+            )
+        })
+}
+
+fn skill_error(skill: Option<&SkillScript>, error: ToolFailure) -> ToolFailure {
+    match skill {
+        Some(skill) => ToolFailure::new(error.code, format!("Skill 脚本 {skill}：{error}")),
+        None => error,
+    }
+}
+
+fn run(
+    invocation: Invocation,
+    access: EcsAccess,
+    skills: &UserSkills,
+    control: Control,
+) -> Result<Reply, ToolFailure> {
     control.check()?;
+    let mut selected = None;
     let (program, state, event, restoring, time) = match invocation {
         Invocation::Init(definition) => (compile(*definition)?, State::new(), None, false, None),
-        Invocation::Restore(definition, state) => (compile(*definition)?, state, None, true, None),
+        Invocation::Restore(mut definition, state, source) => {
+            if matches!(source, RestoreSource::CurrentSkill)
+                && let Some(skill) = definition.skill.take()
+                && let Some(source) = read_skill(skills, &skill, &control.cancel)?
+            {
+                definition.source = source;
+                selected = Some(skill);
+            }
+            let program =
+                compile(*definition).map_err(|error| skill_error(selected.as_ref(), error))?;
+            (program, state, None, true, None)
+        }
         Invocation::Event(program, state, event) => (program, state, Some(event), false, None),
         Invocation::Tick(program, state, timer) => {
             let now = Instant::now();
@@ -363,12 +446,13 @@ fn run(invocation: Invocation, access: EcsAccess, control: Control) -> Result<Re
     drop(tagged);
     drop(engine);
     control.check()?;
-    let result =
-        result.map_err(|error| ToolFailure::new("widget_script_failed", error.to_string()))?;
+    let result = result
+        .map_err(|error| ToolFailure::new("widget_script_failed", error.to_string()))
+        .map_err(|error| skill_error(selected.as_ref(), error))?;
     let view = if optional && result.is_unit() {
         None
     } else {
-        Some(decode(&result)?)
+        Some(decode(&result).map_err(|error| skill_error(selected.as_ref(), error))?)
     };
     Ok(Reply {
         program,

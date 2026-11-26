@@ -45,7 +45,8 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         widget::TEMPLATE,
         "Publish a native, independently restorable widget authored in Rhai. The program constructs stable native child scenes and computes its initial state.",
         &[
-            ("source", "Self-contained Rhai. Define fn init(ctx) returning #{parts: [...], state: #{...}}. ctx.parameters and ctx.resources are maps. Optional fn restore(ctx) receives the saved initial ctx.state and returns the same shape, otherwise init(ctx) is used. Use publish_scene for validation."),
+            ("source", "Self-contained Rhai, required for a widget without a Skill. Define fn init(ctx) returning #{parts: [...], state: #{...}}. Optional fn restore(ctx) receives the saved ctx.state and returns the same shape. Use publish_scene for validation."),
+            ("skill", "Optional {directory, entry}. Use the selected user Skill directory relative to the user Skills root, including any parent directories. entry defaults to scripts/widget.rhai. Omit source to load the current file and save a session backup. update_scene can associate an existing artifact or revise its session source."),
             ("parameters", "Optional serializable map furnished to both callbacks."),
             ("resources", "Optional serializable resource snapshots furnished to both callbacks."),
             ("parts returned by source", "1 to 16 native composition parts, each #{id, area, scene: #{template, props}}. area is intro, controls, content, or footer. Use actual registered Scene props. Host owns their native lifetimes."),

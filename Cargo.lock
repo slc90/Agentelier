@@ -436,6 +436,7 @@ dependencies = [
 name = "agentelier_tools"
 version = "0.1.0"
 dependencies = [
+ "agentelier_skills",
  "image",
  "process-wrap",
  "rhai",

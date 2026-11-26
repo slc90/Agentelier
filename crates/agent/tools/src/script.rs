@@ -10,6 +10,7 @@ use crate::{
     desktop::{CaptureMapping, uia},
     ecs_access::EcsAccess,
 };
+use agentelier_skills::UserSkills;
 use rhai::{AST, Dynamic, Engine, Scope};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -38,6 +39,7 @@ pub struct ScriptOutput {
 pub struct ScriptSession {
     state: Arc<AsyncMutex<ScriptState>>,
     ecs_access: EcsAccess,
+    skills: UserSkills,
 }
 
 pub(crate) enum ScriptTarget {
@@ -83,10 +85,11 @@ fn engine() -> Engine {
 }
 
 impl ScriptSession {
-    pub fn new(ecs_access: EcsAccess) -> Self {
+    pub fn new(ecs_access: EcsAccess, skills: UserSkills) -> Self {
         Self {
             state: Arc::default(),
             ecs_access,
+            skills,
         }
     }
 
@@ -127,7 +130,15 @@ impl ScriptSession {
                 Some(state) => Some(state.clone()),
                 None => widget::prior_state(stored.as_ref())?,
             };
-            let program = widget::prepare(&mut definition, state, access.clone(), cancel).await?;
+            let program = widget::prepare(
+                &mut definition,
+                stored.as_ref(),
+                state,
+                access.clone(),
+                self.skills.clone(),
+                cancel,
+            )
+            .await?;
             target.map(|(_, expected_revision)| widget::Candidate {
                 expected_revision,
                 captured,

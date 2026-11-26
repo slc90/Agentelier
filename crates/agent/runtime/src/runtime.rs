@@ -425,7 +425,7 @@ impl AgentRuntime {
                         let mut skill_jobs = tokio::task::JoinSet::new();
                         let mut memory_dialogue = memory_dialogue::Dialogue::new(
                             owner_credentials.clone(), memory.as_ref().ok().map(Memory::client),
-                            ecs_access.clone(),
+                            ecs_access.clone(), user_skills.clone(),
                         );
                         let execution = async {
                             if let AccountEffect::Event(event) = account.restore().await? {
@@ -459,7 +459,7 @@ impl AgentRuntime {
                                             result: result.map_err(|failure| failure.to_string()),
                                         }))?;
                                         if model_source(&account).and_then(|source| owner.conversation.validate_model_source(source)).is_ok() {
-                                            model_task::start_queued(&mut owner.conversation,&mut owner.model,&mut owner.progress,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),&mut owner.tools,&store,&ecs_access)?;
+                                            model_task::start_queued(&mut owner.conversation,&mut owner.model,&mut owner.progress,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),&mut owner.tools,&store,&ecs_access)?;
                                         }
                                     }
                                 }
@@ -622,9 +622,10 @@ impl AgentRuntime {
                                 match command {
                                     Command::RunWidget(job, wake) => {
                                         let access = ecs_access.clone();
+                                        let skills = user_skills.clone();
                                         let shutdown = runtime_shutdown.clone();
                                         let _worker = tokio::spawn(async move {
-                                            job.run(access, shutdown).await;
+                                            job.run(access, skills, shutdown).await;
                                             wake();
                                         });
                                     }
@@ -643,7 +644,7 @@ impl AgentRuntime {
                                             store: &store.client(),
                                             credentials: &owner_credentials,
                                             operations: &operations,
-                                            skills_root: &data_root.join("skills"),
+                                            skills: &user_skills,
                                             mailbox_commands: mailbox_sender,
                                         }).await;
                                     }
@@ -651,7 +652,7 @@ impl AgentRuntime {
                                         children.mailbox_command(command, conversation, model.as_ref(), spawn_agent::SpawnEnvironment {
                                             ecs_access: &ecs_access,
                                             store: &store.client(), credentials: &owner_credentials, operations: &operations,
-                                            skills_root: &data_root.join("skills"), mailbox_commands: mailbox_sender,
+                                            skills: &user_skills, mailbox_commands: mailbox_sender,
                                         }).await;
                                     }
                                     Command::ChildFinished(result) => {
@@ -674,7 +675,7 @@ impl AgentRuntime {
                                             && let Err(failure) = children.wake_pending(conversation, view.id, agent, spawn_agent::SpawnEnvironment {
                                                 ecs_access: &ecs_access,
                                                 store: &store.client(), credentials: &owner_credentials, operations: &operations,
-                                                skills_root: &data_root.join("skills"), mailbox_commands: mailbox_sender,
+                                                skills: &user_skills, mailbox_commands: mailbox_sender,
                                             }).await {
                                             tracing::error!(session_id = %view.id, agent_id = %agent, error = %failure, "唤醒待处理 Follow-up 失败");
                                         }
@@ -1058,7 +1059,7 @@ impl AgentRuntime {
                                         }
                                         if model.is_none() && !deleting_target && suspending == 0 && !*pending_queue && !*finalizing && pending_source.is_none() && pending_session_model.is_none() && !runtime_shutdown.is_cancelled()
                                             && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
-                                            model_task::start_queued(conversation,model,progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),session_tools,&store,&ecs_access)?;
+                                            model_task::start_queued(conversation,model,progress_events,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),session_tools,&store,&ecs_access)?;
                                         }
                                     }
                                     Command::Created(result) => {
@@ -1162,7 +1163,7 @@ impl AgentRuntime {
                                         }
                                         if !*finalizing && !*pending_queue && suspending == 0 && pending_source.is_none() && pending_session_model.is_none() && delivery_failure.is_none() && !runtime_shutdown.is_cancelled()
                                             && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
-                                            model_task::start_queued(conversation,model,progress_events,&owner_model,&owner_credentials,&publish,&data_root.join("skills"),memory.as_ref().ok().map(Memory::client),session_tools,&store,&ecs_access)?;
+                                            model_task::start_queued(conversation,model,progress_events,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),session_tools,&store,&ecs_access)?;
                                         }
                                     }
                                     Command::Session(command) => {
@@ -1420,7 +1421,7 @@ impl AgentRuntime {
                                                 }
                                                 match conversation.start(id, request) {
                                                     Ok(view) => {
-                                                        let tools = tool_jobs::SessionTools::for_session(session_tools, &view, conversation, store.client(), &ecs_access);
+                                                        let tools = tool_jobs::SessionTools::for_session(session_tools, &view, conversation, store.client(), &ecs_access, &user_skills);
                                                         control.bind_root(conversation, &view)?;
                                                         owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.insert(id, control.clone());
                                                         emit(
@@ -1437,7 +1438,7 @@ impl AgentRuntime {
                                                             id,
                                                             control,
                                                             owner_credentials.clone(),
-                                                            TaskRequest::Chat(sender, steers, task_actions, data_root.join("skills"), memory.as_ref().ok().map(Memory::client), tools),
+                                                            TaskRequest::Chat(sender, steers, task_actions, user_skills.root_path().to_owned(), memory.as_ref().ok().map(Memory::client), tools),
                                                         ));
                                                     }
                                                     Err(failure) => {

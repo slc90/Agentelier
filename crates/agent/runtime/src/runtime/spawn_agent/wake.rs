@@ -113,7 +113,7 @@ impl Children {
                 store: environment.store.clone(),
                 credentials: environment.credentials.clone(),
                 ecs_access: environment.ecs_access.clone(),
-                skills_root: environment.skills_root.into(),
+                skills: environment.skills.clone(),
                 stop,
                 parent_stop,
                 commands: incoming,

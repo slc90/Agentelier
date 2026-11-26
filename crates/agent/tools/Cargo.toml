@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+agentelier_skills = { path = "../skills" }
 serde.workspace = true
 serde_json.workspace = true
 rhai = { workspace = true, features = ["serde"] }
