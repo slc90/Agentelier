@@ -11,6 +11,8 @@ use bevy::text::{Justify, LineBreak};
 use bevy_widgetry::text::WidgetryText;
 use std::io;
 
+pub(super) mod export;
+
 const MAX_FRAME_WIDTH: f32 = 512.0;
 const MAX_FRAME_HEIGHT: f32 = 360.0;
 const CHANNELS: u32 = 4;
@@ -110,7 +112,9 @@ pub(super) fn card(session: SessionId, call_id: String) -> impl Scene {
                 TextLayout { justify: Justify::Center, linebreak: LineBreak::AnyCharacter }
                 Node { width: percent(100), min_width: px(0) }
             ]--
-            Metadata Text::default() WidgetryText Node { display: Display::None }
+            Metadata Text::default() WidgetryText Node { display: Display::None }--
+            @export::button()--
+            @export::feedback()
         ]
     }
 }
@@ -182,6 +186,7 @@ pub(super) fn reconcile(world: &mut World, root: Entity, artifact: Artifact) -> 
     world.entity_mut(frame).insert(ImageNode::default());
     let caption_entity = child::<Caption>(world, frame)?;
     set_text(world, caption_entity, caption)?;
+    export::reset(world, root, matches!(artifact, Artifact::Saved { .. }))?;
     let mut state = world
         .get_mut::<Preview>(root)
         .ok_or_else(|| io::Error::other("图片缺少预览状态"))?;

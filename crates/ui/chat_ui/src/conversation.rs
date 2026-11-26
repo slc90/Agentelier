@@ -331,6 +331,10 @@ pub(crate) fn install(app: &mut App) {
         )
         .add_systems(Update, crate::generated_image::receive.after(receive))
         .add_systems(
+            Update,
+            crate::generated_image::export::receive.after(receive),
+        )
+        .add_systems(
             PostUpdate,
             process_input
                 .after(EditableTextSystems)
