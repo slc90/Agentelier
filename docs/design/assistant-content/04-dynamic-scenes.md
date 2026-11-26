@@ -37,7 +37,9 @@ Application 已注册 `agentelier.slider` 和 `agentelier.number_input`。两者
 
 `agentelier.text_input` 通过 Widgetry TextField 编辑独立的单行文本。定义提供标签、初始文本、占位和 Unicode 标量数量上限，超出定义长度的初值会被拒绝。编辑系统在实际文本改变后发出文本值事件。已聚焦字段的 Enter 发出一次本地提交事件，输入法预编辑及提交按 Widgetry 的编辑流程处理。聊天发送仍由 ChatComposer 自身的编辑器焦点触发。
 
-这里的组合不要求预先为所有可能的应用实现一个完整的 Rust Scene。先具备可描述的布局位置及标准组件，进一步通过自定义脚本控件承载新行为。两者使用同一聊天内容归属与状态保存关系。
+`agentelier.composition` 将基础模板的完整定义放进同一个回复产物。每个子 Scene 有稳定的 `id` 和语义区域 `intro`、`controls`、`content` 或 `footer`，同一区域按定义顺序排列。BSN 提供可随聊天宽度换行的纵向布局，空区域收起。`agentelier.text` 提供可放置在各区域的原生纯文本。
+
+组合只分配一项持久产物 ID。各基础模板仍由原 Factory 校验、创建并记录拥有的实体。组合的修订先在隐藏父节点构造新增或改变定义的子 Scene，通过后按稳定 ID 保留定义相同的实例、更新排列，并回收退出的实例。同一个控件可以移动区域而继续保留状态和焦点。未通过构造的组合或局部修订会清理本次构造的实体。
 
 ## 交互需要状态和绑定
 

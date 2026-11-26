@@ -159,10 +159,11 @@ impl AgentHostPlugin {
         description: &'static str,
         parameters: &'static [(&'static str, &'static str)],
         build: fn(&mut World, Entity, P) -> std::result::Result<Entity, EcsError>,
+        update: Option<fn(&mut World, Entity, P) -> Result>,
         prepare: Option<fn(&World, Entity, P) -> Result<P>>,
     ) -> Result<Self> {
         self.ecs_scenes
-            .register(name, description, parameters, build, None, prepare)?;
+            .register(name, description, parameters, build, update, prepare)?;
         Ok(self)
     }
 }

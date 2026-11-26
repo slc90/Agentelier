@@ -56,6 +56,7 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
             ("max_length", "Maximum Unicode scalar count, from 1 to 4096. Defaults to 512."),
         ],
         build,
+        None,
         Some(prepare),
     )
 }

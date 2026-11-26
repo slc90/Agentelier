@@ -111,6 +111,7 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
             ("value", "Initial option value. Omit on update only to retain the current selection when it is still an option."),
         ],
         choice,
+        None,
         Some(prepare_choice),
     )?
     .with_ecs_scene(

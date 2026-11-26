@@ -1,3 +1,4 @@
+mod composition;
 mod discrete;
 mod numeric;
 mod text_input;
@@ -44,10 +45,12 @@ pub(crate) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         Some(update_button),
         None,
     )?;
-    text_input::register(discrete::register(numeric::register(host)?)?)
+    let host = text_input::register(discrete::register(numeric::register(host)?)?)?;
+    composition::register(host)
 }
 
 pub(crate) fn install(app: &mut App) -> Result {
+    composition::install(app);
     numeric::install(app);
     text_input::install(app);
     discrete::install(app)

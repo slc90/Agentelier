@@ -3,7 +3,10 @@ use agentelier_bridge_connection::ecs_access::{EcsEntity, EcsError, SceneDefinit
 use bevy::prelude::*;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 const MAX_SCENE_ENTITIES: usize = 128;
 const MAX_SCENE_ATTACHMENTS: usize = 4096;
@@ -116,17 +119,12 @@ pub(super) fn validate(
     target: Option<SceneTarget>,
 ) -> Result<Value> {
     let mut definition = definition.clone();
-    if let Some(target) = target
-        && let Some(prepare) = world
-            .get_resource::<Registry>()
-            .and_then(|registry| registry.0.get(definition.template.as_str()))
-            .and_then(|template| template.prepare.clone())
-    {
+    if let Some(target) = target {
         let mut mounted = world.query::<(Entity, &MountedScene, &Instance)>();
         if let Some((root, _, _)) = mounted.iter(world).find(|(_, scene, instance)| {
             scene.0 == target && instance.template == definition.template
         }) {
-            definition.props = prepare(world, root, &definition.props)?;
+            prepare_scene_definition(world, root, &mut definition)?;
         }
     }
     definition.validate()?;
@@ -141,6 +139,32 @@ pub(super) fn validate(
     world.despawn(staging);
     result?;
     serde_json::to_value(definition).map_err(invalid_props)
+}
+
+pub fn prepare_scene_definition(
+    world: &World,
+    root: Entity,
+    definition: &mut SceneDefinition,
+) -> Result<()> {
+    if let Some(instance) = world.get::<Instance>(root)
+        && instance.template == definition.template
+        && let Some(prepare) = world
+            .get_resource::<Registry>()
+            .and_then(|registry| registry.0.get(instance.template))
+            .and_then(|template| template.prepare.as_ref())
+    {
+        definition.props = prepare(world, root, &definition.props)?;
+    }
+    Ok(())
+}
+
+pub fn mount_scene_child(
+    world: &mut World,
+    parent: Entity,
+    definition: &SceneDefinition,
+) -> Result<Entity> {
+    definition.validate()?;
+    build_native_scene(world, parent, definition)
 }
 
 pub fn mount_native_scene(
@@ -226,17 +250,68 @@ pub fn patch_native_scene(
 }
 
 pub(super) fn despawn(world: &mut World, root: EcsEntity) -> Result<Value> {
-    let root = read::entity(world, root)?;
-    let owned = root
-        .get::<Instance>()
+    let root = read::entity(world, root)?.id();
+    let owned = instance_ownership(world, root)?.to_vec();
+    retire_entities(world, &owned)?;
+    Ok(json!(true))
+}
+
+pub fn replace_scene_children(
+    world: &mut World,
+    root: Entity,
+    retiring: &[Entity],
+    incoming: &[Entity],
+) -> Result<()> {
+    let owned = instance_ownership(world, root)?;
+    let mut retired = Vec::new();
+    for &child in retiring {
+        if child == root || !owned.contains(&child) {
+            return Err(EcsError::new(
+                "scene_instance_not_found",
+                "要替换的子 Scene 不属于当前实例",
+            ));
+        }
+        retired.extend_from_slice(instance_ownership(world, child)?);
+    }
+    let remove: BTreeSet<_> = retired.iter().copied().collect();
+    let mut next: Vec<_> = owned
+        .iter()
+        .copied()
+        .filter(|id| !remove.contains(id))
+        .collect();
+    for &child in incoming {
+        next.extend_from_slice(instance_ownership(world, child)?);
+    }
+    if next.len() > MAX_SCENE_ENTITIES {
+        return Err(EcsError::new(
+            "scene_size_limit",
+            "Scene 模板生成的实体过多",
+        ));
+    }
+    retire_entities(world, &retired)?;
+    let Some(mut ownership) = world.get_mut::<Instance>(root) else {
+        return Err(EcsError::new(
+            "scene_instance_not_found",
+            "当前 Scene 实例已失效",
+        ));
+    };
+    ownership.owned = next.into_boxed_slice();
+    Ok(())
+}
+
+fn instance_ownership(world: &World, root: Entity) -> Result<&[Entity]> {
+    world
+        .get::<Instance>(root)
+        .map(|instance| instance.owned.as_ref())
         .ok_or_else(|| {
             EcsError::new(
                 "scene_instance_not_found",
                 "目标并非已登记 Scene 实例的根实体",
             )
-        })?
-        .owned
-        .clone();
+        })
+}
+
+fn retire_entities(world: &mut World, owned: &[Entity]) -> Result<()> {
     let external: Vec<_> = owned
         .iter()
         .filter_map(|id| world.get::<Children>(*id))
@@ -261,7 +336,7 @@ pub(super) fn despawn(world: &mut World, root: EcsEntity) -> Result<Value> {
             world.despawn(id);
         }
     }
-    Ok(json!(true))
+    Ok(())
 }
 
 fn owned_entities(world: &World, root: Entity) -> Result<Box<[Entity]>> {
