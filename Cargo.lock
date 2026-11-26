@@ -2212,6 +2212,7 @@ source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383a
 dependencies = [
  "bevy_widgetry_app_logging",
  "bevy_widgetry_button",
+ "bevy_widgetry_check_box",
  "bevy_widgetry_collapsible",
  "bevy_widgetry_combo_box",
  "bevy_widgetry_core",
@@ -2222,6 +2223,7 @@ dependencies = [
  "bevy_widgetry_list_view",
  "bevy_widgetry_message_box",
  "bevy_widgetry_number_input",
+ "bevy_widgetry_radio_group",
  "bevy_widgetry_scroll_area",
  "bevy_widgetry_segmented",
  "bevy_widgetry_slider",
@@ -2281,6 +2283,19 @@ dependencies = [
  "bevy_widgetry_theme",
  "url",
  "winsafe",
+]
+
+[[package]]
+name = "bevy_widgetry_check_box"
+version = "0.1.0"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
+dependencies = [
+ "bevy",
+ "bevy_widgetry_asset",
+ "bevy_widgetry_core",
+ "bevy_widgetry_diagnostics",
+ "bevy_widgetry_internal_log",
+ "bevy_widgetry_theme",
 ]
 
 [[package]]
@@ -2450,6 +2465,18 @@ dependencies = [
 name = "bevy_widgetry_path_display"
 version = "0.1.0"
 source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
+
+[[package]]
+name = "bevy_widgetry_radio_group"
+version = "0.1.0"
+source = "git+https://github.com/slc90/bevy_widgetry#1eafa11b8bc41f70bc82073383ab4e7ee55ee607"
+dependencies = [
+ "bevy",
+ "bevy_widgetry_core",
+ "bevy_widgetry_diagnostics",
+ "bevy_widgetry_internal_log",
+ "bevy_widgetry_theme",
+]
 
 [[package]]
 name = "bevy_widgetry_scroll_area"

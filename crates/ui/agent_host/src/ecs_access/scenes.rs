@@ -36,12 +36,12 @@ struct Instance {
 struct MountedScene(SceneTarget);
 
 impl Registry {
-    pub(crate) fn register<P: DeserializeOwned + Serialize + 'static, S: Scene>(
+    pub(crate) fn register<P: DeserializeOwned + Serialize + 'static>(
         &mut self,
         name: &'static str,
         description: &'static str,
         parameters: &'static [(&'static str, &'static str)],
-        build: fn(P) -> bevy::prelude::Result<S>,
+        build: impl Fn(&mut World, Entity, P) -> Result<Entity> + Send + Sync + 'static,
         update: Option<fn(&mut World, Entity, P) -> bevy::prelude::Result<()>>,
         prepare: Option<fn(&World, Entity, P) -> bevy::prelude::Result<P>>,
     ) -> Result<()> {
@@ -57,9 +57,7 @@ impl Registry {
             factory: Arc::new(move |world, parent, properties| {
                 let properties = serde_json::from_value(Value::Object(properties.clone()))
                     .map_err(invalid_props)?;
-                let scene = build(properties).map_err(invalid_props)?;
-                bevy_widgetry::scene::spawn_scene(world, bsn! { @scene ChildOf(parent) })
-                    .map_err(|error| EcsError::new("scene_construction_failed", error.to_string()))
+                build(world, parent, properties)
             }),
             patcher: update.map(|update| {
                 let patcher: Patcher = Arc::new(move |world, root, properties| {
@@ -284,6 +282,6 @@ fn owned_entities(world: &World, root: Entity) -> Result<Box<[Entity]>> {
     Ok(owned.into_boxed_slice())
 }
 
-fn invalid_props(error: impl std::fmt::Display) -> EcsError {
+pub(crate) fn invalid_props(error: impl std::fmt::Display) -> EcsError {
     EcsError::new("invalid_scene_props", error.to_string())
 }

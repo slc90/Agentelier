@@ -15,14 +15,18 @@ agentelier_agent_host = { path = "../agent_host" }
 agentelier_chat_ui = { path = "../chat_ui" }
 agentelier_controls = { path = "../controls" }
 bevy_widgetry = { workspace = true, features = [
+  "check_box",
   "combo_box",
   "file_dialog",
   "job",
   "number_input",
+  "radio_group",
   "scroll_area",
+  "segmented",
   "slider",
   "splash",
   "text_field",
+  "toggle_button",
   "tray",
 ] }
 bevy_widgetry_path_display.workspace = true

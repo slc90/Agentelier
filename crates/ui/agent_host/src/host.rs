@@ -1,5 +1,5 @@
 use agentelier_account_bridge::AccountEventKind;
-use agentelier_bridge_connection::ecs_access::{EcsAccess, EcsRequest};
+use agentelier_bridge_connection::ecs_access::{EcsAccess, EcsError, EcsRequest};
 use agentelier_bridge_connection::{BridgeEventKind, BridgeFailure, Connection, DataEnvironment};
 use agentelier_conversation_bridge::SessionId;
 use agentelier_llm_model_bridge::ModelEventKind;
@@ -138,8 +138,31 @@ impl AgentHostPlugin {
         update: Option<fn(&mut World, Entity, P) -> Result>,
         prepare: Option<fn(&World, Entity, P) -> Result<P>>,
     ) -> Result<Self> {
+        self.ecs_scenes.register(
+            name,
+            description,
+            parameters,
+            move |world, parent, properties| {
+                let scene = build(properties).map_err(crate::ecs_access::scenes::invalid_props)?;
+                bevy_widgetry::scene::spawn_scene(world, bsn! { @scene ChildOf(parent) })
+                    .map_err(|error| EcsError::new("scene_construction_failed", error.to_string()))
+            },
+            update,
+            prepare,
+        )?;
+        Ok(self)
+    }
+
+    pub fn with_ecs_scene_factory<P: serde::de::DeserializeOwned + serde::Serialize + 'static>(
+        mut self,
+        name: &'static str,
+        description: &'static str,
+        parameters: &'static [(&'static str, &'static str)],
+        build: fn(&mut World, Entity, P) -> std::result::Result<Entity, EcsError>,
+        prepare: Option<fn(&World, Entity, P) -> Result<P>>,
+    ) -> Result<Self> {
         self.ecs_scenes
-            .register(name, description, parameters, build, update, prepare)?;
+            .register(name, description, parameters, build, None, prepare)?;
         Ok(self)
     }
 }

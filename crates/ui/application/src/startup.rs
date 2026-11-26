@@ -122,7 +122,7 @@ fn run_application(logging_ready: &mut bool, guard: &mut Option<LoggingGuard>) -
         ))
         .add_systems(Startup, setup)
         .add_observer(mount_chat);
-    agent_scenes::install(&mut app);
+    agent_scenes::install(&mut app)?;
     agentelier_chat_ui::install(&mut app, move || config_store.session_model_defaults())?;
     settings::install(&mut app)?;
     tray::install(&mut app)?;

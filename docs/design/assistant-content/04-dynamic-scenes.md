@@ -31,7 +31,9 @@ flowchart TD
 
 Application 已注册 `agentelier.slider` 和 `agentelier.number_input`。两者接受可见标签、`integer` 或 `float` 类型、闭区间、正步进和初值。Number Input 的整数使用有符号 64 位，浮点使用双精度。Slider 使用 Widgetry 的单精度范围，整数值和跨度限于 2²⁴，且初值必须从某个端点按步进到达。
 
-两个控件的 Props 只在构造时初始化 Widgetry 状态。用户的拖动、编辑和步进经由 Widgetry 公开接口更新实际状态，控件从 `ValueChange` 投影带源实体、强类型值和交互结束标记的统一数值事件。布局通过 BSN Scene/SceneList 组合。离散选择、文本输入和表格将按用途接入其他 Widgetry 控件。
+两个控件的 Props 只在构造时初始化 Widgetry 状态。用户的拖动、编辑和步进经由 Widgetry 公开接口更新实际状态，控件从 `ValueChange` 投影带源实体、强类型值和交互结束标记的统一数值事件。布局通过 BSN Scene/SceneList 组合。
+
+离散输入模板 `agentelier.choice` 以 ComboBox、Radio Group 或 Segmented Control 呈现同一组选项，`agentelier.boolean` 以 CheckBox 或 Toggle Button 呈现布尔值。选项的字符串身份独立于标签、顺序和 Widgetry 的临时索引。实例从实际选择或勾选状态投影为统一离散事件。ComboBox 的列表数据源由该实例拥有，随回复控件挂载及回收。
 
 这里的组合不要求预先为所有可能的应用实现一个完整的 Rust Scene。先具备可描述的布局位置及标准组件，进一步通过自定义脚本控件承载新行为。两者使用同一聊天内容归属与状态保存关系。
 
@@ -63,6 +65,8 @@ flowchart LR
 Chat UI 保留原产物位置和容器。相同 `agentelier.button` 模板通过其更新接口改写标签和样式，原按钮实体与焦点保持一致。结构替换先在隐藏子树准备并构造新实例，再公开新子树及回收旧实例。实际更新失败时在原位置显示说明并保留此前实例。
 
 数值模板在更新时允许省略 `value`。AgentHost 在同一 Session、同一产物的已挂载同类型控件中读取当前值，和新范围及步进一并校验，将生效值写入已确认的定义。当前值不满足新定义、更换控件或数值类型、或者实例未挂载时，Agent 必须提供有效的 `value`。普通用户交互值暂随当前挂载实例保留。
+
+离散模板切换呈现方式时使用同一套值校验。选项重排或修改显示标签后，当前选项的身份仍可保留。移除当前选项需要同时提供新的合法值。布尔值在复选框和切换按钮间可沿用。
 
 用户和 Agent 按顺序操作同一个场景。Agent 修改场景时，用户可以等更新完成，再继续使用控件。也可以通过现有聊天交互让 Agent 停止，等任务停止后接手操作。
 

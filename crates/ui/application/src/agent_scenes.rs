@@ -1,3 +1,4 @@
+mod discrete;
 mod numeric;
 
 use agentelier_agent_host::AgentHostPlugin;
@@ -42,11 +43,12 @@ pub(crate) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         Some(update_button),
         None,
     )?;
-    numeric::register(host)
+    discrete::register(numeric::register(host)?)
 }
 
-pub(crate) fn install(app: &mut App) {
+pub(crate) fn install(app: &mut App) -> Result {
     numeric::install(app);
+    discrete::install(app)
 }
 
 fn button(properties: ButtonProperties) -> Result<impl Scene> {
