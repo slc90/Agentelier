@@ -360,7 +360,6 @@ impl Snapshot {
                 control,
             )
             .and_then(|(nodes, truncated, full)| {
-                worker.elements.reserve(pending.references.len())?;
                 validate_window(self.window)?;
                 control.check()?;
                 let generation = self
@@ -378,7 +377,7 @@ impl Snapshot {
             }
         };
         for (id, entry) in pending.references {
-            worker.elements.insert(id, entry)?;
+            worker.elements.insert(id, entry);
         }
         self.properties.extend(pending.properties);
         let obsolete: Vec<_> = self

@@ -12,9 +12,12 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::io;
+use std::sync::Arc;
 
 const MAX_SOURCES: usize = 12;
 const MAX_PROJECT_BYTES: usize = 160;
+// Two batches can be compared in one request within the previous revision-input budget.
+const REVISION_BATCH_BYTES: usize = 128 * 1024;
 use agentelier_llm_model::MAX_MEMORY_SUMMARY_BYTES;
 
 pub struct Consolidation {
@@ -43,9 +46,23 @@ pub(crate) struct Detail {
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ConsolidatedText {
+pub struct ConsolidationExclusions {
     excluded_sources: BTreeSet<String>,
     excluded_observations: BTreeSet<String>,
+}
+
+impl ConsolidationExclusions {
+    pub fn merge(&mut self, output: &str) -> io::Result<()> {
+        if output.len() > MAX_MEMORY_SUMMARY_BYTES * 2 {
+            return Err(io::Error::other("单批记忆整合结果过大"));
+        }
+        let batch: Self = serde_json::from_str(output)
+            .map_err(|_| io::Error::other("全局记忆模型返回无效结构"))?;
+        self.excluded_sources.extend(batch.excluded_sources);
+        self.excluded_observations
+            .extend(batch.excluded_observations);
+        Ok(())
+    }
 }
 
 pub(crate) struct PublicationContent {
@@ -125,10 +142,10 @@ impl MemoryClient {
     pub async fn publish_consolidation(
         &self,
         work: Consolidation,
-        output: Option<String>,
+        output: Option<ConsolidationExclusions>,
         published_at_ms: u64,
     ) -> io::Result<bool> {
-        let content = work.content(output.as_deref())?;
+        let content = work.content(output)?;
         let published_at_ms = i64::try_from(published_at_ms).map_err(io::Error::other)?;
         self.with_store(move |connection, workspace| {
             publication::publish(connection, workspace, work, content, published_at_ms)
@@ -157,11 +174,67 @@ impl Consolidation {
             .any(|note| note.affects_details(&detail.directory))
     }
 
-    pub fn model_input(&self) -> String {
+    pub fn model_inputs(&self) -> io::Result<impl Iterator<Item = String> + '_> {
+        let mut batches = Vec::new();
+        let mut start = 0;
+        let mut bytes = 0;
+        for (index, note) in self.revisions.iter().enumerate() {
+            let size = serde_json::to_vec(note).map_err(io::Error::other)?.len() + 1;
+            if bytes + size > REVISION_BATCH_BYTES && start < index {
+                batches.push(&self.revisions[start..index]);
+                start = index;
+                bytes = 0;
+            }
+            bytes += size;
+        }
+        if start < self.revisions.len() {
+            batches.push(&self.revisions[start..]);
+        }
+        let batches = Arc::new(batches);
+        Ok((0..batches.len()).flat_map(move |index| {
+            let batches = batches.clone();
+            (0..=index).filter_map(move |earlier| {
+                let current = batches[index];
+                if !current.iter().any(|note| note.action != Action::Remember) {
+                    return None;
+                }
+                if earlier == index {
+                    return Some(self.model_input(current));
+                }
+                let mut targets = batches[earlier]
+                    .iter()
+                    .filter(|target| {
+                        target.action != Action::Forget
+                            && current.iter().any(|note| {
+                                classified::affected(note, &classified::revision_scope(target))
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                if targets.is_empty() {
+                    return None;
+                }
+                targets.extend(current);
+                Some(
+                    serde_json::json!({
+                        "sources": [],
+                        "observations": [],
+                        "revision_notes": targets,
+                    })
+                    .to_string(),
+                )
+            })
+        }))
+    }
+
+    fn model_input(&self, notes: &[Revision]) -> String {
         let sources = self
             .details
             .iter()
-            .filter(|(_, detail)| self.corrective_revision_applies(detail))
+            .filter(|(_, detail)| {
+                notes
+                    .iter()
+                    .any(|note| note.affects_details(&detail.directory))
+            })
             .map(|(id, detail)| {
                 serde_json::json!({
                     "session_id": id,
@@ -173,20 +246,18 @@ impl Consolidation {
         serde_json::json!({
             "sources": sources,
             "observations": self.observations.iter()
-                .filter(|item| self.revisions.iter().any(|note| classified::affected(note, &item.scope)))
+                .filter(|item| notes.iter().any(|note| classified::affected(note, &item.scope)))
                 .collect::<Vec<_>>(),
-            "revision_notes": self.revisions,
-        }).to_string()
+            "revision_notes": notes,
+        })
+        .to_string()
     }
 
-    fn content(&self, output: Option<&str>) -> io::Result<PublicationContent> {
-        let result: ConsolidatedText = match output {
-            Some(output) if output.len() <= MAX_MEMORY_SUMMARY_BYTES * 2 => {
-                serde_json::from_str(output)
-                    .map_err(|_| io::Error::other("全局记忆模型返回无效结构"))?
-            }
-            None if !self.needs_model() => ConsolidatedText::default(),
-            _ => return Err(io::Error::other("整合结果缺失或超出大小限制")),
+    fn content(&self, output: Option<ConsolidationExclusions>) -> io::Result<PublicationContent> {
+        let result = match output {
+            Some(output) => output,
+            None if !self.needs_model() => ConsolidationExclusions::default(),
+            None => return Err(io::Error::other("整合结果缺失")),
         };
         let mut excluded = result.excluded_sources;
         if excluded.iter().any(|id| {
@@ -247,9 +318,6 @@ impl Consolidation {
         }
         if summary.trim().is_empty() && !classified.is_empty() {
             summary.push_str("## 来源记忆\n\n已发布当前可按范围检索的分类记录。");
-        }
-        if summary.len() > MAX_MEMORY_SUMMARY_BYTES {
-            return Err(io::Error::other("全局记忆摘要与来源导航合计超过 10 KiB"));
         }
         Ok(PublicationContent {
             summary: (!summary.trim().is_empty()).then_some(summary),

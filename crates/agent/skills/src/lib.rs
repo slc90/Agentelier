@@ -24,7 +24,6 @@ use std::path::{Path, PathBuf};
 
 pub const MAX_SKILL_BYTES: usize = 256 * 1024;
 pub const MAX_METADATA_BYTES: usize = 64 * 1024;
-pub const MAX_DISCOVERY_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_SCAN_ENTRIES: usize = 2048;
 pub const MAX_SCAN_DEPTH: usize = 6;
 

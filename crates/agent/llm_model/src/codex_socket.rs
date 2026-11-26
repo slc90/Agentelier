@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use std::io::{self, Write};
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
-use tokio::time::{Instant, timeout};
+use tokio::time::{Instant, timeout, timeout_at};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::{
     Error, Message, handshake,
@@ -90,8 +90,9 @@ impl Connection {
         credentials: &UsableCredentials,
     ) -> Result<Self, ModelFailure> {
         let key = handshake::client::generate_key();
-        let response = timeout(
-            super::generation::CONNECT_TIMEOUT,
+        let deadline = Instant::now() + super::generation::CONNECT_TIMEOUT;
+        let response = timeout_at(
+            deadline,
             authorize(client.get(CODEX_RESPONSES_URL), credentials)
                 .header(header::CONNECTION, "Upgrade")
                 .header(header::UPGRADE, "websocket")
@@ -118,7 +119,7 @@ impl Connection {
             return Err(protocol("Codex WebSocket 握手响应不符合协议"));
         }
         let id = request_id(&response);
-        let upgraded = timeout(super::generation::CONNECT_TIMEOUT, response.upgrade())
+        let upgraded = timeout_at(deadline, response.upgrade())
             .await
             .map_err(|_| network("等待 Codex WebSocket 升级超时"))?
             .map_err(|_| network("无法升级 Codex WebSocket 连接"))?;
@@ -145,27 +146,25 @@ impl Connection {
 
 impl EventStream for Connection {
     async fn next_event(&mut self) -> Result<Option<String>, ModelFailure> {
-        timeout(STREAM_IDLE_TIMEOUT, async {
-            while let Some(message) = self.socket.next().await {
-                match message.map_err(|error| match error {
-                    Error::Capacity(_) => protocol("Codex WebSocket 事件超过允许大小"),
-                    _ => network("读取 Codex WebSocket 事件失败"),
-                })? {
-                    Message::Text(text) => return Ok(Some(text.to_string())),
-                    Message::Close(_) => break,
-                    Message::Ping(_) => self
-                        .socket
-                        .flush()
-                        .await
-                        .map_err(|_| network("无法回应 Codex WebSocket 心跳"))?,
-                    Message::Pong(_) => {}
-                    _ => return Err(protocol("Codex WebSocket 返回了非文本事件")),
-                }
+        while let Some(message) = timeout(STREAM_IDLE_TIMEOUT, self.socket.next())
+            .await
+            .map_err(|_| network("Codex WebSocket 事件流空闲超时"))?
+        {
+            match message.map_err(|error| match error {
+                Error::Capacity(_) => protocol("Codex WebSocket 事件超过允许大小"),
+                _ => network("读取 Codex WebSocket 事件失败"),
+            })? {
+                Message::Text(text) => return Ok(Some(text.to_string())),
+                Message::Close(_) => break,
+                Message::Ping(_) => timeout(STREAM_IDLE_TIMEOUT, self.socket.flush())
+                    .await
+                    .map_err(|_| network("回应 Codex WebSocket 心跳超时"))?
+                    .map_err(|_| network("无法回应 Codex WebSocket 心跳"))?,
+                Message::Pong(_) => {}
+                _ => return Err(protocol("Codex WebSocket 返回了非文本事件")),
             }
-            Ok(None)
-        })
-        .await
-        .map_err(|_| network("Codex WebSocket 事件流空闲超时"))?
+        }
+        Ok(None)
     }
 }
 

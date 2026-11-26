@@ -30,7 +30,8 @@ pub use generation::{
     RequestCompaction, RequestHistory, RequestProjection, generate, prepare,
 };
 pub use memory::{
-    MAX_MEMORY_SUMMARY_BYTES, MemoryMaterial, MemoryReference, MemoryScope, MemorySnapshot,
+    MAX_MEMORY_SUMMARY_BYTES, MEMORY_SUMMARY_PROMPT_BYTES, MemoryMaterial, MemoryReference,
+    MemoryScope, MemorySnapshot,
 };
 pub use protocol::{
     ArchivedPayload, HistoryAppend, ProtocolArchive, ProtocolHistory, ProtocolItemSummary,

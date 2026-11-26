@@ -1,5 +1,4 @@
 use super::{ScreenRect, WindowId, window};
-use crate::payload::{MAX_ENCODED_IMAGE_BYTES, MAX_IMAGE_EDGE};
 use crate::{ImageDescriptor, ImagePayload, ToolFailure, process::powershell_path};
 use sha2::{Digest, Sha256};
 use std::os::windows::process::CommandExt;
@@ -250,12 +249,7 @@ fn capture_region(region: ScreenRect) -> Result<ImagePayload, ToolFailure> {
             "截图源尺寸超过像素预算",
         ));
     }
-    let edge = width.max(height);
-    let scaled_edge = edge.min(MAX_IMAGE_EDGE);
-    let scale = |dimension: u32| {
-        (u64::from(dimension) * u64::from(scaled_edge) / u64::from(edge)).max(1) as u32
-    };
-    let (output_width, output_height) = (scale(width), scale(height));
+    let (output_width, output_height) = crate::image::prompt_dimensions(width, height);
     let worker = powershell_path().map_err(capture_failed)?;
     let output = Command::new(worker)
         .args([
@@ -272,10 +266,6 @@ fn capture_region(region: ScreenRect) -> Result<ImagePayload, ToolFailure> {
             ("AGENTELIER_CAPTURE_HEIGHT", height.to_string()),
             ("AGENTELIER_CAPTURE_OUT_WIDTH", output_width.to_string()),
             ("AGENTELIER_CAPTURE_OUT_HEIGHT", output_height.to_string()),
-            (
-                "AGENTELIER_CAPTURE_MAX_BYTES",
-                MAX_ENCODED_IMAGE_BYTES.to_string(),
-            ),
         ])
         .creation_flags(CREATE_NO_WINDOW.0)
         .stdin(Stdio::null())
@@ -286,13 +276,8 @@ fn capture_region(region: ScreenRect) -> Result<ImagePayload, ToolFailure> {
             String::from_utf8_lossy(&output.stderr).trim(),
         ));
     }
-    let mime = match image::guess_format(&output.stdout) {
-        Ok(image::ImageFormat::Png) => "image/png",
-        Ok(image::ImageFormat::Jpeg) => "image/jpeg",
-        _ => return Err(capture_failed("截图进程未返回 PNG 或 JPEG")),
-    };
     let descriptor = ImageDescriptor {
-        mime: mime.into(),
+        mime: "image/png".into(),
         digest: format!("{:x}", Sha256::digest(&output.stdout)),
         width: output_width,
         height: output_height,

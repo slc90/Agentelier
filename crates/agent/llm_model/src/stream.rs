@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 use tokio::time::{Instant, timeout_at};
 
-pub(crate) const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+pub(crate) const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 pub(crate) const MAX_EVENT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
 

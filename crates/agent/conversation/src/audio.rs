@@ -3,12 +3,10 @@ use agentelier_llm_model::{TranscriptEvidence, TranscriptReference};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_AUDIO_BYTES: usize = 20 * 1024 * 1024;
-pub const MAX_SESSION_AUDIO_BYTES: u64 = 128 * 1024 * 1024;
 pub const MAX_AUDIO_NAME_CHARS: usize = 255;
 
 pub type AudioId = uuid::Uuid;
 pub type TranscriptId = uuid::Uuid;
-pub const MAX_SESSION_TRANSCRIPTIONS: usize = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -249,9 +247,6 @@ impl Conversation {
             .codex
             .clone()
             .ok_or_else(|| ConversationFailure::new("该会话没有绑定 Codex 凭据"))?;
-        if view.transcriptions.len() >= MAX_SESSION_TRANSCRIPTIONS {
-            return Err(ConversationFailure::new("本会话已达到 64 次音频转写上限"));
-        }
         let attachment = view
             .audio_attachment(audio)
             .ok_or_else(|| ConversationFailure::new("当前会话没有此音频附件"))?;

@@ -195,14 +195,30 @@ impl Runtime {
         cancel: &CancellationToken,
         deadline: Instant,
     ) -> Result<Value, ToolFailure> {
-        let id = reference
-            .strip_prefix("uia-text:")
-            .and_then(|id| Uuid::parse_str(id).ok())
-            .ok_or_else(range_stale)?;
+        let id = range_id(reference)?;
         self.call(cancel, deadline, move |worker, control| {
             worker.text_range_action(id, reference_token(id), action, control)
         })
     }
+
+    pub(crate) fn release_text_range(
+        &self,
+        reference: &str,
+        cancel: &CancellationToken,
+        deadline: Instant,
+    ) -> Result<Value, ToolFailure> {
+        let id = range_id(reference)?;
+        self.call(cancel, deadline, move |worker, _| {
+            Ok(json!({"released": worker.text_ranges.entries.remove(&id).is_some()}))
+        })
+    }
+}
+
+fn range_id(reference: &str) -> Result<Uuid, ToolFailure> {
+    reference
+        .strip_prefix("uia-text:")
+        .and_then(|id| Uuid::parse_str(id).ok())
+        .ok_or_else(range_stale)
 }
 
 impl Worker {

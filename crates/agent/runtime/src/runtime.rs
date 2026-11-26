@@ -4,7 +4,7 @@ use agentelier_account::{
 };
 use agentelier_conversation::{
     AgentRuntimeId, AudioId, Conversation, ConversationEvent, ConversationFailure,
-    ConversationRequest, MAX_PENDING_STEERS, SessionCommand, SessionId, SteerInput,
+    ConversationRequest, SessionCommand, SessionId, SteerInput,
 };
 use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
 use agentelier_memory::Memory;
@@ -55,6 +55,7 @@ pub use agentelier_account::DeliveryFailure;
 
 const COMMAND_CAPACITY: usize = 4;
 const SESSION_COMMAND_CAPACITY: usize = 16;
+const ACTIVE_CONTROL_CAPACITY: usize = 8;
 
 pub struct AgentEvent {
     pub operation_id: u64,
@@ -289,8 +290,8 @@ impl ModelControl {
         mpsc::Receiver<SteerInput>,
         mpsc::Receiver<agentelier_turn_runner::SessionTaskCommand>,
     ) {
-        let (steers, incoming) = mpsc::channel(MAX_PENDING_STEERS);
-        let (task_actions, tasks) = mpsc::channel(MAX_PENDING_STEERS);
+        let (steers, incoming) = mpsc::channel(ACTIVE_CONTROL_CAPACITY);
+        let (task_actions, tasks) = mpsc::channel(ACTIVE_CONTROL_CAPACITY);
         (
             Self {
                 id,

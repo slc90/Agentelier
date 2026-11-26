@@ -14,7 +14,6 @@ use tempfile::NamedTempFile;
 use tokio_util::sync::CancellationToken;
 
 const NOTE_BYTES: usize = 12 * 1024;
-const REVISION_INPUT_BYTES: usize = 256 * 1024;
 const TEXT_BYTES: usize = 1024;
 const NOTE_HEADER: &str = "# Long-term memory revision\n\n```json\n";
 const NOTE_FOOTER: &str = "\n```\n";
@@ -202,12 +201,7 @@ impl MemoryClient {
                     state: if published { "published" } else { "saved_pending_consolidation" },
                 }, false));
             }
-            let notes = revisions(workspace, epoch)?;
-            let bytes = serde_json::to_vec(&notes).map_err(io::Error::other)?.len();
             let body = serde_json::to_string(&note).map_err(io::Error::other)?;
-            if bytes.saturating_add(body.len()).saturating_add(1) > REVISION_INPUT_BYTES {
-                return Err(io::Error::other("长期记忆修订总量已达整合预算"));
-            }
             let content = format!("{NOTE_HEADER}{body}{NOTE_FOOTER}");
             if content.len() > NOTE_BYTES {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, "修订笔记超出大小限制"));
@@ -307,7 +301,6 @@ pub(crate) fn revisions(workspace: &Path, epoch: i64) -> io::Result<Vec<Revision
         Err(failure) => return Err(failure),
     };
     let mut notes = Vec::new();
-    let mut bytes = 0usize;
     for entry in entries {
         let entry = entry?;
         let filename = entry.file_name();
@@ -322,11 +315,6 @@ pub(crate) fn revisions(workspace: &Path, epoch: i64) -> io::Result<Vec<Revision
             .ok_or_else(|| io::Error::other("长期记忆修订笔记已丢失"))?;
         if note.epoch != epoch {
             continue;
-        }
-        bytes =
-            bytes.saturating_add(serde_json::to_vec(&note).map_err(io::Error::other)?.len() + 1);
-        if bytes > REVISION_INPUT_BYTES {
-            return Err(io::Error::other("长期记忆修订超出整合预算"));
         }
         notes.push(note);
     }

@@ -22,7 +22,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
 
-const NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(20);
+pub(crate) const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone)]
@@ -242,8 +242,6 @@ impl Connections {
     }
 
     pub fn registrations(&self) -> Vec<ToolRegistration> {
-        const MAX_SESSION_CATALOG_BYTES: usize = 512 * 1024;
-        let mut bytes = 0;
         let mut definitions = BTreeMap::new();
         let mut collisions = BTreeSet::new();
         for (server, entry) in self
@@ -254,30 +252,12 @@ impl Connections {
             let Some(Ok(catalog)) = &entry.catalog else {
                 continue;
             };
-            let size: usize = catalog
-                .tools
-                .iter()
-                .map(|tool| {
-                    tool.name.len()
-                        + tool.description.len()
-                        + tool.parameters.to_string().len()
-                        + tool
-                            .output_schema
-                            .as_ref()
-                            .map_or(0, |schema| schema.to_string().len())
-                })
-                .sum();
-            if bytes + size > MAX_SESSION_CATALOG_BYTES {
-                error!(server_id = %server, "MCP 工具清单超过会话目录预算");
-                continue;
-            }
             for tool in &catalog.tools {
                 if definitions.insert(&tool.name, tool).is_some() {
                     collisions.insert(&tool.name);
                     error!(server_id = %server, tool = %tool.name, "MCP 模型工具名称冲突");
                 }
             }
-            bytes += size;
         }
         definitions
             .into_iter()
@@ -481,7 +461,7 @@ pub(crate) async fn serve(
         biased;
         _ = stop.cancelled() => return Ok(()),
         result = tokio::time::timeout(
-            NEGOTIATION_TIMEOUT,
+            STARTUP_TIMEOUT,
             serve_client_with_lifecycle_and_ct(client, transport, lifecycle, CancellationToken::new()),
         ) => match result {
             Ok(Ok(client)) => client,

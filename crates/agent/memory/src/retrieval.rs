@@ -11,7 +11,8 @@ use crate::{
 };
 use agentelier_conversation::{MemoryWithdrawal, SessionId};
 use agentelier_llm_model::{
-    MAX_MEMORY_SUMMARY_BYTES, MemoryReference, MemoryScope, MemorySnapshot,
+    MAX_MEMORY_SUMMARY_BYTES, MEMORY_SUMMARY_PROMPT_BYTES, MemoryReference, MemoryScope,
+    MemorySnapshot,
 };
 use rusqlite::{Connection, params};
 use serde::Serialize;
@@ -329,7 +330,7 @@ impl MemoryClient {
                         "- {label} · [{}](rollout_summaries/{})\n",
                         source.session_id, source.record
                     );
-                    if navigation.len() + line.len() + 80 > MAX_MEMORY_SUMMARY_BYTES {
+                    if navigation.len() + line.len() + 80 > MEMORY_SUMMARY_PROMPT_BYTES {
                         break;
                     }
                     if !project_heading {

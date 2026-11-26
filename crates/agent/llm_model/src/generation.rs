@@ -15,7 +15,9 @@ use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 
 pub(super) const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const OVERLOAD_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
+const MAX_HTTP_ATTEMPTS: u32 = 4;
+const MAX_STREAM_RETRIES: u32 = 5;
+const RETRY_BASE_DELAY_MS: u64 = 200;
 
 pub struct GenerationRequest {
     pub behavior: Option<String>,
@@ -67,6 +69,8 @@ pub struct RequestProjection {
     pub memory: Option<crate::MemoryMaterial>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retired_memory_outputs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub omitted_image_outputs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript: Option<crate::TranscriptMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -103,7 +107,7 @@ pub enum RequestCompaction {
 }
 
 pub struct PreparedGeneration {
-    body: Vec<u8>,
+    body: bytes::Bytes,
     projection: RequestProjection,
     tools: Arc<ToolCatalog>,
 }
@@ -158,6 +162,22 @@ impl RequestProjection {
                 matches!(item, crate::ProtocolItemSummary::FunctionResult { call_id } if call_id == retired_id)
             }) {
                 return Err(crate::model::protocol("已撤下记忆结果缺少对应的工具调用"));
+            }
+        }
+        if !self.omitted_image_outputs.is_empty() {
+            let results: HashSet<_> = self
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    crate::ProtocolItemSummary::FunctionResult { call_id } => Some(call_id),
+                    _ => None,
+                })
+                .collect();
+            let mut omitted = HashSet::new();
+            for id in &self.omitted_image_outputs {
+                if !omitted.insert(id) || !results.contains(id) {
+                    return Err(crate::model::protocol("省略的图片结果缺少对应的工具回执"));
+                }
             }
         }
         if let Some(history) = &self.history {
@@ -416,6 +436,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         skill_materials,
         memory,
         retired_memory_outputs: generation.retired_memory_outputs,
+        omitted_image_outputs: Vec::new(),
         transcript,
         history: Some(history),
         items,
@@ -425,7 +446,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         fixed_bytes: None,
     };
     Ok(PreparedGeneration {
-        body,
+        body: body.into(),
         projection,
         tools: generation.tools,
     })
@@ -439,7 +460,7 @@ fn tool_declarations(catalog: &ToolCatalog) -> serde_json::Value {
                 "type": "function",
                 "name": tool.name,
                 "description": tool.description,
-                "parameters": tool.parameters,
+                "parameters": tool.model_parameters(),
                 "strict": tool.strict,
             });
             if tool.mode == ToolMode::Asynchronous {
@@ -513,7 +534,25 @@ async fn generate_inner(
         "开始流式模型请求"
     );
     let mut request = AuthenticatedRequest::new(&current);
-    let mut overload_delays = OVERLOAD_RETRY_DELAYS.into_iter();
+    let mut compressed = if websocket {
+        None
+    } else {
+        let body = generation.body.clone();
+        let original_bytes = body.len();
+        let encoded =
+            tokio::task::spawn_blocking(move || zstd::stream::encode_all(body.as_ref(), 3))
+                .await
+                .map_err(|_| crate::model::protocol("模型请求压缩工作异常结束"))?
+                .map_err(|_| crate::model::protocol("无法压缩已冻结的模型请求"))?;
+        tracing::debug!(
+            original_bytes,
+            compressed_bytes = encoded.len(),
+            "冻结模型请求已压缩"
+        );
+        Some(bytes::Bytes::from(encoded))
+    };
+    let mut http_attempts = 1;
+    let mut stream_retries = 0;
     loop {
         identity.validate(&current).map_err(|failure| {
             ModelFailure::new(ModelFailureKind::Authentication, failure.to_string())
@@ -538,8 +577,17 @@ async fn generate_inner(
                 connection.0 = Some(continuation);
                 result
             })
+            .map_err(FailedAttempt::Stream)
         } else {
-            generate_http(&client, &generation, &current, &mut request, &progress).await
+            generate_http(
+                &client,
+                &generation,
+                compressed.as_ref(),
+                &current,
+                &mut request,
+                &progress,
+            )
+            .await
         };
         match outcome {
             Ok(result) => {
@@ -554,15 +602,46 @@ async fn generate_inner(
                 }
                 return Ok((result, connection));
             }
-            Err(failure) => {
-                if failure.code.as_deref() == Some("server_is_overloaded")
-                    && let Some(delay) = overload_delays.next()
+            Err(attempt) => {
+                let (failure, before_stream) = match attempt {
+                    FailedAttempt::Http(failure) => (failure, true),
+                    FailedAttempt::Stream(failure) => (failure, false),
+                };
+                let retryable_transport = matches!(failure.kind, ModelFailureKind::Network)
+                    || failure
+                        .status
+                        .is_some_and(|status| (500..600).contains(&status));
+                let use_plain_body = before_stream
+                    && (failure.status == Some(415)
+                        || failure.status == Some(400) && failure.code.is_none())
+                    && compressed.take().is_some();
+                let retry = if use_plain_body {
+                    Some(1)
+                } else if before_stream && retryable_transport && http_attempts < MAX_HTTP_ATTEMPTS
                 {
+                    let attempt = http_attempts;
+                    http_attempts += 1;
+                    Some(attempt)
+                } else if (!before_stream && retryable_transport
+                    || failure.code.as_deref() == Some("server_is_overloaded"))
+                    && stream_retries < MAX_STREAM_RETRIES
+                {
+                    stream_retries += 1;
+                    http_attempts = 1;
+                    Some(stream_retries)
+                } else {
+                    None
+                };
+                if let Some(attempt) = retry {
+                    let delay = Duration::from_millis(RETRY_BASE_DELAY_MS << (attempt - 1));
                     tracing::warn!(
                         request_id = failure.request_id.as_deref(),
-                        remaining_retries = overload_delays.len(),
+                        kind = ?failure.kind,
+                        status = failure.status,
+                        http_attempts,
+                        stream_retries,
                         ?delay,
-                        "模型服务过载，等待后重试同一请求"
+                        "模型请求中断或服务暂不可用，等待后重试"
                     );
                     progress
                         .send(StreamEvent::Retrying)
@@ -582,34 +661,48 @@ async fn generate_inner(
     }
 }
 
+enum FailedAttempt {
+    Http(ModelFailure),
+    Stream(ModelFailure),
+}
+
 async fn generate_http(
     client: &Client,
     generation: &PreparedGeneration,
+    compressed: Option<&bytes::Bytes>,
     current: &agentelier_account::UsableCredentials,
     request: &mut AuthenticatedRequest,
     progress: &Sender<StreamEvent>,
-) -> Result<GenerationResult, ModelFailure> {
-    let response = tokio::time::timeout(
-        STREAM_IDLE_TIMEOUT,
-        responses(client, current)
-            .body(generation.body.clone())
-            .send(),
-    )
-    .await
-    .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "等待模型响应超时"))?
-    .map_err(network)?;
+) -> Result<GenerationResult, FailedAttempt> {
+    let sender = responses(client, current);
+    let sender = if let Some(body) = compressed {
+        sender
+            .header(reqwest::header::CONTENT_ENCODING, "zstd")
+            .body(body.clone())
+    } else {
+        sender.body(generation.body.clone())
+    };
+    let response = tokio::time::timeout(STREAM_IDLE_TIMEOUT, sender.send())
+        .await
+        .map_err(|_| {
+            FailedAttempt::Http(ModelFailure::new(
+                ModelFailureKind::Network,
+                "等待模型响应超时",
+            ))
+        })?
+        .map_err(|error| FailedAttempt::Http(network(error)))?;
     progress
         .send(StreamEvent::ResponseReceived {
             status: response.status().as_u16(),
         })
         .await
-        .map_err(|_| crate::model::protocol("模型进度接收端已关闭"))?;
+        .map_err(|_| FailedAttempt::Http(crate::model::protocol("模型进度接收端已关闭")))?;
     if response.status().is_success() {
         let status = response.status().as_u16();
         let id = request_id(&response);
         consume(response, request, Some(progress), Some(&generation.tools))
             .await
-            .map_err(|failure| with_response(failure, status, id))
+            .map_err(|failure| FailedAttempt::Stream(with_response(failure, status, id)))
     } else {
         let failure = http_failure(response).await;
         if let Some(usage) = failure.usage.clone() {
@@ -619,8 +712,8 @@ async fn generate_http(
                     usage: *usage,
                 })
                 .await
-                .map_err(|_| crate::model::protocol("模型用量接收端已关闭"))?;
+                .map_err(|_| FailedAttempt::Http(crate::model::protocol("模型用量接收端已关闭")))?;
         }
-        Err(failure)
+        Err(FailedAttempt::Http(failure))
     }
 }

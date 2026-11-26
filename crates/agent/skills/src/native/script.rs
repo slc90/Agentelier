@@ -59,8 +59,7 @@ impl UserSkills {
         let Some(instructions) = open_file(&path.join("SKILL.md"))? else {
             return Ok(None);
         };
-        let mut bytes_used = 0;
-        let metadata = parse(&read_open_frontmatter(instructions, &mut bytes_used)?)?;
+        let metadata = parse(&read_open_frontmatter(instructions)?)?;
         if Some(metadata.name.as_str()) != directory.last().copied() {
             return Err(Failure("Skill name 与目录名称不一致".into()));
         }

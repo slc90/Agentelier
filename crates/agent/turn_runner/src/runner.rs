@@ -20,7 +20,6 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 const MODEL_PROGRESS_CAPACITY: usize = 32;
-const MAX_TOOL_CALLS: usize = 64;
 
 pub(super) async fn publish(
     progress: &mpsc::Sender<RunnerEvent>,
@@ -521,7 +520,7 @@ async fn run_task(
         return Ok(TurnStatus::Failed(failure.to_string()));
     }
     let catalog = active.call(|turn| Ok(turn.catalog())).await?;
-    let (mut request_index, mut tools_used) = active.call(|turn| turn.execution_counts()).await?;
+    let mut request_index = active.call(|turn| turn.current_request_index()).await?;
     loop {
         jobs.boundary(active, dispatcher, progress, cancel).await?;
         control::drain(active, steers, progress).await?;
@@ -589,6 +588,13 @@ async fn run_task(
             }
         }
         active.apply_inbox().await?;
+        jobs.boundary(active, dispatcher, progress, cancel).await?;
+        if jobs
+            .wait_for_compaction(active, dispatcher, progress, cancel, steers)
+            .await?
+        {
+            continue;
+        }
         request_index = request_index
             .checked_add(1)
             .ok_or_else(|| ConversationFailure::new("模型请求序号已耗尽"))?;
@@ -644,13 +650,12 @@ async fn run_task(
             Some(Err(failure)) => return Ok(TurnStatus::Failed(failure.to_string())),
             None => return Ok(TurnStatus::Cancelled),
         };
-        let limited = result.calls.len() > MAX_TOOL_CALLS.saturating_sub(tools_used);
         let (result, calls, registrations, acceptance, event) = match active
             .call(move |mut turn| {
                 if turn.reject_unsafe_compaction(&result)? {
                     return Ok(None);
                 }
-                let (registrations, acceptance) = turn.accept_response(&result, epoch, !limited)?;
+                let (registrations, acceptance) = turn.accept_response(&result, epoch)?;
                 let event = RecordEvent::Response {
                     state: turn.stored_state(),
                     output: result.output.archive(),
@@ -676,7 +681,7 @@ async fn run_task(
             Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())),
         };
         let response_sequence = active.record(event).await?;
-        let (compaction, tasks_changed, rejected) = active
+        let (compaction, tasks_changed) = active
             .call(move |mut turn| {
                 let compaction =
                     turn.confirm_response_history(result, acceptance.append, response_sequence)?;
@@ -685,7 +690,7 @@ async fn run_task(
                     &acceptance.delivery.settled,
                     response_sequence,
                 )?;
-                Ok((compaction, changed, acceptance.delivery.rejected))
+                Ok((compaction, changed))
             })
             .await?;
         *connection = next_connection;
@@ -711,15 +716,12 @@ async fn run_task(
             }
             return Ok(TurnStatus::Completed);
         }
-        tools_used += calls.len();
         jobs.dispatch(
             active,
             dispatcher,
             catalog.clone(),
             context,
             calls,
-            limited,
-            &rejected,
             &tool_authorization,
             progress,
             cancel,
@@ -734,9 +736,6 @@ async fn run_task(
         }
         if cancel.is_cancelled() {
             return Ok(TurnStatus::Cancelled);
-        }
-        if limited {
-            return Ok(TurnStatus::Limited);
         }
     }
 }

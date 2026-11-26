@@ -2,7 +2,8 @@ use agentelier_account::{CredentialClient, ExecutionIdentity};
 use agentelier_conversation::SessionId;
 use agentelier_llm_model::{ModelInfo, background_text, task_catalog};
 use agentelier_memory::{
-    MemoryClient, MemoryDetail, MemoryInspection, SourceCompletion, extraction_prompt,
+    ConsolidationExclusions, MemoryClient, MemoryDetail, MemoryInspection, SourceCompletion,
+    extraction_prompt,
 };
 use agentelier_session_store::{MemorySourceSnapshot, SessionStoreClient};
 use std::io;
@@ -293,7 +294,6 @@ impl Worker {
             let Some(model) = available.models.first() else {
                 return Ok(false);
             };
-            let input = work.model_input();
             let format = serde_json::json!({
                 "type": "json_schema", "name": "consolidated_memory", "strict": true,
                 "schema": {"type": "object", "properties": {
@@ -301,24 +301,28 @@ impl Worker {
                     "excluded_observations": {"type":"array","items":{"type":"string"}}
                 }, "required": ["excluded_sources","excluded_observations"], "additionalProperties": false}
             });
-            debug!(
-                source_count,
-                model = model.slug,
-                input_bytes = input.len(),
-                "开始后台全局记忆整合"
-            );
-            let output = tokio::select! { biased;
-                _ = self.cancel.cancelled() => return Ok(true),
-                _ = available.identity.invalidated() => return Ok(false),
-                result = background_text(&self.credentials, &available.identity, model, CONSOLIDATE, &input, format) => result,
-            }.map_err(|failure| io::Error::other(format!("后台模型失败：{:?}，HTTP {:?}，请求 {:?}", failure.kind, failure.status, failure.request_id)))?;
-            debug!(
-                source_count,
-                response_id = output.response_id,
-                total_tokens = output.usage.as_ref().map(|usage| usage.total_tokens),
-                "后台全局记忆模型请求结束"
-            );
-            Some(output.text)
+            let mut exclusions = ConsolidationExclusions::default();
+            for input in work.model_inputs()? {
+                debug!(
+                    source_count,
+                    model = model.slug,
+                    input_bytes = input.len(),
+                    "开始一批后台记忆整合"
+                );
+                let output = tokio::select! { biased;
+                    _ = self.cancel.cancelled() => return Ok(true),
+                    _ = available.identity.invalidated() => return Ok(false),
+                    result = background_text(&self.credentials, &available.identity, model, CONSOLIDATE, &input, format.clone()) => result,
+                }.map_err(|failure| io::Error::other(format!("后台模型失败：{:?}，HTTP {:?}，请求 {:?}", failure.kind, failure.status, failure.request_id)))?;
+                exclusions.merge(&output.text)?;
+                debug!(
+                    source_count,
+                    response_id = output.response_id,
+                    total_tokens = output.usage.as_ref().map(|usage| usage.total_tokens),
+                    "后台记忆整合批次结束"
+                );
+            }
+            Some(exclusions)
         };
         if self.cancel.is_cancelled() || self.store.memory_sessions().await? != sessions {
             return Ok(true);

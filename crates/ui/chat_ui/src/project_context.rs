@@ -40,6 +40,7 @@ pub struct RuleSource {
     pub scope: String,
     pub text: String,
     pub hash: String,
+    pub truncated: bool,
 }
 
 pub(crate) fn project(view: ProjectContextView) -> ProjectContext {
@@ -69,6 +70,7 @@ pub(crate) fn project_snapshot(
                 scope: display_path(&source.scope),
                 text: source.text,
                 hash: source.hash,
+                truncated: source.truncated,
             })
             .collect(),
     }
@@ -130,7 +132,7 @@ fn summary(project: Option<&ProjectContext>) -> String {
                 snapshot
                     .sources
                     .iter()
-                    .any(|source| !source.text.trim().is_empty())
+                    .any(|source| source.truncated || !source.text.trim().is_empty())
             }) {
                 "项目规则：最近采集成功；请求材料以已保存的准备记录为准".into()
             } else {
@@ -146,7 +148,7 @@ fn summary(project: Option<&ProjectContext>) -> String {
             text.push_str("\n以下仅为上次成功采集的材料，本次未重新确认");
         }
         text.push_str(&format!(
-            "\n会话目录：{}\n项目边界：{}\n来源 {} 份，原始字节 {}，内容摘要 {}",
+            "\n会话目录：{}\n项目边界：{}\n来源 {} 份，已采集 {} 字节，内容摘要 {}",
             snapshot.working_directory,
             snapshot
                 .project_root
@@ -156,6 +158,9 @@ fn summary(project: Option<&ProjectContext>) -> String {
             snapshot.source_bytes,
             snapshot.hash
         ));
+        if snapshot.sources.iter().any(|source| source.truncated) {
+            text.push_str("\n部分规则以预览载入，可按来源路径读取完整文件。");
+        }
     }
     text
 }
@@ -167,7 +172,9 @@ pub(crate) fn source_scene(source: RuleSource, index: usize, prefix: &str) -> Bo
         source.path,
         source.scope,
         source.hash,
-        if source.text.trim().is_empty() {
+        if source.truncated {
+            "\n只自动载入预览，完整规则请查看来源文件"
+        } else if source.text.trim().is_empty() {
             "\n空白文件，不形成规则正文"
         } else {
             ""

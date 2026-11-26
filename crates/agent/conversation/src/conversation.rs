@@ -1200,7 +1200,7 @@ impl Conversation {
             &current.view.settings.instructions,
             current.tools.definitions(),
         )?;
-        crate::result_budget::ResultHeadroom::default().ensure(&context)?;
+        crate::result_budget::ensure_context_fits(&context)?;
         turn.status = TurnStatus::Running;
         turn.operation_id = operation;
         turn.compaction_continuation = None;

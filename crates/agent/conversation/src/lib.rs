@@ -44,8 +44,8 @@ mod tasks;
 pub use archive::{ArchiveEntry, SessionMetadataChange};
 pub use audio::{
     AudioAttachment, AudioFormat, AudioId, AudioTranscription, MAX_AUDIO_BYTES,
-    MAX_AUDIO_NAME_CHARS, MAX_SESSION_AUDIO_BYTES, TranscriptId, TranscriptionEngine,
-    TranscriptionOutcome, TranscriptionSource,
+    MAX_AUDIO_NAME_CHARS, TranscriptId, TranscriptionEngine, TranscriptionOutcome,
+    TranscriptionSource,
 };
 pub use global_tasks::{
     GlobalTask, GlobalTaskGroup, GlobalTaskProcess, GlobalTaskStatus, GlobalTasks,
@@ -85,12 +85,10 @@ pub use agentelier_llm_model::TranscriptReference;
 pub use agentelier_tools::ToolStatus;
 
 pub use active::ActiveTurn;
-pub use control::{
-    InputDecision, InputReceipt, MAX_PENDING_STEERS, SteerInput, SteerState, SteerView,
-};
+pub use control::{InputDecision, InputReceipt, SteerInput, SteerState, SteerView};
 
 pub use queue::PreparedQueue;
-pub use queue::{MAX_QUEUED_INPUTS, QueueDecision, QueueEvent, QueuedInput, SessionCommand};
+pub use queue::{QueueDecision, QueueEvent, QueuedInput, SessionCommand};
 
 mod metadata;
 pub use metadata::session_title;

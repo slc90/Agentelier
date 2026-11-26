@@ -31,7 +31,7 @@ const DESCRIPTION: &str = concat!(
     "uia_scroll(ref) reads scroll state; uia_scroll(ref,horizontal,vertical) accepts none, small_increment, small_decrement, large_increment, or large_decrement. uia_scroll_item(ref) brings an item into view. ",
     "uia_find_item(container,property,value[,after_ref]) searches ItemContainer by Name, AutomationId, or ClassName. Use uia_realize(ref) for a virtualized result. ",
     "For Text, use uia_text_document_range(ref), uia_text_selection(ref), uia_text_visible_ranges(ref), then uia_text_get(range,max_chars). uia_text_find(range,text,backward,ignore_case) returns a matching range. ",
-    "Use uia_text_range_move(range,unit,count[,endpoint]), uia_text_range_expand(range,unit), uia_text_range_select(range), uia_text_range_scroll(range,align_to_top), and uia_text_range_attribute(range,name). ",
+    "Use uia_text_range_move(range,unit,count[,endpoint]), uia_text_range_expand(range,unit), uia_text_range_select(range), uia_text_range_scroll(range,align_to_top), and uia_text_range_attribute(range,name). Release unused ranges with uia_text_range_release(range). ",
     "Read Text2 caret and annotations via uia_text_caret(ref), uia_text_annotation_range(ref,annotation), edit state via uia_text_edit_state(ref), and a TextChild range via uia_text_child_range(ref). ",
     "Use uia_grid_info(ref), uia_grid_cell(ref,row,column) with zero-based indices, and uia_grid_item_info(ref). uia_table_info(ref), uia_table_headers(ref) and uia_table_item_info(ref) report structure and headers. ",
     "Use uia_spreadsheet_info(ref[,cell_name]) for named cells and uia_spreadsheet_item_info(ref) for formula, value and annotations when supported. ",
@@ -44,7 +44,7 @@ const DESCRIPTION: &str = concat!(
     "uia_wait(ref,condition,timeout_ms) waits for a live condition. Use #{kind:\"property\",name:\"ValueValue\",equals:value}, #{kind:\"appears\",selector:uia_find_condition}, or kinds disappears (with selector), enabled, focused, focus_changed, and structure_changed. ",
     "uia_snapshot(window_ref,view,properties,max_nodes) captures up to 64 nodes. uia_snapshot_status(id) reports generation and dirty state. uia_snapshot_refresh(id,auto/full/or a snapshot node ref) refreshes the capture. ",
     "Rhai try/catch can read error.code and error.message for other desktop commands. Inputs held by the script are released when the call ends. ",
-    "Each admitted script has a 30 second execution deadline."
+    "Each admitted script has a 60 second execution deadline."
 );
 
 #[derive(Deserialize)]
@@ -63,7 +63,7 @@ pub(crate) fn ecs_definition() -> ToolDefinition {
         concat!(
             "Execute Rhai against Agentelier's in-process Bevy ECS. Variables and functions persist within the live conversation. ",
             "Use ecs_world_info() to discover world statistics and supported operations. Use print(value) or return a value. ",
-            "Rhai try/catch can read error.code and error.message. The script has a 30 second deadline."
+            "Rhai try/catch can read error.code and error.message. The script has a 60 second deadline."
         ),
     )
 }
@@ -121,22 +121,27 @@ pub(crate) async fn execute(
 }
 
 fn payload(output: ScriptOutput, image_input: Option<bool>) -> ToolPayload {
-    let ScriptOutput { text, image } = output;
+    let ScriptOutput {
+        text,
+        text_truncated,
+        image,
+    } = output;
+    let mut data = json!({"text":text});
+    if text_truncated {
+        data["text_truncated"] = true.into();
+    }
     match image {
-        Some(_) if image_input == Some(false) => json!({
-            "ok": true,
-            "data": {"text": text, "capture_attachment": "model_does_not_accept_images"}
-        })
-        .to_string()
-        .into(),
-        Some(image) => ToolPayload::Image {
-            summary: json!({
-                "ok": true,
-                "data": {"text": text, "capture": image.descriptor()}
-            })
-            .to_string(),
-            image,
-        },
-        None => json!({"ok":true,"data":{"text":text}}).to_string().into(),
+        Some(_) if image_input == Some(false) => {
+            data["capture_attachment"] = "model_does_not_accept_images".into();
+            json!({"ok":true,"data":data}).to_string().into()
+        }
+        Some(image) => {
+            data["capture"] = json!(image.descriptor());
+            ToolPayload::Image {
+                summary: json!({"ok":true,"data":data}).to_string(),
+                image,
+            }
+        }
+        None => json!({"ok":true,"data":data}).to_string().into(),
     }
 }

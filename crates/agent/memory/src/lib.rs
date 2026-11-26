@@ -15,7 +15,7 @@ mod revision;
 mod store;
 mod tools;
 
-pub use consolidation::Consolidation;
+pub use consolidation::{Consolidation, ConsolidationExclusions};
 pub use extraction::{Extraction, SourceClaim, SourceCompletion, extraction_prompt};
 pub use retrieval::{
     MemoryDetail, MemoryInspection, MemoryInspectionGroup, MemoryInspectionRecord, MemorySource,

@@ -127,13 +127,6 @@ pub struct ToolResult {
     pub cleanup_failed: bool,
 }
 impl ToolResult {
-    pub fn reject_image_budget(self) -> Self {
-        let message = format!(
-            "图片已读取，但加入会话将超过 16 MiB 图片预算，未保留图片载荷。读取元数据：{}",
-            self.output.summary()
-        );
-        Self::error(ToolStatus::Failed, "session_image_limit", &message)
-    }
     pub fn not_executed(code: &str, message: &str) -> Self {
         Self::error(ToolStatus::NotExecuted, code, message)
     }

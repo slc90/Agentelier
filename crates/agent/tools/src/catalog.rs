@@ -2,16 +2,24 @@ use crate::{
     ExecutionContext, ProcessSessions, ToolAccess, ToolFailure, ToolPermit, ToolResult, execution,
 };
 
-const SHELL_LIFETIME: &str = "If still running, returns a conversation-scoped session_id for write_stdin. Native asynchronous work and yielded processes can outlive a turn. At most 8 live or unread process results are retained. Use list_async_tasks to discover them.";
+const SHELL_LIFETIME: &str = "If still running, returns a conversation-scoped session_id for write_stdin. Native asynchronous work and yielded processes can outlive a turn. The process registry keeps up to 64 entries by reclaiming old exited processes when possible. Use list_async_tasks to discover them.";
+const PREVIOUS_PROCESS_LIMIT: &str = "At most 8 live or unread process results are retained.";
+const PROCESS_RETENTION: &str =
+    "The process registry keeps up to 64 entries by reclaiming old exited processes when possible.";
 const LEGACY_SHELL_LIFETIME: &str = "If still running, returns a task-scoped session_id for write_stdin and new output. No command lifetime limit. At most 8 unreaped sessions. All processes are reaped when this user task ends; old IDs cannot be used in a later task.";
 const STDIN_SCOPE: &str = "Continue an existing process in this conversation.";
 const LEGACY_STDIN_SCOPE: &str = "Continue a process session from this user task.";
 const STDIN_EXPIRATION: &str = "Consumed or restored historical IDs cannot be used.";
 const LEGACY_STDIN_EXPIRATION: &str = "Sessions expire at task end.";
+const IMAGE_LIMITS: &str = "At most 79 MiB input and 10,240,000 decoded pixels. High-detail images fit a 2048 px longest edge and 2500 patches of 32 by 32 pixels.";
+const PREVIOUS_IMAGE_LIMITS: &str = "At most 32 MiB input and 25 million decoded pixels. The image is resized proportionally to fit a 2048 px longest edge. Older images may be omitted from model requests.";
+const LEGACY_IMAGE_LIMITS: &str = "At most 10 MiB input, 25 million pixels, longest sent edge 2048 px (proportional resize), 4 MiB encoded result, 16 MiB retained images per session.";
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::HashSet, future::Future, pin::Pin, sync::Arc};
+use std::{borrow::Cow, collections::HashSet, future::Future, pin::Pin, sync::Arc};
 use tokio_util::sync::CancellationToken;
+
+mod model_schema;
 
 const MAX_MODEL_NAME_BYTES: usize = 64;
 
@@ -87,6 +95,14 @@ pub struct ToolDefinition {
 }
 
 impl ToolDefinition {
+    pub fn model_parameters(&self) -> Cow<'_, Value> {
+        if matches!(self.source, ToolSource::Mcp { .. }) {
+            model_schema::compact(&self.parameters)
+        } else {
+            Cow::Borrowed(&self.parameters)
+        }
+    }
+
     pub fn same_declaration(&self, other: &Self) -> bool {
         self.mode == other.mode && self.same_executor_contract(other)
     }
@@ -186,11 +202,41 @@ impl ToolRegistration {
         original_directory: &std::path::Path,
     ) -> Option<ToolDefinition> {
         let mut normalized = saved.clone();
-        if matches!(saved.source, ToolSource::Builtin) && saved.name == "view_image" {
+        if matches!(saved.source, ToolSource::Builtin) && saved.name == "exec_command" {
             normalized.description =
                 normalized
                     .description
-                    .replacen(" and 32 MiB serialized model request", "", 1);
+                    .replacen(PREVIOUS_PROCESS_LIMIT, PROCESS_RETENTION, 1);
+        }
+        if matches!(saved.source, ToolSource::Builtin) {
+            match saved.name.as_str() {
+                "computer_execute" => {
+                    normalized.description = normalized
+                        .description
+                        .replacen("30 second execution deadline.", "60 second execution deadline.", 1)
+                        .replacen(
+                            "uia_text_range_attribute(range,name). Read Text2",
+                            "uia_text_range_attribute(range,name). Release unused ranges with uia_text_range_release(range). Read Text2",
+                            1,
+                        );
+                }
+                "ecs_execute" => {
+                    normalized.description = normalized.description.replacen(
+                        "30 second deadline.",
+                        "60 second deadline.",
+                        1,
+                    );
+                }
+                _ => {}
+            }
+        }
+        if matches!(saved.source, ToolSource::Builtin) && saved.name == "view_image" {
+            normalized.description = normalized
+                .description
+                .replacen(" and 32 MiB serialized model request", "", 1)
+                .replacen(LEGACY_IMAGE_LIMITS, IMAGE_LIMITS, 1)
+                .replacen(" and 4 MiB encoded result.", ".", 1)
+                .replacen(PREVIOUS_IMAGE_LIMITS, IMAGE_LIMITS, 1);
         }
         if self.can_rebind(&normalized) {
             return Some(normalized);
@@ -481,7 +527,7 @@ impl ToolCatalog {
                 strict: true,
                 display_source: None,
                 output_schema: None,
-                description: format!("Read one existing local static PNG or JPEG and return its actual image content to the model, with safe metadata. Required JSON: {{\"path\":\"image.png\"}}. Relative paths resolve in the session working directory; absolute paths use local Windows rules. Detects format from bytes, not extension. Does not capture screenshots, click, edit, generate or OCR images. At most 10 MiB input, 25 million pixels, longest sent edge 2048 px (proportional resize), 4 MiB encoded result, 16 MiB retained images per session. Immutable image bytes remain in history even if the original file changes or is deleted; use a new call to read new content. Model image capability from catalog: {}. Errors preserve existing history, without changing model or account.", match image_input { Some(true)=>"supported", Some(false)=>"unsupported", None=>"unknown; actual request determines support" }),
+                description: format!("Read one existing local static PNG or JPEG and return its actual image content to the model, with safe metadata. Required JSON: {{\"path\":\"image.png\"}}. Relative paths resolve in the session working directory; absolute paths use local Windows rules. Detects format from bytes, not extension. Does not capture screenshots, click, edit, generate or OCR images. {IMAGE_LIMITS} Immutable image bytes remain in history even if the original file changes or is deleted; use a new call to read new content. Model image capability from catalog: {}. Errors preserve existing history, without changing model or account.", match image_input { Some(true)=>"supported", Some(false)=>"unsupported", None=>"unknown; actual request determines support" }),
                 parameters: json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
             }, move |context, arguments, cancel| Box::pin(execution::image(context, arguments, cancel, image_input))).shared_read(),
             ToolRegistration::new(ToolDefinition {

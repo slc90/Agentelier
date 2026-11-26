@@ -320,7 +320,7 @@ impl Worker {
         if let Some(window) = entry.window {
             validate_window(window)?;
         }
-        self.elements.insert(new_id, entry)?;
+        self.elements.insert(new_id, entry);
         Ok(Some(summary))
     }
 }
@@ -450,9 +450,7 @@ impl Cursor {
             };
             let summary = summarize_node(id, &entry, control).map_err(|cause| self.issue(cause))?;
             if parent.is_some() {
-                registry
-                    .insert(id, entry)
-                    .map_err(|cause| self.issue(cause))?;
+                registry.insert(id, entry);
             }
             nodes.push(TreeNode {
                 summary,

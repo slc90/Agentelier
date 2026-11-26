@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const MAX_MEMORY_SUMMARY_BYTES: usize = 10 * 1024;
+pub const MEMORY_SUMMARY_PROMPT_BYTES: usize = 2_500 * 4;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemorySnapshot {
@@ -35,10 +36,10 @@ impl MemorySnapshot {
         if self.publication_id.is_nil()
             || self.epoch < 0
             || self.summary.trim().is_empty()
-            || self.summary.len() > MAX_MEMORY_SUMMARY_BYTES
             || self.hash != format!("{:x}", Sha256::digest(self.summary.as_bytes()))
             || self.scope.as_ref().is_some_and(|scope| {
-                scope.generation < 0
+                self.summary.len() > MAX_MEMORY_SUMMARY_BYTES
+                    || scope.generation < 0
                     || !scope.directory.is_absolute()
                     || scope.sources.len() > 84
                     || scope.sources.iter().any(|source| {

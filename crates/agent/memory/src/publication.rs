@@ -4,7 +4,7 @@ use crate::{
     store::{FILE_ATTRIBUTE_REPARSE_POINT, check_path},
 };
 use agentelier_conversation::SessionId;
-use agentelier_llm_model::{MAX_MEMORY_SUMMARY_BYTES, MemorySnapshot};
+use agentelier_llm_model::MemorySnapshot;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::BTreeMap;
 use std::fs;
@@ -31,7 +31,7 @@ pub(crate) fn snapshot(
     };
     check_path(workspace, true)?;
     let publication_id = Uuid::parse_str(&publication_id).map_err(io::Error::other)?;
-    let summary = read_checked(&workspace.join(SUMMARY), MAX_MEMORY_SUMMARY_BYTES, &hash)?;
+    let summary = read_checked(&workspace.join(SUMMARY), 64 * 1024, &hash)?;
     let snapshot = MemorySnapshot {
         publication_id,
         hash,

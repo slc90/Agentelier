@@ -4,11 +4,9 @@ use sha2::{Digest, Sha256};
 use std::io::{self, Cursor};
 use std::sync::Arc;
 
-pub const MAX_SESSION_IMAGE_BYTES: usize = 16 * 1024 * 1024;
-pub const MAX_ENCODED_IMAGE_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_IMAGE_EDGE: u32 = 2048;
+pub const MAX_PROMPT_IMAGE_BYTES: usize = 79 * 1024 * 1024;
 pub const MAX_ORIGINAL_IMAGE_BYTES: usize = 32 * 1024 * 1024;
-pub const MAX_SESSION_ORIGINAL_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_ORIGINAL_IMAGE_EDGE: u32 = 4096;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,7 +28,7 @@ impl ImageDescriptor {
     }
 
     pub fn validate(&self) -> io::Result<()> {
-        self.validate_limits(MAX_ENCODED_IMAGE_BYTES, MAX_IMAGE_EDGE)
+        self.validate_limits(MAX_PROMPT_IMAGE_BYTES, MAX_IMAGE_EDGE)
     }
 
     pub fn validate_original(&self) -> io::Result<()> {
@@ -183,7 +181,8 @@ impl OriginalImage {
 
     pub fn into_model_image(self) -> io::Result<ImagePayload> {
         let image = self.descriptor;
-        if image.validate().is_ok() {
+        if crate::image::prompt_dimensions(image.width, image.height) == (image.width, image.height)
+        {
             let mime = match image.extension()? {
                 "png" => "image/png",
                 "jpg" => "image/jpeg",

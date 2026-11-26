@@ -199,13 +199,7 @@ async fn convert(
     if let Some(structured) = result.structured_content {
         payload["structuredContent"] = structured;
     }
-    let summary = payload.to_string();
-    if summary.len() > agentelier_tools::MAX_TOOL_BODY_BYTES {
-        return fail(
-            "mcp_result_too_large",
-            "MCP 工具结果超过文字预算；未截断或伪造完整结果",
-        );
-    }
+    let summary = summarize(&payload);
     if let Some((index, block)) = image {
         let mut reason = "图片格式、编码或尺寸不受支持";
         if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&block.data) {
@@ -226,7 +220,7 @@ async fn convert(
             json!({"type":"image","mimeType":block.mime_type,"unavailable":reason});
         return ToolResult {
             status,
-            output: payload.to_string().into(),
+            output: summarize(&payload).into(),
             cleanup_failed: false,
         };
     }
@@ -235,4 +229,25 @@ async fn convert(
         output: summary.into(),
         cleanup_failed: false,
     }
+}
+
+fn summarize(payload: &serde_json::Value) -> String {
+    use agentelier_tools::MAX_TOOL_BODY_BYTES;
+    let full = payload.to_string();
+    if full.len() <= MAX_TOOL_BODY_BYTES {
+        return full;
+    }
+    // The retained JSON is embedded as text. Quotation marks and backslashes can double.
+    let edge = (MAX_TOOL_BODY_BYTES - 512) / 4;
+    json!({
+        "isError": payload["isError"],
+        "truncated": true,
+        "originalBytes": full.len(),
+        "preview": format!(
+            "{}\n[… MCP result truncated …]\n{}",
+            &full[..full.floor_char_boundary(edge)],
+            &full[full.ceil_char_boundary(full.len() - edge)..],
+        ),
+    })
+    .to_string()
 }

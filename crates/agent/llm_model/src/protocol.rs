@@ -243,19 +243,6 @@ impl ProtocolHistory {
         Ok(Self(replacement.0.iter().chain(tail).cloned().collect()))
     }
 
-    pub fn with_response(
-        &self,
-        input: Option<&str>,
-        output: &ProtocolOutput,
-    ) -> Result<Self, crate::ModelFailure> {
-        self.response_append(input, output)?;
-        let mut history = self.clone();
-        if let Some(input) = input {
-            history.0.push(ProtocolItem::User(input.to_owned()));
-        }
-        history.0.extend_from_slice(&output.0);
-        Ok(history)
-    }
     pub fn with_user(&self, input: &str) -> Self {
         let mut history = self.clone();
         history.0.push(ProtocolItem::User(input.to_owned()));
@@ -379,18 +366,10 @@ impl ProtocolHistory {
             .collect()
     }
 
-    pub fn image_bytes_with<'a>(&'a self, pending: impl Iterator<Item = &'a ToolPayload>) -> usize {
-        let mut seen = std::collections::HashSet::new();
-        self.0
-            .iter()
-            .filter_map(|item| match item {
-                ProtocolItem::FunctionResult { output, .. } => output.image(),
-                _ => None,
-            })
-            .chain(pending.filter_map(ToolPayload::image))
-            .filter(|image| seen.insert(image.digest()))
-            .map(|image| image.bytes().len())
-            .sum()
+    pub fn has_images(&self) -> bool {
+        self.0.iter().any(|item| {
+            matches!(item, ProtocolItem::FunctionResult { output, .. } if output.image().is_some())
+        })
     }
 
     pub(crate) fn into_input(self) -> Vec<Value> {

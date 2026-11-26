@@ -209,7 +209,7 @@ impl ActiveTurn<'_> {
             (Some(true), Some(true)) => Some(true),
             _ => None,
         };
-        if image_input == Some(false) && history.image_bytes_with(std::iter::empty()) != 0 {
+        if image_input == Some(false) && history.has_images() {
             return Err(ConversationFailure::new(
                 "子 Agent 无法重放含图片的 Fork 历史",
             ));

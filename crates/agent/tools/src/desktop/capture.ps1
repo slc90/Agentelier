@@ -31,15 +31,6 @@ try {
         $encoded = [System.IO.MemoryStream]::new()
         try {
             $frame.Save($encoded, [System.Drawing.Imaging.ImageFormat]::Png)
-            $limit = [int]$env:AGENTELIER_CAPTURE_MAX_BYTES
-            if ($encoded.Length -gt $limit) {
-                $encoded.SetLength(0)
-                $encoded.Position = 0
-                $frame.Save($encoded, [System.Drawing.Imaging.ImageFormat]::Jpeg)
-            }
-            if ($encoded.Length -gt $limit) {
-                throw 'Encoded capture exceeds the image payload limit'
-            }
             $encoded.Position = 0
             $encoded.CopyTo([Console]::OpenStandardOutput())
         } finally {

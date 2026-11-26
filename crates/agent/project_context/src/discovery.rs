@@ -20,10 +20,6 @@ pub enum ProjectContextFailure {
         path: PathBuf,
         source: std::str::Utf8Error,
     },
-    Budget {
-        path: PathBuf,
-        used: usize,
-    },
 }
 
 impl std::fmt::Display for ProjectContextFailure {
@@ -41,11 +37,6 @@ impl std::fmt::Display for ProjectContextFailure {
             Self::InvalidUtf8 { path, .. } => {
                 write!(f, "项目规则不是有效 UTF-8：{}", path.display())
             }
-            Self::Budget { path, used } => write!(
-                f,
-                "项目规则超过字节预算：{}；已读取至少 {used} 字节，预算 {MAX_PROJECT_SOURCE_BYTES} 字节",
-                path.display()
-            ),
         }
     }
 }
@@ -162,24 +153,28 @@ pub fn collect(
             .read_to_end(&mut bytes)
             .map_err(|error| io_failure(&path, error))?;
         check(cancel)?;
-        snapshot.source_bytes += bytes.len();
-        if snapshot.source_bytes > MAX_PROJECT_SOURCE_BYTES {
-            return Err(ProjectContextFailure::Budget {
-                path,
-                used: snapshot.source_bytes,
-            });
-        }
-        let text =
-            std::str::from_utf8(&bytes).map_err(|source| ProjectContextFailure::InvalidUtf8 {
+        let truncated = bytes.len() > remaining;
+        bytes.truncate(remaining);
+        let text = std::str::from_utf8(&bytes)
+            .or_else(|error| {
+                if truncated && error.error_len().is_none() {
+                    std::str::from_utf8(&bytes[..error.valid_up_to()])
+                } else {
+                    Err(error)
+                }
+            })
+            .map_err(|source| ProjectContextFailure::InvalidUtf8 {
                 path: path.clone(),
                 source,
             })?;
+        snapshot.source_bytes += text.len();
         let text = text.strip_prefix('\u{feff}').unwrap_or(text).to_owned();
         snapshot.sources.push(RuleSource {
             hash: hash(&text),
             path,
             scope,
             text,
+            truncated,
         });
     }
     check(cancel)?;

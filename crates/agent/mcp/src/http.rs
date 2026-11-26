@@ -49,8 +49,6 @@ pub(crate) async fn run(
         reason: "无法构造 MCP HTTP 客户端",
     })?;
     let mut config = StreamableHttpClientTransportConfig::with_uri(url.to_string())
-        .max_sse_event_size(crate::MAX_WIRE_MESSAGE_BYTES)
-        .max_concurrent_requests(2)
         .control_request_timeout(CONTROL_TIMEOUT)
         .reinit_on_expired_session(false);
     if let Some(name) = bearer_environment {

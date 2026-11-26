@@ -16,11 +16,8 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
-const MATERIAL_TIMEOUT: Duration = Duration::from_secs(20);
-const MAX_ITEMS: usize = 128;
-const MAX_PAGES: usize = 16;
+const MATERIAL_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_URI_BYTES: usize = 4096;
-const MAX_LIST_BYTES: usize = 128 * 1024;
 pub const MAX_MATERIAL_BYTES: usize = 64 * 1024;
 
 #[derive(Clone)]
@@ -227,9 +224,6 @@ async fn get_prompt(
     if !usable {
         text.push_str("只有单条非空的 user 纯文本消息可加入聊天草稿。\n");
     }
-    if result.messages.len() > MAX_ITEMS {
-        return Err("展开结果的消息条数超过预算".into());
-    }
     for message in result.messages {
         text.push_str(&format!("\nRole: {:?}\n", message.role));
         match message.content {
@@ -277,14 +271,8 @@ async fn get_prompt(
             )),
             _ => text.push_str("不支持的内容块\n"),
         }
-        if text.len() > MAX_MATERIAL_BYTES {
-            return Err("展开结果超过 64 KiB 预览预算".into());
-        }
     }
-    text.push_str("\n[/MCP Prompt]");
-    if text.len() > MAX_MATERIAL_BYTES {
-        return Err("展开结果超过 64 KiB 预览预算".into());
-    }
+    let text = bounded_preview(text, "\n[/MCP Prompt]");
     Ok(MaterialReply::Preview(MaterialPreview { text, usable }))
 }
 
@@ -334,42 +322,19 @@ async fn load_resources(
     })
     .await?;
     entries.extend(templates);
-    let bytes: usize = entries
-        .iter()
-        .map(|entry| {
-            entry.uri.len()
-                + entry.name.len()
-                + entry.description.as_ref().map_or(0, String::len)
-                + entry.mime.as_ref().map_or(0, String::len)
-        })
-        .sum();
-    if entries.len() > MAX_ITEMS || bytes > MAX_LIST_BYTES {
-        return Err("MCP 资源清单超过大小或条目预算".into());
-    }
     Ok(MaterialReply::Resources { origin, entries })
 }
 
 pub(crate) async fn pages<T, F, Fut>(mut fetch: F) -> Result<Vec<T>, String>
 where
-    T: serde::Serialize,
     F: FnMut(PaginatedRequestParams) -> Fut,
     Fut: Future<Output = Result<(Vec<T>, Option<String>), &'static str>>,
 {
     let mut cursor = None;
     let mut cursors = HashSet::new();
     let mut items = Vec::new();
-    let mut bytes = 0usize;
-    for _ in 0..MAX_PAGES {
+    loop {
         let (page, next) = fetch(PaginatedRequestParams::default().with_cursor(cursor)).await?;
-        if page.len() + items.len() > MAX_ITEMS {
-            return Err("MCP 清单超过条目预算".into());
-        }
-        bytes += serde_json::to_vec(&page)
-            .map_err(|_| "MCP 清单无法编码")?
-            .len();
-        if bytes > MAX_LIST_BYTES {
-            return Err("MCP 清单超过字节预算".into());
-        }
         items.extend(page);
         let Some(next) = next else { return Ok(items) };
         if !cursors.insert(next.clone()) {
@@ -377,7 +342,6 @@ where
         }
         cursor = Some(next);
     }
-    Err("MCP 清单超过分页预算".into())
 }
 
 pub fn expand_resource_uri(
@@ -437,8 +401,8 @@ async fn read_resource(
             }
             _ => "无法取得有效的 MCP 资源读取结果".into(),
         })?;
-    if reply.contents.is_empty() || reply.contents.len() > MAX_ITEMS {
-        return Err("资源没有返回内容，或返回项数超过预算".into());
+    if reply.contents.is_empty() {
+        return Err("资源没有返回内容".into());
     }
     let mut usable = true;
     let mut text = format!(
@@ -499,10 +463,18 @@ async fn read_resource(
                 text.push_str("\n服务器返回了暂不支持的资源内容。\n");
             }
         }
-        if text.len() > MAX_MATERIAL_BYTES {
-            return Err("MCP 资源超过 64 KiB 预览预算".into());
-        }
     }
-    text.push_str("\n[/MCP Resource]");
+    let text = bounded_preview(text, "\n[/MCP Resource]");
     Ok(MaterialReply::Preview(MaterialPreview { text, usable }))
+}
+
+fn bounded_preview(mut text: String, closing: &str) -> String {
+    const TRUNCATED: &str = "\n[预览已截断]";
+    if text.len() > MAX_MATERIAL_BYTES - closing.len() {
+        let prefix = MAX_MATERIAL_BYTES - closing.len() - TRUNCATED.len();
+        text.truncate(text.floor_char_boundary(prefix));
+        text.push_str(TRUNCATED);
+    }
+    text.push_str(closing);
+    text
 }

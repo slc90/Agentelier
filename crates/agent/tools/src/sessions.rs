@@ -8,13 +8,13 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, OwnedRwLockWriteGuard};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-pub const MAX_PROCESS_SESSIONS: usize = 8;
+pub const MAX_PROCESS_SESSIONS: usize = 64;
 const DEFAULT_YIELD_MS: u64 = 10_000;
 const MAX_YIELD_MS: u64 = 30_000;
 
@@ -50,6 +50,7 @@ struct ProcessEntry {
     state: Mutex<ProcessState>,
     terminate: CancellationToken,
     origin: ProcessOrigin,
+    started: Instant,
 }
 
 enum ProcessState {
@@ -134,13 +135,6 @@ impl ProcessSessions {
         if input.cmd.trim().is_empty() {
             return ToolResult::error(ToolStatus::Failed, "invalid_arguments", "命令不能为空");
         }
-        if self.registry.lock().await.processes.len() >= MAX_PROCESS_SESSIONS {
-            return ToolResult::error(
-                ToolStatus::Failed,
-                "session_limit",
-                "会话最多持有 8 个存活或未读取退出结果的进程，请先读取或收起退出结果",
-            );
-        }
         let mut process = match Process::start(&input.cmd, input.workdir, directory, cancel).await {
             Ok(process) => process,
             Err(error) => return failure(error),
@@ -177,6 +171,7 @@ impl ProcessSessions {
                 }),
                 terminate: CancellationToken::new(),
                 origin,
+                started: Instant::now(),
             });
             if let Err(error) =
                 save(&self.save, &entry, &id, ProcessChange::Started { lifetime }).await
@@ -244,9 +239,36 @@ impl ProcessSessions {
                     self.save.clone(),
                 )),
             );
+            drop(registry);
             drop(launch_lease);
+            if let Err(error) = self.prune_exited().await {
+                return storage_failure(error);
+            }
         }
         result
+    }
+
+    async fn prune_exited(&self) -> std::io::Result<()> {
+        let mut candidates = {
+            let registry = self.registry.lock().await;
+            if registry.processes.len() <= MAX_PROCESS_SESSIONS {
+                return Ok(());
+            }
+            registry.processes.clone().into_iter().collect::<Vec<_>>()
+        };
+        candidates.sort_by_key(|(_, entry)| entry.started);
+        for (id, entry) in candidates {
+            if self.registry.lock().await.processes.len() <= MAX_PROCESS_SESSIONS {
+                break;
+            }
+            if let Ok(mut state) = entry.state.try_lock()
+                && matches!(*state, ProcessState::Exited(_))
+            {
+                self.consume(&entry, &id, &mut state).await?;
+                tracing::debug!(session_id = id, "回收最早的已退出进程登记");
+            }
+        }
+        Ok(())
     }
 
     pub(crate) async fn stdin(&self, text: &str, cancel: &CancellationToken) -> ToolResult {

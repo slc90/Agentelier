@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use uuid::Uuid;
 
-const MAX_UNDELIVERED_TASKS: usize = 64;
+const LEGACY_MAX_UNDELIVERED_TASKS: usize = 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -263,18 +263,15 @@ impl TaskLedger {
         turn: TurnId,
         request: u32,
         memory_epoch: Option<i64>,
-        within_budget: bool,
         result_calls: &[String],
     ) -> Result<(ResponseTasks, ResponseDelivery), ConversationFailure> {
-        let delivery = self.plan_delivery(calls, result_calls, within_budget);
-        if !within_budget {
-            return Ok((ResponseTasks::OverBudget, delivery));
-        }
+        let delivery = ResponseDelivery {
+            settled: self.settled_delivery(result_calls),
+            rejected: Vec::new(),
+        };
         let registrations: Vec<_> = calls
             .iter()
-            .filter(|call| {
-                call.mode() == ToolMode::Asynchronous && !delivery.rejected.contains(&call.call_id)
-            })
+            .filter(|call| call.mode() == ToolMode::Asynchronous)
             .map(|call| TaskRegistration {
                 execution: TaskExecution {
                     task: TaskId(Uuid::new_v4()),
@@ -293,39 +290,35 @@ impl TaskLedger {
         Ok((ResponseTasks::Registered(registrations), delivery))
     }
 
-    pub(crate) fn plan_delivery(
-        &self,
-        calls: &[FunctionCall],
-        result_calls: &[String],
-        within_budget: bool,
-    ) -> ResponseDelivery {
+    pub(crate) fn settled_delivery(&self, result_calls: &[String]) -> Vec<TaskId> {
         let results: HashSet<_> = result_calls.iter().map(String::as_str).collect();
-        let settled: Vec<_> = self
-            .tasks
+        self.tasks
             .iter()
             .filter(|task| {
                 task.delivery == Delivery::Appended
                     && results.contains(task.registration.call_id.as_str())
             })
             .map(|task| task.registration.execution.task)
-            .collect();
+            .collect()
+    }
+
+    pub(crate) fn legacy_rejected_delivery(
+        &self,
+        calls: &[FunctionCall],
+        settled: &[TaskId],
+    ) -> Vec<String> {
         let occupied = self
             .tasks
             .iter()
             .filter(|task| !matches!(task.delivery, Delivery::Delivered(_)))
             .count();
-        let available = MAX_UNDELIVERED_TASKS.saturating_sub(occupied - settled.len());
-        let rejected = if within_budget {
-            calls
-                .iter()
-                .filter(|call| call.mode() == ToolMode::Asynchronous)
-                .skip(available)
-                .map(|call| call.call_id.clone())
-                .collect()
-        } else {
-            Vec::new()
-        };
-        ResponseDelivery { settled, rejected }
+        let available = LEGACY_MAX_UNDELIVERED_TASKS.saturating_sub(occupied - settled.len());
+        calls
+            .iter()
+            .filter(|call| call.mode() == ToolMode::Asynchronous)
+            .skip(available)
+            .map(|call| call.call_id.clone())
+            .collect()
     }
 
     pub(crate) fn install(

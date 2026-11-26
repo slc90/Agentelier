@@ -81,6 +81,8 @@ Agentelier 应在 UIA Worker 中实现有界 DFS 遍历。请求至少包含：
 
 ## 逻辑元素引用
 
+元素引用由会话 Worker 持有，发现更多元素时可继续创建引用。搜索、预取和快照各自使用单次查询预算，Worker 退出时释放引用。
+
 Rhai 只保存不透明的字符串引用，例如 `uia:element:<id>`。真正的 `UIElement` COM wrapper 保存在所属 MTA Worker 的元素表中。
 
 每条引用记录：

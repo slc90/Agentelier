@@ -2,10 +2,8 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-use tokio::sync::{OwnedRwLockWriteGuard, OwnedSemaphorePermit, RwLock, Semaphore};
+use tokio::sync::{OwnedRwLockWriteGuard, RwLock};
 use tokio_util::sync::CancellationToken;
-
-const MAX_RUNNING_TOOLS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ToolAccess {
@@ -18,7 +16,6 @@ pub enum ToolAccess {
 #[derive(Clone)]
 pub struct ToolAdmission {
     effects: Arc<RwLock<()>>,
-    slots: Arc<Semaphore>,
     blocked: CancellationToken,
     paused: Arc<AtomicBool>,
     external_unconfirmed: Arc<AtomicBool>,
@@ -29,7 +26,6 @@ impl Default for ToolAdmission {
     fn default() -> Self {
         Self {
             effects: Arc::new(RwLock::new(())),
-            slots: Arc::new(Semaphore::new(MAX_RUNNING_TOOLS)),
             blocked: CancellationToken::new(),
             paused: Arc::default(),
             external_unconfirmed: Arc::default(),
@@ -39,7 +35,6 @@ impl Default for ToolAdmission {
 }
 
 pub struct ToolPermit {
-    _slot: Option<OwnedSemaphorePermit>,
     _shared: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
     pub(crate) exclusive: Option<OwnedRwLockWriteGuard<()>>,
     external_waiting_save: Arc<AtomicUsize>,
@@ -102,7 +97,6 @@ impl ToolAdmission {
     ) -> Option<ToolPermit> {
         if access == ToolAccess::ProcessControl {
             return (!cancel.is_cancelled()).then_some(ToolPermit {
-                _slot: None,
                 _shared: None,
                 exclusive: None,
                 external_waiting_save: self.external_waiting_save.clone(),
@@ -112,27 +106,20 @@ impl ToolAdmission {
             biased;
             _ = cancel.cancelled() => None,
             _ = self.blocked.cancelled() => None,
-            permit = self.acquire_ordinary(access) => permit,
+            permit = self.acquire_ordinary(access) => Some(permit),
         }
     }
 
-    async fn acquire_ordinary(&self, access: ToolAccess) -> Option<ToolPermit> {
-        loop {
-            let (shared, exclusive) = if access == ToolAccess::SharedRead {
-                (Some(self.effects.clone().read_owned().await), None)
-            } else {
-                (None, Some(self.effects.clone().write_owned().await))
-            };
-            if let Ok(slot) = self.slots.clone().try_acquire_owned() {
-                return Some(ToolPermit {
-                    _slot: Some(slot),
-                    _shared: shared,
-                    exclusive,
-                    external_waiting_save: self.external_waiting_save.clone(),
-                });
-            }
-            drop((shared, exclusive));
-            drop(self.slots.acquire().await.ok()?);
+    async fn acquire_ordinary(&self, access: ToolAccess) -> ToolPermit {
+        let (shared, exclusive) = if access == ToolAccess::SharedRead {
+            (Some(self.effects.clone().read_owned().await), None)
+        } else {
+            (None, Some(self.effects.clone().write_owned().await))
+        };
+        ToolPermit {
+            _shared: shared,
+            exclusive,
+            external_waiting_save: self.external_waiting_save.clone(),
         }
     }
 }

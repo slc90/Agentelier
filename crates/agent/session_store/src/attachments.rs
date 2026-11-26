@@ -1,9 +1,7 @@
-use agentelier_conversation::{
-    AudioAttachment, MAX_AUDIO_BYTES, MAX_SESSION_AUDIO_BYTES, SessionId, StoredImage,
-};
+use agentelier_conversation::{AudioAttachment, MAX_AUDIO_BYTES, SessionId, StoredImage};
 use agentelier_tools::{
-    ImageDescriptor, ImagePayload, MAX_ENCODED_IMAGE_BYTES, MAX_ORIGINAL_IMAGE_BYTES,
-    MAX_SESSION_ORIGINAL_IMAGE_BYTES, MAX_TOOL_BODY_BYTES, OriginalImage,
+    ImageDescriptor, ImagePayload, MAX_ORIGINAL_IMAGE_BYTES, MAX_PROMPT_IMAGE_BYTES,
+    MAX_TOOL_BODY_BYTES, OriginalImage,
 };
 use std::io::{Read, Write};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
@@ -67,7 +65,7 @@ fn filename(reference: &StoredImage) -> io::Result<String> {
 }
 
 fn read_file(path: &Path, reference: &StoredImage) -> io::Result<Arc<ImagePayload>> {
-    let bytes = read_encoded(path, reference.image.encoded_bytes, MAX_ENCODED_IMAGE_BYTES)?;
+    let bytes = read_encoded(path, reference.image.encoded_bytes, MAX_PROMPT_IMAGE_BYTES)?;
     ImagePayload::from_encoded(&reference.image, bytes).map(Arc::new)
 }
 
@@ -205,17 +203,6 @@ pub(super) fn save_audio(
 ) -> io::Result<()> {
     let name = audio_filename(&audio.attachment)?;
     let directory = attachment_directory(root, session, true)?;
-    let mut used = audio.attachment.encoded_bytes as u64;
-    for entry in fs::read_dir(&directory)? {
-        let entry = entry?;
-        let filename = entry.file_name();
-        if filename != name.as_str() && filename.to_str().is_some_and(audio_file) {
-            used = used.saturating_add(entry.metadata()?.len());
-        }
-    }
-    if used > MAX_SESSION_AUDIO_BYTES {
-        return Err(io::Error::other("音频附件超过会话 128 MiB 累计限额"));
-    }
     write_encoded(&directory.join(name), &audio.bytes, |path| {
         read_audio_file(path, &audio.attachment).map(drop)
     })
@@ -282,17 +269,6 @@ pub(super) fn save_generated(
     let name = generated_filename(image)?;
     let directory = attachment_directory(root, session, true)?;
     let path = directory.join(&name);
-    let mut used = 0_u64;
-    for entry in fs::read_dir(&directory)? {
-        let entry = entry?;
-        let filename = entry.file_name();
-        if filename != name.as_str() && filename.to_str().is_some_and(generated_file) {
-            used = used.saturating_add(entry.metadata()?.len());
-        }
-    }
-    if used.saturating_add(image.encoded_bytes as u64) > MAX_SESSION_ORIGINAL_IMAGE_BYTES {
-        return Err(io::Error::other("生成原图超过会话 256 MiB 累计限额"));
-    }
     write_encoded(&path, original.bytes(), |path| {
         read_original(path, image).map(drop)
     })?;

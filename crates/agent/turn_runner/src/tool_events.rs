@@ -103,8 +103,6 @@ impl TurnTools {
         catalog: Arc<ToolCatalog>,
         context: Arc<ExecutionContext>,
         calls: Vec<agentelier_llm_model::FunctionCall>,
-        limited: bool,
-        rejected: &[String],
         authorization: &ToolAuthorization,
         progress: &mpsc::Sender<RunnerEvent>,
         cancel: &CancellationToken,
@@ -114,32 +112,7 @@ impl TurnTools {
         let mut controls = Vec::new();
         let steered = active.call(|turn| Ok(turn.has_pending_steer())).await?;
         for call in calls {
-            let skip = if limited {
-                Some(ToolResult::not_executed(
-                    "tool_budget",
-                    "本批调用超过任务限额，整批未执行",
-                ))
-            } else if rejected.contains(&call.call_id) {
-                Some(ToolResult::not_executed(
-                    "session_delivery_budget",
-                    "会话异步任务交付额度已满，此调用未执行",
-                ))
-            } else {
-                None
-            };
-            if let Some(result) = skip {
-                save_call(
-                    active,
-                    dispatcher,
-                    session,
-                    &call.call_id,
-                    None,
-                    result,
-                    progress,
-                    cancel,
-                )
-                .await?;
-            } else if let Some(control) = catalog.task_control(&call.name) {
+            if let Some(control) = catalog.task_control(&call.name) {
                 controls.push((call, control));
             } else {
                 eligible.push(call);
@@ -613,6 +586,50 @@ impl TurnTools {
         close_responses(active).await
     }
 
+    pub(super) async fn wait_for_compaction(
+        &mut self,
+        active: &TurnAccess,
+        dispatcher: &ToolDispatcher,
+        progress: &mpsc::Sender<RunnerEvent>,
+        cancel: &CancellationToken,
+        steers: &mut mpsc::Receiver<SteerInput>,
+    ) -> Result<bool, ConversationFailure> {
+        let mut waited = false;
+        while !cancel.is_cancelled()
+            && active
+                .call(|mut turn| turn.compaction_waits_for_results())
+                .await?
+        {
+            if self.work.calls.is_empty() {
+                return Err(ConversationFailure::new(
+                    "压缩需要未确认的工具结果，当前没有在途执行",
+                ));
+            }
+            if !waited {
+                super::runner::publish(progress, cancel).await?;
+                waited = true;
+            }
+            tokio::select! { biased;
+                _ = cancel.cancelled() => break,
+                command = self.controls.recv(), if !self.controls.is_closed() => {
+                    if let Some(command) = command {
+                        self.command(active, dispatcher, command, progress, cancel).await?;
+                    }
+                }
+                input = steers.recv(), if !steers.is_closed() => {
+                    if let Some(input) = input {
+                        self.accept_steer(active, input, progress, cancel).await?;
+                    }
+                }
+                event = self.work.incoming.recv() => {
+                    self.apply(active, dispatcher, event, progress, cancel).await?;
+                }
+            }
+            self.boundary(active, dispatcher, progress, cancel).await?;
+        }
+        Ok(waited)
+    }
+
     pub(super) async fn close_commands(
         &mut self,
         active: &TurnAccess,
@@ -947,22 +964,11 @@ async fn persist_generated_image(
     result.output = match saved.feedback {
         GeneratedImageFeedback::Ready(image) => {
             let summary = metadata.to_string();
-            let payload = ToolPayload::Image {
-                summary: summary.clone(),
-                image: image.clone(),
-            };
-            if active
-                .call(move |turn| Ok(turn.can_retain_image(&payload)))
-                .await?
-            {
-                match active.persist_image(session, summary.clone(), image).await {
-                    Ok(image) => ToolPayload::Image { summary, image },
-                    Err(failure) => {
-                        unavailable_feedback(&mut metadata, &format!("保存模型图片失败：{failure}"))
-                    }
+            match active.persist_image(session, summary.clone(), image).await {
+                Ok(image) => ToolPayload::Image { summary, image },
+                Err(failure) => {
+                    unavailable_feedback(&mut metadata, &format!("保存模型图片失败：{failure}"))
                 }
-            } else {
-                unavailable_feedback(&mut metadata, "会话图片输入超过 16 MiB")
             }
         }
         GeneratedImageFeedback::Unsupported => {

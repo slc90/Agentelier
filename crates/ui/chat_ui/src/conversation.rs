@@ -2016,6 +2016,14 @@ fn update_session_status(
                 status.push_str(" · ");
                 status.push_str(&entry.title);
             }
+            if session
+                .project_context
+                .snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.sources.iter().any(|source| source.truncated))
+            {
+                status.push_str(" · 项目规则仅载入预览");
+            }
             status
         } else if let Some(target) = draft {
             let SessionModelDefaults { slug, effort } = (defaults.0)()?;

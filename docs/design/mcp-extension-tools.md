@@ -43,7 +43,7 @@ flowchart TD
 
 来自 MCP 的工具 Schema **不能被无条件强制改写为严格 Schema**。`llm_model/generation.rs` 使用登记的严格模式，四个内置工具继续使用完整 required/封闭对象及 `strict=true`；MCP `inputSchema` 则允许可选字段和不同结构。借鉴 Codex `codex-rs/tools/src/mcp_tool.rs` 与 `responses_api.rs` 的做法，保留输入含义并为 MCP 使用适当的非严格声明；必要的最低限度格式适配仅修复模型接口的语法要求，不把 optional 擅自改为 required。服务端仍是自身 Schema 与业务校验的权威。无法向当前模型合法声明的工具应单独报告不可用，而不是制造一个与原工具不同的接口。
 
-既有单次参数上限、模型请求上限、结果大小与图片预算继续生效。MCP 的 `outputSchema`、`structuredContent`、内容块及 `isError` 是结果协议，不等于模型输入 Schema；转换时不能只取一段展示文本丢掉错误状态或结构化内容。
+工具参数经过运行时校验。MCP 的 `outputSchema`、`structuredContent`、内容块及 `isError` 属于结果协议。结果适配保留结构化内容与错误状态，超长文本生成明确标记的预览。图片沿用模型输入尺寸和解码边界。
 
 ## Extension Tools：内部模块提供执行器
 
@@ -107,7 +107,9 @@ HTTP 直连配置的 HTTPS 或回环 HTTP 端点，localhost 固定解析到回�
 
 ### Tools：进入模型可调用目录
 
-连接就绪后使用 `tools/list` 分页发现，监听旧版 tools list changed 通知刷新候选目录。清单、Schema 及描述受数量和字节约束。模型名由服务器 UUID 与原始工具名确定，原始身份和传输配置摘要进入存档。通过校验的工具才登记入统一 `ToolCatalog`。模型只看到名称、描述、模型兼容 Schema；当模型输出 `function_call` 时，Runner 仍按原顺序执行，执行器把 JSON 参数原样按相应协议对象转交给 `tools/call`。服务端返回的 `content`、`structuredContent`、`isError` 要经过有界映射成为既有 `ToolResult`，再交给下一次 Responses 请求。
+启动、协商和工具发现使用 10 秒期限。工具调用、读取资源及展开提示词使用 60 秒期限。发现工具、资源和提示词时按游标读取，直到服务器返回最后一页或达到对应期限。stdio 消息与 HTTP SSE 事件使用 rmcp 默认的 16 MiB 边界。超长资源和提示词以明确标记的 64 KiB 以内预览呈现。
+
+模型名由服务器 UUID 与原始工具名确定，完整原始 Schema 和传输配置摘要用于绑定与恢复。模型侧优先保留参数结构，尽量把单个 Schema 缩减至 5000 字节。执行器将参数按协议原样转交给 `tools/call`。结果适配把 `content`、`structuredContent` 与 `isError` 转成 `ToolResult`，供下一次 Responses 请求使用。
 
 ```mermaid
 sequenceDiagram
@@ -125,7 +127,7 @@ sequenceDiagram
     R->>M: function_call_output(call_id)
 ```
 
-模型调用仍只发生在完整响应边界。工具批次串行、Steer、Stop、64 次工具预算、封闭历史步骤和异常归还沿用现有机制。MCP 的应用层错误（包括 `isError=true`）作为可反馈工具结果。连接断开、协议错误或调用取消分别处理，并在适当时机完成资源收尾。工具结果按有序内容数组保留文本、资源链接和结构化结果。当前单次工具载荷可携带一张图片，数组记录附件位置。其他图片、音频及无法解码的内容带有明确说明。静态 PNG/JPEG 与内置图片工具共用解码、规范化和会话预算。
+模型调用仍只发生在完整响应边界。工具批次、Steer、Stop、封闭历史步骤和异常归还沿用现有机制。MCP 的应用层错误（包括 `isError=true`）作为可反馈工具结果。连接断开、协议错误或调用取消分别处理，并在适当时机完成资源收尾。工具结果按有序内容数组保留文本、资源链接和结构化结果。当前单次工具载荷可携带一张图片，数组记录附件位置。其他图片、音频及无法解码的内容带有明确说明。静态 PNG/JPEG 与内置图片工具共用解码、规范化和请求图片投影。
 
 ### Resources：读取服务器提供的上下文
 

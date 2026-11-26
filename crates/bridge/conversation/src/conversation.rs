@@ -403,6 +403,7 @@ pub struct ProjectRuleSource {
     pub scope: std::path::PathBuf,
     pub text: String,
     pub hash: String,
+    pub truncated: bool,
 }
 #[derive(Clone)]
 pub struct ProjectSnapshotView {
@@ -452,6 +453,7 @@ fn project_context(state: agentelier_conversation::ProjectContextState) -> Proje
                     scope: source.scope.clone(),
                     text: source.text.clone(),
                     hash: source.hash.clone(),
+                    truncated: source.truncated,
                 })
                 .collect(),
         }),
@@ -620,6 +622,7 @@ pub fn view(session: agentelier_conversation::SessionView) -> SessionView {
                                     scope: source.scope.clone(),
                                     text: source.text.clone(),
                                     hash: source.hash.clone(),
+                                    truncated: source.truncated,
                                 })
                                 .collect(),
                         },

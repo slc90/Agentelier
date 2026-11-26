@@ -60,7 +60,7 @@ impl ContextState {
                 })
                 .fold(0, u64::saturating_add);
             for tool in tools {
-                let parameters = serde_json::to_string(&tool.parameters)
+                let parameters = serde_json::to_string(&tool.model_parameters())
                     .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
                 fixed = fixed
                     .saturating_add(estimated_text_tokens(&tool.name))

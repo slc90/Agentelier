@@ -234,8 +234,6 @@ impl Worker {
             };
             return Err(ToolFailure::new("uia_element_not_found", message));
         }
-        self.elements
-            .reserve(matched.iter().filter(|(_, root)| !root).count())?;
         let mut candidates = Vec::with_capacity(matched.len());
         let mut entries = Vec::with_capacity(matched.len());
         for (element, at_root) in matched {
@@ -280,7 +278,7 @@ impl Worker {
             validate_window(window)?;
         }
         for (id, entry) in entries {
-            self.elements.insert(id, entry)?;
+            self.elements.insert(id, entry);
         }
         Ok(json!({
             "root": reference_token(request.root), "view": request.scope.view.name(),

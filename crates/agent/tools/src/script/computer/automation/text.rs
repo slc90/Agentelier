@@ -110,6 +110,16 @@ pub(super) fn register(engine: &mut Engine) {
             |ctx: NativeCallContext, id: ImmutableString, name: ImmutableString| {
                 range(ctx, id, TextRangeAction::attribute(&name))
             },
+        )
+        .register_fn(
+            "uia_text_range_release",
+            |ctx: NativeCallContext, id: ImmutableString| {
+                with_uia(ctx, |run| {
+                    run.uia
+                        .release_text_range(&id, &run.control.cancel, run.control.deadline)
+                        .and_then(plain_data)
+                })
+            },
         );
 }
 

@@ -224,7 +224,7 @@ impl Worker {
             Err(error) if error.code == "uia_pattern_not_supported" => {
                 let entry = capture_item(&self.automation, element, id, container.window, control)?;
                 let data = item_fields(item_id, &entry, control)?;
-                self.elements.insert(item_id, entry)?;
+                self.elements.insert(item_id, entry);
                 data
             }
             Ok(_) => {
@@ -272,7 +272,6 @@ impl Worker {
 
     fn realize(&mut self, id: Uuid, control: &RequestControl) -> Result<Value, ToolFailure> {
         let entry = if let Some(item) = self.virtual_items.items.get(&id).cloned() {
-            self.elements.reserve(1)?;
             let container = self.resolve_element(item.container, control)?;
             let pattern: UIVirtualizedItemPattern = get_pattern(&item.element, control)?;
             provider(control, || pattern.realize())?;
@@ -307,7 +306,7 @@ impl Worker {
                 validate_window(window)?;
             }
             entry.generation += 1;
-            self.elements.insert(id, entry.clone())?;
+            self.elements.insert(id, entry.clone());
             self.virtual_items.items.remove(&id);
             entry
         } else {

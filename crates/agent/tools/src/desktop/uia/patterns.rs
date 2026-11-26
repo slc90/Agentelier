@@ -192,7 +192,6 @@ impl Worker {
         control: &RequestControl,
     ) -> Result<Vec<Value>, ToolFailure> {
         let count = elements.len().min(MAX_PATTERN_ELEMENTS);
-        self.elements.reserve(count)?;
         let mut entries = Vec::with_capacity(count);
         let mut summaries = Vec::with_capacity(count);
         for element in elements.into_iter().take(count) {
@@ -217,7 +216,7 @@ impl Worker {
         }
         control.check()?;
         for (id, entry) in entries {
-            self.elements.insert(id, entry)?;
+            self.elements.insert(id, entry);
         }
         Ok(summaries)
     }

@@ -31,9 +31,8 @@ pub use admission::{ToolAccess, ToolAdmission, ToolPermit};
 pub use execution::{ExecutionContext, ToolUserTurn};
 pub use payload::{
     GENERATE_IMAGE_TOOL, GENERATED_IMAGE_MODEL, ImageDescriptor, ImagePayload,
-    MAX_ENCODED_IMAGE_BYTES, MAX_GENERATION_PROMPT_CHARS, MAX_ORIGINAL_IMAGE_BYTES,
-    MAX_SESSION_IMAGE_BYTES, MAX_SESSION_ORIGINAL_IMAGE_BYTES, OriginalImage, PUBLISH_AUDIO_TOOL,
-    PUBLISH_SCENE_TOOL, ToolPayload, UPDATE_SCENE_TOOL,
+    MAX_GENERATION_PROMPT_CHARS, MAX_ORIGINAL_IMAGE_BYTES, MAX_PROMPT_IMAGE_BYTES, OriginalImage,
+    PUBLISH_AUDIO_TOOL, PUBLISH_SCENE_TOOL, ToolPayload, UPDATE_SCENE_TOOL,
 };
 mod process_facts;
 pub use process_facts::{

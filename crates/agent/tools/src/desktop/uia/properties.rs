@@ -297,8 +297,6 @@ impl Worker {
         let (targets, truncated) =
             cache_targets(&self.automation, &root.element, request, control)?;
         let include_root = request.scope.include_root();
-        self.elements
-            .reserve(targets.len().saturating_sub(usize::from(include_root)))?;
         let mut prepared = Vec::with_capacity(targets.len());
         for target in targets {
             control.check()?;
@@ -338,7 +336,7 @@ impl Worker {
                     control,
                 )?;
                 entry.cache = Some(cache);
-                self.elements.insert(target_id, entry)?;
+                self.elements.insert(target_id, entry);
                 refs.push(reference_token(target_id));
             }
         }

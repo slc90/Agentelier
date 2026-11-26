@@ -1,23 +1,24 @@
 use crate::{
     ImagePayload, ToolFailure, ToolPayload, ToolResult, ToolStatus, WorkingDirectory, blocking,
 };
+use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{DynamicImage, ImageDecoder, ImageEncoder, ImageFormat};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     fs::File,
-    io::{self, Cursor, Read, Write},
+    io::{Cursor, Read},
     path::PathBuf,
     sync::Arc,
 };
 use tokio_util::sync::CancellationToken;
 
-const MAX_INPUT_BYTES: usize = 10 * 1024 * 1024;
-const MAX_PIXELS: u64 = 25_000_000;
+const MAX_INPUT_BYTES: usize = crate::payload::MAX_PROMPT_IMAGE_BYTES;
+const MAX_PIXELS: u64 = 10_240_000;
 const MAX_BYTES_PER_PIXEL: u64 = 8;
-use crate::payload::{MAX_ENCODED_IMAGE_BYTES as MAX_ENCODED_BYTES, MAX_IMAGE_EDGE as MAX_EDGE};
-const JPEG_QUALITY: u8 = 85;
+use crate::payload::MAX_IMAGE_EDGE as MAX_EDGE;
+const JPEG_QUALITY: u8 = 90;
 const PNG_DIMENSIONS_START: usize = 16;
 
 #[derive(Deserialize)]
@@ -28,20 +29,6 @@ struct Arguments {
 
 fn failure(code: &'static str, error: impl std::fmt::Display) -> ToolFailure {
     ToolFailure::new(code, error.to_string())
-}
-
-struct Encoded(Vec<u8>);
-impl Write for Encoded {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        if bytes.len() > MAX_ENCODED_BYTES.saturating_sub(self.0.len()) {
-            return Err(io::Error::other("规范化图像超过 4 MiB，未生成截断载荷"));
-        }
-        self.0.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
 }
 
 fn read(
@@ -71,14 +58,14 @@ fn read(
         return Err(failure("image_type", "图片路径不是普通文件"));
     }
     if metadata.len() > MAX_INPUT_BYTES as u64 {
-        return Err(failure("image_input_limit", "原始图片超过 10 MiB"));
+        return Err(failure("image_input_limit", "原始图片超过 79 MiB"));
     }
     let mut bytes = Vec::new();
     file.take(MAX_INPUT_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| failure("image_read", error))?;
     if bytes.len() > MAX_INPUT_BYTES {
-        return Err(failure("image_input_limit", "实际读取图片超过 10 MiB"));
+        return Err(failure("image_input_limit", "实际读取图片超过 79 MiB"));
     }
     let (image, original_width, original_height, source_digest) = decode(bytes, None, control)?;
     let summary = json!({"ok":true,"data":{"path":path,"original_format":if image.mime == "image/png" {"png"} else {"jpeg"},"original_width":original_width,"original_height":original_height,"width":image.width,"height":image.height,"mime":image.mime,"source_sha256":source_digest,"sha256":image.digest,"encoded_bytes":image.bytes.len()}}).to_string();
@@ -98,7 +85,7 @@ fn decode(
 ) -> Result<(ImagePayload, u32, u32, String), ToolFailure> {
     control.check()?;
     if bytes.len() > MAX_INPUT_BYTES {
-        return Err(failure("image_input_limit", "原始图片超过 10 MiB"));
+        return Err(failure("image_input_limit", "原始图片超过 79 MiB"));
     }
     let source_digest = format!("{:x}", Sha256::digest(&bytes));
     let format = image::guess_format(&bytes).map_err(|error| failure("image_format", error))?;
@@ -170,38 +157,66 @@ fn decode(
     Ok((image, width, height, source_digest))
 }
 
+pub(crate) fn prompt_dimensions(width: u32, height: u32) -> (u32, u32) {
+    const PATCH: u32 = 32;
+    const MAX_PATCHES: u32 = 2_500;
+    let (width, height) = (width.max(1), height.max(1));
+    let edge = width.max(height);
+    let scale = (f64::from(MAX_EDGE) / f64::from(edge)).min(1.0);
+    let width = (f64::from(width) * scale).round().max(1.0) as u32;
+    let height = (f64::from(height) * scale).round().max(1.0) as u32;
+    if width.div_ceil(PATCH) * height.div_ceil(PATCH) <= MAX_PATCHES {
+        return (width, height);
+    }
+    let (width, height, patch) = (f64::from(width), f64::from(height), f64::from(PATCH));
+    let mut scale = (patch * patch * f64::from(MAX_PATCHES) / width / height).sqrt();
+    let horizontal = width * scale / patch;
+    let vertical = height * scale / patch;
+    scale *= (horizontal.floor() / horizontal).min(vertical.floor() / vertical);
+    (
+        (width * scale).floor().max(1.0) as u32,
+        (height * scale).floor().max(1.0) as u32,
+    )
+}
+
 pub(crate) fn normalize(decoded: DynamicImage, png: bool) -> Result<ImagePayload, ToolFailure> {
-    let resized = if decoded.width().max(decoded.height()) > MAX_EDGE {
-        decoded.resize(MAX_EDGE, MAX_EDGE, image::imageops::FilterType::Triangle)
+    let (width, height) = prompt_dimensions(decoded.width(), decoded.height());
+    let resized = if (width, height) != (decoded.width(), decoded.height()) {
+        decoded.resize_exact(width, height, image::imageops::FilterType::Triangle)
     } else {
         decoded
     };
-    let (sent_width, sent_height) = (resized.width(), resized.height());
-    let mut encoded = Encoded(Vec::new());
+    let (width, height) = (resized.width(), resized.height());
+    let mut bytes = Vec::new();
     let mime = if png {
-        let pixels = resized.to_rgba8();
-        image::codecs::png::PngEncoder::new(&mut encoded)
-            .write_image(
-                &pixels,
-                sent_width,
-                sent_height,
+        let (pixels, color) = if resized.color().has_alpha() {
+            (
+                resized.into_rgba8().into_raw(),
                 image::ExtendedColorType::Rgba8,
             )
+        } else {
+            (
+                resized.into_rgb8().into_raw(),
+                image::ExtendedColorType::Rgb8,
+            )
+        };
+        PngEncoder::new_with_quality(&mut bytes, CompressionType::Default, FilterType::Adaptive)
+            .write_image(&pixels, width, height, color)
             .map_err(|error| failure("image_encode", error))?;
         "image/png"
     } else {
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, JPEG_QUALITY)
-            .encode_image(&resized.to_rgb8())
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, JPEG_QUALITY)
+            .encode_image(&resized.into_rgb8())
             .map_err(|error| failure("image_encode", error))?;
         "image/jpeg"
     };
-    let digest = format!("{:x}", Sha256::digest(&encoded.0));
+    let digest = format!("{:x}", Sha256::digest(&bytes));
     Ok(ImagePayload {
-        bytes: encoded.0,
+        bytes,
         mime,
         digest,
-        width: sent_width,
-        height: sent_height,
+        width,
+        height,
     })
 }
 
@@ -231,7 +246,7 @@ fn check_dimensions(width: u32, height: u32) -> Result<(), ToolFailure> {
     if width == 0 || height == 0 || u64::from(width) * u64::from(height) > MAX_PIXELS {
         Err(failure(
             "image_pixel_limit",
-            "解码图片超过 2500 万像素或尺寸无效",
+            "解码图片超过 1024 万像素或尺寸无效",
         ))
     } else {
         Ok(())

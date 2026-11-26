@@ -1,4 +1,4 @@
-use crate::control::{MAX_PENDING_STEERS, SteerInput, SteerState, SteerView};
+use crate::control::{SteerInput, SteerState, SteerView};
 use crate::conversation::{
     ConversationFailure, SessionView, TaskPhase, ToolView, TurnMemory, TurnStatus, TurnView,
 };
@@ -6,9 +6,7 @@ use agentelier_llm_model::{
     FunctionCall, GenerationRequest, GenerationResult, HistoryAppend, OutputText, ProtocolHistory,
     StreamEvent,
 };
-use agentelier_tools::{
-    MAX_SESSION_IMAGE_BYTES, MAX_TOOL_BODY_BYTES, ToolCatalog, ToolPayload, ToolResult, ToolStatus,
-};
+use agentelier_tools::{MAX_TOOL_BODY_BYTES, ToolCatalog, ToolPayload, ToolResult, ToolStatus};
 use std::sync::Arc;
 
 pub(crate) struct ActiveState {
@@ -25,19 +23,6 @@ pub(crate) struct ActiveState {
 pub(crate) struct ToolResultEntry {
     pub(crate) output: ToolPayload,
     pub(crate) saved: Option<u64>,
-}
-
-fn image_budget_fits(
-    history: &ProtocolHistory,
-    results: &std::collections::BTreeMap<String, ToolResultEntry>,
-    output: &ToolPayload,
-) -> bool {
-    history.image_bytes_with(
-        results
-            .values()
-            .map(|entry| &entry.output)
-            .chain(std::iter::once(output)),
-    ) <= MAX_SESSION_IMAGE_BYTES
 }
 
 pub struct ActiveTurn<'a> {
@@ -61,7 +46,7 @@ impl ActiveTurn<'_> {
         selected: Vec<agentelier_skills::SelectedSkill>,
     ) -> Result<(), ConversationFailure> {
         let rendered = catalog
-            .render()
+            .render(self.view.context.limits.window)
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
         let transcript = self
             .view
@@ -476,9 +461,7 @@ impl ActiveTurn<'_> {
             .map(|tool| tool.call_id.as_str())
             .collect();
         let (context, retired_memory_outputs) = context.retire_memory_outputs(&allowed);
-        if context.has_open_calls() || skip_compaction {
-            self.check_result_capacity(&context, &Default::default(), false)?;
-        }
+        let ensure_fits = context.has_open_calls() || skip_compaction;
         let behavior = crate::behavior::for_request(self.view, turn);
         let expression = crate::expression::capture(self, turn);
         let previous = turn
@@ -496,6 +479,14 @@ impl ActiveTurn<'_> {
                     .as_ref()
                     .map_or(0, agentelier_llm_model::ExpressionContext::estimated_tokens),
             );
+        self.view.context.refresh(
+            &context,
+            &self.view.settings.instructions,
+            self.tools.definitions(),
+        )?;
+        if ensure_fits {
+            crate::result_budget::ensure_context_fits(&self.view.context)?;
+        }
         let turn = self
             .view
             .turn
@@ -507,11 +498,6 @@ impl ActiveTurn<'_> {
             .ok_or_else(|| ConversationFailure::new("模型请求序号已耗尽"))?;
         turn.phase = TaskPhase::RequestingModel;
         turn.request_items = context.summary();
-        self.view.context.refresh(
-            &context,
-            &self.view.settings.instructions,
-            self.tools.definitions(),
-        )?;
         Ok(GenerationRequest {
             history_position: self.history.position(),
             skip_compaction,
@@ -524,7 +510,7 @@ impl ActiveTurn<'_> {
             skill_catalog: turn
                 .skills
                 .as_ref()
-                .map(|catalog| catalog.render())
+                .map(|catalog| catalog.render(self.view.context.limits.window))
                 .transpose()
                 .map_err(|failure| ConversationFailure::new(failure.to_string()))?,
             slug: self.view.settings.slug.clone(),
@@ -541,6 +527,38 @@ impl ActiveTurn<'_> {
         })
     }
 
+    pub fn compaction_waits_for_results(&mut self) -> Result<bool, ConversationFailure> {
+        if !self.history.has_open_calls() || self.state.continuation.is_some() {
+            return Ok(false);
+        }
+        let turn = self
+            .view
+            .turn
+            .as_mut()
+            .ok_or_else(|| ConversationFailure::new("上下文压缩缺少活动任务"))?;
+        let mut context = (*self.view.context).clone();
+        let input;
+        let history = if self.state.input_retained {
+            &*self.history
+        } else {
+            input = self.history.with_user(&turn.input);
+            &input
+        };
+        context.refresh(
+            history,
+            &self.view.settings.instructions,
+            self.tools.definitions(),
+        )?;
+        let waiting = context
+            .limits
+            .compact_threshold()
+            .is_some_and(|threshold| context.tokens >= threshold);
+        if waiting {
+            turn.phase = TaskPhase::CompactingContext;
+        }
+        Ok(waiting)
+    }
+
     pub fn update(&mut self, event: StreamEvent) -> Result<(), ConversationFailure> {
         let turn = self
             .view
@@ -553,6 +571,11 @@ impl ActiveTurn<'_> {
                     .retain(|message| message.request_index != turn.request_index);
                 turn.tools
                     .retain(|tool| tool.retained || tool.request_index != turn.request_index);
+                if let Some(fact) = turn.requests.last_mut()
+                    && fact.request == turn.request_index
+                {
+                    fact.response_status = None;
+                }
                 turn.phase = TaskPhase::RequestingModel;
             }
             StreamEvent::Sending | StreamEvent::ResponseReceived { .. } => {
@@ -683,15 +706,6 @@ impl ActiveTurn<'_> {
         if turn.steers.iter().any(|previous| previous.id == input.id) {
             return Err(ConversationFailure::new("补充输入身份重复"));
         }
-        if turn
-            .steers
-            .iter()
-            .filter(|input| matches!(input.state, SteerState::Accepted))
-            .count()
-            >= MAX_PENDING_STEERS
-        {
-            return Err(ConversationFailure::new("待生效补充输入已满"));
-        }
         turn.steers.push(SteerView {
             id: input.id,
             text: input.text,
@@ -814,7 +828,7 @@ impl ActiveTurn<'_> {
         {
             history = history.with_user(text);
         }
-        self.check_result_capacity(&history, &Default::default(), false)
+        self.check_context_capacity(&history)
     }
 
     pub fn reject_unsafe_compaction(
@@ -857,16 +871,12 @@ impl ActiveTurn<'_> {
         self.state.continuation
     }
 
-    pub fn execution_counts(&self) -> Result<(u32, usize), ConversationFailure> {
-        let turn = self
-            .view
+    pub fn current_request_index(&self) -> Result<u32, ConversationFailure> {
+        self.view
             .turn
             .as_ref()
-            .ok_or_else(|| ConversationFailure::new("执行计数缺少活动任务"))?;
-        Ok((
-            turn.request_index,
-            turn.tools.iter().filter(|tool| tool.retained).count(),
-        ))
+            .map(|turn| turn.request_index)
+            .ok_or_else(|| ConversationFailure::new("执行计数缺少活动任务"))
     }
 
     fn upsert_tool(
@@ -925,7 +935,6 @@ impl ActiveTurn<'_> {
         &mut self,
         result: &GenerationResult,
         memory_epoch: Option<i64>,
-        within_budget: bool,
     ) -> Result<(crate::ResponseTasks, crate::ResponseAcceptance), ConversationFailure> {
         let previous_calls: std::collections::HashSet<_> = self
             .view
@@ -970,7 +979,6 @@ impl ActiveTurn<'_> {
             turn.id,
             turn.request_index,
             memory_epoch,
-            within_budget,
             &history.result_calls,
         )?;
         if !self.history.accepts_compaction(&result.output)
@@ -982,31 +990,6 @@ impl ActiveTurn<'_> {
             return Err(ConversationFailure::new(
                 "压缩响应越过开放调用或不允许的请求边界",
             ));
-        }
-        if self.history.has_open_calls() || !result.calls.is_empty() {
-            let candidate = self
-                .history
-                .with_response(
-                    (!self.state.input_retained).then_some(turn.input.as_str()),
-                    &result.output,
-                )
-                .map_err(crate::result_budget::model_error)?;
-            let compacted = result.compaction.is_some();
-            let candidate = if compacted {
-                candidate.compacted()
-            } else {
-                candidate
-            };
-            let rejected = if within_budget {
-                delivery.rejected.iter().map(String::as_str).collect()
-            } else {
-                result
-                    .calls
-                    .iter()
-                    .map(|call| call.call_id.as_str())
-                    .collect()
-            };
-            self.check_result_capacity(&candidate, &rejected, compacted)?;
         }
         let turn = self
             .view
@@ -1238,7 +1221,7 @@ impl ActiveTurn<'_> {
     pub fn tool_result(
         &mut self,
         call_id: &str,
-        mut result: ToolResult,
+        result: ToolResult,
     ) -> Result<Option<(ToolStatus, ToolPayload)>, ConversationFailure> {
         if matches!(
             result.output,
@@ -1272,11 +1255,6 @@ impl ActiveTurn<'_> {
             }
             return Err(ConversationFailure::new("同一调用收到互相冲突的工具结果"));
         }
-        if result.output.image().is_some()
-            && !image_budget_fits(self.history, self.results, &result.output)
-        {
-            result = result.reject_image_budget();
-        }
         if result.status == ToolStatus::ExternalUnconfirmed {
             self.view
                 .task_policy
@@ -1294,10 +1272,6 @@ impl ActiveTurn<'_> {
             },
         );
         Ok(Some((result.status, result.output)))
-    }
-
-    pub fn can_retain_image(&self, output: &ToolPayload) -> bool {
-        image_budget_fits(self.history, self.results, output)
     }
 
     pub fn confirm_response_history(

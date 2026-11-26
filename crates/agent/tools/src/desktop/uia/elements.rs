@@ -11,7 +11,6 @@ use tokio_util::sync::CancellationToken;
 use uiautomation::{UIAutomation, UIElement, types::Handle};
 use uuid::Uuid;
 
-const MAX_REFERENCES: usize = 4096;
 const MAX_SUMMARY_CHARS: usize = 256;
 
 #[derive(Default)]
@@ -130,7 +129,7 @@ impl Worker {
         let id = Uuid::new_v4();
         let entry = Element::capture(&self.automation, element, window, true, None, control)?;
         let summary = summarize(id, &entry, control)?;
-        self.elements.insert(id, entry)?;
+        self.elements.insert(id, entry);
         Ok(summary)
     }
 }
@@ -144,20 +143,8 @@ impl Registry {
         self.entries.get_mut(&id).ok_or_else(element_unavailable)
     }
 
-    pub(super) fn insert(&mut self, id: Uuid, element: Element) -> Result<(), ToolFailure> {
-        self.reserve(1)?;
+    pub(super) fn insert(&mut self, id: Uuid, element: Element) {
         self.entries.insert(id, element);
-        Ok(())
-    }
-
-    pub(super) fn reserve(&self, additional: usize) -> Result<(), ToolFailure> {
-        if additional > MAX_REFERENCES.saturating_sub(self.entries.len()) {
-            return Err(ToolFailure::new(
-                "uia_reference_limit",
-                "UIA 会话元素引用已达上限",
-            ));
-        }
-        Ok(())
     }
 }
 

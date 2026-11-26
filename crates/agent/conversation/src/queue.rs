@@ -1,6 +1,5 @@
 use crate::{Conversation, ConversationFailure, SessionId, SessionView, TurnId, TurnStatus};
 
-pub const MAX_QUEUED_INPUTS: usize = 8;
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct QueuedInput {
     pub operation_id: u64,
@@ -161,9 +160,6 @@ impl Conversation {
             } => {
                 if text.trim().is_empty() {
                     return Err(ConversationFailure::new("不能排队空白消息"));
-                }
-                if view.queue.len() >= MAX_QUEUED_INPUTS {
-                    return Err(ConversationFailure::new("待办消息已满，最多 8 条"));
                 }
                 let transcript = transcript
                     .map(|id| view.transcript_reference(id))

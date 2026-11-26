@@ -7,6 +7,9 @@ use std::os::windows::fs::MetadataExt;
 use std::path::Path;
 use tokio_util::sync::CancellationToken;
 
+const MAX_DIRECTORIES_PER_ROOT: usize = 2_000;
+const MAX_ENTRIES_PER_ROOT: usize = 20_000;
+
 pub(crate) fn read_file(path: &Path, limit: usize) -> Result<String, Failure> {
     let file = File::open(path).map_err(|e| Failure(format!("{}：{e}", path.display())))?;
     read_open_file(file, limit)
@@ -30,12 +33,12 @@ pub(crate) fn read_open_file(file: File, limit: usize) -> Result<String, Failure
     String::from_utf8(bytes).map_err(|e| Failure(format!("Skill 材料不是 UTF-8：{e}")))
 }
 
-fn read_frontmatter(path: &Path, bytes_used: &mut usize) -> Result<String, Failure> {
+fn read_frontmatter(path: &Path) -> Result<String, Failure> {
     let file = File::open(path).map_err(|e| Failure(e.to_string()))?;
-    read_open_frontmatter(file, bytes_used)
+    read_open_frontmatter(file)
 }
 
-pub(crate) fn read_open_frontmatter(file: File, bytes_used: &mut usize) -> Result<String, Failure> {
+pub(crate) fn read_open_frontmatter(file: File) -> Result<String, Failure> {
     let metadata = file.metadata().map_err(|e| Failure(e.to_string()))?;
     if !metadata.is_file() || metadata.len() > crate::MAX_SKILL_BYTES as u64 {
         return Err(Failure("SKILL.md 不是普通文件或超过 256 KiB".into()));
@@ -47,7 +50,6 @@ pub(crate) fn read_open_frontmatter(file: File, bytes_used: &mut usize) -> Resul
         let count = reader
             .read_line(&mut yaml)
             .map_err(|e| Failure(e.to_string()))?;
-        *bytes_used += count;
         if yaml.len() > crate::MAX_METADATA_BYTES {
             return Err(Failure("Skill frontmatter 超过 64 KiB".into()));
         }
@@ -98,12 +100,8 @@ impl Default for Policy {
     }
 }
 
-fn skill(
-    path: &Path,
-    source: &Source,
-    bytes_used: &mut usize,
-) -> Result<(Skill, Option<Diagnostic>), Failure> {
-    let yaml = read_frontmatter(path, bytes_used)?;
+fn skill(path: &Path, source: &Source) -> Result<(Skill, Option<Diagnostic>), Failure> {
+    let yaml = read_frontmatter(path)?;
     let metadata = parse(&yaml)?;
     if path
         .parent()
@@ -118,9 +116,8 @@ fn skill(
         .parent()
         .ok_or_else(|| Failure("Skill 缺少父目录".into()))?
         .join("agents/openai.yaml");
-    let extension = read_extension(&extra_path);
-    let (extension, warning, extension_bytes) = match extension {
-        Ok((extra, bytes)) => (extra, None, bytes),
+    let (extension, warning) = match read_extension(&extra_path) {
+        Ok(extra) => (extra, None),
         Err(error) => (
             Extension {
                 policy: Policy {
@@ -132,10 +129,8 @@ fn skill(
                 path: extra_path,
                 message: format!("可选元数据无效，仅允许显式选择：{error}"),
             }),
-            crate::MAX_METADATA_BYTES,
         ),
     };
-    *bytes_used += extension_bytes;
     Ok((
         Skill {
             resource: SkillResource::File {
@@ -153,7 +148,7 @@ fn skill(
     ))
 }
 
-fn read_extension(path: &Path) -> Result<(Extension, usize), Failure> {
+fn read_extension(path: &Path) -> Result<Extension, Failure> {
     let parent = path
         .parent()
         .ok_or_else(|| Failure("Skill 扩展元数据缺少父目录".into()))?;
@@ -164,13 +159,13 @@ fn read_extension(path: &Path) -> Result<(Extension, usize), Failure> {
             }
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok((Extension::default(), 0));
+                return Ok(Extension::default());
             }
             Err(e) => return Err(e.into()),
         }
     }
     let text = read_file(path, crate::MAX_METADATA_BYTES)?;
-    Ok((extension(&text)?, text.len()))
+    extension(&text)
 }
 
 pub(crate) fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<Catalog, Failure> {
@@ -180,10 +175,11 @@ pub(crate) fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<C
     };
     let mut visited = BTreeSet::new();
     let mut skills = BTreeSet::new();
-    let mut entries_used = 0;
-    let mut bytes_used = 0;
     for root in catalog.roots.clone() {
-        let mut pending = vec![(root.path, 0)];
+        let mut pending = vec![(root.path.clone(), 0)];
+        let mut directories_scanned = 0;
+        let mut entries_left = MAX_ENTRIES_PER_ROOT;
+        let mut entries_truncated = false;
         while let Some((directory, depth)) = pending.pop() {
             check(cancel)?;
             let canonical = match fs::symlink_metadata(&directory).and_then(|metadata| {
@@ -213,9 +209,20 @@ pub(crate) fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<C
                     continue;
                 }
             };
-            if !visited.insert(canonical.clone()) {
+            if visited.contains(&canonical) {
                 continue;
             }
+            if directories_scanned == MAX_DIRECTORIES_PER_ROOT {
+                catalog.diagnostics.push(Diagnostic {
+                    path: root.path.clone(),
+                    message: format!(
+                        "Skills 扫描达到 {MAX_DIRECTORIES_PER_ROOT} 个目录，已保留发现结果"
+                    ),
+                });
+                break;
+            }
+            visited.insert(canonical);
+            directories_scanned += 1;
             let candidate = directory.join("SKILL.md");
             match fs::symlink_metadata(&candidate) {
                 Ok(metadata) => {
@@ -226,11 +233,7 @@ pub(crate) fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<C
                         });
                         continue;
                     }
-                    let result = skill(&candidate, &root.source, &mut bytes_used);
-                    if bytes_used > crate::MAX_DISCOVERY_BYTES {
-                        return Err(Failure("Skills 发现材料超过 4 MiB".into()));
-                    }
-                    match result {
+                    match skill(&candidate, &root.source) {
                         Ok((skill, warning)) => {
                             if let Some(warning) = warning {
                                 catalog.diagnostics.push(warning);
@@ -259,6 +262,9 @@ pub(crate) fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<C
                     continue;
                 }
             }
+            if entries_truncated {
+                continue;
+            }
             let children = match fs::read_dir(&directory) {
                 Ok(children) => children,
                 Err(e) => {
@@ -272,10 +278,17 @@ pub(crate) fn discover(roots: Vec<Root>, cancel: &CancellationToken) -> Result<C
             let mut paths = Vec::new();
             for child in children {
                 check(cancel)?;
-                entries_used += 1;
-                if entries_used > crate::MAX_SCAN_ENTRIES {
-                    return Err(Failure("Skills 扫描超过 2048 个目录项".into()));
+                if entries_left == 0 {
+                    entries_truncated = true;
+                    catalog.diagnostics.push(Diagnostic {
+                        path: root.path.clone(),
+                        message: format!(
+                            "Skills 扫描达到 {MAX_ENTRIES_PER_ROOT} 个目录项，已保留发现结果"
+                        ),
+                    });
+                    break;
                 }
+                entries_left -= 1;
                 match child {
                     Ok(child) => {
                         let path = child.path();

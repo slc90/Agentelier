@@ -7,6 +7,8 @@ pub struct RuleSource {
     pub scope: PathBuf,
     pub text: String,
     pub hash: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -25,12 +27,13 @@ pub(crate) fn hash(text: &str) -> String {
 
 impl ProjectSnapshot {
     pub fn validate(&self) -> Result<(), String> {
+        const MAX_ARCHIVED_SOURCE_BYTES: usize = 128 * 1024;
         if !self.working_directory.is_absolute()
             || self
                 .project_root
                 .as_ref()
                 .is_some_and(|root| !self.working_directory.starts_with(root))
-            || self.source_bytes > crate::MAX_PROJECT_SOURCE_BYTES
+            || self.source_bytes > MAX_ARCHIVED_SOURCE_BYTES
         {
             return Err("项目快照目录或预算无效".into());
         }
@@ -69,7 +72,7 @@ impl ProjectSnapshot {
     pub fn has_rules(&self) -> bool {
         self.sources
             .iter()
-            .any(|source| !source.text.trim().is_empty())
+            .any(|source| source.truncated || !source.text.trim().is_empty())
     }
 
     pub(crate) fn render(&mut self) {
@@ -81,7 +84,7 @@ impl ProjectSnapshot {
                 self.project_root.as_deref().unwrap_or(&self.working_directory).display(),
             ));
             for source in &self.sources {
-                if source.text.trim().is_empty() {
+                if source.text.trim().is_empty() && !source.truncated {
                     continue;
                 }
                 rendered.push_str(&format!(
@@ -90,6 +93,11 @@ impl ProjectSnapshot {
                     source.scope.display(),
                     source.text,
                 ));
+                if source.truncated {
+                    rendered.push_str(
+                        "The automatic project instruction preview is incomplete for this source. Read the full AGENTS.md at the source path before acting within its scope.\n",
+                    );
+                }
             }
         }
         self.hash = hash(&rendered);

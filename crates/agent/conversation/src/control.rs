@@ -1,7 +1,5 @@
 use crate::{SessionId, TurnId};
 
-pub const MAX_PENDING_STEERS: usize = 8;
-
 pub struct SteerInput {
     pub id: u64,
     pub session: SessionId,

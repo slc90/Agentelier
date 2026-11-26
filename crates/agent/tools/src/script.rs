@@ -17,11 +17,10 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
-const SCRIPT_TIMEOUT: Duration = Duration::from_secs(30);
+const SCRIPT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_SCRIPT_BYTES: usize = 64 * 1024;
 const MAX_OUTPUT_BYTES: usize = 8 * 1024;
 const MAX_FUNCTIONS: usize = 128;
-const MAX_VARIABLES: usize = 256;
 const MAX_OPERATIONS: u64 = 2_000_000;
 const MAX_CALL_LEVELS: usize = 32;
 const MAX_EXPRESSION_DEPTH: usize = 64;
@@ -32,7 +31,14 @@ static DESKTOP_CLEANUP_CONFIRMED: AsyncMutex<bool> = AsyncMutex::const_new(true)
 
 pub struct ScriptOutput {
     pub text: String,
+    pub text_truncated: bool,
     pub image: Option<Arc<ImagePayload>>,
+}
+
+#[derive(Default)]
+struct OutputBuffer {
+    text: String,
+    truncated: bool,
 }
 
 #[derive(Clone)]
@@ -76,7 +82,6 @@ fn engine() -> Engine {
         .set_max_call_levels(MAX_CALL_LEVELS)
         .set_max_expr_depths(MAX_EXPRESSION_DEPTH, MAX_EXPRESSION_DEPTH)
         .set_max_functions(MAX_FUNCTIONS)
-        .set_max_variables(MAX_VARIABLES)
         .set_max_string_size(MAX_STRING_BYTES)
         .set_max_array_size(MAX_COLLECTION_SIZE)
         .set_max_map_size(MAX_COLLECTION_SIZE);
@@ -245,14 +250,8 @@ impl ScriptState {
             .compile_with_scope(&self.scope, script)
             .map_err(|error| ToolFailure::new("script_parse_failed", error.to_string()))?;
         let program = self.functions.merge(&ast);
-        if program.iter_functions().take(MAX_FUNCTIONS + 1).count() > MAX_FUNCTIONS {
-            return Err(ToolFailure::new(
-                "script_function_limit",
-                "会话函数数量超过限制",
-            ));
-        }
 
-        let output = Arc::new(Mutex::new(String::new()));
+        let output = Arc::new(Mutex::new(OutputBuffer::default()));
         let printer = output.clone();
         let debugger = output.clone();
         let progress = control.clone();
@@ -305,10 +304,11 @@ impl ScriptState {
             .lock()
             .map_err(|error| ToolFailure::new("script_output_failed", error.to_string()))?;
         if !value.is_unit() {
-            append_output(&mut output, &value.to_string());
+            output.append(&value.to_string());
         }
         Ok(ScriptOutput {
-            text: std::mem::take(&mut output),
+            text: std::mem::take(&mut output.text),
+            text_truncated: output.truncated,
             image,
         })
     }
@@ -367,14 +367,20 @@ fn cancelled() -> ToolFailure {
     ToolFailure::new("cancelled", "Rhai 脚本已取消")
 }
 
-fn print_line(output: &Mutex<String>, line: &str) {
+fn print_line(output: &Mutex<OutputBuffer>, line: &str) {
     if let Ok(mut output) = output.lock() {
-        append_output(&mut output, line);
-        append_output(&mut output, "\n");
+        output.append(line);
+        output.append("\n");
     }
 }
 
-fn append_output(output: &mut String, text: &str) {
-    let limit = MAX_OUTPUT_BYTES.saturating_sub(output.len());
-    output.push_str(&text[..text.floor_char_boundary(text.len().min(limit))]);
+impl OutputBuffer {
+    fn append(&mut self, text: &str) {
+        if !self.truncated {
+            let limit = MAX_OUTPUT_BYTES.saturating_sub(self.text.len());
+            let end = text.floor_char_boundary(text.len().min(limit));
+            self.text.push_str(&text[..end]);
+            self.truncated = end < text.len();
+        }
+    }
 }

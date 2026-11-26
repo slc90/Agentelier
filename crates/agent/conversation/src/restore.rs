@@ -8,9 +8,7 @@ use agentelier_llm_model::{
     ArchivedPayload, HistoryAppend, ModelFailure, ModelFailureKind, ProtocolArchive,
     ProtocolHistory,
 };
-use agentelier_tools::{
-    ImagePayload, MAX_SESSION_IMAGE_BYTES, ToolCatalog, ToolContract, ToolStatus,
-};
+use agentelier_tools::{ImagePayload, ToolCatalog, ToolContract, ToolStatus};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -782,11 +780,8 @@ fn replay(
                     || transcriptions
                         .iter()
                         .any(|item| item.source.id == source.id)
-                    || transcriptions.len() >= crate::audio::MAX_SESSION_TRANSCRIPTIONS
                 {
-                    return Err(ConversationFailure::new(
-                        "转写记录来源无效、重复或超过会话上限",
-                    ));
+                    return Err(ConversationFailure::new("转写记录来源无效或重复"));
                 }
                 transcriptions.push(crate::AudioTranscription {
                     source,
@@ -1229,16 +1224,20 @@ fn replay(
                                 "存档接受了越过开放调用或已禁用的压缩",
                             ));
                         }
-                        let expected =
-                            tasks.plan_delivery(&calls, &frozen.result_calls, !over_budget);
-                        if acceptance.delivery != expected {
+                        let settled = tasks.settled_delivery(&frozen.result_calls);
+                        if acceptance.delivery.settled != settled
+                            || !acceptance.delivery.rejected.is_empty()
+                                && (over_budget
+                                    || acceptance.delivery.rejected
+                                        != tasks.legacy_rejected_delivery(&calls, &settled))
+                        {
                             return Err(ConversationFailure::new("存档响应的任务结算或准入不一致"));
                         }
-                        rejected = expected.rejected;
-                        expected.settled
+                        rejected.clone_from(&acceptance.delivery.rejected);
+                        settled
                     } else {
                         let included: Vec<_> = history.result_ids().map(str::to_owned).collect();
-                        tasks.plan_delivery(&[], &included, true).settled
+                        tasks.settled_delivery(&included)
                     };
                     registrations.validate(&calls, turn.id, turn.request_index, &rejected)?;
                     tasks.install(registrations, &settled, record.sequence, false)?;
@@ -1855,9 +1854,6 @@ fn replay(
         return Err(ConversationFailure::new(
             "当前执行阶段要求恢复时封闭所有调用",
         ));
-    }
-    if history.image_bytes_with(std::iter::empty()) > MAX_SESSION_IMAGE_BYTES {
-        return Err(ConversationFailure::new("恢复的工作上下文超过会话图片预算"));
     }
     state.committed_items = history.summary();
     for tool in state

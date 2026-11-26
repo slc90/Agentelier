@@ -75,7 +75,7 @@ Scroll、ScrollItem、ItemContainer 和 VirtualizedItem 常用于大型列表。
 
 ### 文本
 
-文本范围是会话内字符串引用，绑定创建时的元素代次。元素重定位后，原范围不能用于新对象。每次读取须给定 1 到 4096 个字符的预算。查找返回新的匹配范围，移动、扩展、选择和滚动作用于调用指定的范围。文本属性结果区分 Provider 缺失、范围内混合值和有效值。
+文本范围是会话内字符串引用，绑定创建时的元素代次。元素重定位后，原范围不能用于新对象。每次读取须给定 1 到 4096 个字符的预算。查找返回新的匹配范围，移动、扩展、选择和滚动作用于调用指定的范围。用完时调用 `uia_text_range_release(range)`，释放关联的 Provider 引用和登记位置。释放后该范围 ID 不可再读取。文本属性结果区分 Provider 缺失、范围内混合值和有效值。
 
 Text Pattern 返回 DocumentRange、Selection 和 VisibleRanges 等文本范围。TextRange 支持读取文本、查找子文本、移动端点、扩展范围、选择、滚入视口及读取文本属性。Text Pattern 本身主要用于读取/导航；文本修改应使用元素支持的 Value Pattern 或现有 Computer Use 输入能力，不要把 TextRange.Select 误写成“设置文本”。
 

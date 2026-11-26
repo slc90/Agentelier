@@ -5,12 +5,9 @@ use rmcp::transport::async_rw::AsyncRwTransport;
 use std::{
     env, io,
     path::{Path, PathBuf},
-    pin::Pin,
     process::Stdio,
-    task::{Context, Poll},
     time::Duration,
 };
-use tokio::io::{AsyncRead, ReadBuf};
 use tokio_util::sync::CancellationToken;
 use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 
@@ -36,12 +33,7 @@ pub(crate) async fn run(
     let mut child = spawn(&command, &args, &working_directory, &environment)?;
     let protocol = match (child.stdout().take(), child.stdin().take()) {
         (Some(stdout), Some(stdin)) => {
-            serve(
-                AsyncRwTransport::new_client(BoundedRead::new(stdout), stdin),
-                &stop,
-                publish,
-            )
-            .await
+            serve(AsyncRwTransport::new_client(stdout, stdin), &stop, publish).await
         }
         _ => Err(Failure {
             stage: "启动",
@@ -123,44 +115,4 @@ async fn reap(mut child: Box<dyn ChildWrapper>) -> Result<(), Failure> {
         .and_then(Result::ok)
         .map(|_| ())
         .ok_or(failure)
-}
-
-struct BoundedRead<R> {
-    inner: R,
-    line_bytes: usize,
-}
-
-impl<R> BoundedRead<R> {
-    fn new(inner: R) -> Self {
-        Self {
-            inner,
-            line_bytes: 0,
-        }
-    }
-}
-
-impl<R: AsyncRead + Unpin> AsyncRead for BoundedRead<R> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buffer: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let previous = buffer.filled().len();
-        match Pin::new(&mut self.inner).poll_read(cx, buffer) {
-            Poll::Ready(Ok(())) => {
-                for byte in &buffer.filled()[previous..] {
-                    if *byte == b'\n' {
-                        self.line_bytes = 0;
-                    } else {
-                        self.line_bytes += 1;
-                        if self.line_bytes > crate::MAX_WIRE_MESSAGE_BYTES {
-                            return Poll::Ready(Err(io::Error::other("MCP 消息帧超过 6 MiB")));
-                        }
-                    }
-                }
-                Poll::Ready(Ok(()))
-            }
-            result => result,
-        }
-    }
 }
