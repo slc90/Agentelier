@@ -2,8 +2,9 @@ mod input;
 mod playback;
 
 use agentelier_agent_host::{
-    AgentHost, AgentHostPlugin, EcsError, SceneDefinition, mount_scene_child, patch_native_scene,
-    replace_scene_children, validating_scene, widget,
+    AgentHost, AgentHostPlugin, EcsError, MountedScene, SceneDefinition, SceneState,
+    SceneStateWrites, SceneStored, mount_scene_child, patch_native_scene, replace_scene_children,
+    validating_scene, widget,
 };
 use bevy::{prelude::*, window::PrimaryWindow};
 use bevy_widgetry::{scene::spawn_scene, text::WidgetryText};
@@ -54,7 +55,23 @@ pub(super) fn register(host: AgentHostPlugin) -> Result<AgentHostPlugin> {
         build,
         None,
         None,
-    )
+    )?.with_ecs_scene_restore(widget::TEMPLATE, restore, prepare_unmounted)
+}
+
+fn restore(mut definition: widget::Definition, saved: &SceneState) -> Result<widget::Definition> {
+    let initial = definition
+        .prepared
+        .as_mut()
+        .ok_or_else(|| io::Error::other("脚本控件缺少已检查的初始定义"))?;
+    initial.state = widget::decode_state(&saved.values)?;
+    Ok(definition)
+}
+
+fn prepare_unmounted(
+    definition: widget::Definition,
+    _: &SceneStored,
+) -> Result<widget::Definition> {
+    Ok(definition)
 }
 
 pub(super) fn install(app: &mut App) {
@@ -168,7 +185,7 @@ fn advance(world: &mut World) {
                 },
             },
             Load::Live(mut live) => {
-                run_event(world, status, &mut live, &host, visible);
+                run_event(world, root, status, &mut live, &host, visible);
                 Load::Live(live)
             }
             Load::Done => Load::Done,
@@ -208,7 +225,14 @@ fn mount_live(world: &mut World, root: Entity, reply: widget::Reply) -> Result<L
     })
 }
 
-fn run_event(world: &mut World, status: Entity, live: &mut Live, host: &AgentHost, visible: bool) {
+fn run_event(
+    world: &mut World,
+    root: Entity,
+    status: Entity,
+    live: &mut Live,
+    host: &AgentHost,
+    visible: bool,
+) {
     if !visible {
         live.clock.suspend();
     }
@@ -245,8 +269,14 @@ fn run_event(world: &mut World, status: Entity, live: &mut Live, host: &AgentHos
                 if let Some(request) = view.playback {
                     live.clock.request(request);
                 }
+                let changed = live.view.state != view.state;
                 live.view = view;
-                feedback(world, status, None);
+                let error = changed
+                    .then(|| persist(world, root, &live.view.state))
+                    .transpose()
+                    .err()
+                    .map(|error| format!("脚本控件状态未保存：{error}"));
+                feedback(world, status, error);
             }
             Ok(())
         });
@@ -293,6 +323,21 @@ fn run_event(world: &mut World, status: Entity, live: &mut Live, host: &AgentHos
             }
         }
     }
+}
+
+fn persist(world: &mut World, root: Entity, value: &widget::State) -> Result {
+    let Some(&mount) = world.get::<MountedScene>(root) else {
+        return Ok(());
+    };
+    let state = SceneState {
+        revision: mount.revision,
+        values: widget::encode_state(value)?,
+        part_values: Default::default(),
+    };
+    world
+        .resource_mut::<SceneStateWrites>()
+        .schedule(root, mount, state);
+    Ok(())
 }
 
 fn feedback(world: &mut World, status: Entity, error: Option<String>) {

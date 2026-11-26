@@ -12,6 +12,27 @@ use tokio_util::sync::CancellationToken;
 
 pub const TEMPLATE: &str = "agentelier.scripted_widget";
 pub type State = Map<String, Value>;
+const STATE_FIELD: &str = "script_state";
+
+pub fn encode_state(state: &State) -> Result<State, ToolFailure> {
+    let value = serde_json::to_string(state)
+        .map_err(|error| ToolFailure::new("invalid_widget_state", error.to_string()))?;
+    Ok(State::from_iter([(
+        STATE_FIELD.into(),
+        Value::String(value),
+    )]))
+}
+
+pub fn decode_state(values: &State) -> Result<State, ToolFailure> {
+    let value = values
+        .get(STATE_FIELD)
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            ToolFailure::new("invalid_widget_state", "控件的存档缺少已确认的脚本状态")
+        })?;
+    serde_json::from_str(value)
+        .map_err(|error| ToolFailure::new("invalid_widget_state", error.to_string()))
+}
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
