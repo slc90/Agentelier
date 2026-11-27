@@ -5,7 +5,6 @@ use bevy::prelude::*;
 #[derive(Clone, Reflect)]
 pub(crate) struct PendingDraft {
     pub id: u64,
-    pub text: String,
     pub revision: u64,
 }
 #[derive(Clone, Copy, Reflect)]

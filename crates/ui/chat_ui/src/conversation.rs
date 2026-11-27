@@ -1,4 +1,5 @@
 use crate::active_input::{ChatSteer, ChatSteerState, PendingDraft};
+use crate::composer::{self, Boundary, TextSegment};
 use crate::preparation::ModelState;
 use crate::{ArchiveState, projects::ProjectState};
 use agentelier_agent_host::{
@@ -9,8 +10,8 @@ use agentelier_controls::{
     AvatarSource,
 };
 use agentelier_conversation_bridge::{
-    ComposerContent, ComposerElement, ComposerSubmission, ConversationEvent, ConversationRequest,
-    SessionAction, SessionCreate, SessionView, TurnStatus,
+    ComposerSubmission, ConversationEvent, ConversationRequest, SessionAction, SessionCreate,
+    SessionView, TurnStatus,
 };
 use agentelier_conversation_bridge::{ProjectId, SessionId, SessionLocation};
 use agentelier_login_ui::AccountState;
@@ -19,7 +20,7 @@ use bevy::camera::RenderTarget;
 use bevy::ecs::message::MessageCursor;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
-use bevy::input_focus::{FocusCause, InputFocus, InputFocusSystems};
+use bevy::input_focus::{InputFocus, InputFocusSystems};
 use bevy::prelude::*;
 use bevy::text::{EditableTextSystems, Justify, LineBreak};
 use bevy::ui::{ComputedUiTargetCamera, InteractionDisabled, UiSystems};
@@ -29,7 +30,7 @@ use bevy_app_assets::SidebarIcon;
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::scroll_area::{ScrollbarPolicy, ScrollbarVisibility, WidgetryScrollArea};
 use bevy_widgetry::text::WidgetryText;
-use bevy_widgetry::text_field::{AutoSize, WidgetryTextField, WidgetryTextFieldHeadless};
+use bevy_widgetry::text_field::WidgetryTextFieldHeadless;
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::Arc;
@@ -39,8 +40,6 @@ const MESSAGE_GAP: f32 = 4.0;
 const CONTENT_GAP: f32 = 12.0;
 const CONTENT_PADDING: f32 = 8.0;
 const BUTTON_HEIGHT: f32 = 40.0;
-const COMPOSER_MIN_ROWS: usize = 2;
-const COMPOSER_MAX_ROWS: usize = 6;
 const REPLY_SPINNER_SIZE: f32 = 16.0;
 
 #[derive(Clone, Reflect)]
@@ -219,7 +218,8 @@ pub struct ChatState {
     pub task_revision: Option<u64>,
     pub operation: Option<u64>,
     pub cancelling: bool,
-    pub draft: String,
+    #[reflect(ignore)]
+    pub(crate) composer: composer::Draft,
     pub error: Option<String>,
     pub draft_revision: u64,
     pub(crate) pending_inputs: Vec<PendingDraft>,
@@ -235,7 +235,7 @@ impl ChatState {
     fn can_send(&self, model: &ModelState, account: &AccountState) -> bool {
         self.operation.is_none()
             && model.can_request(account)
-            && !self.draft.trim().is_empty()
+            && self.composer.has_input()
             && (self.new_chat.is_some() && model.can_create_session(account)
                 || self.session.as_ref().is_some_and(|session| {
                     !session.execution_blocked
@@ -250,11 +250,11 @@ impl ChatState {
         !self.cancelling
             && !account.runtime_failed
             && account.model_unavailable_reason().is_none()
-            && !self.draft.trim().is_empty()
+            && self.composer.has_input()
             && !self
                 .pending_inputs
                 .iter()
-                .any(|input| input.revision == self.draft_revision && input.text == self.draft)
+                .any(|input| input.revision == self.draft_revision)
             && self.session.as_ref().is_some_and(|session| {
                 !session.execution_blocked
                     && session.matches_account(account)
@@ -269,10 +269,9 @@ impl ChatState {
 #[derive(Resource, Default)]
 struct InputIntents {
     send: Option<Entity>,
+    boundary: Option<Boundary>,
     clear_accepted: Option<PendingDraft>,
 }
-#[derive(Component, Clone, Default)]
-struct Composer;
 #[derive(Component, Clone, Default)]
 struct MessageList;
 #[derive(Component, Clone, Default)]
@@ -321,6 +320,7 @@ pub(crate) fn install(app: &mut App) {
     crate::audio_attachment::install(app);
     crate::transcription::install(app);
     crate::queue::install(app);
+    composer::install(app);
     crate::native_scene::install(app);
     app.init_resource::<SessionUiStates>()
         .init_resource::<ChatState>()
@@ -356,21 +356,20 @@ pub(crate) fn install(app: &mut App) {
         );
 }
 
-pub(crate) fn panel(state: &ChatState) -> impl Scene {
-    let draft = state.draft.clone();
+pub(crate) fn panel(_state: &ChatState) -> impl Scene {
     bsn! {
         Name("ChatPanel") crate::background_tasks::Bounds
         Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column }
         Children [
             @crate::queue::panel()--
             @conversation_view()--
-            @chat_composer(draft)--
+            @chat_composer()--
             @crate::background_tasks::panel()
         ]
     }
 }
 
-fn chat_composer(draft: String) -> impl Scene {
+fn chat_composer() -> impl Scene {
     bsn! {
         Name("ChatComposerPanel")
         Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP), flex_shrink: 0.0, padding: UiRect::all(px(CONTENT_PADDING)) }
@@ -380,11 +379,7 @@ fn chat_composer(draft: String) -> impl Scene {
             @crate::audio_attachment::draft_panel()--
             @crate::transcription::panel(crate::transcription::Target::Draft)--
             @crate::transcription::selection_panel()--
-            @WidgetryTextField {
-                @value: draft, @multiline: true,
-                @auto_size: {Some(AutoSize { min_rows: COMPOSER_MIN_ROWS, max_rows: COMPOSER_MAX_ROWS })},
-            }
-            Composer Name("ChatComposer") Node { width: percent(100), min_width: px(0), flex_shrink: 0.0 }--
+            @composer::body()--
             Name("ChatComposerFooter")
             Node { display: Display::None, column_gap: px(CONTENT_GAP), align_items: AlignItems::Center }
             Children [
@@ -456,10 +451,20 @@ impl ChatState {
             || self.pending_inputs.iter().any(|input| input.id == id)
     }
 
-    fn clear_saved_draft(&mut self, received: PendingDraft) {
-        if self.draft_revision == received.revision && self.draft == received.text {
-            self.draft.clear();
+    fn clear_saved_draft(&mut self, received: PendingDraft) -> bool {
+        if self.draft_revision != received.revision {
+            return false;
         }
+        self.composer = default();
+        true
+    }
+
+    pub(crate) fn edit_draft(&mut self) -> Result {
+        self.draft_revision = self
+            .draft_revision
+            .checked_add(1)
+            .ok_or_else(|| io::Error::other("草稿修订已耗尽"))?;
+        Ok(())
     }
 }
 
@@ -482,6 +487,7 @@ fn switch_view(world: &mut World, view: SessionView) -> Result {
 
 fn switch_draft(world: &mut World, target: ChatTarget) -> Result {
     agentelier_agent_host::flush_scene_state(world);
+    composer::read_fields(world)?;
     let mut previous = std::mem::take(&mut *world.resource_mut::<ChatState>());
     if let Some(clear) = world.resource_mut::<InputIntents>().clear_accepted.take() {
         previous.clear_saved_draft(clear);
@@ -493,14 +499,8 @@ fn switch_draft(world: &mut World, target: ChatTarget) -> Result {
         }
         states.0.remove(&target).unwrap_or_default()
     };
-    let mut roots = world.query_filtered::<Entity, With<Composer>>();
-    let roots: Vec<_> = roots.iter(world).collect();
-    for root in roots {
-        WidgetryTextFieldHeadless::set_text_in_world(world, root, &restored.draft)
-            .map_err(|failure| failure.into_bevy_error())?;
-    }
     *world.resource_mut::<ChatState>() = restored;
-    Ok(())
+    composer::rebuild(world, None)
 }
 
 fn forget_session(world: &mut World, session: SessionId) -> Result {
@@ -515,15 +515,8 @@ fn forget_session(world: &mut World, session: SessionId) -> Result {
         .is_some_and(|view| view.id == session);
     crate::reading::forget(world, session, current);
     if current {
-        let roots = world
-            .query_filtered::<Entity, With<Composer>>()
-            .iter(world)
-            .collect::<Vec<_>>();
-        for root in roots {
-            WidgetryTextFieldHeadless::set_text_in_world(world, root, "")
-                .map_err(|failure| failure.into_bevy_error())?;
-        }
         *world.resource_mut::<ChatState>() = default();
+        composer::rebuild(world, None)?;
     }
     Ok(())
 }
@@ -571,15 +564,7 @@ fn open_draft(world: &mut World, target: NewChatTarget) -> Result {
         crate::archives::sync_selection(world)?;
         reconcile(world)?;
     }
-    let root = world
-        .query_filtered::<Entity, With<Composer>>()
-        .single(world)?;
-    let editor = WidgetryTextFieldHeadless::editor_entity(world, root)
-        .map_err(|failure| failure.into_bevy_error())?;
-    world
-        .resource_mut::<InputFocus>()
-        .set(editor, FocusCause::Navigated);
-    Ok(())
+    composer::focus_end(world)
 }
 
 fn stop(world: &mut World) -> Result {
@@ -625,33 +610,7 @@ pub(crate) fn append_mcp_draft(world: &mut World, material: &str) -> Result {
     if state.session.is_none() && state.new_chat.is_none() {
         return Err(io::Error::other("请先打开聊天会话").into());
     }
-    let root = world
-        .query_filtered::<Entity, With<Composer>>()
-        .single(world)?;
-    let mut draft = WidgetryTextFieldHeadless::text(world, root)
-        .map_err(|failure| failure.into_bevy_error())?;
-    let separator = if draft.is_empty() { "" } else { "\n\n" };
-    if draft.len() + separator.len() + material.len() > agentelier_agent_host::MAX_MATERIAL_BYTES {
-        return Err(io::Error::other("加入材料后草稿将超过 64 KiB").into());
-    }
-    draft.push_str(separator);
-    draft.push_str(material);
-    WidgetryTextFieldHeadless::set_text_in_world(world, root, &draft)
-        .map_err(|failure| failure.into_bevy_error())?;
-    sync_draft(world, draft)
-}
-
-fn sync_draft(world: &mut World, draft: String) -> Result {
-    let mut state = world.resource_mut::<ChatState>();
-    if state.draft != draft {
-        let revision = state
-            .draft_revision
-            .checked_add(1)
-            .ok_or_else(|| io::Error::other("草稿修订已耗尽"))?;
-        state.draft = draft;
-        state.draft_revision = revision;
-    }
-    Ok(())
+    composer::append(world, material)
 }
 
 fn send(world: &mut World) -> Result {
@@ -671,10 +630,9 @@ fn send(world: &mut World) -> Result {
     ) {
         return Ok(());
     }
-    let mut input = ComposerSubmission::text(state.draft.clone());
+    let mut input = state.composer.submission();
     let submitted = PendingDraft {
         id: 0,
-        text: state.draft.clone(),
         revision: state.draft_revision,
     };
     let starting_chat = state.new_chat.is_some();
@@ -735,13 +693,6 @@ fn send(world: &mut World) -> Result {
 }
 
 fn add_draft_materials(world: &World, session: &ChatSession, input: &mut ComposerSubmission) {
-    if let Some(audio) = &session.audio_draft {
-        input
-            .elements
-            .push(ComposerElement::new(ComposerContent::Audio {
-                audio: audio.attachment(),
-            }));
-    }
     input.transcript = world
         .resource::<crate::transcription::TranscriptionState>()
         .selection(session);
@@ -762,10 +713,10 @@ fn steer(world: &mut World) -> Result {
         .ok_or_else(|| io::Error::other("补充输入缺少任务"))?;
     let submitted = PendingDraft {
         id: 0,
-        text: state.draft.clone(),
         revision: state.draft_revision,
     };
-    let mut input = ComposerSubmission::text(submitted.text.clone());
+    let mut input = state.composer.submission();
+    let text = state.composer.text();
     add_draft_materials(world, session, &mut input);
     let queue = input.requires_queue();
     let host = world.resource::<AgentHost>();
@@ -775,12 +726,7 @@ fn steer(world: &mut World) -> Result {
             input,
         })
     } else {
-        host.steer_conversation(
-            session.id,
-            turn.id,
-            turn.operation_id,
-            submitted.text.clone(),
-        )
+        host.steer_conversation(session.id, turn.id, turn.operation_id, text)
     };
     let mut state = world.resource_mut::<ChatState>();
     match result {
@@ -817,7 +763,7 @@ fn capture_enter(
     let focus = world.resource::<InputFocus>().get();
     let mut fields = world.query_filtered::<
         (Entity, &WidgetryTextFieldHeadless),
-        Or<(With<Composer>, With<crate::memory_chat::Composer>)>,
+        Or<(With<TextSegment>, With<crate::memory_chat::Composer>)>,
     >();
     let root = fields
         .iter(world)
@@ -848,14 +794,39 @@ fn capture_enter(
     ]
     .iter()
     .any(|key| pressed.pressed(*key));
+    let boundary_candidate = root.filter(|entity| world.get::<TextSegment>(*entity).is_some());
+    let mut boundaries = [
+        KeyCode::ArrowLeft,
+        KeyCode::ArrowRight,
+        KeyCode::Backspace,
+        KeyCode::Delete,
+    ]
+    .map(|key| {
+        (
+            key,
+            boundary_candidate.and_then(|root| composer::boundary(world, root, key)),
+        )
+    });
+    let mut boundary = None;
     let mut send = false;
     for event in events.read_mut(&mut world.resource_mut::<Messages<KeyboardInput>>()) {
-        if window != Some(event.window)
-            || ime_active
-            || composing
-            || shortcut
-            || !matches!(event.key_code, KeyCode::Enter | KeyCode::NumpadEnter)
+        if window != Some(event.window) || ime_active || composing || shortcut {
+            continue;
+        }
+        if !shift
+            && event.state == ButtonState::Pressed
+            && !event.repeat
+            && let Some(action) = boundaries
+                .iter_mut()
+                .find(|(key, _)| *key == event.key_code)
+                .and_then(|(_, action)| action.take())
         {
+            event.logical_key = Key::Unidentified(NativeKey::Unidentified);
+            event.text = None;
+            boundary = Some(action);
+            continue;
+        }
+        if !matches!(event.key_code, KeyCode::Enter | KeyCode::NumpadEnter) {
             continue;
         }
         // Remap before focused dispatch, retaining Bevy's normal selection and text-edit path.
@@ -868,8 +839,12 @@ fn capture_enter(
             send |= event.state == ButtonState::Pressed && !event.repeat;
         }
     }
+    let mut intents = world.resource_mut::<InputIntents>();
     if send {
-        world.resource_mut::<InputIntents>().send = root;
+        intents.send = root;
+    }
+    if boundary.is_some() {
+        intents.boundary = boundary;
     }
     Ok(())
 }
@@ -878,34 +853,29 @@ fn process_input(world: &mut World) -> Result {
     let mut intents = world.resource_mut::<InputIntents>();
     let clear = intents.clear_accepted.take();
     let requested = intents.send.take();
-    let mut fields = world.query_filtered::<Entity, With<Composer>>();
-    let roots: Vec<_> = fields.iter(world).collect();
-    for root in roots {
-        let editor = WidgetryTextFieldHeadless::editor_entity(world, root)
-            .map_err(|failure| failure.into_bevy_error())?;
-        let mut editors = world.query::<Ref<bevy::text::EditableText>>();
-        let changed = editors.get(world, editor)?.is_changed();
-        if !changed && clear.is_none() && requested != Some(root) {
-            continue;
+    let boundary = intents.boundary.take();
+    composer::read_fields(world)?;
+    let chat_requested = requested.is_some_and(|root| world.get::<TextSegment>(root).is_some());
+    if let Some(clear) = clear
+        && world.resource_mut::<ChatState>().clear_saved_draft(clear)
+    {
+        let restore_focus = composer::anchor(world)?.is_some();
+        composer::rebuild(world, None)?;
+        if restore_focus {
+            composer::focus_end(world)?;
         }
-        let mut value = WidgetryTextFieldHeadless::text(world, root)
-            .map_err(|failure| failure.into_bevy_error())?;
-        if clear.as_ref().is_some_and(|submitted| {
-            submitted.text == value
-                && submitted.revision == world.resource::<ChatState>().draft_revision
-        }) {
-            WidgetryTextFieldHeadless::set_text_in_world(world, root, "")
-                .map_err(|failure| failure.into_bevy_error())?;
-            value.clear();
-        }
-        sync_draft(world, value)?;
     }
-    if let Some(root) = requested {
-        if world.get::<Composer>(root).is_some() {
-            send(world)?;
-        } else if world.get::<crate::memory_chat::Composer>(root).is_some() {
-            crate::memory_chat::submit(world)?;
-        }
+    composer::remember_anchor(world)?;
+    composer::synchronize_audio(world)?;
+    if let Some(boundary) = boundary {
+        composer::apply_boundary(world, boundary)?;
+    }
+    if chat_requested {
+        send(world)?;
+    } else if requested
+        .is_some_and(|root| world.get::<crate::memory_chat::Composer>(root).is_some())
+    {
+        crate::memory_chat::submit(world)?;
     }
     Ok(())
 }
@@ -1158,7 +1128,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         .collect();
     for event in events {
         if let ConversationEvent::AudioDraft { session, result } = event.kind {
-            crate::audio_attachment::receipt(world, event.operation_id, session, result);
+            crate::audio_attachment::receipt(world, event.operation_id, session, result)?;
             continue;
         }
         if let ConversationEvent::AudioTranscription { session, result } = event.kind {
@@ -1511,6 +1481,20 @@ fn with_target(
         result?;
     }
     Ok(false)
+}
+
+pub(crate) fn apply_legacy_audio(
+    world: &mut World,
+    session: SessionId,
+    audio: Option<agentelier_conversation_bridge::AudioAttachmentView>,
+) -> Result {
+    with_target(world, ChatTarget::Session(session), |state| {
+        if let Some(session) = &mut state.session {
+            session.audio_draft = audio.map(Into::into);
+        }
+        Ok(None)
+    })?;
+    Ok(())
 }
 
 fn mount_messages(_event: On<Add<MessageList>>, mut commands: Commands) {

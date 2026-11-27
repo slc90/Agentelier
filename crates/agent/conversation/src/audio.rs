@@ -209,19 +209,17 @@ impl Conversation {
             .as_ref()
             .filter(|chat| chat.view.id == session)?
             .view;
-        view.turn
-            .iter()
-            .map(Box::as_ref)
-            .chain(&view.previous_turns)
-            .flat_map(|turn| {
-                turn.submission.audio().chain(
-                    turn.tools
-                        .iter()
-                        .filter(|tool| tool.retained)
-                        .filter_map(|tool| tool.published_audio.as_ref()),
-                )
+        view.audio_attachment(audio)
+            .or_else(|| {
+                view.turn
+                    .iter()
+                    .map(Box::as_ref)
+                    .chain(&view.previous_turns)
+                    .flat_map(|turn| &turn.tools)
+                    .filter(|tool| tool.retained)
+                    .filter_map(|tool| tool.published_audio.as_ref())
+                    .find(|item| item.id == audio)
             })
-            .find(|item| item.id == audio)
             .cloned()
     }
 
