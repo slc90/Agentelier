@@ -29,6 +29,8 @@ pub(crate) struct AppConfig {
     pub(crate) default_model_slug: String,
     #[serde(default = "default_reasoning_effort")]
     pub(crate) default_reasoning_effort: String,
+    #[serde(default)]
+    pub(crate) default_fast: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) user_avatar: Option<AvatarSettings>,
     #[serde(
@@ -122,6 +124,7 @@ impl Default for AppConfig {
             data_directory: None,
             default_model_slug: default_model_slug(),
             default_reasoning_effort: default_reasoning_effort(),
+            default_fast: false,
             user_avatar: None,
             _legacy_workspace_layout: (),
             _legacy_codex_auth_file: (),
@@ -220,6 +223,7 @@ impl ConfigStore {
         Ok(agentelier_chat_ui::SessionModelDefaults {
             slug: current.config.default_model_slug.clone(),
             effort: current.config.default_reasoning_effort.clone(),
+            fast: current.config.default_fast,
         })
     }
 
@@ -239,6 +243,10 @@ impl ConfigStore {
             config.default_model_slug = slug;
             config.default_reasoning_effort = effort;
         })
+    }
+
+    pub(crate) fn save_default_fast(&self, fast: bool) -> io::Result<()> {
+        self.update(|config| config.default_fast = fast)
     }
 
     pub(crate) fn save_avatar(&self, avatar: Option<AvatarSettings>) -> io::Result<()> {

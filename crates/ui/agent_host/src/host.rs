@@ -1,7 +1,7 @@
 use agentelier_account_bridge::AccountEventKind;
 use agentelier_bridge_connection::ecs_access::{EcsAccess, EcsError, EcsRequest};
 use agentelier_bridge_connection::{BridgeEventKind, BridgeFailure, Connection, DataEnvironment};
-use agentelier_conversation_bridge::SessionId;
+use agentelier_conversation_bridge::{SessionId, SessionModelSelection};
 use agentelier_llm_model_bridge::ModelEventKind;
 use bevy::prelude::*;
 use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
@@ -366,8 +366,12 @@ impl AgentHost {
     ) -> Result<u64> {
         self.submit(|connection| connection.change_session_metadata(session, change))
     }
-    pub fn change_session_model(&self, session: SessionId, slug: String) -> Result<u64> {
-        self.submit(|connection| connection.change_session_model(session, slug))
+    pub fn change_session_model(
+        &self,
+        session: SessionId,
+        selection: SessionModelSelection,
+    ) -> Result<u64> {
+        self.submit(|connection| connection.change_session_model(session, selection))
     }
     pub fn refresh_archives(&self) -> Result {
         self.submit(|connection| connection.refresh_archives())

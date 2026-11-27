@@ -10,6 +10,7 @@ pub struct SessionSettings {
     pub slug: String,
     pub display_name: String,
     pub effort: Option<String>,
+    pub fast: bool,
     pub image_input: Option<bool>,
     pub context_limits: Box<ContextLimits>,
     pub instructions: Arc<InstructionSnapshot>,
@@ -196,6 +197,7 @@ pub struct RequestBehavior {
 
 #[derive(Clone)]
 pub struct RequestView {
+    pub fast: bool,
     pub behavior: Option<RequestBehavior>,
     pub transcript: Option<(usize, TranscriptReferenceView)>,
     pub response_accepted: Option<bool>,
@@ -279,6 +281,7 @@ pub struct ContextView {
 }
 #[derive(Clone)]
 pub struct SessionView {
+    pub requires_websocket_model: bool,
     pub codex_identity: Option<(String, String)>,
     pub project_publications: Arc<Vec<ProjectPublicationView>>,
     pub project_context: Box<ProjectContextView>,
@@ -578,6 +581,7 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
 
 pub fn view(session: agentelier_conversation::SessionView) -> SessionView {
     SessionView {
+        requires_websocket_model: session.requires_websocket_model,
         project_publications: Arc::new(
             session
                 .project_publications
@@ -662,6 +666,7 @@ pub fn view(session: agentelier_conversation::SessionView) -> SessionView {
             slug: session.settings.slug,
             display_name: session.settings.display_name,
             effort: session.settings.effort,
+            fast: session.settings.fast,
             image_input: session.settings.image_input,
             context_limits: session.settings.context_limits,
             instructions: session.settings.instructions,
@@ -711,6 +716,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
             .map(|fact| RequestView {
                 response_accepted: fact.response_accepted,
                 additional_tools_in_input: fact.projection.additional_tools_in_input(),
+                fast: fact.projection.fast,
                 behavior: fact.projection.behavior.map(|material| RequestBehavior {
                     hash: material.hash,
                     text: material.text,

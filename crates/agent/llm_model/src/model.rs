@@ -62,6 +62,7 @@ pub struct ModelInfo {
     pub display_name: String,
     pub supported_reasoning_levels: Vec<String>,
     pub default_reasoning_level: Option<String>,
+    pub fast: bool,
     pub image_input: Option<bool>,
     pub context_limits: crate::ContextLimits,
     pub multi_agent: MultiAgentCapability,
@@ -156,10 +157,12 @@ pub fn select_agent_model<'a>(
 pub fn select_session_model<'a>(
     models: &'a [ModelInfo],
     slug: &str,
-    effort: &str,
+    effort: Option<&str>,
 ) -> Result<&'a ModelInfo, AgentModelError> {
     let model = find_model(models, slug)?;
-    explicit_effort(model, effort)?;
+    if let Some(effort) = effort {
+        explicit_effort(model, effort)?;
+    }
     Ok(model)
 }
 
@@ -330,6 +333,7 @@ async fn execute_model(
                 image_input,
                 context_limits: crate::ContextLimits::parse(model)?,
                 multi_agent: multi_agent_capability(model)?,
+                fast: supports_fast(model),
                 slug,
                 display_name,
                 supported_reasoning_levels,
@@ -366,6 +370,18 @@ async fn execute_model(
         model: display_name,
         text: text_output(output.messages),
     }))
+}
+
+fn supports_fast(model: &Value) -> bool {
+    if let Some(tiers) = model.get("service_tiers").and_then(Value::as_array) {
+        return tiers
+            .iter()
+            .any(|tier| matches!(tier["id"].as_str(), Some("priority" | "fast")));
+    }
+    model
+        .get("additional_speed_tiers")
+        .and_then(Value::as_array)
+        .is_some_and(|tiers| tiers.iter().any(|tier| tier.as_str() == Some("fast")))
 }
 
 pub struct BackgroundText {

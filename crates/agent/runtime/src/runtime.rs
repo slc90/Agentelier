@@ -953,13 +953,16 @@ impl AgentRuntime {
                                         }
                                     }
                                     Command::ChangeSessionModel(change) => {
-                                        if pending_session_model.is_some() || conversation.current().is_none_or(|view| view.id != change.session) {
+                                        if conversation.session_id() != Some(change.session) {
                                             emit(&publish, change.id, AgentEventKind::Conversation(ConversationEvent::SessionModelSaved {
                                                 session: change.session,
-                                                result: Err("当前已有模型变更等待保存，或目标会话已变化".into()),
+                                                result: Err("要更改模型的会话已变化".into()),
                                             }))?;
-                                        } else {
-                                            *pending_session_model = Some(change);
+                                        } else if let Some(previous) = pending_session_model.replace(change) {
+                                            emit(&publish, previous.id, AgentEventKind::Conversation(ConversationEvent::SessionModelSaved {
+                                                session: previous.session,
+                                                result: Err("已选择更新的会话模型设置".into()),
+                                            }))?;
                                         }
                                     }
                                     Command::ProjectSaved(id, result) => {
@@ -1012,6 +1015,9 @@ impl AgentRuntime {
                                     Command::Loaded(result) => {
                                         let pending = loading.take().ok_or(RuntimeFailure::ModelState)?;
                                         let id = pending.id;
+                                        if result.as_ref().as_ref().is_ok_and(agentelier_conversation::RestoredSession::recovery_committed) {
+                                            catalog_dirty = true;
+                                        }
                                         let mut next = make_owner()?;
                                         let event = pending.complete(*result, &operations, &mut next.conversation, &mcp_connections);
                                         let opened = next.conversation.session_id();
@@ -1021,12 +1027,6 @@ impl AgentRuntime {
                                             let processes = next.conversation.restored_processes().projection(session);
                                             emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::Processes(processes)))?;
                                             owners.insert(Some(session), next);
-                                        }
-                                        if opened.is_some() && catalog.is_none() {
-                                            match store.client().scan() {
-                                                Ok(reply) => catalog = Some(reply),
-                                                Err(failure) => emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::ArchiveFailed(failure.to_string())))?,
-                                            }
                                         }
                                     }
                                     Command::Recorded(result) => {
@@ -1863,12 +1863,12 @@ impl AgentRuntime {
         &self,
         id: u64,
         session: SessionId,
-        slug: String,
+        selection: agentelier_conversation::SessionModelSelection,
     ) -> Result<(), RuntimeFailure> {
         self.submit(Command::ChangeSessionModel(session_model::Change {
             id,
             session,
-            slug,
+            selection,
         }))
     }
     pub fn request_conversation(

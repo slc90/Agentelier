@@ -52,6 +52,8 @@ LLM Model 以 ModelRequest::Catalog 读取全部可显示模型，以 Verify 携
 
 推理能力从目录的 supported_reasoning_levels 和 default_reasoning_level 解析。畸形能力数据或与支持列表不一致的默认值作为协议失败。Bridge 逐字段转换可选 effort，LLM Model 在显式值存在时序列化 reasoning.effort。验证回复带回实际提交设置。
 
+聊天的 Fast 能力从目录的 `service_tiers` 读取，旧目录可使用 `additional_speed_tiers`。模型请求冻结时以 `service_tier: "priority"` 表达 Fast，以 `"default"` 表达关闭，并在请求记录中保留本次选择。每轮开始时重新核对目录能力。[Codex 模型目录](https://github.com/openai/codex/blob/main/codex-rs/models-manager/models.json)
+
 聊天 GenerationRequest 额外携带固定的 InstructionSnapshot。生成前核对快照，并通过其统一 `messages()` 映射将基础覆盖及有序补充文本构造成 `developer` 输入消息，再追加 ProtocolHistory 和当前用户输入；基础与补充槽位不对应不同协议优先级。默认空配置保持原有请求行为。指令材料解析与保存归 Prompts，LLM Model 不读提示词文件，不在模型连接验证中自动注入准备区指令。
 
 聊天请求携带会话冻结的 Function Tool 声明、自动选择和 `parallel_tool_calls: true`。固定指令、记忆、技能、协议历史和本轮输入随原顺序排列，材料索引记录实际位置。Codex 新建 `gpt-6-astra` 会话使用 WebSocket 的 `response.create` 和顶层 `tools`，具备异步资格的声明携带 `async: true`。其他模型和已有 Codex 平铺会话使用 HTTP 同步声明。HTTP 聊天使用 `store: false`、`stream: true` 和完整的 `input`，省略 `previous_response_id`。独立的目录与连接验证不附带工具。

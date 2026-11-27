@@ -1,6 +1,6 @@
 use agentelier_account_bridge::AccountEventKind;
 use agentelier_agent_runtime::{AgentEventKind, AgentRuntime, DeliveryFailure};
-use agentelier_conversation_bridge::SessionId;
+use agentelier_conversation_bridge::{SessionId, SessionModelSelection};
 use agentelier_llm_model_bridge::ModelEventKind;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -486,9 +486,9 @@ impl Connection {
     pub fn change_session_model(
         &mut self,
         session: SessionId,
-        slug: String,
+        selection: SessionModelSelection,
     ) -> Result<u64, BridgeFailure> {
-        if self.stopping || self.failure.is_some() || !self.pending_session_models.is_empty() {
+        if self.stopping || self.failure.is_some() {
             return Err(BridgeFailure("当前执行连接不能接纳模型变更".into()));
         }
         let id = self
@@ -496,7 +496,7 @@ impl Connection {
             .allocate()
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
         self.runtime
-            .change_session_model(id, session, slug)
+            .change_session_model(id, session, selection)
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
         self.pending_session_models.insert(id, session);
         Ok(id)

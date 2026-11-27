@@ -130,6 +130,11 @@ impl ActiveTurn<'_> {
                 "当前账号模型不支持会话固定的推理设置",
             ));
         }
+        if self.view.settings.fast && !model.fast {
+            return Err(ConversationFailure::new(
+                "当前账号的会话模型已不支持 Fast 模式，请在聊天底栏关闭 Fast",
+            ));
+        }
         Ok(())
     }
     pub fn stored_state(&self) -> crate::StoredState {
@@ -605,6 +610,7 @@ impl ActiveTurn<'_> {
                 .compact_threshold()
                 .ok_or_else(|| ConversationFailure::new("模型缺少有效的服务端压缩阈值"))?,
             effort: self.view.settings.effort.clone(),
+            fast: self.view.settings.fast,
             context,
             input_images: Default::default(),
             tools: self.tools.clone(),

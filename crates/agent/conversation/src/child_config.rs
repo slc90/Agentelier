@@ -257,6 +257,7 @@ impl ActiveTurn<'_> {
                 slug: slug.clone(),
                 display_name: display_name.clone(),
                 effort: effort.map(str::to_owned),
+                fast: false,
                 image_input,
                 instructions,
                 working_directory: parent.working_directory.clone(),

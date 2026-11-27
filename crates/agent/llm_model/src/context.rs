@@ -7,7 +7,7 @@ const DEFAULT_EFFECTIVE_PERCENT: u64 = 95;
 const AUTO_COMPACT_PERCENT: u64 = 90;
 const PERCENT: u64 = 100;
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextLimits {
     pub window: Option<u64>,
     pub effective: Option<u64>,

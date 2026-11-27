@@ -18,7 +18,7 @@ Agentelier 是面向 Windows x64 / DX12 的单进程 Rust 桌面 Agent 应用。
 | `crates/agent/login/` | `agentelier_login` | 数据环境、Codex 浏览器 OAuth、凭据持久化与身份摘要 |
 | `crates/agent/account/` | `agentelier_account` | Codex 来源状态、共享凭据请求、执行身份门控和账号额度 |
 | `crates/agent/llm_model/` | `agentelier_llm_model` | 模型目录与窗口能力、Responses 的 HTTP/SSE 与 WebSocket 传输、响应使用量和模型错误语义 |
-| `crates/agent/conversation/` | `agentelier_conversation` | 固定设置的聊天会话、Turn 身份、工作窗口计量、压缩检查点及恢复、展示记录与结果收敛 |
+| `crates/agent/conversation/` | `agentelier_conversation` | 聊天会话设置、Turn 身份、工作窗口计量、压缩检查点及恢复、展示记录与结果收敛 |
 | `crates/agent/session_store/` | `agentelier_session_store` | 稳定 UUID 会话日志、项目定义与会话归属、恢复读取、执行事件追加、不可变媒体附件、单写入者、提交确认与存储收尾 |
 | `crates/agent/memory/` | `agentelier_memory` | 数据目录级 SQLite、会话提取证据及状态、全局记忆候选选择、Markdown 发布与恢复、历史记忆检索、详情读取与显式修订工具，已发布材料的安全展示数据 |
 | `crates/agent/prompts/` | `agentelier_prompts` | 提示词版本库、组合预设、指令快照与原子文件保存 |
@@ -121,13 +121,13 @@ flowchart TD
 
 `application` 安装由 controls 提供的应用主题与共享控件插件。登录、目录设置和聊天界面的普通按钮由 `AgentelierButton` 组合，业务内容和事件处理留在调用方。样式与焦点环由 controls 更新，Widgetry 持有输入、禁用及 Loading 状态。账号和对话使用 `AgentelierAvatar`，通过 Assets 提供的图像句柄显示头像。独立头像编辑窗口使用 `AvatarCropper` 调整原图的归一化裁剪参数，保存后将同一渲染投影交给已登录头像与用户消息。详见[控件体系](ui/components.md)。
 
-主窗口通过 Widgetry Window 固定尺寸并支持标题栏拖动。chat_ui 在标题栏装配账号、设置、Skill、MCP 和记忆管理入口，并以固定 3:7 比例装配 Session 侧栏和聊天区。Session 条目按身份合并聊天和后台任务状态。Application 使用 Widgetry 文件选择窗口接收头像原图，独立编辑窗口复用 Controls 的圆形裁剪和预览。
+主窗口通过 Widgetry Window 固定尺寸并支持标题栏拖动。chat_ui 在标题栏装配账号、设置、Skill、MCP 和记忆管理入口，并以固定 1:3 比例装配 Session 侧栏和聊天区。Session 条目按身份合并聊天和后台任务状态。Application 使用 Widgetry 文件选择窗口接收头像原图，独立编辑窗口复用 Controls 的圆形裁剪和预览。
 
 Application 在启动阶段安装 Widgetry Tray。托盘就绪后，关闭主窗口会记录并隐藏当前可见的窗口，保留窗口实体、模态关系和后台执行。隐藏期间新增的可见窗口在原生创建前加入快照，恢复时跳过已关闭的窗口并保留最小化状态。托盘左键恢复快照，主窗口未被 Widgetry 模态窗口阻挡时请求焦点。托盘初始化未就绪时，主窗口保持可见。各 UI 模块处理自己拥有的辅助窗口关闭请求，Widgetry 管理自身独立对话框的关闭。
 
 Assets 保存相同图案的 EXE ICO、主窗口与任务栏 PNG，以及托盘 ICO。可执行包通过 Widgetry 的图标构建依赖嵌入 EXE 资源，Application 通过 Widgetry 装配运行时图标和托盘。
 
-C 区使用一棵 Widgetry Tree 显示项目，末尾的内置「单独聊天」收纳无项目归属的会话。项目定义与会话归属由 Session Store 写入，Conversation 定义命令和目录投影。界面通过 Bridge 取得保存后的目录，并在 Agent 确认打开后切换 D 区。Runtime 保留原会话仍在使用的后台工具资源，并发布跨会话的安全任务快照。[项目组织与归属](modules/session-store.md#项目组织与归属)
+C 区使用一棵 Widgetry Tree 显示项目，末尾的内置「单独聊天」收纳无项目归属的会话。项目定义与会话归属由 Session Store 写入，Conversation 定义命令和目录投影。界面通过 Bridge 取得保存后的目录，扫描期间可以从已显示的分组打开新聊天草稿。浏览项目时只同步会话高亮，保留侧栏浏览位置。已有会话在 Agent 确认打开后切换 D 区，并在侧栏定位到该会话。用户在自动恢复期间打开的草稿继续显示。Runtime 保留原会话仍在使用的后台工具资源，并发布跨会话的安全任务快照。[项目组织与归属](modules/session-store.md#项目组织与归属)
 
 Application 启动时隐藏主窗口，在 Widgetry Splash 窗口播放由 Bevy 原生渲染的四幕字形演出，最终呈现与主窗口共用的背景。完成窗口交接后，Login UI 检查保存的目录，或在主窗口前打开独立的 Widgetry 模态目录选择器。辅助 Job 调用 Login 检查目录并建立数据环境，配置由 Application 的 ConfigStore 串行合并并完整替换提交。成功后主窗口挂载工作区，通过共享 AgentHost 发起账号恢复。数据根路径在本次运行中保持固定。启动窗口的时序见[Splash 启动演出与主窗口交接](modules/splash.md)。
 

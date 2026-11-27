@@ -1,5 +1,5 @@
 use agentelier_conversation::{
-    Conversation, ConversationFailure, RecordEvent, SessionId, SessionView,
+    Conversation, ConversationFailure, RecordEvent, SessionId, SessionModelSelection, SessionView,
 };
 use agentelier_llm_model::ModelInfo;
 use agentelier_session_store::SessionStore;
@@ -8,7 +8,7 @@ use tracing::{error, info};
 pub(super) struct Change {
     pub(super) id: u64,
     pub(super) session: SessionId,
-    pub(super) slug: String,
+    pub(super) selection: SessionModelSelection,
 }
 
 impl Change {
@@ -20,7 +20,8 @@ impl Change {
     ) -> Result<SessionView, ConversationFailure> {
         let id = self.id;
         let session = self.session;
-        let Some(prepared) = conversation.prepare_model_change(session, &self.slug, models)? else {
+        let Some(prepared) = conversation.prepare_model_change(session, &self.selection, models)?
+        else {
             info!(operation_id = id, session_id = %session, "会话模型未变化");
             return conversation
                 .current()
@@ -41,7 +42,7 @@ impl Change {
             error!(operation_id = id, session_id = %session, error = %failure, "模型已保存，摘要更新失败，可从记录重建");
         }
         let view = conversation.install_model_change(session, prepared)?;
-        info!(operation_id = id, session_id = %session, model = view.settings.slug, sequence = commit.sequence, "会话模型已持久保存");
+        info!(operation_id = id, session_id = %session, model = view.settings.slug, effort = ?view.settings.effort, fast = view.settings.fast, sequence = commit.sequence, "会话模型已持久保存");
         Ok(view)
     }
 }

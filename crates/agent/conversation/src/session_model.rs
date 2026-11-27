@@ -3,24 +3,38 @@ use agentelier_llm_model::{ContextLimits, ModelInfo, codex_tool_contract, select
 use agentelier_tools::ToolContract;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, PartialEq, Eq)]
+pub struct SessionModelSelection {
+    pub slug: String,
+    pub options: SessionModelOptions,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionModelOptions {
+    pub effort: Option<String>,
+    pub fast: bool,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct StoredSessionModel {
     pub slug: String,
     pub display_name: String,
     pub image_input: Option<bool>,
     pub context_limits: ContextLimits,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<SessionModelOptions>,
 }
 
 pub struct PreparedModelChange {
     pub model: StoredSessionModel,
-    context: ContextState,
+    context: Option<ContextState>,
 }
 
 impl Conversation {
     pub fn prepare_model_change(
         &self,
         session: SessionId,
-        slug: &str,
+        selection: &SessionModelSelection,
         models: &[ModelInfo],
     ) -> Result<Option<PreparedModelChange>, ConversationFailure> {
         let current = self
@@ -31,17 +45,19 @@ impl Conversation {
         if current.view.execution_blocked {
             return Err(ConversationFailure::new("当前会话处于只读状态"));
         }
-        if slug == current.view.settings.slug {
+        let settings = &current.view.settings;
+        if selection.slug == settings.slug
+            && selection.options.effort == settings.effort
+            && selection.options.fast == settings.fast
+        {
             return Ok(None);
         }
-        let model = match &current.view.settings.effort {
-            Some(effort) => select_session_model(models, slug, effort)
-                .map_err(|failure| ConversationFailure::new(failure.to_string()))?,
-            None => models
-                .iter()
-                .find(|model| model.slug == slug)
-                .ok_or_else(|| ConversationFailure::new("当前账号模型目录不包含所选模型"))?,
-        };
+        let model =
+            select_session_model(models, &selection.slug, selection.options.effort.as_deref())
+                .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+        if selection.options.fast && !model.fast {
+            return Err(ConversationFailure::new("所选模型不支持 Fast 模式"));
+        }
         if current.tools.contract() == ToolContract::CodexWebSocket
             && codex_tool_contract(&model.slug) != ToolContract::CodexWebSocket
         {
@@ -54,24 +70,26 @@ impl Conversation {
                 "所选模型缺少有效的上下文窗口或压缩阈值",
             ));
         }
-        let history = current
-            .history
-            .as_ref()
-            .ok_or_else(|| ConversationFailure::new("有模型任务正在使用会话历史，请稍后重试"))?;
-        let mut context = current.view.context.as_ref().clone();
-        context.limits = model.context_limits.clone();
-        context.anchor = None;
-        context.refresh(
-            history,
-            &current.view.settings.instructions,
-            current.tools.definitions(),
-        )?;
+        let context =
+            if model.slug != settings.slug || model.context_limits != *settings.context_limits {
+                let history = current.history.as_ref().ok_or_else(|| {
+                    ConversationFailure::new("有模型任务正在使用会话历史，请稍后重试")
+                })?;
+                let mut context = current.view.context.as_ref().clone();
+                context.limits = model.context_limits.clone();
+                context.anchor = None;
+                context.refresh(history, &settings.instructions, current.tools.definitions())?;
+                Some(context)
+            } else {
+                None
+            };
         Ok(Some(PreparedModelChange {
             model: StoredSessionModel {
                 slug: model.slug.clone(),
                 display_name: model.display_name.clone(),
                 image_input: model.image_input,
                 context_limits: model.context_limits.clone(),
+                options: Some(selection.options.clone()),
             },
             context,
         }))
@@ -91,7 +109,13 @@ impl Conversation {
         current.view.settings.display_name = change.model.display_name;
         current.view.settings.image_input = change.model.image_input;
         *current.view.settings.context_limits = change.model.context_limits;
-        *current.view.context = change.context;
+        if let Some(options) = change.model.options {
+            current.view.settings.effort = options.effort;
+            current.view.settings.fast = options.fast;
+        }
+        if let Some(context) = change.context {
+            *current.view.context = context;
+        }
         Ok(current.view.clone())
     }
 }

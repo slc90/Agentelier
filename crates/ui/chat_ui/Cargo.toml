@@ -36,6 +36,7 @@ bevy_widgetry = { workspace = true, features = [
   "job",
 ] }
 tracing.workspace = true
+unicode-segmentation.workspace = true
 time.workspace = true
 
 [lints]

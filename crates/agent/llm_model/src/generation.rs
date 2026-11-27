@@ -32,6 +32,7 @@ pub struct GenerationRequest {
     pub compact_threshold: u64,
     pub skip_compaction: bool,
     pub effort: Option<String>,
+    pub fast: bool,
     pub context: ProtocolHistory,
     pub input_images: HashMap<(uuid::Uuid, uuid::Uuid), Arc<agentelier_tools::ImagePayload>>,
     pub history_position: usize,
@@ -57,6 +58,8 @@ impl RecordedModelSource {
 pub struct RequestProjection {
     #[serde(default, skip_serializing_if = "RecordedModelSource::is_siwc")]
     pub route: RecordedModelSource,
+    #[serde(default)]
+    pub fast: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction: Option<RequestCompaction>,
     #[serde(default, skip_serializing_if = "ToolContract::is_flat")]
@@ -430,6 +433,11 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     if let Some(effort) = &generation.effort {
         payload["reasoning"] = serde_json::json!({"effort": effort});
     }
+    payload["service_tier"] = serde_json::json!(if generation.fast {
+        "priority"
+    } else {
+        "default"
+    });
     payload["instructions"] = serde_json::Value::String(String::new());
     if contract == ToolContract::CodexWebSocket {
         payload["type"] = serde_json::json!("response.create");
@@ -455,6 +463,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     use sha2::{Digest, Sha256};
     let projection = RequestProjection {
         route: RecordedModelSource::Codex,
+        fast: generation.fast,
         compaction: Some(compaction),
         tool_contract: contract,
         behavior,

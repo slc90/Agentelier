@@ -1,5 +1,6 @@
 use super::{
-    Choice, DirectoryPath, DirectoryPicker, Field, Selector, SettingsMessage, SettingsWindow,
+    Choice, DefaultFast, DirectoryPath, DirectoryPicker, Field, Selector, SettingsMessage,
+    SettingsWindow,
 };
 use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
 use bevy::prelude::*;
@@ -59,6 +60,12 @@ fn content(scale: Selector, model: Selector, effort: Selector) -> impl SceneList
         @selector("界面缩放", scale)--
         @selector("默认模型", model)--
         @selector("默认推理强度", effort)--
+        Node { align_items: AlignItems::Center, column_gap: px(12) }
+        Children [
+            Text("默认 Fast 模式") WidgetryText Node { min_width: px(126) }--
+            @agentelier_controls::agentelier_switch()
+            DefaultFast Name("SettingsDefaultFast") on(super::toggle_fast)
+        ]--
         Text::default() WidgetryText SettingsMessage Name("SettingsFeedback")
         Node { display: Display::None }
         TextLayout::linebreak(LineBreak::AnyCharacter)--

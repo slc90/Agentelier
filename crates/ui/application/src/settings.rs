@@ -3,7 +3,7 @@ use agentelier_chat_ui::{ModelChoice, ModelState, OpenSettings};
 use agentelier_login::validate_data_directory;
 use agentelier_login_ui::DataDirectoryReady;
 use bevy::prelude::*;
-use bevy::ui::UiSystems;
+use bevy::ui::{Checked, UiSystems};
 use bevy::ui_widgets::ValueChange;
 use bevy::window::WindowCloseRequested;
 use bevy_widgetry::combo_box::{WidgetryComboBox, WidgetryComboBoxAppExt};
@@ -12,6 +12,7 @@ use bevy_widgetry::job::{JobId, JobManager, JobOptions, JobOutcome, JobRead, Job
 use bevy_widgetry::list_view::{WidgetryListItemId, WidgetryListModel};
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text_field::WidgetryTextFieldHeadless;
+use bevy_widgetry::toggle_button::WidgetryToggleButtonChanged;
 use bevy_widgetry::ui_scale::WidgetryUiScale;
 use bevy_widgetry::window::widgetry_window_target;
 use bevy_widgetry_path_display::{display_path, simplify_path};
@@ -47,6 +48,9 @@ enum DirectoryPath {
 
 #[derive(Component, Clone, Default)]
 struct SettingsMessage;
+
+#[derive(Component, Clone, Default)]
+struct DefaultFast;
 
 #[derive(Clone, Copy)]
 enum Field {
@@ -140,6 +144,18 @@ fn sync(world: &mut World) -> Result {
         return Ok(());
     }
     let config = world.resource::<ConfigStore>().snapshot()?;
+    if let Ok(entity) = world
+        .query_filtered::<Entity, With<DefaultFast>>()
+        .single(world)
+        && world.get::<Checked>(entity).is_some() != config.default_fast
+    {
+        let mut toggle = world.entity_mut(entity);
+        if config.default_fast {
+            toggle.insert(Checked);
+        } else {
+            toggle.remove::<Checked>();
+        }
+    }
     let state = world.resource::<Settings>();
     let current = state.current_directory.clone();
     let next = config
@@ -337,7 +353,12 @@ fn apply_choice(world: &mut World, choice: Choice) -> Result {
             }
             let catalog = world.resource::<ModelState>();
             model_for_slug(catalog, &slug)
-                .and_then(|model| compatible_effort(model, &saved.effort))
+                .and_then(|model| {
+                    model
+                        .compatible_effort(Some(&saved.effort))
+                        .map(str::to_owned)
+                        .ok_or_else(|| format!("{} 没有可用的推理强度", model.display_name))
+                })
                 .and_then(|effort| {
                     store
                         .save_session_defaults(slug, effort)
@@ -372,20 +393,18 @@ fn model_for_slug<'a>(catalog: &'a ModelState, slug: &str) -> Result<&'a ModelCh
         .ok_or_else(|| "所选模型不在当前模型目录中".to_owned())
 }
 
-fn compatible_effort(model: &ModelChoice, current: &str) -> Result<String, String> {
-    let levels = &model.supported_reasoning_levels;
-    levels
-        .iter()
-        .find(|effort| effort.as_str() == current)
-        .or_else(|| {
-            model
-                .default_reasoning_level
-                .as_ref()
-                .filter(|effort| levels.contains(effort))
-        })
-        .or(levels.first())
-        .cloned()
-        .ok_or_else(|| format!("{} 没有可用的推理强度", model.display_name))
+fn toggle_fast(
+    event: On<WidgetryToggleButtonChanged>,
+    store: Res<ConfigStore>,
+    mut state: ResMut<Settings>,
+) -> Result {
+    if store.snapshot()?.default_fast != event.selected {
+        state.message = store
+            .save_default_fast(event.selected)
+            .err()
+            .map(|failure| failure.to_string());
+    }
+    Ok(())
 }
 
 fn open_picker(world: &mut World) -> Result {

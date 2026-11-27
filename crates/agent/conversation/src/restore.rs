@@ -41,6 +41,7 @@ pub struct RestoredSession {
     stops: Vec<crate::AgentStop>,
     mailboxes: crate::Mailboxes,
     pub normalized: bool,
+    recovery_committed: bool,
 }
 
 impl RestoredSession {
@@ -78,6 +79,11 @@ impl RestoredSession {
 
     pub fn confirm_recovery(&mut self, sequence: u64) {
         self.tasks.confirm_recovery(sequence);
+        self.recovery_committed = true;
+    }
+
+    pub fn recovery_committed(&self) -> bool {
+        self.recovery_committed
     }
 }
 
@@ -514,6 +520,10 @@ fn replay(
         display_name: initial.settings.display_name.clone(),
         image_input: initial.settings.image_input,
         context_limits: initial.settings.context_limits.as_ref().clone(),
+        options: Some(crate::SessionModelOptions {
+            effort: initial.settings.effort.clone(),
+            fast: initial.settings.fast,
+        }),
     };
     let mut seen_calls = HashSet::new();
     let mut seen_items = HashSet::new();
@@ -849,9 +859,12 @@ fn replay(
                 {
                     return Err(ConversationFailure::new("存档模型变更与会话状态不符"));
                 }
-                model = *saved;
-                state.context.limits = model.context_limits.clone();
-                state.context.anchor = None;
+                if saved.slug != model.slug || saved.context_limits != model.context_limits {
+                    state.context.limits = saved.context_limits.clone();
+                    state.context.anchor = None;
+                }
+                let options = saved.options.or(model.options);
+                model = crate::StoredSessionModel { options, ..*saved };
             }
             RecordEvent::ProjectPublished {
                 state: incoming,
@@ -1908,6 +1921,7 @@ fn replay(
         next_turn,
         notice: (!notices.is_empty()).then(|| notices.join("\n")),
         normalized,
+        recovery_committed: false,
         recovered_results,
         recovered_mailbox,
         agents,
@@ -2007,10 +2021,18 @@ impl Conversation {
         };
 
         let settings = restored.initial.settings;
+        let model_options = restored
+            .model
+            .options
+            .unwrap_or(crate::SessionModelOptions {
+                effort: settings.effort,
+                fast: settings.fast,
+            });
         let latest_project = restored.publications.last().filter(|publication| {
             publication.snapshot.working_directory == restored.working_directory
         });
         let view = SessionView {
+            requires_websocket_model: settings.tool_contract == ToolContract::CodexWebSocket,
             project_context: Box::new(match restored.state.project_error {
                 Some(message) => crate::ProjectContextState::Failed {
                     message,
@@ -2034,7 +2056,8 @@ impl Conversation {
                 context_limits: Box::new(restored.model.context_limits),
                 slug: restored.model.slug,
                 display_name: restored.model.display_name,
-                effort: settings.effort,
+                effort: model_options.effort,
+                fast: model_options.fast,
                 image_input: restored.model.image_input,
                 instructions: Arc::new(settings.instructions),
                 working_directory: restored.working_directory,

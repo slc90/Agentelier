@@ -91,6 +91,7 @@ impl Dialogue {
         let create = SessionCreate {
             slug,
             effort,
+            fast: false,
             location: SessionLocation::Standalone(directory.clone()),
             instructions: Arc::new(InstructionSnapshot {
                 base_overridden: false,

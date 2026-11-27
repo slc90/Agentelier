@@ -9,6 +9,7 @@ mod background_tasks;
 pub use archives::{ArchiveChoice, ArchiveState};
 mod composer;
 mod composer_completion;
+mod composer_footer;
 mod composer_media;
 mod conversation;
 mod generated_image;
@@ -28,6 +29,7 @@ mod request_inspection;
 mod skills;
 mod spinner;
 mod task_toast;
+mod text_overflow;
 mod transcription;
 mod workspace;
 

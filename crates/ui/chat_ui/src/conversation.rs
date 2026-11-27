@@ -1,7 +1,7 @@
+use crate::ArchiveState;
 use crate::active_input::{ChatSteer, ChatSteerState, PendingDraft};
 use crate::composer::{self, Boundary, TextSegment};
 use crate::preparation::ModelState;
-use crate::{ArchiveState, projects::ProjectState};
 use agentelier_agent_host::{
     AgentHost, ConversationEvent as HostConversationEvent, HostFailed, ReceiveAgentEvents,
 };
@@ -111,6 +111,7 @@ pub struct ChatRequestBehavior {
 
 #[derive(Clone, Reflect)]
 pub struct ChatRequest {
+    pub fast: bool,
     pub behavior: Option<ChatRequestBehavior>,
     pub transcript: Option<(usize, crate::transcription::ChatTranscriptReference)>,
     pub response_accepted: Option<bool>,
@@ -162,6 +163,8 @@ pub struct ChatSession {
     pub slug: String,
     pub display_name: String,
     pub effort: Option<String>,
+    pub fast: bool,
+    pub requires_websocket_model: bool,
     pub image_input: Option<bool>,
     #[reflect(ignore)]
     pub context_limits: Box<agentelier_conversation_bridge::ContextLimits>,
@@ -206,6 +209,7 @@ pub(crate) enum NewChatTarget {
 pub struct SessionModelDefaults {
     pub slug: String,
     pub effort: String,
+    pub fast: bool,
 }
 
 #[derive(Resource)]
@@ -231,6 +235,10 @@ pub struct ChatState {
     pub(crate) pending_inputs: Vec<PendingDraft>,
     pub(crate) queue_controls: Vec<u64>,
     pub input_feedback: Option<String>,
+    #[reflect(ignore)]
+    pub(super) draft_model: Option<SessionModelDefaults>,
+    #[reflect(ignore)]
+    pub(super) pending_model: Option<super::composer_footer::PendingModel>,
 }
 
 impl ChatState {
@@ -240,6 +248,7 @@ impl ChatState {
 
     fn can_send(&self, model: &ModelState, account: &AccountState) -> bool {
         self.operation.is_none()
+            && self.pending_model.is_none()
             && model.can_request(account)
             && self.composer.has_input()
             && (self.new_chat.is_some() && model.can_create_session(account)
@@ -305,8 +314,6 @@ enum ReplyItemId {
 }
 #[derive(Component, Clone, Default)]
 struct ComposerFeedback;
-#[derive(Component, Clone, Default)]
-struct SessionStatus;
 #[derive(Component, Clone, Copy)]
 enum ChatAction {
     NewChat(NewChatTarget),
@@ -359,26 +366,23 @@ pub(crate) fn install(app: &mut App) {
                 .after(EditableTextSystems)
                 .before(UiSystems::PostLayout),
         )
-        .add_systems(
-            PostUpdate,
-            (update, update_session_status).before(UiSystems::Content),
-        );
+        .add_systems(PostUpdate, update.before(UiSystems::Content));
 }
 
-pub(crate) fn panel(_state: &ChatState) -> impl Scene {
+pub(crate) fn panel(sources: [Entity; 2]) -> impl Scene {
     bsn! {
         Name("ChatPanel") crate::background_tasks::Bounds
         Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column }
         Children [
             @crate::queue::panel()--
             @conversation_view()--
-            @chat_composer()--
+            @chat_composer(sources)--
             @crate::background_tasks::panel()
         ]
     }
 }
 
-fn chat_composer() -> impl Scene {
+fn chat_composer(sources: [Entity; 2]) -> impl Scene {
     bsn! {
         Name("ChatComposerPanel")
         Node { width: percent(100), flex_direction: FlexDirection::Column, row_gap: px(CONTENT_GAP), flex_shrink: 0.0, padding: UiRect::all(px(CONTENT_PADDING)) }
@@ -389,15 +393,7 @@ fn chat_composer() -> impl Scene {
             @crate::transcription::panel(crate::transcription::Target::Draft)--
             @crate::transcription::selection_panel()--
             @composer::body()--
-            Name("ChatComposerFooter")
-            Node { display: Display::None, column_gap: px(CONTENT_GAP), align_items: AlignItems::Center }
-            Children [
-                Text::default() WidgetryText SessionStatus Name("ChatSessionStatus") Pickable::IGNORE
-                TextLayout::linebreak(LineBreak::AnyCharacter)
-                Node { flex_grow: 1.0, min_width: px(0) }--
-                @stop_button()
-                Node { display: Display::None }
-            ]
+            @super::composer_footer::scene(sources)
         ]
     }
 }
@@ -530,7 +526,7 @@ fn forget_session(world: &mut World, session: SessionId) -> Result {
     Ok(())
 }
 
-fn stop_button() -> impl Scene {
+pub(super) fn stop_button() -> impl Scene {
     bsn! {
         @AgentelierButton { @style: AgentelierButtonStyle::Danger, @children: bsn_list! { Text("停止") WidgetryText } }
         Name("StopChatGeneration") template(|_| Ok(ChatAction::Stop))
@@ -551,7 +547,7 @@ fn activate(event: On<Activate>, actions: Query<&ChatAction>, mut commands: Comm
 
 fn open_draft(world: &mut World, target: NewChatTarget) -> Result {
     let state = world.resource::<ChatState>();
-    if world.resource::<crate::ArchiveState>().loading {
+    if world.resource::<ArchiveState>().opening.is_some() {
         return Ok(());
     }
     if let NewChatTarget::Project(id) = target
@@ -650,8 +646,8 @@ fn send(world: &mut World) -> Result {
     };
     let starting_chat = state.new_chat.is_some();
     let request = if let Some(target) = state.new_chat {
-        let SessionModelDefaults { slug, effort } =
-            (world.resource::<SessionDefaultsSource>().0)()?;
+        let SessionModelDefaults { slug, effort, fast } =
+            super::composer_footer::draft_model(world)?;
         let instructions = Arc::new(crate::prompts::snapshot(world)?);
         let location = match target {
             NewChatTarget::Project(project) => SessionLocation::InProject {
@@ -671,6 +667,7 @@ fn send(world: &mut World) -> Result {
             create: SessionCreate {
                 slug,
                 effort,
+                fast,
                 instructions,
                 location,
             },
@@ -955,6 +952,7 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
             .requests
             .into_iter()
             .map(|fact| ChatRequest {
+                fast: fact.fast,
                 behavior: fact.behavior.map(|material| ChatRequestBehavior {
                     hash: material.hash,
                     text: material.text,
@@ -1146,6 +1144,8 @@ pub(super) fn project(session: SessionView) -> Result<ChatSession> {
         slug: session.settings.slug,
         display_name: session.settings.display_name,
         effort: session.settings.effort,
+        fast: session.settings.fast,
+        requires_websocket_model: session.requires_websocket_model,
         image_input: session.settings.image_input,
         working_path: session.settings.working_directory.clone(),
         working_directory: bevy_widgetry_path_display::display_path(
@@ -1227,21 +1227,41 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             crate::projects::saved(world, event.operation_id, result);
             continue;
         }
+        if let ConversationEvent::SessionModelSaved { session, result } = event.kind {
+            changed |= with_target(world, ChatTarget::Session(session), |state| {
+                let latest = state
+                    .pending_model
+                    .as_ref()
+                    .is_some_and(|pending| pending.id == event.operation_id);
+                if latest {
+                    state.pending_model = None;
+                }
+                match result {
+                    Ok(view) => state.session = Some(project(view)?),
+                    Err(reason) if latest => state.input_feedback = Some(reason),
+                    Err(_) => {}
+                }
+                Ok(None)
+            })?;
+            continue;
+        }
         if let ConversationEvent::Opened(view) = event.kind {
             let id = view.id;
             let opening = world.resource::<ArchiveState>().opening;
             let target = ChatTarget::Session(id);
             let current = world.resource::<ChatState>().target();
-            if event.operation_id == 0 && current.is_some() {
-                changed |= with_target(world, target, |state| {
-                    if state.operation.is_none() {
-                        state.session = Some(project(view)?);
-                    }
-                    Ok(None)
-                })?;
-                continue;
-            }
-            if event.operation_id != 0 && opening != Some((event.operation_id, id)) {
+            if event.operation_id == 0 {
+                world.resource_mut::<ArchiveState>().finish_startup();
+                if current.is_some() {
+                    changed |= with_target(world, target, |state| {
+                        if state.operation.is_none() {
+                            state.session = Some(project(view)?);
+                        }
+                        Ok(None)
+                    })?;
+                    continue;
+                }
+            } else if opening != Some((event.operation_id, id)) {
                 continue;
             }
             switch_view(world, view)?;
@@ -1249,7 +1269,6 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             archives.selected = Some(id);
             archives.opening = None;
             archives.error = None;
-            archives.loading = false;
             crate::archives::reveal_selection(world)?;
             changed = true;
             continue;
@@ -1271,8 +1290,11 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         };
         if let Some(reason) = archive_error {
             let mut archives = world.resource_mut::<ArchiveState>();
-            archives.opening = None;
-            archives.loading = false;
+            if event.operation_id == 0 {
+                archives.finish_startup();
+            } else {
+                archives.opening = None;
+            }
             archives.error = Some(reason.clone());
             crate::archives::sync_selection(world)?;
             continue;
@@ -1437,6 +1459,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
                 ConversationEvent::Created(view) | ConversationEvent::CreatedForSend(view) => {
                     state.session = Some(project(view)?);
                     state.new_chat = None;
+                    state.draft_model = None;
                     state.task_revision = None;
                     None
                 }
@@ -1482,11 +1505,13 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
             .resource_mut::<crate::transcription::TranscriptionState>()
             .host_failed(&reason);
         let mut archives = world.resource_mut::<ArchiveState>();
-        archives.loading = false;
+        archives.finish_startup();
         archives.opening = None;
+        archives.error = Some(reason.clone());
         for state in world.resource_mut::<SessionUiStates>().0.values_mut() {
             state.operation = None;
             state.pending_inputs.clear();
+            state.pending_model = None;
             state.queue_controls.clear();
             state.cancelling = false;
             state.error = Some(reason.clone());
@@ -1496,6 +1521,7 @@ fn receive(world: &mut World, mut failures: Local<MessageCursor<HostFailed>>) ->
         let mut state = world.resource_mut::<ChatState>();
         state.operation = None;
         state.pending_inputs.clear();
+        state.pending_model = None;
         state.queue_controls.clear();
         state.cancelling = false;
         state.error = Some(reason);
@@ -2154,83 +2180,6 @@ fn memory_message_label(turn: &ChatTurn, message: &ChatMessage) -> String {
     )
 }
 
-fn update_session_status(
-    chat: Res<ChatState>,
-    archives: Res<ArchiveState>,
-    projects: Res<ProjectState>,
-    defaults: Res<SessionDefaultsSource>,
-    models: Res<ModelState>,
-    mut labels: Query<(&mut Text, &ChildOf), With<SessionStatus>>,
-    mut nodes: Query<&mut Node>,
-) -> Result {
-    let draft = chat.draft_target();
-    for (mut label, parent) in &mut labels {
-        if draft.is_none()
-            && !chat.is_changed()
-            && !archives.is_changed()
-            && !projects.is_changed()
-            && !label.is_added()
-        {
-            continue;
-        }
-        let status = if let Some(session) = &chat.session {
-            let effort = session.effort.as_deref().unwrap_or("服务默认");
-            let path = projects.session_project(session.id).map_or_else(
-                || session.working_directory.clone(),
-                |project| bevy_widgetry_path_display::display_path(&project.directory),
-            );
-            let mut status = format!("{} {effort} · {path}", session.display_name);
-            if let Some(entry) = archives.entries.iter().find(|entry| entry.id == session.id) {
-                status.push_str(" · ");
-                status.push_str(&entry.title);
-            }
-            if session
-                .project_context
-                .snapshot
-                .as_ref()
-                .is_some_and(|snapshot| snapshot.sources.iter().any(|source| source.truncated))
-            {
-                status.push_str(" · 项目规则仅载入预览");
-            }
-            status
-        } else if let Some(target) = draft {
-            let SessionModelDefaults { slug, effort } = (defaults.0)()?;
-            let name = models
-                .models
-                .iter()
-                .find(|model| model.slug == slug)
-                .map_or(slug.as_str(), |model| model.display_name.as_str());
-            let mut status = format!("{name} {effort}");
-            let path = match target {
-                NewChatTarget::Project(id) => projects
-                    .project(id)
-                    .map(|project| bevy_widgetry_path_display::display_path(&project.directory)),
-                NewChatTarget::Standalone => Some(bevy_widgetry_path_display::display_path(
-                    &std::env::current_dir()?,
-                )),
-            };
-            if let Some(path) = path {
-                status.push_str(" · ");
-                status.push_str(&path);
-            }
-            status
-        } else {
-            String::new()
-        };
-        let display = if status.is_empty() {
-            Display::None
-        } else {
-            Display::Flex
-        };
-        label.set_if_neq(Text(status));
-        if let Ok(node) = nodes.get_mut(parent.parent()) {
-            node.map_unchanged(|node| &mut node.display)
-                .set_if_neq(display);
-        }
-    }
-    Ok(())
-}
-
 fn composer_feedback(state: &ChatState, model: &ModelState, account: &AccountState) -> String {
     if let Some(error) = &state.error {
         return error.clone();
@@ -2264,7 +2213,18 @@ fn composer_feedback(state: &ChatState, model: &ModelState, account: &AccountSta
             _ => {}
         }
     }
-    session.notice.clone().unwrap_or_default()
+    if let Some(notice) = &session.notice {
+        return notice.clone();
+    }
+    if session
+        .project_context
+        .snapshot
+        .as_ref()
+        .is_some_and(|snapshot| snapshot.sources.iter().any(|source| source.truncated))
+    {
+        return "项目规则仅载入预览".into();
+    }
+    String::new()
 }
 fn update(
     state: Res<ChatState>,
@@ -2305,7 +2265,7 @@ fn update(
             AgentelierButtonLoading::set(&mut commands, entity, state.cancelling);
         }
         let enabled = match action {
-            ChatAction::NewChat(_) => !archives.loading,
+            ChatAction::NewChat(_) => archives.opening.is_none(),
             ChatAction::Stop => !state.cancelling && running,
         };
         if enabled && disabled {

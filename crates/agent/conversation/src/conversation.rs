@@ -51,6 +51,7 @@ pub struct SessionSettings {
     pub slug: String,
     pub display_name: String,
     pub effort: Option<String>,
+    pub fast: bool,
     pub image_input: Option<bool>,
     pub context_limits: Box<agentelier_llm_model::ContextLimits>,
     pub instructions: Arc<InstructionSnapshot>,
@@ -88,6 +89,7 @@ pub enum SessionLocation {
 pub struct SessionCreate {
     pub slug: String,
     pub effort: String,
+    pub fast: bool,
     pub instructions: Arc<InstructionSnapshot>,
     pub location: SessionLocation,
 }
@@ -99,8 +101,9 @@ impl SessionCreate {
         catalog: &[agentelier_llm_model::ModelInfo],
         working_directory: std::path::PathBuf,
     ) -> Result<SessionSettings, ConversationFailure> {
-        let model = agentelier_llm_model::select_session_model(catalog, &self.slug, &self.effort)
-            .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
+        let model =
+            agentelier_llm_model::select_session_model(catalog, &self.slug, Some(&self.effort))
+                .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
         Ok(SessionSettings {
             kind: SessionKind::User,
             background: None,
@@ -108,6 +111,7 @@ impl SessionCreate {
             slug: self.slug,
             display_name: model.display_name.clone(),
             effort: Some(self.effort),
+            fast: self.fast && model.fast,
             image_input: model.image_input,
             context_limits: Box::new(model.context_limits.clone()),
             instructions: self.instructions,
@@ -322,6 +326,7 @@ pub struct SessionView {
     pub notice: Option<String>,
     pub id: SessionId,
     pub settings: Box<SessionSettings>,
+    pub requires_websocket_model: bool,
     pub turn: Option<Box<TurnView>>,
     pub previous_turns: Vec<TurnView>,
     pub audio_draft: Option<crate::AudioAttachment>,
@@ -747,6 +752,8 @@ impl Conversation {
         let tools =
             Arc::new(tools.map_err(|failure| ConversationFailure::new(failure.to_string()))?);
         let mut session = SessionView {
+            requires_websocket_model: tools.contract()
+                == agentelier_tools::ToolContract::CodexWebSocket,
             project_publications: Arc::default(),
             project_context: Default::default(),
             context: Box::default(),
@@ -848,6 +855,8 @@ impl Conversation {
             skills: Arc::new(config.skills),
         };
         let mut view = SessionView {
+            requires_websocket_model: tools.contract()
+                == agentelier_tools::ToolContract::CodexWebSocket,
             project_publications: Arc::new(publications),
             project_context: Box::new(crate::ProjectContextState::Loaded(child.project.clone())),
             context: Box::new(crate::ContextState {
@@ -864,6 +873,7 @@ impl Conversation {
                 slug: settings.slug,
                 display_name: settings.display_name,
                 effort: settings.effort,
+                fast: settings.fast,
                 image_input: settings.image_input,
                 context_limits: settings.context_limits,
                 instructions: Arc::new(settings.instructions),

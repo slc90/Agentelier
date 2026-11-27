@@ -7,6 +7,8 @@ pub struct ModelInfo {
     pub display_name: String,
     pub supported_reasoning_levels: Vec<String>,
     pub default_reasoning_level: Option<String>,
+    pub fast: bool,
+    pub websocket: bool,
     pub image_input: Option<bool>,
     pub context_limits: ContextLimits,
 }
@@ -95,10 +97,13 @@ pub fn convert(
                         models
                             .into_iter()
                             .map(|model| ModelInfo {
+                                websocket: !agentelier_llm_model::codex_tool_contract(&model.slug)
+                                    .is_flat(),
                                 slug: model.slug,
                                 display_name: model.display_name,
                                 supported_reasoning_levels: model.supported_reasoning_levels,
                                 default_reasoning_level: model.default_reasoning_level,
+                                fast: model.fast,
                                 image_input: model.image_input,
                                 context_limits: model.context_limits,
                             })

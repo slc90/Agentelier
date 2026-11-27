@@ -25,6 +25,8 @@ const SESSION_INDENT: f32 = 8.0;
 const SESSION_TITLE_LEFT_SHIFT: f32 = 18.0;
 const CONTROL_GAP: f32 = 12.0;
 const FOLDER_SIZE: u32 = 24;
+const ROW_ACTION_SIZE: u32 = 28;
+const SESSION_SPINNER_SIZE: f32 = 16.0;
 // Center the rendered folder over Widgetry's expander hit area, which precedes the row content.
 const FOLDER_LEFT_OFFSET: f32 = 28.0;
 
@@ -44,11 +46,19 @@ pub struct ArchiveChoice {
 pub struct ArchiveState {
     pub entries: Vec<ArchiveChoice>,
     pub selected: Option<SessionId>,
-    pub loading: bool,
+    startup: ArchiveStartup,
     pub error: Option<String>,
     pub opening: Option<(u64, SessionId)>,
     deleted: Vec<SessionId>,
     pub cleanup_errors: Vec<String>,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Reflect)]
+enum ArchiveStartup {
+    #[default]
+    Scanning,
+    Restoring,
+    Ready,
 }
 
 impl Default for ArchiveState {
@@ -56,12 +66,22 @@ impl Default for ArchiveState {
         Self {
             entries: Vec::new(),
             selected: None,
-            loading: true,
+            startup: ArchiveStartup::default(),
             error: None,
             opening: None,
             deleted: Vec::new(),
             cleanup_errors: Vec::new(),
         }
+    }
+}
+
+impl ArchiveState {
+    pub(crate) fn busy(&self) -> bool {
+        self.startup != ArchiveStartup::Ready || self.opening.is_some()
+    }
+
+    pub(crate) fn finish_startup(&mut self) {
+        self.startup = ArchiveStartup::Ready;
     }
 }
 
@@ -148,7 +168,8 @@ fn initialize(mut commands: Commands) {
 
 fn render(node: Entity, entry: &NavigatorEntry) -> impl SceneList + use<> {
     let title = entry.title.clone();
-    let title_margin = if matches!(entry.target, Target::Session(_)) {
+    let session = matches!(entry.target, Target::Session(_));
+    let title_margin = if session {
         UiRect::left(px(-SESSION_TITLE_LEFT_SHIFT))
     } else {
         UiRect::ZERO
@@ -189,8 +210,8 @@ fn render(node: Entity, entry: &NavigatorEntry) -> impl SceneList + use<> {
         Node { width: percent(100), height: percent(100), min_width: px(0), align_items: AlignItems::Center, column_gap: px(6) }
         Children [
             {icon}--
-            Text(title) WidgetryText TextLayout::no_wrap()
-            Node { flex_grow: 1.0, min_width: px(0), overflow: Overflow::clip(), margin: title_margin }--
+            Node { flex_grow: 1.0, flex_basis: px(0), min_width: px(0), overflow: Overflow::clip(), margin: title_margin }
+            Children [ @crate::text_overflow::text(title, session) ]--
             {actions}
         ]
     }
@@ -293,6 +314,7 @@ fn update_folders(
 
 pub(crate) fn reveal_button(icon: SidebarIcon) -> impl Scene {
     let icon_size = 12;
+    let size = ROW_ACTION_SIZE as f32;
     bsn! {
         @AgentelierButton {
             @style: AgentelierButtonStyle::Icon,
@@ -301,7 +323,7 @@ pub(crate) fn reveal_button(icon: SidebarIcon) -> impl Scene {
                 Pickable::IGNORE
             },
         }
-        RevealOnHover Visibility::Hidden Node { min_height: px(28), height: px(28) }
+        RevealOnHover Visibility::Hidden Node { min_height: px(size), height: px(size) }
     }
 }
 
@@ -337,8 +359,7 @@ fn reveal_on_hover(
 }
 
 fn indicator(session: SessionId) -> impl Scene {
-    let icon_size = 16;
-    let size = icon_size as f32;
+    let size = ROW_ACTION_SIZE as f32;
     let error_color = WidgetryIconStateColorOverrides {
         foreground: Some(Color::srgb_u8(0xB9, 0x19, 0x2E)),
     };
@@ -348,10 +369,10 @@ fn indicator(session: SessionId) -> impl Scene {
         Visibility::Hidden Pickable::IGNORE
         Node { width: px(size), height: px(size), justify_content: JustifyContent::Center, align_items: AlignItems::Center, flex_shrink: 0.0 }
         Children [
-            @crate::spinner::ring(size) Name("SessionBusy") Node { display: Display::None }--
+            @crate::spinner::ring(SESSION_SPINNER_SIZE) Name("SessionBusy") Node { display: Display::None }--
             @WidgetryIcon {
                 @path: {SidebarIcon::SessionError.path()},
-                @max_size: {Some(UVec2::splat(icon_size))},
+                @max_size: {Some(UVec2::splat(ROW_ACTION_SIZE))},
                 @colors: {WidgetryIconColorOverrides { normal: error_color.clone(), disabled: error_color }},
             }
             Name("SessionError") Pickable::IGNORE Node { display: Display::None }
@@ -467,7 +488,7 @@ fn select(event: On<WidgetryTreeEvent>, entries: Query<&NavigatorEntry>, mut com
             return Ok(());
         }
         sync_selection(world)?;
-        if world.resource::<ArchiveState>().loading {
+        if world.resource::<ArchiveState>().busy() {
             return Ok(());
         }
         agentelier_agent_host::flush_scene_state(world);
@@ -477,7 +498,6 @@ fn select(event: On<WidgetryTreeEvent>, entries: Query<&NavigatorEntry>, mut com
         {
             Ok(id) => {
                 let mut archives = world.resource_mut::<ArchiveState>();
-                archives.loading = true;
                 archives.opening = Some((id, session));
                 archives.error = None;
                 tracing::info!(operation_id = id, session_id = %session, "开始打开本地会话");
@@ -519,8 +539,12 @@ pub(crate) fn catalog(world: &mut World, entries: Vec<ArchiveEntry>) -> Result {
             .then_with(|| left.id.as_bytes().cmp(right.id.as_bytes()))
     });
     let mut state = world.resource_mut::<ArchiveState>();
-    if choices.iter().all(|entry| entry.archived) {
-        state.loading = false;
+    if state.startup == ArchiveStartup::Scanning {
+        state.startup = if choices.iter().any(|entry| !entry.archived) {
+            ArchiveStartup::Restoring
+        } else {
+            ArchiveStartup::Ready
+        };
     }
     state.entries = choices;
     state.error = None;
@@ -655,10 +679,20 @@ pub(crate) fn reveal_selection(world: &mut World) -> Result {
                 .map_err(|failure| failure.into_bevy_error())?;
         }
     }
-    sync_selection(world)
+    project_selection(world, SelectionSync::Reveal)
 }
 
 pub(crate) fn sync_selection(world: &mut World) -> Result {
+    project_selection(world, SelectionSync::Highlight)
+}
+
+#[derive(Clone, Copy)]
+enum SelectionSync {
+    Highlight,
+    Reveal,
+}
+
+fn project_selection(world: &mut World, sync: SelectionSync) -> Result {
     let session = active_session_node(world);
     let parent = session.and_then(|node| world.get::<ChildOf>(node).map(ChildOf::parent));
     let navigator = world.resource::<Navigator>();
@@ -676,8 +710,20 @@ pub(crate) fn sync_selection(world: &mut World) -> Result {
         } else {
             draft
         };
-        WidgetryTreeView::select(world, view, target)
-            .map_err(|failure| failure.into_bevy_error())?;
+        match sync {
+            SelectionSync::Highlight => {
+                let selection = WidgetryTreeView::selection(world, view)
+                    .map_err(|failure| failure.into_bevy_error())?;
+                if selection.selected_id() != target {
+                    WidgetryTreeView::replace_selection(world, view, target)
+                        .map_err(|failure| failure.into_bevy_error())?;
+                }
+            }
+            SelectionSync::Reveal => {
+                WidgetryTreeView::select(world, view, target)
+                    .map_err(|failure| failure.into_bevy_error())?;
+            }
+        }
     }
     Ok(())
 }
@@ -689,15 +735,22 @@ fn update(
     mut commands: Commands,
 ) {
     for (entity, current) in &selectors {
-        if state.loading && !current {
+        if state.opening.is_some() && !current {
             commands.entity(entity).insert(InteractionDisabled);
-        } else if !state.loading && current {
+        } else if state.opening.is_none() && current {
             commands.entity(entity).remove::<InteractionDisabled>();
         }
     }
+    let progress = match state.startup {
+        ArchiveStartup::Scanning => Some("正在读取项目和会话…"),
+        ArchiveStartup::Restoring => Some("正在读取上次会话…"),
+        ArchiveStartup::Ready if state.opening.is_some() => Some("正在打开会话…"),
+        ArchiveStartup::Ready => None,
+    };
     let status = state
         .error
         .clone()
+        .or_else(|| progress.map(str::to_owned))
         .unwrap_or_else(|| state.cleanup_errors.join("\n"));
     let display = if status.is_empty() {
         Display::None

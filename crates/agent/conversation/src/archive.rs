@@ -374,6 +374,8 @@ pub struct StoredSettings {
     pub slug: String,
     pub display_name: String,
     pub effort: Option<String>,
+    #[serde(default)]
+    pub fast: bool,
     pub image_input: Option<bool>,
     pub instructions: InstructionSnapshot,
     pub working_directory: PathBuf,
@@ -456,6 +458,7 @@ impl InitialSession {
                 slug: view.settings.slug.clone(),
                 display_name: view.settings.display_name.clone(),
                 effort: view.settings.effort.clone(),
+                fast: view.settings.fast,
                 image_input: view.settings.image_input,
                 instructions: (*view.settings.instructions).clone(),
                 working_directory: view.settings.working_directory.clone(),

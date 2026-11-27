@@ -1,4 +1,3 @@
-use crate::conversation::ChatState;
 use agentelier_agent_host::{AgentHost, HostFailed, ModelEvent, ReceiveAgentEvents};
 use agentelier_llm_model_bridge::{ModelEventKind, ModelRequest, ModelResult};
 use agentelier_login_ui::AccountState;
@@ -16,11 +15,25 @@ pub struct ModelChoice {
     pub display_name: String,
     pub supported_reasoning_levels: Vec<String>,
     pub default_reasoning_level: Option<String>,
+    pub fast: bool,
+    pub websocket: bool,
     pub image_input: Option<bool>,
     pub context_window: Option<u64>,
     pub effective_window: Option<u64>,
     pub auto_compact_limit: Option<u64>,
     pub comp_hash: Option<String>,
+}
+
+impl ModelChoice {
+    pub fn compatible_effort(&self, current: Option<&str>) -> Option<&str> {
+        let levels = &self.supported_reasoning_levels;
+        levels
+            .iter()
+            .find(|effort| Some(effort.as_str()) == current)
+            .or(self.default_reasoning_level.as_ref())
+            .or(levels.first())
+            .map(String::as_str)
+    }
 }
 
 #[derive(Resource, Reflect, Clone, Default)]
@@ -58,7 +71,9 @@ pub fn install(
     app.insert_resource(crate::conversation::SessionDefaultsSource(Box::new(
         model_defaults,
     )));
+    crate::text_overflow::install(app);
     crate::conversation::install(app);
+    crate::composer_footer::install(app)?;
     crate::spinner::install(app);
     crate::global_tasks::install(app);
     crate::background_tasks::install(app);
@@ -78,14 +93,14 @@ pub fn install(
 fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
     let host = event.entity;
     commands.queue(move |world: &mut World| {
-        let chat = world.resource::<ChatState>();
+        let sources = crate::composer_footer::sources(&mut world.commands(), host);
         let content = bsn_list! {
             Name("ModelPreparation")
             Node { width: percent(100), height: percent(100), min_height: px(0), flex_direction: FlexDirection::Column, row_gap: px(PANEL_GAP) }
             Children [
                 crate::prompts::NormalContent
                 Node { width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column }
-                Children [ @crate::conversation::panel(chat) ]--
+                Children [ @crate::conversation::panel(sources) ]--
                 crate::prompts::PromptWorkspace Name("PromptWorkspace")
                 Node { display: Display::None, width: percent(100), flex_grow: 1.0, min_height: px(0), flex_direction: FlexDirection::Column }
             ]
@@ -100,7 +115,7 @@ fn mount(event: On<Add<ChatUiHost>>, mut commands: Commands) {
 fn auto_catalog(world: &mut World) -> Result {
     let state = world.resource::<ModelState>();
     let account = world.resource::<AccountState>();
-    if world.resource::<crate::ArchiveState>().loading
+    if world.resource::<crate::ArchiveState>().busy()
         || state.catalog_loaded
         || state.catalog_error.is_some()
         || !state.can_request(account)
@@ -157,6 +172,8 @@ pub(crate) fn receive(world: &mut World, mut failures: Local<MessageCursor<HostF
                         display_name: model.display_name,
                         supported_reasoning_levels: model.supported_reasoning_levels,
                         default_reasoning_level: model.default_reasoning_level,
+                        fast: model.fast,
+                        websocket: model.websocket,
                         image_input: model.image_input,
                         context_window: model.context_limits.window,
                         effective_window: model.context_limits.effective,

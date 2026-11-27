@@ -5,6 +5,7 @@ mod avatar;
 mod avatar_cropper;
 mod button;
 mod scroll;
+mod switch;
 mod theme;
 mod window;
 
@@ -16,6 +17,7 @@ pub use avatar_cropper::{AvatarCropperState, avatar_cropper};
 pub use bevy_widgetry::button::WidgetryButtonLoading as AgentelierButtonLoading;
 pub use button::{AgentelierButton, AgentelierButtonProps, AgentelierButtonStyle};
 pub use scroll::forward_vertical_scroll;
+pub use switch::agentelier_switch;
 pub use theme::AGENTELIER_THEME;
 pub use window::{
     FILE_DIALOG_WINDOW_CONTROLS, MANAGEMENT_WINDOW_CONTROLS, install_owned_window_close,
@@ -33,6 +35,7 @@ impl Plugin for AgentelierControlsPlugin {
             app.add_plugins(WidgetryButtonPlugin);
         }
         button::install(app);
+        switch::install(app);
         avatar::install(app);
     }
 }

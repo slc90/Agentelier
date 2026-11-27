@@ -62,7 +62,9 @@ pub use memory_evidence::{MemorySourceTurn, memory_evidence};
 pub use native_scene::{PublishedScene, SceneState, SceneStateReceipt};
 pub use processes::ProcessLedger;
 pub use restore::{RestoredChild, RestoredSession, restore, restore_child};
-pub use session_model::{PreparedModelChange, StoredSessionModel};
+pub use session_model::{
+    PreparedModelChange, SessionModelOptions, SessionModelSelection, StoredSessionModel,
+};
 pub use task_actions::{SessionProcesses, TaskAction, TaskActionOutcome, TaskActionReceipt};
 pub use task_policy::{TaskPolicy, TaskPolicyChange};
 pub use tasks::{
