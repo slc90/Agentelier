@@ -194,6 +194,7 @@ pub(crate) fn rebuild(world: &mut World, focus: Option<Anchor>) -> Result {
     let state = world.resource::<ChatState>();
     let items = state.composer.elements.clone();
     let draft = state.composer.owner;
+    let legacy_audio = state.composer.legacy_audio;
     let session = state.session.as_ref().map(|session| session.id);
     world.entity_mut(parent).despawn_children();
     let compact = items.len() > 1;
@@ -211,7 +212,14 @@ pub(crate) fn rebuild(world: &mut World, focus: Option<Anchor>) -> Result {
                 };
                 spawn_scene(world, scene).map_err(|failure| failure.into_bevy_error())?;
             }
-            content => mount_atom(world, parent, session, draft, id, content)?,
+            content => mount_atom(
+                world,
+                parent,
+                session.filter(|_| legacy_audio == Some(id)),
+                draft,
+                id,
+                content,
+            )?,
         }
     }
     if let Some(anchor) = focus {
@@ -236,12 +244,15 @@ fn mount_atom(
         ComposerContent::Audio { audio } => format!("音频 · {}", audio.name),
         ComposerContent::Text { .. } => return Err(io::Error::other("文字段无须内容项显示").into()),
     };
-    let controls = if let ComposerContent::Audio { audio } = &content
-        && let Some(session) = session
-    {
+    let controls = if let ComposerContent::Audio { audio } = &content {
         let view = agentelier_conversation_bridge::AudioAttachmentView::from(audio.clone());
+        let owner = session.map_or(
+            agentelier_agent_host::ComposerAssetOwner::Draft(draft),
+            agentelier_agent_host::ComposerAssetOwner::Session,
+        );
+        let audio = crate::audio_attachment::ChatAudio::from(view);
         Some(
-            Box::new(bsn_list! { @crate::audio_playback::controls(session, &view.into()) })
+            Box::new(bsn_list! { @crate::audio_playback::controls_for(owner, &audio) })
                 as Box<dyn SceneList>,
         )
     } else {

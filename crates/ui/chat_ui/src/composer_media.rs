@@ -28,11 +28,39 @@ pub(crate) struct Placement {
     pub anchor: Anchor,
 }
 
-#[derive(Component, Clone)]
-struct Picker(Placement);
+#[derive(Clone, Copy)]
+enum Kind {
+    Image,
+    Audio,
+}
 
-#[derive(Component, Clone, Default)]
-struct AddImage;
+impl Kind {
+    fn filter(self) -> WidgetryFileDialogFilter {
+        let (id, label, suffixes) = match self {
+            Self::Image => (
+                "input-images",
+                "图片 (PNG, JPEG)",
+                &["png", "jpg", "jpeg"][..],
+            ),
+            Self::Audio => ("input-audio", "音频 (WAV, MP3)", &["wav", "mp3"][..]),
+        };
+        WidgetryFileDialogFilter {
+            id: WidgetryFileDialogFilterId(id.into()),
+            label: label.into(),
+            suffixes: suffixes.iter().map(|suffix| (*suffix).into()).collect(),
+            default_extension: None,
+        }
+    }
+}
+
+#[derive(Component, Clone)]
+struct Picker {
+    placement: Placement,
+    kind: Kind,
+}
+
+#[derive(Component, Clone, Copy)]
+struct AddMedia(Kind);
 
 #[derive(Component, Clone)]
 struct Preview {
@@ -58,14 +86,21 @@ pub(crate) fn install(app: &mut App) {
         );
 }
 
-pub(crate) fn add_button() -> impl Scene {
+pub(crate) fn image_button() -> impl Scene {
     bsn! {
         @AgentelierButton { @children: bsn_list! { Text("添加图片") WidgetryText } }
-        AddImage Name("AddComposerImage") Node { display: Display::None } on(open_picker)
+        template(|_| Ok(AddMedia(Kind::Image))) Name("AddComposerImage") Node { display: Display::None } on(open_picker)
     }
 }
 
-fn button_visibility(chat: Res<ChatState>, mut buttons: Query<&mut Node, With<AddImage>>) {
+pub(crate) fn audio_button() -> impl Scene {
+    bsn! {
+        @AgentelierButton { @children: bsn_list! { Text("添加音频") WidgetryText } }
+        template(|_| Ok(AddMedia(Kind::Audio))) Name("AddComposerAudio") Node { display: Display::None } on(open_picker)
+    }
+}
+
+fn button_visibility(chat: Res<ChatState>, mut buttons: Query<&mut Node, With<AddMedia>>) {
     let visible = chat.session.is_some() || chat.draft_target().is_some();
     for node in &mut buttons {
         node.map_unchanged(|node| &mut node.display)
@@ -77,27 +112,34 @@ fn button_visibility(chat: Res<ChatState>, mut buttons: Query<&mut Node, With<Ad
     }
 }
 
-fn open_picker(_: On<Activate>, chat: Res<ChatState>, mut commands: Commands) {
+fn open_picker(
+    event: On<Activate>,
+    buttons: Query<&AddMedia>,
+    chat: Res<ChatState>,
+    mut commands: Commands,
+) {
+    let Ok(&AddMedia(kind)) = buttons.get(event.entity) else {
+        return;
+    };
+    let (title, name) = match kind {
+        Kind::Image => ("选择图片", "ComposerImagePicker"),
+        Kind::Audio => ("选择音频文件", "ComposerAudioPicker"),
+    };
     let Some(placement) = chat.composer.placement(chat.draft_revision) else {
         return;
     };
     let window = WidgetryFileDialogWindow {
         native: Window {
-            title: "选择图片".into(),
+            title: title.into(),
             resolution: (840, 580).into(),
             ..default()
         },
         ..default()
     };
-    let filters = vec![WidgetryFileDialogFilter {
-        id: WidgetryFileDialogFilterId("input-images".into()),
-        label: "图片 (PNG, JPEG)".into(),
-        suffixes: vec!["png".into(), "jpg".into(), "jpeg".into()],
-        default_extension: None,
-    }];
+    let filters = vec![kind.filter()];
     commands.spawn_scene_with_error_handler(bsn! {
         @WidgetryFileDialog { @mode: WidgetryFileDialogMode::PickFiles, @window: {Some(window)}, @filters: filters }
-        Name("ComposerImagePicker") template(move |_| Ok(Picker(placement.clone()))) on(picked)
+        Name(name) template(move |_| Ok(Picker { placement: placement.clone(), kind })) on(picked)
     });
 }
 
@@ -105,18 +147,23 @@ fn picked(event: On<WidgetryFileDialogResultEvent>, query: Query<&Picker>, mut c
     let Ok(picker) = query.get(event.entity) else {
         return;
     };
-    let placement = picker.0.clone();
+    let placement = picker.placement.clone();
+    let kind = picker.kind;
     let paths = match &event.result {
         WidgetryFileDialogResult::Files(paths) => paths.to_vec(),
         WidgetryFileDialogResult::File(path) => vec![path.clone()],
         _ => return,
     };
     commands.queue(move |world: &mut World| {
-        stage(
-            world,
-            placement,
-            paths.into_iter().map(ComposerImageSource::Local).collect(),
-        )
+        let draft = placement.owner;
+        let request = match kind {
+            Kind::Image => ComposerAssetRequest::StageImages {
+                draft,
+                sources: paths.into_iter().map(ComposerImageSource::Local).collect(),
+            },
+            Kind::Audio => ComposerAssetRequest::StageAudio { draft, paths },
+        };
+        stage(world, placement, request)
     });
 }
 
@@ -140,19 +187,15 @@ pub(crate) fn select_file(
         revision: chat.draft_revision,
         anchor,
     };
-    stage(
-        world,
-        placement,
-        vec![ComposerImageSource::Project { reference, scope }],
-    )?;
+    let request = ComposerAssetRequest::StageImages {
+        draft: placement.owner,
+        sources: vec![ComposerImageSource::Project { reference, scope }],
+    };
+    stage(world, placement, request)?;
     Ok(true)
 }
 
-fn stage(world: &mut World, placement: Placement, sources: Vec<ComposerImageSource>) -> Result {
-    let request = ComposerAssetRequest::StageImages {
-        draft: placement.owner,
-        sources,
-    };
+fn stage(world: &mut World, placement: Placement, request: ComposerAssetRequest) -> Result {
     match world.resource::<AgentHost>().composer_asset(request) {
         Ok(reply) => {
             let task = AsyncComputeTaskPool::get().spawn(reply);

@@ -203,26 +203,6 @@ impl AudioAttachment {
 }
 
 impl Conversation {
-    pub fn saved_audio(&self, session: SessionId, audio: AudioId) -> Option<AudioAttachment> {
-        let view = &self
-            .session
-            .as_ref()
-            .filter(|chat| chat.view.id == session)?
-            .view;
-        view.audio_attachment(audio)
-            .or_else(|| {
-                view.turn
-                    .iter()
-                    .map(Box::as_ref)
-                    .chain(&view.previous_turns)
-                    .flat_map(|turn| &turn.tools)
-                    .filter(|tool| tool.retained)
-                    .filter_map(|tool| tool.published_audio.as_ref())
-                    .find(|item| item.id == audio)
-            })
-            .cloned()
-    }
-
     pub fn prepare_transcription(
         &self,
         session: SessionId,

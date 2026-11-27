@@ -1553,6 +1553,9 @@ pub(crate) fn apply_draft_assets(
 ) -> Result {
     composer::read_fields(world)?;
     let apply = |state: &mut ChatState| -> Result<Option<composer::Anchor>> {
+        let advice = assets
+            .iter()
+            .any(|asset| matches!(asset, ComposerContent::Audio { .. }));
         let mut errors = errors;
         let mut focus = None;
         if !assets.is_empty() {
@@ -1564,7 +1567,7 @@ pub(crate) fn apply_draft_assets(
             }
         }
         state.input_feedback = if errors.is_empty() {
-            None
+            advice.then(|| "音频随消息保存，发送后可转写并引用文稿。".into())
         } else {
             Some(errors.join("\n"))
         };

@@ -1,17 +1,20 @@
 use crate::conversation::ChatState;
-use agentelier_agent_host::{AgentHost, HostFailed, SavedAudioEvent};
+use agentelier_agent_host::{
+    AgentHost, ComposerAssetOwner, ComposerAssetReply, ComposerAssetRequest, HostFailed,
+};
 use agentelier_controls::AgentelierButton;
-use agentelier_conversation_bridge::SessionId;
+use agentelier_conversation_bridge::{AudioAttachment, SessionId};
 use bevy::audio::{AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackSettings};
 use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures::check_ready};
 use bevy::text::LineBreak;
 use bevy::ui::{InteractionDisabled, UiSystems};
 use bevy::ui_widgets::Activate;
 use bevy::window::RequestRedraw;
 use bevy_widgetry::text::WidgetryText;
-use std::io::Cursor;
 use std::time::{Duration, Instant};
+use std::{io::Cursor, sync::Arc};
 
 mod waveform;
 
@@ -20,10 +23,35 @@ const SINK_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Component, Clone)]
 struct AudioClip {
-    session: SessionId,
-    id: SessionId,
-    duration_ms: u64,
-    digest: String,
+    owner: ComposerAssetOwner,
+    attachment: AudioAttachment,
+}
+
+type AudioRead = Task<Result<Arc<[u8]>, String>>;
+
+impl AudioClip {
+    fn belongs(&self, chat: &ChatState) -> bool {
+        match self.owner {
+            ComposerAssetOwner::Draft(owner) => chat.composer.owner() == owner,
+            ComposerAssetOwner::Session(owner) => {
+                chat.session.as_ref().is_some_and(|chat| chat.id == owner)
+            }
+        }
+    }
+
+    fn read(&self, host: &AgentHost) -> Result<AudioRead> {
+        let reply = host.composer_asset(ComposerAssetRequest::Audio {
+            owner: self.owner,
+            audio: self.attachment.clone(),
+        })?;
+        Ok(AsyncComputeTaskPool::get().spawn(async move {
+            match reply.await {
+                Ok(ComposerAssetReply::Audio(bytes)) => Ok(bytes),
+                Ok(_) => Err("收到不匹配的音频附件回执".into()),
+                Err(failure) => Err(failure.to_string()),
+            }
+        }))
+    }
 }
 
 #[derive(Component, Clone, Default, PartialEq, Reflect)]
@@ -64,7 +92,7 @@ struct Active {
 }
 
 enum Source {
-    Reading { operation: u64, expires: Instant },
+    Reading { task: AudioRead, expires: Instant },
     Starting { player: Entity, expires: Instant },
     Live(Output),
     Ended,
@@ -90,13 +118,18 @@ pub(super) fn controls(
     session: SessionId,
     audio: &super::audio_attachment::ChatAudio,
 ) -> impl Scene + use<> {
+    controls_for(ComposerAssetOwner::Session(session), audio)
+}
+
+pub(super) fn controls_for(
+    owner: ComposerAssetOwner,
+    audio: &super::audio_attachment::ChatAudio,
+) -> impl Scene + use<> {
     let clip = AudioClip {
-        session,
-        id: audio.id,
-        duration_ms: audio.duration_ms,
-        digest: audio.digest.clone(),
+        owner,
+        attachment: audio.attachment(),
     };
-    let duration = time_label(clip.duration_ms);
+    let duration = time_label(clip.attachment.duration_ms);
     bsn! {
         Name("ChatAudioPlayback") template(move |_| Ok(clip.clone())) AudioPlaybackStatus
         Node { width: percent(100), min_width: px(0), align_items: AlignItems::Center, column_gap: px(8), row_gap: px(4), flex_wrap: FlexWrap::Wrap }
@@ -124,7 +157,6 @@ fn activate(
 
 fn drive(
     world: &mut World,
-    mut receipts: Local<MessageCursor<SavedAudioEvent>>,
     mut failures: Local<MessageCursor<HostFailed>>,
     mut exits: Local<MessageCursor<AppExit>>,
 ) {
@@ -133,20 +165,14 @@ fn drive(
         .last()
         .map(|event| event.reason.clone());
     let exiting = exits.read(world.resource::<Messages<AppExit>>()).count() > 0;
-    let session = world
-        .resource::<ChatState>()
-        .session
-        .as_ref()
-        .map(|view| view.id);
     let now = Instant::now();
     world.resource_scope(|world, mut playback: Mut<Playback>| {
         let mut active = playback.active.take();
         let requested = playback.requested.take();
-        if let Some(old) = active.take_if(|active| exiting || !belongs(world, active.card, session))
-        {
+        if let Some(old) = active.take_if(|active| exiting || !belongs(world, active.card)) {
             reset(world, old);
         }
-        if let Some(card) = requested.filter(|&card| !exiting && belongs(world, card, session)) {
+        if let Some(card) = requested.filter(|&card| !exiting && belongs(world, card)) {
             let restart = match active.as_mut().filter(|active| active.card == card) {
                 None
                 | Some(Active {
@@ -178,16 +204,12 @@ fn drive(
             }
         }
 
-        let received = receipts.read(world.resource::<Messages<SavedAudioEvent>>());
         if let Some(Active {
             card,
-            source: Source::Reading { operation, expires },
+            source: Source::Reading { task, expires },
         }) = active.as_mut()
         {
-            let result = received
-                .filter(|reply| reply.operation_id == *operation)
-                .last()
-                .map(|reply| reply.result.clone())
+            let result = check_ready(task)
                 .or_else(|| host_failure.map(Err))
                 .or_else(|| (now >= *expires).then(|| Err("读取音频超时".into())));
             if let Some(result) = result {
@@ -208,32 +230,27 @@ fn drive(
                     }
                 }
             }
-        } else {
-            received.count();
         }
 
         playback.active = active.and_then(|active| tick(world, active, now));
     });
 }
 
-fn belongs(world: &World, card: Entity, session: Option<SessionId>) -> bool {
+fn belongs(world: &World, card: Entity) -> bool {
     world
         .get::<AudioClip>(card)
-        .is_some_and(|clip| Some(clip.session) == session)
+        .is_some_and(|clip| clip.belongs(world.resource::<ChatState>()))
 }
 
 fn request(world: &mut World, card: Entity, now: Instant) -> Option<Active> {
     let clip = world.get::<AudioClip>(card)?;
-    match world
-        .resource::<AgentHost>()
-        .request_saved_audio(clip.session, clip.id)
-    {
-        Ok(operation) => {
+    match clip.read(world.resource::<AgentHost>()) {
+        Ok(task) => {
             set_status(world, card, PlaybackPhase::Loading, 0);
             Some(Active {
                 card,
                 source: Source::Reading {
-                    operation,
+                    task,
                     expires: now + READ_TIMEOUT,
                 },
             })
@@ -300,7 +317,7 @@ fn tick(world: &mut World, mut active: Active, now: Instant) -> Option<Active> {
                 );
                 return None;
             };
-            let duration = world.get::<AudioClip>(card)?.duration_ms;
+            let duration = world.get::<AudioClip>(card)?.attachment.duration_ms;
             if sink.empty() {
                 release_player(world, player);
                 set_status(world, card, PlaybackPhase::Ended, duration);

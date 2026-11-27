@@ -1,6 +1,6 @@
 use super::{AudioClip, AudioPlaybackStatus, READ_TIMEOUT};
 use crate::conversation::ChatState;
-use agentelier_agent_host::{AgentHost, SavedAudioEvent};
+use agentelier_agent_host::AgentHost;
 use agentelier_session_store::{AudioExtrema, summarize_audio};
 use bevy::asset::RenderAssetUsages;
 use bevy::color::Alpha;
@@ -56,7 +56,10 @@ struct Pending {
 }
 
 enum Job {
-    Reading { operation: u64, expires: Instant },
+    Reading {
+        task: super::AudioRead,
+        expires: Instant,
+    },
     Building(Task<std::io::Result<Vec<Image>>>),
 }
 
@@ -85,7 +88,6 @@ pub(super) fn view() -> impl Scene {
 
 fn load(
     mut waveforms: ResMut<Waveforms>,
-    mut receipts: MessageReader<SavedAudioEvent>,
     mut images: ResMut<Assets<Image>>,
     mut redraw: MessageWriter<RequestRedraw>,
     host: Res<AgentHost>,
@@ -103,7 +105,7 @@ fn load(
     )>,
 ) {
     if let Some(mut pending) = waveforms.pending.take() {
-        let result = poll(&mut pending, &mut receipts);
+        let result = poll(&mut pending);
         match result {
             Some(Ok(masks)) => {
                 let masks = masks
@@ -116,21 +118,20 @@ fn load(
                 if waveforms.cache.len() == CACHE_CAPACITY {
                     waveforms.cache.pop_front();
                 }
-                waveforms.cache.push_back((pending.clip.digest, masks));
+                waveforms
+                    .cache
+                    .push_back((pending.clip.attachment.digest, masks));
             }
             Some(Err(error)) => {
-                tracing::error!(audio = %pending.clip.id, %error, "生成音频波形失败");
+                tracing::error!(audio = %pending.clip.attachment.id, %error, "生成音频波形失败");
                 if let Ok((_, _, mut state, ..)) = views.get_mut(pending.view) {
                     *state = WaveformView::Unavailable;
                 }
             }
             None => waveforms.pending = Some(pending),
         }
-    } else {
-        receipts.clear();
     }
 
-    let session = chat.session.as_ref().map(|session| session.id);
     for (entity, parent, mut state, node, transform, target, clip, visible) in &mut views {
         if !matches!(*state, WaveformView::Waiting)
             || !visible.get()
@@ -141,31 +142,31 @@ fn load(
         let Ok(clip) = clips.get(parent.parent()) else {
             continue;
         };
-        if Some(clip.session) != session {
+        if !clip.belongs(&chat) {
             continue;
         }
         if let Some(index) = waveforms
             .cache
             .iter()
-            .position(|(hash, _)| *hash == clip.digest)
+            .position(|(hash, _)| *hash == clip.attachment.digest)
             && let Some(entry) = waveforms.cache.remove(index)
         {
             *state = WaveformView::Ready(entry.1.clone());
             waveforms.cache.push_back(entry);
         } else if waveforms.pending.is_none() {
-            match host.request_saved_audio(clip.session, clip.id) {
-                Ok(operation) => {
+            match clip.read(&host) {
+                Ok(task) => {
                     waveforms.pending = Some(Pending {
                         view: entity,
                         clip: clip.clone(),
                         job: Job::Reading {
-                            operation,
+                            task,
                             expires: Instant::now() + READ_TIMEOUT,
                         },
                     });
                 }
                 Err(error) => {
-                    tracing::error!(audio = %clip.id, %error, "请求音频波形失败");
+                    tracing::error!(audio = %clip.attachment.id, %error, "请求音频波形失败");
                     *state = WaveformView::Unavailable;
                 }
             }
@@ -176,37 +177,26 @@ fn load(
     }
 }
 
-fn poll(
-    pending: &mut Pending,
-    receipts: &mut MessageReader<SavedAudioEvent>,
-) -> Option<Result<Vec<Image>, String>> {
+fn poll(pending: &mut Pending) -> Option<Result<Vec<Image>, String>> {
     match &mut pending.job {
-        Job::Reading { operation, expires } => {
-            let receipt = receipts
-                .read()
-                .filter(|reply| reply.operation_id == *operation)
-                .last();
-            match receipt.map(|reply| &reply.result) {
-                Some(Ok(bytes)) => {
-                    let bytes = bytes.clone();
-                    let duration_ms = pending.clip.duration_ms;
-                    pending.job = Job::Building(AsyncComputeTaskPool::get().spawn(async move {
-                        summarize_audio(bytes, duration_ms).map(|peaks| {
-                            DISPLAY_COLUMNS
-                                .into_iter()
-                                .map(|columns| mask(&peaks, columns))
-                                .collect()
-                        })
-                    }));
-                    None
-                }
-                Some(Err(error)) => Some(Err(error.clone())),
-                None if Instant::now() >= *expires => Some(Err("读取音频超时".into())),
-                None => None,
+        Job::Reading { task, expires } => match check_ready(task) {
+            Some(Ok(bytes)) => {
+                let duration_ms = pending.clip.attachment.duration_ms;
+                pending.job = Job::Building(AsyncComputeTaskPool::get().spawn(async move {
+                    summarize_audio(bytes, duration_ms).map(|peaks| {
+                        DISPLAY_COLUMNS
+                            .into_iter()
+                            .map(|columns| mask(&peaks, columns))
+                            .collect()
+                    })
+                }));
+                None
             }
-        }
+            Some(Err(error)) => Some(Err(error)),
+            None if Instant::now() >= *expires => Some(Err("读取音频超时".into())),
+            None => None,
+        },
         Job::Building(task) => {
-            receipts.clear();
             check_ready(task).map(|result| result.map_err(|error| error.to_string()))
         }
     }
@@ -305,7 +295,7 @@ fn present(
                 .or_else(|| masks.first()),
             _ => None,
         };
-        let progress = playback.position_ms as f32 / clip.duration_ms.max(1) as f32;
+        let progress = playback.position_ms as f32 / clip.attachment.duration_ms.max(1) as f32;
         let accent = theme.slider.normal.fill;
         for child in children.iter() {
             if let Ok((mut text, node)) = hints.get_mut(child) {

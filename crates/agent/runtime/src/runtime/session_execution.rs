@@ -223,7 +223,6 @@ pub(super) fn target(command: &Command) -> Option<SessionId> {
     match command {
         Command::SaveSceneState(_, target, _) => Some(target.session),
         Command::AudioDraft(_, session, _)
-        | Command::SavedAudio(_, session, _)
         | Command::TranscribeAudio(_, session, _)
         | Command::CancelTranscription(_, session)
         | Command::AudioFinished(

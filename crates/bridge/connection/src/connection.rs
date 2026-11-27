@@ -48,7 +48,6 @@ pub enum BridgeEventKind {
     MemoryProgress(Box<agentelier_conversation_bridge::SessionView>),
     MemoryWork(crate::MemoryWorkState),
     ImageAttachment(Result<crate::ImageAttachmentReply, String>),
-    SavedAudio(Result<std::sync::Arc<[u8]>, String>),
     McpMaterial(Result<crate::MaterialReply, String>),
 }
 #[derive(Clone, Debug)]
@@ -111,7 +110,6 @@ pub struct Connection {
     pending_session_models: HashMap<u64, SessionId>,
     pending_scene_states: HashMap<u64, (crate::ecs_access::SceneTarget, u64)>,
     pending_images: HashSet<u64>,
-    pending_saved_audio: HashSet<u64>,
     pending_audio: HashMap<u64, SessionId>,
 }
 impl Connection {
@@ -167,7 +165,6 @@ impl Connection {
                         AgentEventKind::MemoryProgress(view) => BridgeEventKind::MemoryProgress(Box::new(agentelier_conversation_bridge::session_view(*view))),
                         AgentEventKind::MemoryWork(status) => BridgeEventKind::MemoryWork(status),
                         AgentEventKind::ImageAttachment(reply) => BridgeEventKind::ImageAttachment(reply),
-                        AgentEventKind::SavedAudio(reply) => BridgeEventKind::SavedAudio(reply),
                         AgentEventKind::McpMaterial(reply) => BridgeEventKind::McpMaterial(reply),
                         AgentEventKind::McpStatus(status) => BridgeEventKind::McpStatus(status),
                         AgentEventKind::McpConfig(result) => {
@@ -241,7 +238,6 @@ impl Connection {
             pending_session_models: HashMap::new(),
             pending_scene_states: HashMap::new(),
             pending_images: HashSet::new(),
-            pending_saved_audio: HashSet::new(),
             pending_audio: HashMap::new(),
         })
     }
@@ -257,25 +253,6 @@ impl Connection {
             .request_memory(id, request)
             .map_err(|failure| BridgeFailure(failure.to_string()))?;
         self.pending_memory.insert(id);
-        Ok(id)
-    }
-
-    pub fn request_saved_audio(
-        &mut self,
-        session: SessionId,
-        audio: SessionId,
-    ) -> Result<u64, BridgeFailure> {
-        if self.stopping || self.failure.is_some() {
-            return Err(BridgeFailure("执行连接已经关闭".into()));
-        }
-        let id = self
-            .operations
-            .allocate()
-            .map_err(|failure| BridgeFailure(failure.to_string()))?;
-        self.runtime
-            .request_saved_audio(id, session, audio)
-            .map_err(|failure| BridgeFailure(failure.to_string()))?;
-        self.pending_saved_audio.insert(id);
         Ok(id)
     }
 
@@ -866,12 +843,6 @@ impl Connection {
                     }
                     return Ok(Some(event));
                 }
-                if matches!(event.kind, BridgeEventKind::SavedAudio(_)) {
-                    if !self.pending_saved_audio.remove(&event.operation_id) {
-                        return self.protocol_failure();
-                    }
-                    return Ok(Some(event));
-                }
                 if matches!(event.kind, BridgeEventKind::McpStatus(_)) {
                     return Ok(Some(event));
                 }
@@ -896,7 +867,6 @@ impl Connection {
                     | BridgeEventKind::MemoryProgress(_)
                     | BridgeEventKind::MemoryWork(_)
                     | BridgeEventKind::ImageAttachment(_)
-                    | BridgeEventKind::SavedAudio(_)
                     | BridgeEventKind::Skills(_)
                     | BridgeEventKind::McpConfig(_)
                     | BridgeEventKind::McpMaterial(_) => {

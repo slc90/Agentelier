@@ -80,7 +80,6 @@ pub enum AgentEventKind {
     MemoryProgress(Box<agentelier_conversation::SessionView>),
     MemoryWork(MemoryWorkState),
     ImageAttachment(Result<ImageAttachmentReply, String>),
-    SavedAudio(Result<Arc<[u8]>, String>),
 }
 #[derive(Debug)]
 pub enum RuntimeFailure {
@@ -140,10 +139,7 @@ enum SourceSettlement {
     Logout(u64),
 }
 
-enum AttachmentReply {
-    Image(io::Result<ImageAttachmentReply>),
-    Audio(io::Result<Arc<[u8]>>),
-}
+type AttachmentReply = io::Result<ImageAttachmentReply>;
 
 enum Command {
     RunWidget(agentelier_tools::widget::Job, Box<dyn FnOnce() + Send>),
@@ -158,7 +154,6 @@ enum Command {
     MemoryDialogue(memory_dialogue::Signal),
     MemoryWork(MemoryWorkState),
     ImageAttachment(u64, SessionId, String, ImageAttachmentAction),
-    SavedAudio(u64, SessionId, AudioId),
     AttachmentFinished(u64, AttachmentReply),
     ComposerAsset(
         ComposerAssetRequest,
@@ -763,39 +758,17 @@ impl AgentRuntime {
                                             let root = data_root.clone();
                                             attachments.spawn(async move {
                                                 let result = image_attachment::execute(client, root, session, image, action).await;
-                                                (id, AttachmentReply::Image(result))
+                                                (id, result)
                                             });
                                         } else {
                                             emit(&publish, id, AgentEventKind::ImageAttachment(Err("当前会话没有这张已确认的图片".into())))?;
                                         }
                                     }
-                                    Command::SavedAudio(id, session, audio) => {
-                                        if let Some(audio) = conversation.saved_audio(session, audio).filter(|_| !deleting_target) {
-                                            let client = store.client();
-                                            attachments.spawn(async move {
-                                                let result = client.read_audio(session, audio).await.map(Arc::from);
-                                                (id, AttachmentReply::Audio(result))
-                                            });
-                                        } else {
-                                            emit(&publish, id, AgentEventKind::SavedAudio(Err("当前会话没有此音频附件".into())))?;
+                                    Command::AttachmentFinished(id, result) => {
+                                        if let Err(failure) = &result {
+                                            error!(operation_id = id, error = %failure, "处理生成图片附件失败");
                                         }
-                                    }
-                                    Command::AttachmentFinished(id, reply) => {
-                                        let kind = match reply {
-                                            AttachmentReply::Image(result) => {
-                                                if let Err(failure) = &result {
-                                                    error!(operation_id = id, error = %failure, "处理生成图片附件失败");
-                                                }
-                                                AgentEventKind::ImageAttachment(result.map_err(|failure| failure.to_string()))
-                                            }
-                                            AttachmentReply::Audio(result) => {
-                                                if let Err(failure) = &result {
-                                                    error!(operation_id = id, error = %failure, "读取已保存音频失败");
-                                                }
-                                                AgentEventKind::SavedAudio(result.map_err(|failure| failure.to_string()))
-                                            }
-                                        };
-                                        emit(&publish, id, kind)?;
+                                        emit(&publish, id, AgentEventKind::ImageAttachment(result.map_err(|failure| failure.to_string())))?;
                                     }
                                     Command::Memory(id, MemoryRequest::OpenChat { slug, effort }) => {
                                         let result = async {
@@ -1653,7 +1626,7 @@ impl AgentRuntime {
                         }
                         while let Some(result) = attachments.join_next().await {
                             match result {
-                                Ok((id, AttachmentReply::Image(Err(failure)) | AttachmentReply::Audio(Err(failure)))) => error!(operation_id = id, error = %failure, "关闭期间处理媒体附件失败"),
+                                Ok((id, Err(failure))) => error!(operation_id = id, error = %failure, "关闭期间处理媒体附件失败"),
                                 Err(failure) => error!(error = %failure, "关闭期间媒体附件任务异常结束"),
                                 Ok(_) => {}
                             }
@@ -1826,15 +1799,6 @@ impl AgentRuntime {
         path: Option<PathBuf>,
     ) -> Result<(), RuntimeFailure> {
         self.submit(Command::AudioDraft(id, session, path))
-    }
-
-    pub fn request_saved_audio(
-        &self,
-        id: u64,
-        session: SessionId,
-        audio: AudioId,
-    ) -> Result<(), RuntimeFailure> {
-        self.submit(Command::SavedAudio(id, session, audio))
     }
 
     pub fn transcribe_audio(

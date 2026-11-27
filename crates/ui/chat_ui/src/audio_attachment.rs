@@ -1,15 +1,8 @@
 use crate::conversation::ChatState;
 use agentelier_agent_host::AgentHost;
-use agentelier_controls::AgentelierButton;
 use agentelier_conversation_bridge::{AudioAttachmentView, SessionId};
 use bevy::prelude::*;
 use bevy::text::LineBreak;
-use bevy::ui_widgets::Activate;
-use bevy_widgetry::file_dialog::{
-    WidgetryFileDialog, WidgetryFileDialogMode, WidgetryFileDialogResult,
-    WidgetryFileDialogResultEvent, WidgetryFileDialogWindow,
-};
-use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
 use std::path::PathBuf;
 
@@ -93,13 +86,7 @@ impl AudioDraftState {
 }
 
 #[derive(Component, Clone, Default)]
-struct AddAudio;
-
-#[derive(Component, Clone, Default)]
 struct AudioDraftText;
-
-#[derive(Component, Clone, Copy)]
-struct AudioPicker(SessionId);
 
 pub(crate) fn install(app: &mut App) {
     super::audio_playback::install(app);
@@ -111,63 +98,10 @@ pub(crate) fn draft_panel() -> impl Scene {
     bsn! {
         Node { width: percent(100), min_width: px(0), column_gap: px(8), flex_shrink: 0.0, align_items: AlignItems::Center }
         Children [
-            @crate::composer_media::add_button()--
-            @AgentelierButton { @children: bsn_list! {Text("添加音频") WidgetryText} }
-            AddAudio Name("AddComposerAudio") Node { display: Display::None } on(pick_audio)--
+            @crate::composer_media::image_button()--
+            @crate::composer_media::audio_button()--
             Text::default() WidgetryText AudioDraftText Name("AudioDraftStatus") Node { display: Display::None }
         ]
-    }
-}
-
-fn pick_audio(
-    _: On<Activate>,
-    chat: Res<ChatState>,
-    state: Res<AudioDraftState>,
-    mut commands: Commands,
-) {
-    let Some(session) = chat
-        .session
-        .as_ref()
-        .map(|session| session.id)
-        .filter(|_| !state.busy())
-    else {
-        return;
-    };
-    let window = WidgetryFileDialogWindow {
-        native: Window {
-            title: "选择音频文件".into(),
-            resolution: (840, 580).into(),
-            ..default()
-        },
-        ..default()
-    };
-    commands.spawn_scene_with_error_handler(bsn! {
-        @WidgetryFileDialog { @mode: WidgetryFileDialogMode::PickFile, @window: {Some(window)} }
-        Name("ComposerAudioPicker") template(move |_| Ok(AudioPicker(session))) on(audio_picked)
-    });
-}
-
-fn audio_picked(
-    event: On<WidgetryFileDialogResultEvent>,
-    pickers: Query<&AudioPicker>,
-    mut commands: Commands,
-) {
-    let Ok(&AudioPicker(session)) = pickers.get(event.entity) else {
-        return;
-    };
-    if let WidgetryFileDialogResult::File(path) = &event.result {
-        let path = path.clone();
-        commands.queue(move |world: &mut World| -> Result {
-            if world
-                .resource::<ChatState>()
-                .session
-                .as_ref()
-                .is_some_and(|view| view.id == session)
-            {
-                request_change(world, Some(path))?;
-            }
-            Ok(())
-        });
     }
 }
 
@@ -231,7 +165,6 @@ pub(crate) fn receipt(
 fn synchronize(
     media: Res<AudioDraftState>,
     chat: Res<ChatState>,
-    mut buttons: Query<&mut Node, (With<AddAudio>, Without<AudioDraftText>)>,
     mut texts: Query<(&mut Text, &mut Node), With<AudioDraftText>>,
 ) {
     let session = chat.session.as_ref().map(|session| session.id);
@@ -247,14 +180,6 @@ fn synchronize(
             .filter(|(target, _)| Some(*target) == session)
             .map_or("", |(_, message)| message.as_str())
     };
-    for node in &mut buttons {
-        node.map_unchanged(|node| &mut node.display)
-            .set_if_neq(if session.is_some() {
-                Display::Flex
-            } else {
-                Display::None
-            });
-    }
     for (mut text, node) in &mut texts {
         text.set_if_neq(Text::new(feedback));
         node.map_unchanged(|node| &mut node.display)
