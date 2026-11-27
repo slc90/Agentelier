@@ -15,8 +15,10 @@ pub use agentelier_skills::{SkillEntry, SkillRequest, SkillSnapshot, UserSkillId
 pub use operations::OperationSequence;
 
 pub use runtime::{
-    AgentEvent, AgentEventKind, AgentRuntime, DeliveryFailure, ImageAttachmentAction,
-    ImageAttachmentReply, MemoryReply, MemoryRequest, MemoryWorkState, RuntimeFailure,
+    AgentEvent, AgentEventKind, AgentRuntime, ComposerAssetFuture, ComposerAssetOwner,
+    ComposerAssetReply, ComposerAssetRequest, ComposerImageSource, DeliveryFailure,
+    ImageAttachmentAction, ImageAttachmentReply, MemoryReply, MemoryRequest, MemoryWorkState,
+    RuntimeFailure,
 };
 
 pub use agentelier_mcp::{ConnectionState, ConnectionStatus};

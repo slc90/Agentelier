@@ -38,3 +38,8 @@ pub use agentelier_bridge_connection::{
     MAX_MATERIAL_BYTES, MaterialKind, MaterialOrigin, MaterialPreview, MaterialReply,
     MaterialRequest, PromptChoice, ResourceChoice, expand_resource_uri,
 };
+
+pub use agentelier_bridge_connection::{
+    ComposerAssetFuture, ComposerAssetOwner, ComposerAssetReply, ComposerAssetRequest,
+    ComposerImageSource,
+};

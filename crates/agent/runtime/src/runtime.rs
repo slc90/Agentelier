@@ -14,6 +14,11 @@ mod audio_task;
 mod background;
 mod child_runtime;
 mod composer;
+mod composer_assets;
+pub use composer_assets::{
+    ComposerAssetFuture, ComposerAssetOwner, ComposerAssetReply, ComposerAssetRequest,
+    ComposerImageSource,
+};
 mod creation;
 mod deleting;
 mod image_attachment;
@@ -155,6 +160,10 @@ enum Command {
     ImageAttachment(u64, SessionId, String, ImageAttachmentAction),
     SavedAudio(u64, SessionId, AudioId),
     AttachmentFinished(u64, AttachmentReply),
+    ComposerAsset(
+        ComposerAssetRequest,
+        tokio::sync::oneshot::Sender<io::Result<ComposerAssetReply>>,
+    ),
     AudioDraft(u64, SessionId, Option<PathBuf>),
     TranscribeAudio(u64, SessionId, AudioId),
     CancelTranscription(u64, SessionId),
@@ -684,6 +693,12 @@ impl AgentRuntime {
                                         *stopping_root = Some(task.id);
                                         children.cancel_active();
                                         debug!(operation_id = task.id, "Root 停止已阻断协作准入，正在回收子 Agent");
+                                    }
+                                    Command::ComposerAsset(request, reply) => {
+                                        let client = store.client();
+                                        tokio::spawn(async move {
+                                            drop(reply.send(composer_assets::request(client, request).await));
+                                        });
                                     }
                                     Command::AudioDraft(id, session, path) => {
                                         if model.is_some() || *finalizing || *pending_queue || deleting_target || !audio_jobs.is_empty() || !conversation.is_current(session) {
@@ -1789,6 +1804,19 @@ impl AgentRuntime {
         } else {
             self.send(command)
         }
+    }
+
+    pub fn composer_asset(
+        &self,
+        request: ComposerAssetRequest,
+    ) -> Result<ComposerAssetFuture, RuntimeFailure> {
+        let (reply, result) = tokio::sync::oneshot::channel();
+        self.submit(Command::ComposerAsset(request, reply))?;
+        Ok(Box::pin(async move {
+            result
+                .await
+                .map_err(|_| io::Error::other("附件存储未返回读取结果"))?
+        }))
     }
 
     pub fn change_audio_draft(

@@ -303,6 +303,13 @@ impl AgentHost {
         self.submit(|connection| connection.request_memory(request))
     }
 
+    pub fn composer_asset(
+        &self,
+        request: crate::ComposerAssetRequest,
+    ) -> Result<crate::ComposerAssetFuture> {
+        self.submit(|connection| connection.composer_asset(request))
+    }
+
     pub fn request_image_attachment(
         &self,
         session: SessionId,

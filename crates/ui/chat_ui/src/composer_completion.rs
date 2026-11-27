@@ -467,6 +467,19 @@ fn choose(world: &mut World, index: usize) -> Result {
         return Ok(());
     }
     let content = candidate.content.clone();
+    if let ComposerContent::File { reference } = &content
+        && let Some(scope) = file_scope(world)
+        && crate::composer_media::select_file(
+            world,
+            reference.clone(),
+            scope,
+            trigger.replacement.clone(),
+        )?
+    {
+        let mut state = world.resource_mut::<Completion>();
+        state.dismissed = state.trigger.take();
+        return render(world);
+    }
     world.resource_mut::<Completion>().trigger = None;
     composer::insert(world, trigger.replacement, content)
 }

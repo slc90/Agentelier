@@ -10,8 +10,8 @@ use agentelier_controls::{
     AvatarSource,
 };
 use agentelier_conversation_bridge::{
-    ComposerSubmission, ConversationEvent, ConversationRequest, SessionAction, SessionCreate,
-    SessionView, TurnStatus,
+    ComposerContent, ComposerElement, ComposerSubmission, ConversationEvent, ConversationRequest,
+    SessionAction, SessionCreate, SessionView, TurnStatus,
 };
 use agentelier_conversation_bridge::{ProjectId, SessionId, SessionLocation};
 use agentelier_login_ui::AccountState;
@@ -137,6 +137,8 @@ pub struct ChatTurn {
     pub input_id: u64,
     pub is_retry: bool,
     pub input: String,
+    #[reflect(ignore)]
+    input_elements: Vec<ComposerElement>,
     pub audio: Vec<crate::audio_attachment::ChatAudio>,
     pub transcript: Option<crate::transcription::ChatTranscriptReference>,
     pub messages: Vec<ChatMessage>,
@@ -326,6 +328,7 @@ pub(crate) fn install(app: &mut App) {
     crate::transcription::install(app);
     crate::queue::install(app);
     composer::install(app);
+    crate::composer_media::install(app);
     crate::composer_completion::install(app);
     crate::native_scene::install(app);
     app.init_resource::<SessionUiStates>()
@@ -620,6 +623,10 @@ pub(crate) fn append_mcp_draft(world: &mut World, material: &str) -> Result {
 }
 
 fn send(world: &mut World) -> Result {
+    if crate::composer_media::importing(world, world.resource::<ChatState>().composer.owner()) {
+        world.resource_mut::<ChatState>().input_feedback = Some("正在保存所选附件…".into());
+        return Ok(());
+    }
     if world
         .resource::<crate::audio_attachment::AudioDraftState>()
         .busy()
@@ -1023,6 +1030,7 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
         is_retry: turn.is_retry,
         operation_id: turn.operation_id,
         input: turn.submission.text().to_owned(),
+        input_elements: turn.submission.elements().to_vec(),
         audio: turn
             .submission
             .audio()
@@ -1537,6 +1545,47 @@ pub(crate) fn apply_legacy_audio(
     Ok(())
 }
 
+pub(crate) fn apply_draft_assets(
+    world: &mut World,
+    placement: crate::composer_media::Placement,
+    assets: Vec<ComposerContent>,
+    errors: Vec<String>,
+) -> Result {
+    composer::read_fields(world)?;
+    let apply = |state: &mut ChatState| -> Result<Option<composer::Anchor>> {
+        let mut errors = errors;
+        let mut focus = None;
+        if !assets.is_empty() {
+            if state.draft_revision == placement.revision {
+                focus = Some(state.composer.insert_assets(placement.anchor, assets)?);
+                state.edit_draft()?;
+            } else {
+                errors.push("附件插入位置已变化，请重新选择插入点".into());
+            }
+        }
+        state.input_feedback = if errors.is_empty() {
+            None
+        } else {
+            Some(errors.join("\n"))
+        };
+        Ok(focus)
+    };
+    if world.resource::<ChatState>().composer.owner() == placement.owner {
+        let focus = apply(&mut world.resource_mut::<ChatState>())?;
+        if focus.is_some() {
+            composer::rebuild(world, focus)?;
+        }
+    } else if let Some(state) = world
+        .resource_mut::<SessionUiStates>()
+        .0
+        .values_mut()
+        .find(|state| state.composer.owner() == placement.owner)
+    {
+        apply(state)?;
+    }
+    Ok(())
+}
+
 fn mount_messages(_event: On<Add<MessageList>>, mut commands: Commands) {
     commands.queue(reconcile);
 }
@@ -1553,6 +1602,7 @@ enum RowContent {
     Reply(ReplyContent),
     MemoryMessage { label: String, source: String },
     Audio(crate::audio_attachment::ChatAudio),
+    InputImage(agentelier_conversation_bridge::InputImage),
 }
 
 enum ReplyContent {
@@ -1699,13 +1749,45 @@ pub(super) fn reconcile_list(
                 item_id: None,
             };
             if !turn.result_continuation && inputs.insert(turn.input_id) {
-                desired.push((user_key.clone(), RowContent::User(turn.input.clone())));
-                for audio in &turn.audio {
-                    let key = ChatRow {
-                        item_id: Some(format!("audio-{}", audio.id)),
-                        ..user_key.clone()
-                    };
-                    desired.push((key, RowContent::Audio(audio.clone())));
+                if turn.input_elements.iter().any(|item| {
+                    matches!(
+                        item.content,
+                        ComposerContent::Audio { .. } | ComposerContent::Image { .. }
+                    )
+                }) {
+                    for element in &turn.input_elements {
+                        let key = ChatRow {
+                            item_id: Some(element.id.to_string()),
+                            ..user_key.clone()
+                        };
+                        let content = match &element.content {
+                            ComposerContent::Text { text } if !text.is_empty() => {
+                                RowContent::User(text.clone())
+                            }
+                            ComposerContent::Text { .. } => continue,
+                            ComposerContent::Image { image } => {
+                                RowContent::InputImage(image.clone())
+                            }
+                            ComposerContent::Audio { audio } => RowContent::Audio(
+                                agentelier_conversation_bridge::AudioAttachmentView::from(
+                                    audio.clone(),
+                                )
+                                .into(),
+                            ),
+                            ComposerContent::File { reference } => {
+                                RowContent::User(reference.display())
+                            }
+                            ComposerContent::Skill { name, .. } => {
+                                RowContent::User(format!("${name}"))
+                            }
+                            ComposerContent::Mcp { label, .. } => {
+                                RowContent::User(format!("${label}"))
+                            }
+                        };
+                        desired.push((key, content));
+                    }
+                } else {
+                    desired.push((user_key.clone(), RowContent::User(turn.input.clone())));
                 }
                 if let Some(source) = &turn.transcript {
                     let key = ChatRow {
@@ -1795,7 +1877,7 @@ pub(super) fn reconcile_list(
         if let Some(entity) = existing.remove(&key) {
             ordered.push(entity);
             match content {
-                RowContent::Audio(_) => {}
+                RowContent::Audio(_) | RowContent::InputImage(_) => {}
                 RowContent::Plain(text) => {
                     world
                         .get_mut::<Text>(entity)
@@ -1846,6 +1928,15 @@ pub(super) fn reconcile_list(
                     .unwrap_or_else(|| key.item_id.clone().unwrap_or_else(|| "user".into()))
             );
             let entity = match content {
+                    RowContent::InputImage(image) => {
+                        let owner = agentelier_agent_host::ComposerAssetOwner::Session(key.session);
+                        let label = format!("你 · {}", image.name);
+                        world.commands().spawn_scene_with_error_handler(bsn! {
+                            Name(name) ChildOf(list) template(move |_| Ok(key.clone()))
+                            Node { width: percent(100), flex_direction: FlexDirection::Column, align_items: AlignItems::End, row_gap: px(CONTENT_GAP) }
+                            Children [Text(label) WidgetryText-- @crate::composer_media::image(owner, image)]
+                        }).id()
+                    }
                     RowContent::Audio(audio) => world.commands().spawn_scene_with_error_handler(bsn! {
                         @crate::audio_attachment::card(key.session, audio)
                         Name(name) ChildOf(list) template(move |_| Ok(key.clone()))

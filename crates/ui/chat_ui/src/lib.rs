@@ -9,6 +9,7 @@ mod background_tasks;
 pub use archives::{ArchiveChoice, ArchiveState};
 mod composer;
 mod composer_completion;
+mod composer_media;
 mod conversation;
 mod generated_image;
 mod global_tasks;

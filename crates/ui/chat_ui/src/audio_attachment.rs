@@ -111,6 +111,7 @@ pub(crate) fn draft_panel() -> impl Scene {
     bsn! {
         Node { width: percent(100), min_width: px(0), column_gap: px(8), flex_shrink: 0.0, align_items: AlignItems::Center }
         Children [
+            @crate::composer_media::add_button()--
             @AgentelierButton { @children: bsn_list! {Text("添加音频") WidgetryText} }
             AddAudio Name("AddComposerAudio") Node { display: Display::None } on(pick_audio)--
             Text::default() WidgetryText AudioDraftText Name("AudioDraftStatus") Node { display: Display::None }

@@ -279,6 +279,18 @@ impl Connection {
         Ok(id)
     }
 
+    pub fn composer_asset(
+        &mut self,
+        request: crate::ComposerAssetRequest,
+    ) -> Result<crate::ComposerAssetFuture, BridgeFailure> {
+        if self.stopping || self.failure.is_some() {
+            return Err(BridgeFailure("当前执行连接不能读取或暂存附件".into()));
+        }
+        self.runtime
+            .composer_asset(request)
+            .map_err(|failure| BridgeFailure(failure.to_string()))
+    }
+
     pub fn request_image_attachment(
         &mut self,
         session: SessionId,

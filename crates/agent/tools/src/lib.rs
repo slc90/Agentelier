@@ -17,7 +17,7 @@ mod sessions;
 mod task_control;
 
 pub use environment::WorkingDirectory;
-pub use image::from_mcp_bytes;
+pub use image::{from_mcp_bytes, prepare_local_image};
 pub use script::widget;
 pub use script::{ScriptOutput, ScriptSession};
 

@@ -220,6 +220,13 @@ pub(crate) fn normalize(decoded: DynamicImage, png: bool) -> Result<ImagePayload
     })
 }
 
+pub fn prepare_local_image(bytes: Vec<u8>) -> std::io::Result<ImagePayload> {
+    let control = blocking::Control::new(CancellationToken::new());
+    decode(bytes, None, &control)
+        .map(|(image, _, _, _)| image)
+        .map_err(std::io::Error::other)
+}
+
 pub async fn from_mcp_bytes(
     bytes: Vec<u8>,
     mime: String,

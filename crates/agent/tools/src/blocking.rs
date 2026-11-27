@@ -9,6 +9,13 @@ pub(crate) struct Control {
     deadline: Instant,
 }
 impl Control {
+    pub(crate) fn new(cancel: CancellationToken) -> Self {
+        Self {
+            cancel,
+            deadline: Instant::now() + FILE_WORK_TIMEOUT,
+        }
+    }
+
     pub(crate) fn check(&self) -> Result<(), ToolFailure> {
         if self.cancel.is_cancelled() {
             Err(ToolFailure::new(
@@ -42,10 +49,7 @@ pub(crate) async fn run(
     cancel: &CancellationToken,
     work: impl FnOnce(Control) -> ToolResult + Send + 'static,
 ) -> ToolResult {
-    let control = Control {
-        cancel: cancel.clone(),
-        deadline: Instant::now() + FILE_WORK_TIMEOUT,
-    };
+    let control = Control::new(cancel.clone());
     // Always join: dropping a blocking handle would leave unowned file work after task completion.
     match tokio::task::spawn_blocking(move || work(control)).await {
         Ok(result) => result,

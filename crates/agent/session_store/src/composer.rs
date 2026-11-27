@@ -2,9 +2,7 @@ use crate::attachments;
 use agentelier_conversation::{
     AudioAttachment, ComposerContent, ComposerMessage, InputImage, RecordEvent, SessionId,
 };
-use agentelier_tools::{
-    ImagePayload, MAX_ORIGINAL_IMAGE_BYTES, MAX_PROMPT_IMAGE_BYTES, OriginalImage,
-};
+use agentelier_tools::{ImagePayload, MAX_PROMPT_IMAGE_BYTES, prepare_local_image};
 use std::{
     fs,
     io::{self, Read, Write},
@@ -133,12 +131,12 @@ impl Imported {
             .collect();
         let file = fs::File::open(path)?;
         let metadata = file.metadata()?;
-        if !metadata.is_file() || metadata.len() > MAX_ORIGINAL_IMAGE_BYTES as u64 {
+        if !metadata.is_file() || metadata.len() > MAX_PROMPT_IMAGE_BYTES as u64 {
             return Err(io::Error::other("所选图片不是普通文件或超过图片输入限额"));
         }
         let mut bytes = Vec::new();
         (&file)
-            .take(MAX_ORIGINAL_IMAGE_BYTES as u64 + 1)
+            .take(MAX_PROMPT_IMAGE_BYTES as u64 + 1)
             .read_to_end(&mut bytes)?;
         let after = file.metadata()?;
         if metadata.len() != bytes.len() as u64
@@ -147,7 +145,7 @@ impl Imported {
         {
             return Err(io::Error::other("图片文件在读取期间变化"));
         }
-        let payload = OriginalImage::decode(bytes)?.into_model_image()?;
+        let payload = prepare_local_image(bytes)?;
         let image = InputImage {
             id: SessionId::new_v4(),
             name,

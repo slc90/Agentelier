@@ -23,3 +23,8 @@ pub use agentelier_agent_runtime::{
     MAX_MATERIAL_BYTES, MaterialKind, MaterialOrigin, MaterialPreview, MaterialReply,
     MaterialRequest, PromptChoice, ResourceChoice, expand_resource_uri,
 };
+
+pub use agentelier_agent_runtime::{
+    ComposerAssetFuture, ComposerAssetOwner, ComposerAssetReply, ComposerAssetRequest,
+    ComposerImageSource,
+};

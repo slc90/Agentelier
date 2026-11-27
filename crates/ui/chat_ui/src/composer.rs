@@ -28,6 +28,8 @@ struct RemoveElement(SessionId);
 #[derive(Clone)]
 pub(crate) struct Draft {
     elements: Vec<ComposerElement>,
+    owner: SessionId,
+    has_staged: bool,
     legacy_audio: Option<SessionId>,
     cursor: Option<Anchor>,
 }
@@ -36,6 +38,8 @@ impl Default for Draft {
     fn default() -> Self {
         Self {
             elements: vec![text_element(String::new())],
+            owner: SessionId::new_v4(),
+            has_staged: false,
             legacy_audio: None,
             cursor: None,
         }
@@ -63,8 +67,34 @@ impl Draft {
     pub(crate) fn submission(&self) -> ComposerSubmission {
         ComposerSubmission {
             elements: self.elements.clone(),
+            draft_owner: self.has_staged.then_some(self.owner),
             ..default()
         }
+    }
+
+    pub(crate) fn owner(&self) -> SessionId {
+        self.owner
+    }
+
+    pub(crate) fn placement(&self, revision: u64) -> Option<crate::composer_media::Placement> {
+        Some(crate::composer_media::Placement {
+            owner: self.owner,
+            revision,
+            anchor: self.cursor.clone().or_else(|| self.last_anchor())?,
+        })
+    }
+
+    pub(crate) fn insert_assets(
+        &mut self,
+        anchor: Anchor,
+        assets: Vec<ComposerContent>,
+    ) -> Result<Anchor> {
+        let mut focus = anchor;
+        for asset in assets {
+            focus = self.insert(focus, ComposerElement::new(asset))?;
+            self.has_staged = true;
+        }
+        Ok(focus)
     }
 
     fn index(&self, id: SessionId) -> Option<usize> {
@@ -163,6 +193,7 @@ pub(crate) fn rebuild(world: &mut World, focus: Option<Anchor>) -> Result {
     };
     let state = world.resource::<ChatState>();
     let items = state.composer.elements.clone();
+    let draft = state.composer.owner;
     let session = state.session.as_ref().map(|session| session.id);
     world.entity_mut(parent).despawn_children();
     let compact = items.len() > 1;
@@ -180,7 +211,7 @@ pub(crate) fn rebuild(world: &mut World, focus: Option<Anchor>) -> Result {
                 };
                 spawn_scene(world, scene).map_err(|failure| failure.into_bevy_error())?;
             }
-            content => mount_atom(world, parent, session, id, content)?,
+            content => mount_atom(world, parent, session, draft, id, content)?,
         }
     }
     if let Some(anchor) = focus {
@@ -193,6 +224,7 @@ fn mount_atom(
     world: &mut World,
     parent: Entity,
     session: Option<SessionId>,
+    draft: SessionId,
     id: SessionId,
     content: ComposerContent,
 ) -> Result {
@@ -204,14 +236,21 @@ fn mount_atom(
         ComposerContent::Audio { audio } => format!("音频 · {}", audio.name),
         ComposerContent::Text { .. } => return Err(io::Error::other("文字段无须内容项显示").into()),
     };
-    let controls = if let ComposerContent::Audio { audio } = content
+    let controls = if let ComposerContent::Audio { audio } = &content
         && let Some(session) = session
     {
-        let view = agentelier_conversation_bridge::AudioAttachmentView::from(audio);
+        let view = agentelier_conversation_bridge::AudioAttachmentView::from(audio.clone());
         Some(
             Box::new(bsn_list! { @crate::audio_playback::controls(session, &view.into()) })
                 as Box<dyn SceneList>,
         )
+    } else {
+        None
+    };
+    let preview = if let ComposerContent::Image { image } = content {
+        Some(Box::new(
+            bsn_list! { @crate::composer_media::image(agentelier_agent_host::ComposerAssetOwner::Draft(draft), image) },
+        ) as Box<dyn SceneList>)
     } else {
         None
     };
@@ -221,6 +260,7 @@ fn mount_atom(
         Children [
             Text(label) WidgetryText TextLayout::linebreak(LineBreak::AnyCharacter)--
             {controls}--
+            {preview}--
             @AgentelierButton { @children: bsn_list! {Text("移除") WidgetryText} }
             Name("RemoveComposerElement") template(move |_| Ok(RemoveElement(id))) on(remove_clicked)
         ]
