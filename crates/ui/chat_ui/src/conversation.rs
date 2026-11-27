@@ -26,7 +26,7 @@ use bevy::ui_widgets::Activate;
 use bevy::window::{Ime, WindowRef};
 use bevy_app_assets::SidebarIcon;
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
-use bevy_widgetry::scroll_area::WidgetryScrollArea;
+use bevy_widgetry::scroll_area::{ScrollbarPolicy, ScrollbarVisibility, WidgetryScrollArea};
 use bevy_widgetry::text::WidgetryText;
 use bevy_widgetry::text_field::{AutoSize, WidgetryTextField, WidgetryTextFieldHeadless};
 use std::collections::{HashMap, HashSet};
@@ -400,6 +400,10 @@ fn chat_composer(draft: String) -> impl Scene {
 fn conversation_view() -> impl Scene {
     bsn! {
         @WidgetryScrollArea {
+            @scrollbar_visibility: {ScrollbarVisibility {
+                vertical: ScrollbarPolicy::Always,
+                ..default()
+            }},
             @children: {Some(Box::new(bsn_list! {
                 MessageList Name("ChatMessages")
                 Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(MESSAGE_GAP) }

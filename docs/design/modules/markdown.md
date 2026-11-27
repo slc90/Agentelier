@@ -18,6 +18,8 @@
 
 ConversationView 将用户头像与正文放在右侧，将助手头像和最终回复的 Markdown 正文放在左侧。头像独占一行，正文可使用聊天区的可用宽度。消息行使用会话、输入或输出身份复用，收到变化时更新对应正文。
 
+主聊天的纵向滚动条始终占用固定宽度。表格等内容按该宽度换行并更新高度，避免滚动条显隐再次改变正文宽度和阅读位置。
+
 解析器依据：[官方指南](https://pulldown-cmark.github.io/pulldown-cmark/)、[0.13.6 API](https://docs.rs/pulldown-cmark/0.13.6/pulldown_cmark/)。
 
 记忆聊天的原文与排版共用一个 MarkdownSource。切换视图时，工具栏、渲染正文和只读 TextField 保持身份。原文更新通过 WidgetryTextFieldHeadless 公开 API 同步。复制正文直接取当前 MarkdownSource，代码复制取当前解析代码文本。操作结果显示在对应按钮上。渲染子树尚在 Scene 构造时，完成后再同步。
