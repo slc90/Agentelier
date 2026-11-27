@@ -174,6 +174,8 @@ pub struct ChatSession {
     pub committed_items: Vec<ChatHistoryItem>,
     pub execution_blocked: bool,
     pub tool_catalog: Vec<(String, String)>,
+    #[reflect(ignore)]
+    pub(crate) mcp_capabilities: Vec<agentelier_conversation_bridge::McpCapability>,
     pub queue: Vec<crate::queue::ChatQueuedInput>,
     pub queue_paused: bool,
 }
@@ -270,6 +272,7 @@ impl ChatState {
 struct InputIntents {
     send: Option<Entity>,
     boundary: Option<Boundary>,
+    completion: Option<KeyCode>,
     clear_accepted: Option<PendingDraft>,
 }
 #[derive(Component, Clone, Default)]
@@ -321,6 +324,7 @@ pub(crate) fn install(app: &mut App) {
     crate::transcription::install(app);
     crate::queue::install(app);
     composer::install(app);
+    crate::composer_completion::install(app);
     crate::native_scene::install(app);
     app.init_resource::<SessionUiStates>()
         .init_resource::<ChatState>()
@@ -808,9 +812,29 @@ fn capture_enter(
         )
     });
     let mut boundary = None;
+    let mut completion = None;
+    let completing = root.is_some_and(|root| crate::composer_completion::active(world, root));
     let mut send = false;
     for event in events.read_mut(&mut world.resource_mut::<Messages<KeyboardInput>>()) {
         if window != Some(event.window) || ime_active || composing || shortcut {
+            continue;
+        }
+        if completing
+            && !shift
+            && matches!(
+                event.key_code,
+                KeyCode::ArrowUp
+                    | KeyCode::ArrowDown
+                    | KeyCode::Escape
+                    | KeyCode::Enter
+                    | KeyCode::NumpadEnter
+            )
+        {
+            event.logical_key = Key::Unidentified(NativeKey::Unidentified);
+            event.text = None;
+            if event.state == ButtonState::Pressed {
+                completion = Some(event.key_code);
+            }
             continue;
         }
         if !shift
@@ -843,6 +867,9 @@ fn capture_enter(
     if send {
         intents.send = root;
     }
+    if completion.is_some() {
+        intents.completion = completion;
+    }
     if boundary.is_some() {
         intents.boundary = boundary;
     }
@@ -854,6 +881,7 @@ fn process_input(world: &mut World) -> Result {
     let clear = intents.clear_accepted.take();
     let requested = intents.send.take();
     let boundary = intents.boundary.take();
+    let completion = intents.completion.take();
     composer::read_fields(world)?;
     let chat_requested = requested.is_some_and(|root| world.get::<TextSegment>(root).is_some());
     if let Some(clear) = clear
@@ -870,8 +898,16 @@ fn process_input(world: &mut World) -> Result {
     if let Some(boundary) = boundary {
         composer::apply_boundary(world, boundary)?;
     }
+    if let Some(completion) = completion {
+        crate::composer_completion::key(world, completion)?;
+    }
+    crate::composer_completion::update(world)?;
     if chat_requested {
-        send(world)?;
+        if requested.is_some_and(|root| crate::composer_completion::active(world, root)) {
+            crate::composer_completion::key(world, KeyCode::Enter)?;
+        } else {
+            send(world)?;
+        }
     } else if requested
         .is_some_and(|root| world.get::<crate::memory_chat::Composer>(root).is_some())
     {
@@ -1079,6 +1115,7 @@ pub(super) fn project(session: SessionView) -> Result<ChatSession> {
         codex_identity: session.codex_identity,
         notice: session.notice,
         execution_blocked: session.execution_blocked,
+        mcp_capabilities: session.mcp_capabilities,
         tool_catalog: session.tool_catalog,
         queue: session
             .queue

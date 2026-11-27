@@ -27,7 +27,10 @@ pub struct SkillSnapshot {
     pub diagnostics: Vec<String>,
 }
 
+#[derive(Clone)]
 pub struct SkillEntry {
+    pub identity: crate::SkillIdentity,
+    pub enabled: bool,
     pub metadata: Metadata,
     pub user: Option<UserSkillId>,
 }
@@ -54,6 +57,8 @@ impl UserSkills {
             .skills
             .into_iter()
             .filter_map(|skill| {
+                let identity = crate::SkillIdentity::from(&skill.resource);
+                let enabled = skill.available() && skill.enabled;
                 let user = match skill.resource {
                     SkillResource::Embedded { .. } => None,
                     SkillResource::File {
@@ -66,6 +71,8 @@ impl UserSkills {
                 Some(SkillEntry {
                     metadata: skill.metadata,
                     user,
+                    identity,
+                    enabled,
                 })
             })
             .collect();

@@ -26,7 +26,7 @@ pub use expression::{
     ExpressionContext, ExpressionExcerpt, ExpressionMaterial, expression_excerpt,
 };
 pub use generation::{
-    GenerationConnection, GenerationRequest, PreparedGeneration, RecordedModelSource,
+    GenerationConnection, GenerationRequest, McpMaterial, PreparedGeneration, RecordedModelSource,
     RequestCompaction, RequestHistory, RequestProjection, generate, prepare,
 };
 pub use memory::{

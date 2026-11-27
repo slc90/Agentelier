@@ -13,6 +13,7 @@ mod account_login;
 mod audio_task;
 mod background;
 mod child_runtime;
+mod composer;
 mod creation;
 mod deleting;
 mod image_attachment;
@@ -458,7 +459,7 @@ impl AgentRuntime {
                                             result: result.map_err(|failure| failure.to_string()),
                                         }))?;
                                         if model_source(&account).and_then(|source| owner.conversation.validate_model_source(source)).is_ok() {
-                                            model_task::start_queued(&mut owner.conversation,&mut owner.model,&mut owner.progress,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),&mut owner.tools,&store,&ecs_access)?;
+                                            model_task::start_queued(&mut owner.conversation,&mut owner.model,&mut owner.progress,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),&mut owner.tools,&store,&ecs_access,&mcp_connections).await?;
                                         }
                                     }
                                 }
@@ -1057,7 +1058,7 @@ impl AgentRuntime {
                                         }
                                         if model.is_none() && !deleting_target && suspending == 0 && !*pending_queue && !*finalizing && pending_source.is_none() && pending_session_model.is_none() && !runtime_shutdown.is_cancelled()
                                             && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
-                                            model_task::start_queued(conversation,model,progress_events,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),session_tools,&store,&ecs_access)?;
+                                            model_task::start_queued(conversation,model,progress_events,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),session_tools,&store,&ecs_access,&mcp_connections).await?;
                                         }
                                     }
                                     Command::Created(result) => {
@@ -1169,7 +1170,7 @@ impl AgentRuntime {
                                         }
                                         if !*finalizing && !*pending_queue && suspending == 0 && pending_source.is_none() && pending_session_model.is_none() && delivery_failure.is_none() && !runtime_shutdown.is_cancelled()
                                             && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
-                                            model_task::start_queued(conversation,model,progress_events,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),session_tools,&store,&ecs_access)?;
+                                            model_task::start_queued(conversation,model,progress_events,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),session_tools,&store,&ecs_access,&mcp_connections).await?;
                                         }
                                     }
                                     Command::Session(command) => {
@@ -1185,6 +1186,14 @@ impl AgentRuntime {
                                         {
                                             let id = command.id();
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Queue(agentelier_conversation::QueueEvent { id, view: conversation.current(), decision: agentelier_conversation::QueueDecision::Rejected(failure.to_string()) })))?;
+                                            continue;
+                                        }
+                                        if let SessionCommand::Enqueue { id, ref input, .. } = command
+                                            && let Err(failure) = composer::validate(&input.elements, &mcp_connections, &user_skills).await
+                                        {
+                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Queue(agentelier_conversation::QueueEvent {
+                                                id, view: conversation.current(), decision: agentelier_conversation::QueueDecision::Rejected(failure.to_string()),
+                                            })))?;
                                             continue;
                                         }
                                         match conversation.prepare_queue(command) {
@@ -1369,6 +1378,13 @@ impl AgentRuntime {
                                                     ConversationRequest::CreateAndSend { create, input } => (ConversationRequest::Create(create), Some(input)),
                                                     request => (request, None),
                                                 };
+                                                if let Some(input) = &first
+                                                    && let Err(failure) = composer::validate(&input.elements, &mcp_connections, &user_skills).await
+                                                {
+                                                    control.finished.cancel();
+                                                    emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
+                                                    continue;
+                                                }
                                                 let next = make_owner()?;
                                                 let resolved = match request {
                                                     ConversationRequest::Create(create) => async {
@@ -1420,6 +1436,13 @@ impl AgentRuntime {
                                             }
                                             request @ (ConversationRequest::Send { .. } | ConversationRequest::Retry { .. } | ConversationRequest::ContinueWithoutCompaction { .. } | ConversationRequest::ProcessResults { .. }) => {
                                                 if let Err(failure) = model_source(&account).and_then(|source| conversation.validate_model_source(source)) {
+                                                    control.finished.cancel();
+                                                    emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
+                                                    continue;
+                                                }
+                                                if let ConversationRequest::Send { ref input, .. } = request
+                                                    && let Err(failure) = composer::validate(&input.elements, &mcp_connections, &user_skills).await
+                                                {
                                                     control.finished.cancel();
                                                     emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
                                                     continue;

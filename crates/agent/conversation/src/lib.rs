@@ -25,8 +25,8 @@ pub use child_config::{
 };
 mod composer;
 pub use composer::{
-    ComposerContent, ComposerElement, ComposerMessage, ComposerSubmission, InputImage, McpIdentity,
-    McpToolIdentity, SkillIdentity,
+    ComposerContent, ComposerElement, ComposerMessage, ComposerSubmission, InputImage,
+    McpCapability, McpIdentity, McpToolIdentity, SkillIdentity, bound_skills, validate_mcp_input,
 };
 mod control;
 mod conversation;

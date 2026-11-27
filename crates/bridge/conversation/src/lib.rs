@@ -4,7 +4,7 @@ compile_error!("This application supports Windows x64 only");
 mod conversation;
 pub use agentelier_conversation::{
     AudioAttachment, AudioFormat, ComposerContent, ComposerElement, ComposerMessage,
-    ComposerSubmission, InputImage, McpIdentity, McpToolIdentity, SkillIdentity,
+    ComposerSubmission, InputImage, McpCapability, McpIdentity, McpToolIdentity, SkillIdentity,
 };
 pub use agentelier_conversation::{
     BackgroundStatus, BackgroundTask, GlobalTask, GlobalTaskGroup, GlobalTaskProcess,

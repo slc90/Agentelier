@@ -208,28 +208,49 @@ impl Conversation {
         }
     }
 
+    pub fn next_queued(&self) -> Option<&QueuedInput> {
+        self.session
+            .as_ref()
+            .filter(|session| {
+                !session.view.queue_paused
+                    && !session.view.task_policy.background_paused
+                    && session.view.task_policy.external_unconfirmed.is_empty()
+                    && !session.view.execution_blocked
+                    && session
+                        .history
+                        .as_ref()
+                        .is_some_and(|history| !history.has_open_synchronous_calls())
+                    && session
+                        .view
+                        .turn
+                        .as_ref()
+                        .is_none_or(|turn| !matches!(turn.status, TurnStatus::Running))
+            })?
+            .view
+            .queue
+            .first()
+    }
+
+    pub fn pause_invalid_queue(
+        &mut self,
+        reason: String,
+    ) -> Result<SessionView, ConversationFailure> {
+        let session = self
+            .session
+            .as_mut()
+            .ok_or_else(|| ConversationFailure::new("出队缺少会话"))?;
+        session.view.queue_paused = true;
+        session.view.notice = Some(format!("队列已暂停：{reason}"));
+        Ok(session.view.clone())
+    }
+
     pub fn start_queued(&mut self) -> Result<Option<(u64, SessionView)>, ConversationFailure> {
-        let Some(session) = self.session.as_ref().filter(|session| {
-            !session.view.queue_paused
-                && !session.view.task_policy.background_paused
-                && session.view.task_policy.external_unconfirmed.is_empty()
-                && !session.view.execution_blocked
-                && session
-                    .history
-                    .as_ref()
-                    .is_some_and(|history| !history.has_open_synchronous_calls())
-                && session
-                    .view
-                    .turn
-                    .as_ref()
-                    .is_none_or(|turn| !matches!(turn.status, TurnStatus::Running))
-        }) else {
+        let Some(input) = self.next_queued().cloned() else {
             return Ok(None);
         };
-        let Some(input) = session.view.queue.first().cloned() else {
-            return Ok(None);
-        };
-        let session_id = session.view.id;
+        let session_id = self
+            .session_id()
+            .ok_or_else(|| ConversationFailure::new("出队缺少会话"))?;
         self.begin_input(input.operation_id, session_id, Some(input.submission))?;
         let session = self
             .session

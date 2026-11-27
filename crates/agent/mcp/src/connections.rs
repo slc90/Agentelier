@@ -52,6 +52,7 @@ pub struct ConnectionStatus {
     pub state: ConnectionState,
     pub tools: Option<Result<usize, &'static str>>,
     pub tool_names: Vec<String>,
+    pub tool_definitions: Vec<ToolDefinition>,
     pub tool_issues: Vec<String>,
 }
 
@@ -218,6 +219,12 @@ impl Connections {
                     .as_ref()
                     .and_then(|result| result.as_ref().ok())
                     .map(|catalog| catalog.issues.clone())
+                    .unwrap_or_default(),
+                tool_definitions: connection
+                    .catalog
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .map(|catalog| catalog.tools.clone())
                     .unwrap_or_default(),
                 tool_names: connection
                     .catalog

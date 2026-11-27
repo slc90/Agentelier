@@ -467,7 +467,7 @@ async fn run_task(
         };
     if settings.kind.is_user()
         && !active
-            .call(|turn| Ok(turn.continuation().is_some()))
+            .call(|turn| Ok(turn.continuation().is_some() || turn.has_frozen_skills()))
             .await?
     {
         let loading_cancel = cancel.clone();
@@ -479,6 +479,7 @@ async fn run_task(
                     .any(|tool| tool.name == agentelier_skills::READ_RESOURCE_TOOL))
             })
             .await?;
+        let (manual_input, bindings) = active.call(|turn| turn.skill_input()).await?;
         let frozen_skills = child.as_ref().map(|materials| materials.skills.clone());
         let discovered = tokio::task::spawn_blocking(move || {
             let catalog = match frozen_skills {
@@ -493,7 +494,8 @@ async fn run_task(
                     &loading_cancel,
                 )?,
             };
-            let selected = agentelier_skills::select(&catalog, &input, &loading_cancel)?;
+            let selected =
+                agentelier_skills::select(&catalog, &manual_input, &bindings, &loading_cancel)?;
             Ok::<_, agentelier_skills::Failure>((catalog, selected))
         })
         .await

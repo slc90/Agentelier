@@ -134,7 +134,7 @@ fn text_element(text: String) -> ComposerElement {
     ComposerElement::new(ComposerContent::Text { text })
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Anchor {
     pub segment: SessionId,
     pub span: Range<usize>,
@@ -327,6 +327,16 @@ pub(crate) fn focus_at(world: &mut World, anchor: Anchor) -> Result {
             Ok(())
         })
     })
+}
+
+pub(crate) fn insert(world: &mut World, anchor: Anchor, content: ComposerContent) -> Result {
+    read_fields(world)?;
+    let mut state = world.resource_mut::<ChatState>();
+    let focus = state
+        .composer
+        .insert(anchor, ComposerElement::new(content))?;
+    state.edit_draft()?;
+    rebuild(world, Some(focus))
 }
 
 pub(crate) fn append(world: &mut World, material: &str) -> Result {

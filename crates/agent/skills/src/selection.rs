@@ -2,7 +2,7 @@ use crate::{Catalog, Failure, Skill, SkillResource, Source, check, discovery::re
 use pulldown_cmark::{Event, Options, Parser};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, path::PathBuf};
 use tokio_util::sync::CancellationToken;
 
 pub const MAX_SELECTED_BYTES: usize = 1024 * 1024;
@@ -102,19 +102,46 @@ impl SelectedSkill {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SkillIdentity {
+    File(PathBuf),
+    Embedded(crate::EmbeddedSkill),
+}
+
+impl From<&SkillResource> for SkillIdentity {
+    fn from(resource: &SkillResource) -> Self {
+        match resource {
+            SkillResource::File { path, .. } => Self::File(path.clone()),
+            SkillResource::Embedded { embedded } => Self::Embedded(*embedded),
+        }
+    }
+}
+
 pub fn select(
     catalog: &Catalog,
     input: &str,
+    bindings: &[(String, SkillIdentity)],
     cancel: &CancellationToken,
 ) -> Result<Vec<SelectedSkill>, Failure> {
     let mut selected = Vec::new();
     let mut bytes = 0;
-    for name in mentions(input) {
+    let manual = mentions(input);
+    let mut identities = Vec::new();
+    for (name, identity) in bindings
+        .iter()
+        .map(|(name, identity)| (name, Some(identity)))
+        .chain(manual.iter().map(|name| (name, None)))
+    {
         check(cancel)?;
         let matches: Vec<_> = catalog
             .skills
             .iter()
-            .filter(|skill| skill.available() && skill.metadata.name == name)
+            .filter(|skill| identity.is_some() || skill.available())
+            .filter(|skill| {
+                &skill.metadata.name == name
+                    && identity
+                        .is_none_or(|identity| SkillIdentity::from(&skill.resource) == *identity)
+            })
             .collect();
         let skill = match matches.as_slice() {
             [] => {
@@ -122,7 +149,9 @@ pub fn select(
                     "没有可用的 Skill ${name}；请检查名称、来源或发现诊断"
                 )));
             }
-            [skill] if !skill.enabled => return Err(Failure(format!("Skill ${name} 已被禁用"))),
+            [skill] if !skill.available() || !skill.enabled => {
+                return Err(Failure(format!("Skill ${name} 已被禁用")));
+            }
             [skill] => *skill,
             _ => {
                 return Err(Failure(format!(
@@ -135,6 +164,11 @@ pub fn select(
                 )));
             }
         };
+        let identity = SkillIdentity::from(&skill.resource);
+        if identities.contains(&identity) {
+            continue;
+        }
+        identities.push(identity);
         let text = match &skill.resource {
             SkillResource::File {
                 path,

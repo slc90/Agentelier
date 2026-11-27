@@ -598,7 +598,7 @@ pub(super) async fn stop_model(
     Ok(())
 }
 
-pub(super) fn start_queued(
+pub(super) async fn start_queued(
     conversation: &mut Conversation,
     model: &mut Option<ModelTask>,
     incoming: &mut Option<mpsc::Receiver<RunnerEvent>>,
@@ -613,8 +613,21 @@ pub(super) fn start_queued(
     )>,
     store: &agentelier_session_store::SessionStore,
     ecs_access: &crate::ecs_access::EcsAccess,
+    mcp: &agentelier_mcp::Connections,
 ) -> Result<(), RuntimeFailure> {
     if model.is_some() {
+        return Ok(());
+    }
+    if let Some(next) = conversation.next_queued()
+        && let Err(failure) =
+            super::composer::validate(next.submission.elements(), mcp, skills).await
+    {
+        let view = conversation.pause_invalid_queue(failure.to_string())?;
+        emit(
+            publish,
+            0,
+            AgentEventKind::Conversation(ConversationEvent::IdleUpdated(view)),
+        )?;
         return Ok(());
     }
     let Some((id, view)) = conversation.start_queued()? else {

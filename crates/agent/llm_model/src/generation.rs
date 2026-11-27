@@ -26,6 +26,7 @@ pub struct GenerationRequest {
     pub retired_memory_outputs: Vec<String>,
     pub transcript: Option<crate::TranscriptEvidence>,
     pub selected_skills: Vec<agentelier_skills::SelectedSkill>,
+    pub mcp_materials: Vec<McpMaterial>,
     pub skill_catalog: Option<String>,
     pub slug: String,
     pub compact_threshold: u64,
@@ -66,6 +67,8 @@ pub struct RequestProjection {
     pub expression: Option<crate::ExpressionMaterial>,
     #[serde(default)]
     pub skill_materials: Vec<SkillMaterial>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_materials: Vec<McpMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<crate::MemoryMaterial>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -84,6 +87,14 @@ pub struct RequestProjection {
     pub payload_bytes: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fixed_bytes: Option<usize>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct McpMaterial {
+    pub server: uuid::Uuid,
+    pub target: String,
+    pub tool: Option<String>,
+    pub declared_names: Vec<String>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -373,6 +384,17 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         });
         input.push(serde_json::json!({"role":"developer", "content":catalog}));
     }
+    if !generation.mcp_materials.is_empty() {
+        let names = generation
+            .mcp_materials
+            .iter()
+            .flat_map(|material| material.declared_names.iter().map(String::as_str))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(", ");
+        input.push(serde_json::json!({"role":"developer","content":format!("The user explicitly referred to these MCP capabilities for this turn: {names}. Use them where relevant within the existing tool permissions.")}));
+    }
     let user_images = generation.context.user_images().cloned().collect();
     input.extend(generation.context.into_input(&generation.input_images)?);
     for skill in generation.selected_skills {
@@ -438,6 +460,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         behavior,
         expression,
         skill_materials,
+        mcp_materials: generation.mcp_materials,
         memory,
         retired_memory_outputs: generation.retired_memory_outputs,
         omitted_image_outputs: Vec::new(),

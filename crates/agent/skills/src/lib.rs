@@ -7,7 +7,7 @@ mod discovery;
 mod native;
 mod parser;
 mod selection;
-pub use selection::{SelectedSkill, mentions, select};
+pub use selection::{SelectedSkill, SkillIdentity, mentions, select};
 
 pub use builtin::{
     BUILTIN_NAME, EmbeddedResource, READ_RESOURCE_TOOL, discover_standard, read_resource,

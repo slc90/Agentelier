@@ -1,4 +1,5 @@
 use crate::{AudioAttachment, ConversationFailure, SessionId, TranscriptId, TranscriptReference};
+pub use agentelier_skills::SkillIdentity;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Component, PathBuf};
@@ -45,21 +46,86 @@ pub enum ComposerContent {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SkillIdentity {
-    File(PathBuf),
-    Embedded(agentelier_skills::EmbeddedSkill),
-}
-
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpIdentity {
     pub server: uuid::Uuid,
+    pub target: String,
     pub tool: Option<McpToolIdentity>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpToolIdentity {
-    pub target: String,
     pub name: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct McpCapability {
+    pub identity: McpIdentity,
+    pub label: String,
+    pub server_name: String,
+    pub description: String,
+}
+
+impl McpCapability {
+    pub fn from_definition(definition: &agentelier_tools::ToolDefinition) -> Option<Self> {
+        let agentelier_tools::ToolSource::Mcp {
+            server,
+            target,
+            tool,
+        } = &definition.source
+        else {
+            return None;
+        };
+        let server_name = definition
+            .display_source
+            .as_deref()
+            .and_then(|source| source.strip_prefix("MCP "))
+            .and_then(|source| source.rsplit_once(" · ").map(|(name, _)| name))
+            .unwrap_or("MCP")
+            .to_owned();
+        Some(Self {
+            identity: McpIdentity {
+                server: *server,
+                target: target.clone(),
+                tool: Some(McpToolIdentity { name: tool.clone() }),
+            },
+            label: tool.clone(),
+            server_name,
+            description: definition.description.clone(),
+        })
+    }
+}
+
+pub fn validate_mcp_input(
+    elements: &[ComposerElement],
+    available: &[McpCapability],
+) -> Result<(), ConversationFailure> {
+    for element in elements {
+        if let ComposerContent::Mcp { label, identity } = &element.content
+            && !available.iter().any(|candidate| {
+                candidate.identity.server == identity.server
+                    && candidate.identity.target == identity.target
+                    && (identity.tool.is_none() || candidate.identity.tool == identity.tool)
+            })
+        {
+            return Err(ConversationFailure::new(format!(
+                "MCP 引用 ${label} 已断开或不属于会话工具目录"
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub fn bound_skills(elements: &[ComposerElement]) -> Vec<(String, SkillIdentity)> {
+    elements
+        .iter()
+        .filter_map(|element| {
+            if let ComposerContent::Skill { name, identity } = &element.content {
+                Some((name.clone(), identity.clone()))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +170,7 @@ impl ComposerSubmission {
         let mut message = ComposerMessage::new(self.elements, transcript);
         message.draft_owner = self.draft_owner;
         message.validate()?;
+        validate_mcp_input(message.elements(), &view.mcp_capabilities)?;
         message.validate_image_capability(view.settings.image_input)?;
         for audio in message.audio() {
             if self.draft_owner.is_none() && view.audio_draft.as_ref() != Some(audio) {
@@ -264,10 +331,11 @@ impl ComposerMessage {
                 ComposerContent::Mcp { label, identity } => {
                     !label.trim().is_empty()
                         && !identity.server.is_nil()
+                        && !identity.target.is_empty()
                         && identity
                             .tool
                             .as_ref()
-                            .is_none_or(|tool| !tool.target.is_empty() && !tool.name.is_empty())
+                            .is_none_or(|tool| !tool.name.is_empty())
                 }
                 ComposerContent::File { path } => {
                     !path.as_os_str().is_empty()

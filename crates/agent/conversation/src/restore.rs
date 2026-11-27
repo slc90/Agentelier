@@ -2046,6 +2046,11 @@ impl Conversation {
             committed_items: restored.state.committed_items,
             execution_blocked: restored.state.execution_blocked,
             process_cleanup_unconfirmed: false,
+            mcp_capabilities: settings
+                .tools
+                .iter()
+                .filter_map(crate::McpCapability::from_definition)
+                .collect(),
             tool_catalog: settings
                 .tools
                 .into_iter()

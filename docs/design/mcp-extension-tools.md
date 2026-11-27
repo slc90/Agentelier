@@ -180,3 +180,5 @@ Resources 和 Prompts 的列表可以随服务器状态重新获取，因为它�
 `docs/design/tool_call.md` 定义模型调用与任务执行语义；`docs/design/modules/conversation.md` 定义冻结目录、历史与恢复；`docs/design/modules/prompts.md` 定义本地 Developer 指令快照；`docs/design/skills/README.md` 定义 Skills 材料发现。本设计只扩展工具来源和 MCP 外部材料来源，不重写这些已有业务规则。实际实施改变当前架构事实时，同步更新 `docs/design/architecture.md` 及受影响模块设计。
 
 官方机制参考集中在 `codex-rs/ext/extension-api/`、`codex-rs/core/src/tools/handlers/extension_tools.rs`、`codex-rs/codex-mcp/`、`codex-rs/core/src/tools/handlers/mcp.rs`、`codex-rs/core/src/tools/handlers/mcp_resource/` 和 `codex-rs/tools/src/mcp_tool.rs`。协议范围以 MCP Tools、Resources、Prompts 的现行标准定义为准；Codex 的内部工程分层及其完整插件/权限体系不是 Agentelier 的移植目标。
+
+Composer 可以显式引用会话工具目录内的 MCP Server 和 Tool。接纳和出队核对源身份与连接，模型请求中的本地材料列出对应的已声明工具名。工具调用仍由现有模型工具声明和执行路由处理。

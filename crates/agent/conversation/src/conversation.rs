@@ -330,6 +330,7 @@ pub struct SessionView {
     pub execution_blocked: bool,
     pub(crate) process_cleanup_unconfirmed: bool,
     pub tool_catalog: Vec<(String, String)>,
+    pub mcp_capabilities: Vec<crate::McpCapability>,
     pub queue: Vec<QueuedInput>,
     pub queue_paused: bool,
     pub task_policy: Box<crate::TaskPolicy>,
@@ -762,6 +763,10 @@ impl Conversation {
             queue: Vec::new(),
             queue_paused: false,
             task_policy: Default::default(),
+            mcp_capabilities: tools
+                .definitions()
+                .filter_map(crate::McpCapability::from_definition)
+                .collect(),
             tool_catalog: tools
                 .definitions()
                 .map(|tool| (tool.name.clone(), tool.catalog_description()))
@@ -871,6 +876,10 @@ impl Conversation {
             committed_items: history.summary(),
             execution_blocked: false,
             process_cleanup_unconfirmed: false,
+            mcp_capabilities: tools
+                .definitions()
+                .filter_map(crate::McpCapability::from_definition)
+                .collect(),
             tool_catalog: tools
                 .definitions()
                 .map(|tool| (tool.name.clone(), tool.catalog_description()))
@@ -1142,6 +1151,8 @@ impl Conversation {
                     })
                     .ok_or(ConversationFailure::new("只有最近失败或取消的输入可以重试"))?;
                 let input = previous.submission.clone();
+                let frozen = previous.skills.clone();
+                let selected = previous.selected_skills.clone();
                 let input_id = previous.input_id;
                 self.begin_input(operation, session, Some(input))?;
                 let current = self
@@ -1155,6 +1166,8 @@ impl Conversation {
                     .ok_or(ConversationFailure::new("重试缺少轮次"))?;
                 turn.input_id = input_id;
                 turn.is_retry = true;
+                turn.skills = frozen;
+                turn.selected_skills = selected;
                 Ok(current.view.clone())
             }
             ConversationRequest::Create(_)

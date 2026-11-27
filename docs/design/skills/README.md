@@ -211,3 +211,5 @@ Rust 工具随新 Session 的工具目录冻结。工作流中明确的说明文
 - UI 与验证边界参考：[bevy_widgetry](https://github.com/slc90/bevy_widgetry)、[bevy_brp](https://github.com/slc90/bevy_brp)，Skills 接入不修改这两个库。
 
 该目标机制按四个独立功能增量落地：[实施方案](../../../plans/skills/00-overview.md)。
+
+Composer 的结构化 Skill 选择冻结路径或内置身份。同名候选按来源区分，任务只解析实际绑定的来源。手写 `$name` 仍从普通文本扫描。Retry 使用已经冻结的 Skills 目录与正文。

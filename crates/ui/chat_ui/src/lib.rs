@@ -8,6 +8,7 @@ mod audio_playback;
 mod background_tasks;
 pub use archives::{ArchiveChoice, ArchiveState};
 mod composer;
+mod composer_completion;
 mod conversation;
 mod generated_image;
 mod global_tasks;

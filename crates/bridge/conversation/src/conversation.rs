@@ -293,6 +293,7 @@ pub struct SessionView {
     pub committed_items: Vec<HistoryItem>,
     pub execution_blocked: bool,
     pub tool_catalog: Vec<(String, String)>,
+    pub mcp_capabilities: Vec<crate::McpCapability>,
     pub queue: Vec<QueuedInput>,
     pub queue_paused: bool,
 }
@@ -644,6 +645,7 @@ pub fn view(session: agentelier_conversation::SessionView) -> SessionView {
             .map(|identity| (identity.subject, identity.workspace_id)),
         notice: session.notice,
         execution_blocked: session.execution_blocked,
+        mcp_capabilities: session.mcp_capabilities,
         tool_catalog: session.tool_catalog,
         queue: session
             .queue

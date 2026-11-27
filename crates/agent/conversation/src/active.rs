@@ -429,6 +429,31 @@ impl ActiveTurn<'_> {
         Ok(())
     }
 
+    pub fn skill_input(
+        &self,
+    ) -> Result<(String, Vec<(String, crate::SkillIdentity)>), ConversationFailure> {
+        let turn = self
+            .view
+            .turn
+            .as_ref()
+            .ok_or_else(|| ConversationFailure::new("技能选择缺少活动输入"))?;
+        let mut text = String::new();
+        for element in turn.submission.elements() {
+            match &element.content {
+                crate::ComposerContent::Text { text: segment } => text.push_str(segment),
+                _ => text.push(' '),
+            }
+        }
+        Ok((text, crate::bound_skills(turn.submission.elements())))
+    }
+
+    pub fn has_frozen_skills(&self) -> bool {
+        self.view
+            .turn
+            .as_ref()
+            .is_some_and(|turn| turn.skills.is_some())
+    }
+
     pub fn input(&self) -> Result<String, ConversationFailure> {
         self.view
             .turn
@@ -439,6 +464,47 @@ impl ActiveTurn<'_> {
 
     pub fn context_window(&self) -> u64 {
         self.view.context.window
+    }
+
+    fn mcp_materials(
+        tools: &ToolCatalog,
+        input: &crate::ComposerMessage,
+    ) -> Vec<agentelier_llm_model::McpMaterial> {
+        input
+            .elements()
+            .iter()
+            .filter_map(|element| {
+                let crate::ComposerContent::Mcp { identity, .. } = &element.content else {
+                    return None;
+                };
+                let names = tools
+                    .definitions()
+                    .filter_map(|definition| {
+                        let agentelier_tools::ToolSource::Mcp {
+                            server,
+                            target,
+                            tool,
+                        } = &definition.source
+                        else {
+                            return None;
+                        };
+                        (*server == identity.server
+                            && *target == identity.target
+                            && identity
+                                .tool
+                                .as_ref()
+                                .is_none_or(|selected| selected.name == *tool))
+                        .then(|| definition.name.clone())
+                    })
+                    .collect::<Vec<_>>();
+                Some(agentelier_llm_model::McpMaterial {
+                    server: identity.server,
+                    target: identity.target.clone(),
+                    tool: identity.tool.as_ref().map(|tool| tool.name.clone()),
+                    declared_names: names,
+                })
+            })
+            .collect()
     }
 
     pub fn request(&mut self) -> Result<GenerationRequest, ConversationFailure> {
@@ -524,6 +590,7 @@ impl ActiveTurn<'_> {
             retired_memory_outputs,
             transcript,
             selected_skills: turn.selected_skills.clone(),
+            mcp_materials: Self::mcp_materials(self.tools, &turn.submission),
             skill_catalog: turn
                 .skills
                 .as_ref()
