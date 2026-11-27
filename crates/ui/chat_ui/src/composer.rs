@@ -199,7 +199,7 @@ fn mount_atom(
     let label = match &content {
         ComposerContent::Skill { name, .. } => format!("${name}"),
         ComposerContent::Mcp { label, .. } => format!("${label}"),
-        ComposerContent::File { path } => format!("@{}", path.display()),
+        ComposerContent::File { reference } => reference.display(),
         ComposerContent::Image { image } => format!("图片 · {}", image.name),
         ComposerContent::Audio { audio } => format!("音频 · {}", audio.name),
         ComposerContent::Text { .. } => return Err(io::Error::other("文字段无须内容项显示").into()),

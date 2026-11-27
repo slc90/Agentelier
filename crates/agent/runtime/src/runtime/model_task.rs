@@ -618,17 +618,22 @@ pub(super) async fn start_queued(
     if model.is_some() {
         return Ok(());
     }
-    if let Some(next) = conversation.next_queued()
-        && let Err(failure) =
-            super::composer::validate(next.submission.elements(), mcp, skills).await
-    {
-        let view = conversation.pause_invalid_queue(failure.to_string())?;
-        emit(
-            publish,
-            0,
-            AgentEventKind::Conversation(ConversationEvent::IdleUpdated(view)),
-        )?;
-        return Ok(());
+    if let Some(next) = conversation.next_queued() {
+        let elements = next.submission.elements();
+        let valid = async {
+            super::composer::validate(elements, mcp, skills).await?;
+            super::composer::validate_session_files(elements, conversation, store).await
+        }
+        .await;
+        if let Err(failure) = valid {
+            let view = conversation.pause_invalid_queue(failure.to_string())?;
+            emit(
+                publish,
+                0,
+                AgentEventKind::Conversation(ConversationEvent::IdleUpdated(view)),
+            )?;
+            return Ok(());
+        }
     }
     let Some((id, view)) = conversation.start_queued()? else {
         return Ok(());

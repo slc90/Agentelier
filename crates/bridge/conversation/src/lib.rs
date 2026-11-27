@@ -11,6 +11,7 @@ pub use agentelier_conversation::{
     GlobalTaskStatus, GlobalTasks, PublishedScene, SceneState, SceneStateReceipt, TaskDelivery,
     TaskNotification, TaskNotificationKind,
 };
+pub use agentelier_conversation::{FileReference, FileScope};
 pub use agentelier_conversation::{
     Project, ProjectCatalog, ProjectChange, ProjectId, ProjectView, SessionLocation,
 };

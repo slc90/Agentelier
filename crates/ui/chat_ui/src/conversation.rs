@@ -166,6 +166,8 @@ pub struct ChatSession {
     pub context: String,
     pub context_details: String,
     pub working_directory: String,
+    #[reflect(ignore)]
+    pub(crate) working_path: std::path::PathBuf,
     pub instruction_snapshot: String,
     pub turn: Option<ChatTurn>,
     pub previous_turns: Vec<ChatTurn>,
@@ -1137,6 +1139,7 @@ pub(super) fn project(session: SessionView) -> Result<ChatSession> {
         display_name: session.settings.display_name,
         effort: session.settings.effort,
         image_input: session.settings.image_input,
+        working_path: session.settings.working_directory.clone(),
         working_directory: bevy_widgetry_path_display::display_path(
             &session.settings.working_directory,
         ),

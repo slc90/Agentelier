@@ -7,9 +7,12 @@ use agentelier_agent_host::{
     SkillRequest, SkillsEvent,
 };
 use agentelier_controls::{AgentelierButton, AgentelierButtonStyle};
-use agentelier_conversation_bridge::{ComposerContent, McpCapability, SkillIdentity};
+use agentelier_conversation_bridge::{
+    ComposerContent, FileReference, FileScope, McpCapability, SkillIdentity,
+};
 use bevy::picking::{events::PointerPress, pointer::PointerButton};
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task, futures::check_ready};
 use bevy::text::{FontSize, LineBreak};
 use bevy::ui::{InteractionDisabled, OverrideClip};
 use bevy::ui_widgets::popover::{Popover, PopoverAlign, PopoverPlacement, PopoverSide};
@@ -33,6 +36,108 @@ struct Trigger {
     root: Entity,
     replacement: Anchor,
     query: String,
+    kind: Kind,
+    token: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Capability,
+    File,
+}
+
+#[derive(Default)]
+struct FileCatalog {
+    scope: Option<FileScope>,
+    loading: Option<Task<std::io::Result<Vec<FileReference>>>>,
+    entries: Vec<FileReference>,
+    error: Option<String>,
+}
+
+impl FileCatalog {
+    fn update(&mut self, scope: Option<FileScope>, refresh: bool) -> bool {
+        if self.scope != scope || refresh {
+            self.entries.clear();
+            self.error = None;
+            self.loading = scope
+                .clone()
+                .map(|scope| AsyncComputeTaskPool::get().spawn(async move { scope.list() }));
+            self.scope = scope;
+            return true;
+        }
+        let Some(result) = self.loading.as_mut().and_then(check_ready) else {
+            return false;
+        };
+        self.loading = None;
+        match result {
+            Ok(entries) => self.entries = entries,
+            Err(failure) => self.error = Some(format!("无法读取项目文件目录：{failure}")),
+        }
+        true
+    }
+
+    fn search(&self, query: &str) -> Vec<Candidate> {
+        let query = query.replace('/', "\\");
+        let mut matches = self
+            .entries
+            .iter()
+            .filter_map(|reference| {
+                let path = reference.path.to_string_lossy();
+                let lower = path.to_lowercase();
+                let filename = reference.path.file_name()?.to_string_lossy().to_lowercase();
+                let rank = if filename.starts_with(&query) {
+                    0
+                } else if lower.contains(&query) || filename.contains(&query) {
+                    1
+                } else {
+                    return None;
+                };
+                Some((rank, reference))
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by_key(|(rank, reference)| {
+            (*rank, reference.path.components().count(), &reference.path)
+        });
+        matches
+            .into_iter()
+            .take(MAX_ROWS)
+            .map(|(_, reference)| Candidate {
+                name: reference.display(),
+                detail: reference.path.extension().map_or_else(
+                    || "文件".into(),
+                    |value| value.to_string_lossy().into_owned(),
+                ),
+                content: ComposerContent::File {
+                    reference: reference.clone(),
+                },
+                enabled: true,
+            })
+            .collect()
+    }
+}
+
+fn file_scope(world: &World) -> Option<FileScope> {
+    let chat = world.resource::<ChatState>();
+    let projects = world.resource::<crate::projects::ProjectState>();
+    if let Some(session) = &chat.session {
+        let project = projects
+            .session_project(session.id)
+            .map(|project| project.directory.clone());
+        return Some(FileScope {
+            working_directory: session.working_path.clone(),
+            project,
+        });
+    }
+    let working_directory = match chat.draft_target()? {
+        crate::conversation::NewChatTarget::Project(project) => {
+            projects.project(project)?.directory.clone()
+        }
+        crate::conversation::NewChatTarget::Standalone => std::env::current_dir().ok()?,
+    };
+    Some(FileScope {
+        working_directory,
+        project: None,
+    })
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -46,6 +151,7 @@ struct Candidate {
 #[derive(Resource, Default)]
 struct Completion {
     skills: Vec<SkillEntry>,
+    files: FileCatalog,
     connections: Vec<ConnectionStatus>,
     pending_skills: Option<u64>,
     failure: Option<String>,
@@ -102,18 +208,40 @@ fn trigger(world: &mut World) -> Result<Option<Trigger>> {
     let Some(before) = value.get(..position.span.start) else {
         return Ok(None);
     };
-    let query = before.trim_end_matches(|ch: char| ch.is_alphanumeric() || matches!(ch, '_' | '-'));
-    let Some(prefix) = query.strip_suffix('$') else {
+    let Some((offset, marker)) = before
+        .char_indices()
+        .rev()
+        .take_while(|(_, ch)| !ch.is_whitespace())
+        .find(|(_, ch)| matches!(ch, '$' | '@'))
+    else {
         return Ok(None);
     };
-    if prefix.ends_with(|ch: char| ch.is_alphanumeric() || matches!(ch, '\\' | '$')) {
+    let prefix = &before[..offset];
+    if prefix.ends_with(|ch: char| ch.is_alphanumeric() || matches!(ch, '\\' | '$' | '@')) {
         return Ok(None);
     }
-    position.span.start = prefix.len();
+    let query = &before[offset + marker.len_utf8()..];
+    let kind = if marker == '$' {
+        if !query
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || matches!(ch, '_' | '-'))
+        {
+            return Ok(None);
+        }
+        Kind::Capability
+    } else {
+        if query.contains([':', '"', '<', '>', '|', '?', '*']) {
+            return Ok(None);
+        }
+        Kind::File
+    };
+    position.span.start = offset;
     Ok(Some(Trigger {
         root,
         replacement: position,
-        query: before[query.len()..].to_lowercase(),
+        query: query.to_lowercase(),
+        kind,
+        token: before[offset..].to_owned(),
     }))
 }
 
@@ -222,15 +350,24 @@ pub(crate) fn active(world: &World, root: Entity) -> bool {
 
 pub(crate) fn update(world: &mut World) -> Result {
     let next = trigger(world)?;
+    let scope = next
+        .as_ref()
+        .filter(|next| next.kind == Kind::File)
+        .and_then(|_| file_scope(world));
     let mut state = world.resource_mut::<Completion>();
     if state.dismissed.is_some() && state.dismissed != next {
         state.dismissed = None;
     }
     let next = next.filter(|next| state.dismissed.as_ref() != Some(next));
-    if next == state.trigger && !state.dirty {
+    let previous_kind = state.trigger.as_ref().map(|trigger| trigger.kind);
+    let kind = next.as_ref().map(|trigger| trigger.kind);
+    let files_changed =
+        kind == Some(Kind::File) && state.files.update(scope, previous_kind != kind);
+    if next == state.trigger && !state.dirty && !files_changed {
         return Ok(());
     }
-    let request = next.is_some() && state.trigger.is_none() && state.pending_skills.is_none();
+    let request =
+        kind == Some(Kind::Capability) && previous_kind != kind && state.pending_skills.is_none();
     let changed = next != state.trigger;
     state.trigger = next;
     state.dirty = false;
@@ -251,7 +388,10 @@ pub(crate) fn update(world: &mut World) -> Result {
     let choices = state
         .trigger
         .as_ref()
-        .map(|trigger| candidates(state, world.resource::<ChatState>(), &trigger.query))
+        .map(|trigger| match trigger.kind {
+            Kind::Capability => candidates(state, world.resource::<ChatState>(), &trigger.query),
+            Kind::File => state.files.search(&trigger.query),
+        })
         .unwrap_or_default();
     let mut state = world.resource_mut::<Completion>();
     let selected = if changed {
@@ -321,6 +461,11 @@ fn choose(world: &mut World, index: usize) -> Result {
     let Some(trigger) = state.trigger.clone() else {
         return Ok(());
     };
+    let value = WidgetryTextFieldHeadless::text(world, trigger.root)
+        .map_err(|failure| failure.into_bevy_error())?;
+    if value.get(trigger.replacement.span.clone()) != Some(trigger.token.as_str()) {
+        return Ok(());
+    }
     let content = candidate.content.clone();
     world.resource_mut::<Completion>().trigger = None;
     composer::insert(world, trigger.replacement, content)
@@ -353,13 +498,18 @@ fn render(world: &mut World) -> Result {
     }
     let choices = state.choices.clone();
     let selected = state.selected;
-    let empty = if state.pending_skills.is_some() {
-        "正在读取能力目录…".to_owned()
-    } else {
-        state
+    let empty = match trigger.kind {
+        Kind::Capability if state.pending_skills.is_some() => "正在读取能力目录…".to_owned(),
+        Kind::Capability => state
             .failure
             .clone()
-            .unwrap_or_else(|| "没有匹配的能力".into())
+            .unwrap_or_else(|| "没有匹配的能力".into()),
+        Kind::File if state.files.loading.is_some() => "正在读取项目文件…".to_owned(),
+        Kind::File => state
+            .files
+            .error
+            .clone()
+            .unwrap_or_else(|| "没有匹配的文件".into()),
     };
     let theme = world.resource::<WidgetryTheme>();
     let background = theme.window.frame.normal.background;

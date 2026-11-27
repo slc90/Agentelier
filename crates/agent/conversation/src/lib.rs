@@ -31,6 +31,8 @@ pub use composer::{
 mod control;
 mod conversation;
 mod expression;
+mod file_reference;
+pub use file_reference::{FileReference, FileScope};
 mod mailbox;
 pub use mailbox::{
     AgentMessage, AgentMessageId, ClaimedMessage, DeliveryMode, MAX_AGENT_MESSAGE_CHARS,

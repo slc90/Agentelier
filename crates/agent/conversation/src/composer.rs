@@ -2,7 +2,6 @@ use crate::{AudioAttachment, ConversationFailure, SessionId, TranscriptId, Trans
 pub use agentelier_skills::SkillIdentity;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::{Component, PathBuf};
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ComposerElement {
@@ -35,7 +34,7 @@ pub enum ComposerContent {
         identity: McpIdentity,
     },
     File {
-        path: PathBuf,
+        reference: crate::FileReference,
     },
     Image {
         image: InputImage,
@@ -337,12 +336,7 @@ impl ComposerMessage {
                             .as_ref()
                             .is_none_or(|tool| !tool.name.is_empty())
                 }
-                ComposerContent::File { path } => {
-                    !path.as_os_str().is_empty()
-                        && path
-                            .components()
-                            .all(|part| matches!(part, Component::Normal(_)))
-                }
+                ComposerContent::File { reference } => reference.valid_shape(),
                 ComposerContent::Image { image } => {
                     image
                         .image
@@ -408,16 +402,7 @@ impl ComposerContent {
                 text.push('$');
                 text.push_str(label);
             }
-            ComposerContent::File { path } => {
-                let path = path.to_string_lossy();
-                if path.contains(char::is_whitespace) {
-                    text.push('"');
-                    text.push_str(&path);
-                    text.push('"');
-                } else {
-                    text.push_str(&path);
-                }
-            }
+            ComposerContent::File { reference } => text.push_str(&reference.display()),
             ComposerContent::Audio { .. } | ComposerContent::Image { .. } => {}
         }
     }

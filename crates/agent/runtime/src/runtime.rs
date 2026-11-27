@@ -1189,6 +1189,14 @@ impl AgentRuntime {
                                             continue;
                                         }
                                         if let SessionCommand::Enqueue { id, ref input, .. } = command
+                                            && let Err(failure) = composer::validate_session_files(&input.elements, &*conversation, &store).await
+                                        {
+                                            emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Queue(agentelier_conversation::QueueEvent {
+                                                id, view: conversation.current(), decision: agentelier_conversation::QueueDecision::Rejected(failure.to_string()),
+                                            })))?;
+                                            continue;
+                                        }
+                                        if let SessionCommand::Enqueue { id, ref input, .. } = command
                                             && let Err(failure) = composer::validate(&input.elements, &mcp_connections, &user_skills).await
                                         {
                                             emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Queue(agentelier_conversation::QueueEvent {
@@ -1409,10 +1417,13 @@ impl AgentRuntime {
                                                     _ => return Err(RuntimeFailure::ModelState),
                                                 };
                                                 let prepared = match resolved {
-                                                    Ok((settings, project)) => creation::freeze_origin(settings, &data_root)
-                                                        .await
-                                                        .and_then(|settings| next.conversation.prepare(settings, &tools, None))
-                                                        .map(|prepared| (prepared, project)),
+                                                    Ok((settings, project)) => async {
+                                                        if let Some(input) = &first {
+                                                            composer::validate_files(&input.elements, settings.working_directory.clone(), project, &store).await?;
+                                                        }
+                                                        let settings = creation::freeze_origin(settings, &data_root).await?;
+                                                        next.conversation.prepare(settings, &tools, None).map(|prepared| (prepared, project))
+                                                    }.await,
                                                     Err(failure) => Err(failure),
                                                 };
                                                 let started = prepared.and_then(|(prepared, project)| {
@@ -1442,6 +1453,13 @@ impl AgentRuntime {
                                                 }
                                                 if let ConversationRequest::Send { ref input, .. } = request
                                                     && let Err(failure) = composer::validate(&input.elements, &mcp_connections, &user_skills).await
+                                                {
+                                                    control.finished.cancel();
+                                                    emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
+                                                    continue;
+                                                }
+                                                if let ConversationRequest::Send { ref input, .. } = request
+                                                    && let Err(failure) = composer::validate_session_files(&input.elements, &*conversation, &store).await
                                                 {
                                                     control.finished.cancel();
                                                     emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
