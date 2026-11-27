@@ -9,7 +9,15 @@ use agentelier_llm_model::{
 use agentelier_tools::{MAX_TOOL_BODY_BYTES, ToolCatalog, ToolPayload, ToolResult, ToolStatus};
 use std::sync::Arc;
 
+pub(crate) struct PendingAdmission {
+    pub(crate) prior_turn: Option<Box<TurnView>>,
+    pub(crate) prior_notice: Option<String>,
+    pub(crate) prior_background_paused: bool,
+    pub(crate) queued: Option<crate::QueuedInput>,
+}
+
 pub(crate) struct ActiveState {
+    pub(crate) admission: Option<PendingAdmission>,
     pub(crate) memory: Option<Arc<agentelier_llm_model::MemorySnapshot>>,
     pub(crate) source_sequence: Option<u64>,
     pub(crate) responses: std::collections::BTreeMap<u64, (crate::TurnId, u32)>,
@@ -52,7 +60,7 @@ impl ActiveTurn<'_> {
             .view
             .turn
             .as_ref()
-            .and_then(|turn| turn.transcript.as_ref())
+            .and_then(|turn| turn.submission.transcript.as_ref())
             .map(|reference| self.view.transcript_evidence(reference))
             .transpose()?;
         self.view.context.task_material_tokens =
@@ -216,7 +224,7 @@ impl ActiveTurn<'_> {
             .as_ref()
             .ok_or_else(|| ConversationFailure::new("工具调用缺少当前用户任务"))?;
         let statements = (!turn.result_continuation)
-            .then(|| turn.input.clone())
+            .then(|| turn.submission.text().to_owned())
             .into_iter()
             .chain(
                 turn.steers
@@ -418,7 +426,7 @@ impl ActiveTurn<'_> {
         self.view
             .turn
             .as_ref()
-            .map(|turn| turn.input.clone())
+            .map(|turn| turn.submission.text().to_owned())
             .ok_or_else(|| ConversationFailure::new("活动任务缺少用户输入"))
     }
 
@@ -437,6 +445,7 @@ impl ActiveTurn<'_> {
             .continuation
             .is_some_and(|source| source.request == turn.request_index);
         let transcript = turn
+            .submission
             .transcript
             .as_ref()
             .map(|reference| self.view.transcript_evidence(reference))
@@ -445,7 +454,7 @@ impl ActiveTurn<'_> {
             return Err(ConversationFailure::new("同步调用的结果尚未进入历史"));
         }
         let context = if !self.state.input_retained {
-            self.history.with_user(&turn.input)
+            self.history.with_user(turn.submission.text())
         } else {
             self.history.clone()
         };
@@ -541,7 +550,7 @@ impl ActiveTurn<'_> {
         let history = if self.state.input_retained {
             &*self.history
         } else {
-            input = self.history.with_user(&turn.input);
+            input = self.history.with_user(turn.submission.text());
             &input
         };
         context.refresh(
@@ -750,7 +759,7 @@ impl ActiveTurn<'_> {
             .checked_add(1)
             .ok_or(ConversationFailure::new("请求序号已耗尽"))?;
         if !self.state.input_retained {
-            *self.history = self.history.with_user(&turn.input);
+            *self.history = self.history.with_user(turn.submission.text());
             self.state.input_retained = true;
         }
         let mut applied = Vec::new();
@@ -817,7 +826,7 @@ impl ActiveTurn<'_> {
         let mut history = if self.state.input_retained {
             self.history.clone()
         } else {
-            self.history.with_user(&turn.input)
+            self.history.with_user(turn.submission.text())
         };
         for text in turn
             .steers
@@ -960,7 +969,7 @@ impl ActiveTurn<'_> {
         let append = self
             .history
             .response_append(
-                (!self.state.input_retained).then_some(turn.input.as_str()),
+                (!self.state.input_retained).then_some(turn.submission.text()),
                 &result.output,
             )
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
@@ -1305,7 +1314,7 @@ impl ActiveTurn<'_> {
         }
         self.history
             .append_response(
-                (!self.state.input_retained).then_some(turn.input.as_str()),
+                (!self.state.input_retained).then_some(turn.submission.text()),
                 result.output,
             )
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;

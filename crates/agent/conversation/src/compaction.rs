@@ -82,6 +82,23 @@ impl CompactionCandidate {
     }
 }
 impl ActiveTurn<'_> {
+    pub fn admission_sequence(&self) -> Option<u64> {
+        self.state.source_sequence
+    }
+
+    pub fn record_admission(&mut self, sequence: u64) {
+        self.recorded(sequence);
+        self.state.admission = None;
+        if self.view.turn.as_ref().is_some_and(|turn| {
+            !turn.is_retry
+                && turn
+                    .submission
+                    .uses_audio_draft(self.view.audio_draft.as_ref())
+        }) {
+            self.view.audio_draft = None;
+        }
+    }
+
     pub fn recorded(&mut self, sequence: u64) {
         self.state.source_sequence = Some(sequence);
     }

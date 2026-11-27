@@ -104,7 +104,7 @@ impl Dialogue {
         settings.kind = SessionKind::MemoryManagement;
         let prepared = self.conversation.prepare(settings, &[], None)?;
         let (control, _, _) = ModelControl::new(id);
-        let mut creation = Creation::start(id, control, prepared, None, store)?;
+        let mut creation = Creation::start(id, control, prepared, None, None, store)?;
         let commit = creation.wait().await;
         match creation.complete(commit, &mut self.conversation).0 {
             ConversationEvent::Created(view) => Ok(view),
@@ -182,14 +182,7 @@ impl Dialogue {
             Signal::Update(Some(event)) => {
                 let model = self.model.as_ref().ok_or(RuntimeFailure::ModelState)?;
                 model.check_instance(&self.conversation)?;
-                model_task::progress(
-                    &mut self.conversation,
-                    model.id,
-                    event,
-                    &client,
-                    &relay,
-                    None,
-                )
+                model_task::progress(&mut self.conversation, model.id, event, &client, &relay)
             }
             Signal::Update(None) => {
                 self.incoming = None;

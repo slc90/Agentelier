@@ -121,7 +121,7 @@ impl TranscriptionState {
                     session
                         .audio_draft
                         .iter()
-                        .chain(turns().filter_map(|turn| turn.audio.as_ref()))
+                        .chain(turns().flat_map(|turn| &turn.audio))
                         .any(|audio| audio.id == entry.audio)
                 });
         available.then_some(id)
@@ -520,7 +520,7 @@ fn synchronize_selection(world: &mut World) {
         let source = session
             .audio_draft
             .iter()
-            .chain(turns().filter_map(|turn| turn.audio.as_ref()))
+            .chain(turns().flat_map(|turn| &turn.audio))
             .find(|audio| audio.id == document.audio)?;
         Some(source_label(&source.name, &document.engine, id))
     });

@@ -41,9 +41,7 @@ impl ChildTurn {
             operation,
             ConversationRequest::Send {
                 session: thread,
-                input: task,
-                audio: None,
-                transcript: None,
+                input: agentelier_conversation::ComposerSubmission::text(task),
             },
         )
     }
@@ -220,7 +218,7 @@ impl Execution {
                         }
                     }
                     Some(event) => {
-                        if let Err(failure) = model_task::progress(&mut conversation, operation, event, &store, &internal_only, None) {
+                        if let Err(failure) = model_task::progress(&mut conversation, operation, event, &store, &internal_only) {
                             first_failure.get_or_insert(failure);
                             task.control.cancel.cancel();
                         }

@@ -715,6 +715,14 @@ pub(super) fn load(
             RecordEvent::AgentTurn { event, .. } => event.as_ref(),
             event => event,
         };
+        if let Some(input) = crate::composer::admitted_input(event) {
+            for audio in input.audio() {
+                crate::attachments::read_audio(root, session, audio)?;
+            }
+            for image in input.images() {
+                crate::composer::read_image(root, session, image)?;
+            }
+        }
         if let agentelier_conversation::RecordEvent::AudioDraft {
             attachment: Some(audio),
             ..

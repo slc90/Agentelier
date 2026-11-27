@@ -50,7 +50,7 @@ impl crate::conversation::ChatSession {
             .view
             .turn
             .as_ref()
-            .and_then(|turn| turn.transcript.as_ref())
+            .and_then(|turn| turn.submission.transcript.as_ref())
             .map(|reference| self.view.transcript_evidence(reference))
             .transpose()?;
         context.task_material_tokens = context

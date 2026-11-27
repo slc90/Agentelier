@@ -106,10 +106,15 @@ pub(crate) fn receive(state: &mut ChatState, event: QueueEvent) -> Option<Pendin
             .map(|input| ChatQueuedInput {
                 operation_id: input.operation_id,
                 input_id: input.input_id,
-                text: input.text,
-                transcript: input.transcript.map(Into::into),
+                text: input.submission.text().to_owned(),
+                transcript: input
+                    .submission
+                    .transcript
+                    .map(agentelier_conversation_bridge::TranscriptReferenceView::from)
+                    .map(Into::into),
             })
             .collect();
+        session.audio_draft = view.audio_draft.map(Into::into);
         session.queue_paused = view.queue_paused;
         session.execution_blocked = view.execution_blocked;
     }

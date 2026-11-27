@@ -87,8 +87,9 @@ impl crate::SessionView {
                     .iter()
                     .map(Box::as_ref)
                     .chain(&self.previous_turns)
-                    .filter_map(|turn| turn.audio.as_ref()),
+                    .flat_map(|turn| turn.submission.audio()),
             )
+            .chain(self.queue.iter().flat_map(|input| input.submission.audio()))
             .find(|item| item.id == audio)
     }
 
@@ -113,7 +114,7 @@ impl crate::SessionView {
                 .iter()
                 .map(Box::as_ref)
                 .chain(&self.previous_turns)
-                .filter_map(|turn| turn.transcript.as_ref())
+                .filter_map(|turn| turn.submission.transcript.as_ref())
                 .find(|source| source.transcript == id)
                 .ok_or_else(|| ConversationFailure::new("所选文稿缺少原始音频附件"))?;
             result.evidence(self.id, reference)?;
@@ -213,7 +214,7 @@ impl Conversation {
             .map(Box::as_ref)
             .chain(&view.previous_turns)
             .flat_map(|turn| {
-                turn.audio.iter().chain(
+                turn.submission.audio().chain(
                     turn.tools
                         .iter()
                         .filter(|tool| tool.retained)

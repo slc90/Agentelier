@@ -464,7 +464,7 @@ impl Invocation {
         let id = env.operations.allocate().map_err(failure)?;
         let (control, _, _) = ModelControl::new(id);
         let mut pending =
-            creation::Creation::start(id, control, prepared, Some(project), env.store)?;
+            creation::Creation::start(id, control, prepared, Some(project), None, env.store)?;
         let reply = pending.wait().await;
         let (event, _) = pending.complete(reply, &mut owner.conversation);
         let session = match &event {
@@ -513,9 +513,7 @@ impl<P: Fn(AgentEvent) -> Result<(), DeliveryFailure>> Environment<'_, P> {
             id,
             ConversationRequest::Send {
                 session,
-                input,
-                audio: None,
-                transcript: None,
+                input: agentelier_conversation::ComposerSubmission::text(input),
             },
         )?;
         let tools = tool_jobs::SessionTools::for_session(
@@ -533,12 +531,6 @@ impl<P: Fn(AgentEvent) -> Result<(), DeliveryFailure>> Environment<'_, P> {
             .lock()
             .map_err(failure)?
             .insert(id, control.clone());
-        super::emit(
-            self.publish,
-            id,
-            AgentEventKind::Conversation(ConversationEvent::Accepted(view)),
-        )
-        .map_err(failure)?;
         let (progress, receiver) = mpsc::channel(super::PROGRESS_CAPACITY);
         owner.progress = Some(receiver);
         owner.model = Some(ModelTask::start(

@@ -3,22 +3,21 @@ use agentelier_conversation::{
     AgentId, Conversation, ConversationEvent, ConversationFailure, PreparedSession, ProjectId,
     RecordEvent, SessionId, SessionSettings, SessionView, SteerInput,
 };
-use agentelier_session_store::{Commit, SessionStore};
+use agentelier_session_store::{Commit, Publication, SessionStore};
 use std::io;
 use std::path::Path;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tracing::{error, info};
 
 pub(super) struct Creation {
     pub(super) id: u64,
     pub(super) control: ModelControl,
     prepared: PreparedSession,
-    reply: oneshot::Receiver<io::Result<Commit>>,
+    reply: Publication,
     pub(super) first: Option<FirstMessage>,
 }
 
 pub(super) struct FirstMessage {
-    pub(super) input: String,
     pub(super) steers: mpsc::Receiver<SteerInput>,
     pub(super) task_actions: mpsc::Receiver<agentelier_turn_runner::SessionTaskCommand>,
 }
@@ -76,10 +75,11 @@ impl Creation {
         control: ModelControl,
         prepared: PreparedSession,
         project: Option<ProjectId>,
+        first_record: Option<RecordEvent>,
         store: &SessionStore,
     ) -> Result<Self, ConversationFailure> {
         let reply = store
-            .create(prepared.initial.clone(), project)
+            .publish(prepared.initial.clone(), project, first_record)
             .map_err(|failure| ConversationFailure::new(format!("无法创建会话存档：{failure}")))?;
         info!(operation_id = id, session_id = %prepared.initial.session, "开始创建会话存档");
         Ok(Self {
@@ -92,9 +92,7 @@ impl Creation {
     }
 
     pub(super) async fn wait(&mut self) -> io::Result<Commit> {
-        (&mut self.reply)
-            .await
-            .map_err(|_| io::Error::other("会话存储工作者未返回提交结果"))?
+        self.reply.wait().await
     }
 
     pub(super) fn complete(
@@ -127,6 +125,13 @@ impl Creation {
             Ok((view, instance)) => {
                 info!(operation_id = self.id, session_id = %view.id, agent_id = %agent, agent_path = "root", runtime_instance = %instance, model = %view.settings.slug, effort = ?view.settings.effort, sequence = commit.sequence, "会话初始存档已提交并登记 Root Agent");
                 if self.first.is_some() {
+                    match conversation.active_turn(self.id) {
+                        Ok(mut turn) => turn.recorded(commit.sequence),
+                        Err(failure) => {
+                            self.control.finished.cancel();
+                            return (ConversationEvent::Rejected(failure.to_string()), None);
+                        }
+                    }
                     (ConversationEvent::CreatedForSend(view), self.first)
                 } else {
                     self.control.finished.cancel();

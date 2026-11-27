@@ -13,7 +13,7 @@ use tempfile::NamedTempFile;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 
-fn directory(path: &Path, parent: &Path) -> io::Result<PathBuf> {
+pub(super) fn directory(path: &Path, parent: &Path) -> io::Result<PathBuf> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Err(io::Error::other("会话附件路径不是普通目录或包含重解析点"));
@@ -41,6 +41,10 @@ pub(super) fn session_directory(root: &Path, session: SessionId) -> io::Result<P
 
 fn attachment_directory(root: &Path, session: SessionId, create: bool) -> io::Result<PathBuf> {
     let session = session_directory(root, session)?;
+    local_attachment_directory(&session, create)
+}
+
+pub(super) fn local_attachment_directory(session: &Path, create: bool) -> io::Result<PathBuf> {
     let path = session.join("attachments");
     if create {
         match fs::create_dir(&path) {
@@ -49,7 +53,7 @@ fn attachment_directory(root: &Path, session: SessionId, create: bool) -> io::Re
             Err(failure) => return Err(failure),
         }
     }
-    directory(&path, &session)
+    directory(&path, session)
 }
 
 fn filename(reference: &StoredImage) -> io::Result<String> {
@@ -69,7 +73,7 @@ fn read_file(path: &Path, reference: &StoredImage) -> io::Result<Arc<ImagePayloa
     ImagePayload::from_encoded(&reference.image, bytes).map(Arc::new)
 }
 
-fn read_encoded(path: &Path, expected: usize, limit: usize) -> io::Result<Vec<u8>> {
+pub(super) fn read_encoded(path: &Path, expected: usize, limit: usize) -> io::Result<Vec<u8>> {
     let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
@@ -104,7 +108,7 @@ pub(super) fn save(root: &Path, reference: &StoredImage, image: &ImagePayload) -
     })
 }
 
-fn write_encoded(
+pub(super) fn write_encoded(
     path: &Path,
     bytes: &[u8],
     verify: impl Fn(&Path) -> io::Result<()>,
@@ -167,7 +171,7 @@ pub(super) fn audio_file(name: &str) -> bool {
         })
 }
 
-fn audio_filename(attachment: &AudioAttachment) -> io::Result<String> {
+pub(super) fn audio_filename(attachment: &AudioAttachment) -> io::Result<String> {
     attachment.validate().map_err(io::Error::other)?;
     Ok(format!(
         "audio-{}.{}",
@@ -176,7 +180,7 @@ fn audio_filename(attachment: &AudioAttachment) -> io::Result<String> {
     ))
 }
 
-fn read_audio_file(path: &Path, attachment: &AudioAttachment) -> io::Result<Vec<u8>> {
+pub(super) fn read_audio_file(path: &Path, attachment: &AudioAttachment) -> io::Result<Vec<u8>> {
     let bytes = read_encoded(path, attachment.encoded_bytes, MAX_AUDIO_BYTES)?;
     if bytes.len() != attachment.encoded_bytes
         || crate::audio::checksum(&bytes) != attachment.digest

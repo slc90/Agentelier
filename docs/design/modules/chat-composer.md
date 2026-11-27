@@ -20,6 +20,8 @@ flowchart TB
 
 这套设计从草稿本身开始：先确定一条消息可以由什么组成，再说明这些内容如何进入编辑器，最后看它们怎样跨越会话边界进入模型请求。
 
+当前 Conversation、Bridge 和 Session Store 已使用有序输入快照，并支持将首条接纳与会话一起发布。Composer 控件和新增媒体入口按实施计划接入。
+
 ## 一条消息由有序内容组成
 
 当前聊天输入主要由 `ChatState.draft` 保存文本，而音频附件另存于 `ChatSession.audio_draft`。`ConversationRequest::Send` 再把文本、单个音频 ID 和转写引用分别传递。这样的表示可以处理简单文本或一个音频附件，却无法完整表达一条消息里多段文字、多个媒体和能力引用之间的关系。

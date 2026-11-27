@@ -180,47 +180,58 @@ pub async fn run(
     connection: Arc<tokio::sync::Mutex<GenerationConnection>>,
 ) -> Result<(), ConversationFailure> {
     let active = TurnAccess::new(progress.clone());
-    let (turn_id, native) = active
-        .call(|turn| Ok((turn.turn_id()?, turn.supports_detached_work())))
-        .await?;
-    let event = active
+    let (turn_id, native, sequence) = active
         .call(|turn| {
-            let state = turn.stored_state();
-            Ok(match turn.continuation() {
-                Some(source) => RecordEvent::ContinuedWithoutCompaction { state, source },
-                None => RecordEvent::Accepted { state },
-            })
+            Ok((
+                turn.turn_id()?,
+                turn.supports_detached_work(),
+                turn.admission_sequence(),
+            ))
         })
         .await?;
-    let admitted = active.record(event).await;
-    if let Ok(sequence) = admitted {
+    let admitted = if let Some(sequence) = sequence {
+        Ok(sequence)
+    } else {
+        let event = active
+            .call(|turn| {
+                let state = turn.stored_state();
+                Ok(match turn.continuation() {
+                    Some(source) => RecordEvent::ContinuedWithoutCompaction { state, source },
+                    None => RecordEvent::Accepted { state },
+                })
+            })
+            .await?;
+        active.record(event).await
+    };
+    let sequence = admitted?;
+    {
         active
             .call(move |mut turn| {
-                turn.recorded(sequence);
+                turn.record_admission(sequence);
                 Ok(())
             })
             .await?;
+        progress
+            .send(RunnerEvent::Admitted)
+            .await
+            .map_err(|_| ConversationFailure::new("任务接纳回执接收端已关闭"))?;
     }
     let mut jobs = TurnTools::new(work.lock_owned().await, controls, turn_id);
     let mut session_connection = connection.lock().await;
     let mut connection = std::mem::take(&mut *session_connection);
-    let mut outcome = if admitted.is_ok() {
-        run_task(
-            &active,
-            &dispatcher,
-            credentials,
-            &cancel,
-            &progress,
-            &mut steers,
-            user_skills_root,
-            memory,
-            &mut jobs,
-            &mut connection,
-        )
-        .await
-    } else {
-        admitted.map(|_| TurnStatus::Cancelled)
-    };
+    let mut outcome = run_task(
+        &active,
+        &dispatcher,
+        credentials,
+        &cancel,
+        &progress,
+        &mut steers,
+        user_skills_root,
+        memory,
+        &mut jobs,
+        &mut connection,
+    )
+    .await;
     let detach = native && outcome.is_ok() && !cancel.is_cancelled() && !dispatcher.is_blocked();
     let projection = if detach {
         Ok(())

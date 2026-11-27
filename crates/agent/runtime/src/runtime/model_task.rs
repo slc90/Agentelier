@@ -109,7 +109,6 @@ pub(super) fn progress(
     event: RunnerEvent,
     store: &SessionStoreClient,
     publish: &impl Fn(AgentEvent) -> Result<(), DeliveryFailure>,
-    admitted: Option<tokio::sync::oneshot::Sender<()>>,
 ) -> Result<(), RuntimeFailure> {
     match event {
         RunnerEvent::Inbox(request) => {
@@ -147,11 +146,6 @@ pub(super) fn progress(
                             Err(ConversationFailure::new("会话记录提交身份不一致"))
                         }
                     });
-                if result.is_ok()
-                    && let Some(admitted) = admitted
-                {
-                    let _closed = admitted.send(());
-                }
                 drop(reply.send(result));
             });
             Ok(())
@@ -255,6 +249,15 @@ pub(super) fn progress(
             });
             Ok(())
         }
+        RunnerEvent::Admitted => {
+            conversation.active_turn(id)?;
+            let view = conversation.current().ok_or(RuntimeFailure::ModelState)?;
+            emit(
+                publish,
+                id,
+                AgentEventKind::Conversation(ConversationEvent::Accepted(view)),
+            )
+        }
         RunnerEvent::Progress => {
             if id == 0 {
                 conversation.tool_turn()?;
@@ -341,7 +344,7 @@ pub(super) fn drain_progress(
 ) -> Result<(), RuntimeFailure> {
     if let Some(receiver) = incoming {
         while let Ok(event) = receiver.try_recv() {
-            progress(conversation, id, event, store, publish, None)?;
+            progress(conversation, id, event, store, publish)?;
         }
     }
     *incoming = None;
@@ -371,6 +374,14 @@ pub(super) fn complete(
             Ok(Some(TaskResult::Chat(Ok(())))) => conversation.finish(id)?,
             Ok(Some(TaskResult::Chat(Err(failure)))) => {
                 tracing::error!(operation_id = id, error = %failure, "聊天执行记录未确认");
+                if conversation.reject_unadmitted(id)? {
+                    if let Some(view) = conversation.current() {
+                        settle_root(conversation, &view, id)?;
+                    }
+                    return Ok(AgentEventKind::Conversation(ConversationEvent::Rejected(
+                        failure.to_string(),
+                    )));
+                }
                 conversation.interrupt(id)?
             }
             Err(_) => conversation.interrupt(id)?,
@@ -423,12 +434,12 @@ pub(super) async fn drive_idle(
     tokio::pin!(operation);
     let result = loop {
         tokio::select! { biased;
-            Some(event) = incoming.recv() => progress(conversation, 0, event, store, publish, None)?,
+            Some(event) = incoming.recv() => progress(conversation, 0, event, store, publish)?,
             result = &mut operation => break result,
         }
     };
     while let Ok(event) = incoming.try_recv() {
-        progress(conversation, 0, event, store, publish, None)?;
+        progress(conversation, 0, event, store, publish)?;
     }
     result.map_err(Into::into)
 }
@@ -493,7 +504,7 @@ pub(super) async fn stop_model(
                     Some(receiver) => receiver.recv().await,
                     None => std::future::pending().await,
                 }} => match event {
-                    Some(event) => if let Err(failure) = progress(conversation,task.id,event,&store.client(),publish,None) {
+                    Some(event) => if let Err(failure) = progress(conversation,task.id,event,&store.client(),publish) {
                         tracing::error!(error=%failure,"取消收尾时状态交付失败，继续回收任务");
                         progress_failure=progress_failure.or(Some(failure));
                     },
@@ -524,7 +535,10 @@ pub(super) async fn stop_model(
             _ => None,
         };
         let mut storage_failure = None;
-        if task.chat {
+        if matches!(
+            &event,
+            AgentEventKind::Conversation(ConversationEvent::Finished(_))
+        ) {
             let (state, history) = conversation.archive().ok_or(RuntimeFailure::ModelState)?;
             match store
                 .client()

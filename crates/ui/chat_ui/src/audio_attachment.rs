@@ -32,6 +32,22 @@ impl From<AudioAttachmentView> for ChatAudio {
 }
 
 impl ChatAudio {
+    pub(crate) fn attachment(&self) -> agentelier_conversation_bridge::AudioAttachment {
+        use agentelier_conversation_bridge::{AudioAttachment, AudioFormat};
+        AudioAttachment {
+            id: self.id,
+            name: self.name.clone(),
+            format: match self.mime.as_str() {
+                "audio/wav" => AudioFormat::Wav,
+                "audio/flac" => AudioFormat::Flac,
+                _ => AudioFormat::Mp3,
+            },
+            digest: self.digest.clone(),
+            encoded_bytes: self.encoded_bytes,
+            duration_ms: self.duration_ms,
+        }
+    }
+
     fn label(&self) -> String {
         let kib = self.encoded_bytes as f64 / 1024.0;
         let format = match self.mime.as_str() {

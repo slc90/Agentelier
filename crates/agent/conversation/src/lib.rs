@@ -23,6 +23,11 @@ pub use child_config::{
     AgentCreationRecord, ChildConfigSnapshot, ChildExecutionPolicy, ChildMaterials,
     ChildPreparation, ForkBoundary, ForkMode, PreparedChild,
 };
+mod composer;
+pub use composer::{
+    ComposerContent, ComposerElement, ComposerMessage, ComposerSubmission, InputImage, McpIdentity,
+    McpToolIdentity, SkillIdentity,
+};
 mod control;
 mod conversation;
 mod expression;

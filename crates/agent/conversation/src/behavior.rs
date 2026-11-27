@@ -116,7 +116,7 @@ pub(crate) fn for_request(view: &SessionView, turn: &TurnView) -> Option<String>
         .iter()
         .rev()
         .find(|input| matches!(input.state, SteerState::Applied) && !input.text.trim().is_empty())
-        .map_or(turn.input.as_str(), |input| input.text.as_str())
+        .map_or(turn.submission.text(), |input| input.text.as_str())
         .to_lowercase();
     let mut guidance = SCENARIOS
         .iter()

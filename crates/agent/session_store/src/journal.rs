@@ -28,11 +28,11 @@ pub(super) struct Writer(HashMap<SessionId, Cursor>);
 fn update(cursor: &mut Cursor, record: &SessionRecord) {
     track_scene_revisions(&mut cursor.scene_revisions, &record.event);
     let input = match &record.event {
-        RecordEvent::Accepted { state } => state.turn.as_ref().map(|turn| turn.input.as_str()),
+        RecordEvent::Accepted { state } => state.turn.as_ref().map(|turn| turn.submission.text()),
         RecordEvent::QueueChanged {
             decision: agentelier_conversation::QueueDecision::Enqueued,
             state,
-        } => state.queue.last().map(|input| input.text.as_str()),
+        } => state.queue.last().map(|input| input.submission.text()),
         _ => None,
     };
     if !cursor.titled
@@ -127,12 +127,7 @@ impl Writer {
 
     pub(super) fn append(&mut self, root: &Path, event: RecordEvent) -> io::Result<Commit> {
         let session = event.session();
-        let at_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(io::Error::other)?
-            .as_millis()
-            .try_into()
-            .map_err(io::Error::other)?;
+        let at_ms = timestamp()?;
         self.append_kind(
             root,
             session,
@@ -312,4 +307,13 @@ pub(super) fn write_summary(directory: &Path, summary: &SessionSummary) -> io::R
     temporary.as_file().sync_all()?;
     temporary.persist(path).map_err(|failure| failure.error)?;
     Ok(())
+}
+
+pub(super) fn timestamp() -> io::Result<u64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_millis()
+        .try_into()
+        .map_err(io::Error::other)
 }

@@ -3,6 +3,7 @@ compile_error!("This application supports Windows x64 only");
 
 mod attachments;
 mod audio;
+mod composer;
 mod deletion;
 mod journal;
 mod projects;
@@ -11,7 +12,7 @@ mod store;
 
 pub use audio::{AudioExtrema, summarize_audio};
 pub use store::{
-    Commit, FORMAT, FORMAT_VERSION, MetadataCommit, Record, RecordKind, SessionStore,
+    Commit, FORMAT, FORMAT_VERSION, MetadataCommit, Publication, Record, RecordKind, SessionStore,
     SessionStoreClient,
 };
 

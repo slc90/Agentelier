@@ -4,16 +4,14 @@ use crate::{Conversation, ConversationFailure, SessionId, SessionView, TurnId, T
 pub struct QueuedInput {
     pub operation_id: u64,
     pub input_id: TurnId,
-    pub text: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transcript: Option<agentelier_llm_model::TranscriptReference>,
+    #[serde(flatten)]
+    pub submission: crate::ComposerMessage,
 }
 pub enum SessionCommand {
     Enqueue {
         id: u64,
         session: SessionId,
-        text: String,
-        transcript: Option<crate::TranscriptId>,
+        input: crate::ComposerSubmission,
     },
     Remove {
         id: u64,
@@ -80,6 +78,15 @@ impl PreparedQueue {
             .filter(|session| session.view.id == self.state.session)
         {
             Some(session) => {
+                if matches!(self.decision, QueueDecision::Enqueued)
+                    && self.state.queue.last().is_some_and(|input| {
+                        input
+                            .submission
+                            .uses_audio_draft(session.view.audio_draft.as_ref())
+                    })
+                {
+                    session.view.audio_draft = None;
+                }
                 session.view.queue = self.state.queue;
                 session.view.queue_paused = self.state.queue_paused
                     || session.view.execution_blocked
@@ -152,18 +159,8 @@ impl Conversation {
             ));
         }
         match command {
-            SessionCommand::Enqueue {
-                id,
-                text,
-                transcript,
-                ..
-            } => {
-                if text.trim().is_empty() {
-                    return Err(ConversationFailure::new("不能排队空白消息"));
-                }
-                let transcript = transcript
-                    .map(|id| view.transcript_reference(id))
-                    .transpose()?;
+            SessionCommand::Enqueue { id, input, .. } => {
+                let submission = input.resolve(view)?;
                 let input_id = next_turn
                     .checked_add(1)
                     .ok_or(ConversationFailure::new("输入标识已耗尽"))?;
@@ -171,8 +168,7 @@ impl Conversation {
                 view.queue.push(QueuedInput {
                     operation_id: id,
                     input_id: TurnId(input_id),
-                    text,
-                    transcript,
+                    submission,
                 });
                 Ok(QueueDecision::Enqueued)
             }
@@ -234,18 +230,18 @@ impl Conversation {
             return Ok(None);
         };
         let session_id = session.view.id;
-        self.begin_input(
-            input.operation_id,
-            session_id,
-            Some(input.text),
-            None,
-            input.transcript,
-        )?;
+        self.begin_input(input.operation_id, session_id, Some(input.submission))?;
         let session = self
             .session
             .as_mut()
             .ok_or(ConversationFailure::new("出队缺少会话"))?;
-        session.view.queue.remove(0);
+        let queued = session.view.queue.remove(0);
+        let admission = session
+            .active
+            .as_mut()
+            .and_then(|active| active.admission.as_mut())
+            .ok_or_else(|| ConversationFailure::new("出队缺少接纳状态"))?;
+        admission.queued = Some(queued);
         session
             .view
             .turn

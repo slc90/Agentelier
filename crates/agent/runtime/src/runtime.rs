@@ -391,9 +391,7 @@ impl AgentRuntime {
                             mcp_connections.configure(servers);
                         }
                         let mut creating: Option<(creation::Creation, session_execution::Owner)> = None;
-                        let mut initial_send = None;
                         let mut title_jobs = tokio::task::JoinSet::new();
-                        let mut title_admissions = HashMap::new();
                         let mut loading: Option<loading::Loading> = None;
                         let mut catalog = Some(store.client().scan_startup().map_err(RuntimeFailure::Store)?);
                         let mut startup_catalog = true;
@@ -495,7 +493,6 @@ impl AgentRuntime {
                                         }
                                         continue;
                                     },
-                                    Some(command) = async { initial_send.take() }, if initial_send.is_some() => command,
                                     signal = memory_dialogue.next() => Command::MemoryDialogue(signal),
                                     Ok(()) = memory_status.changed() => Command::MemoryWork(*memory_status.borrow_and_update()),
                                     result = async {
@@ -808,7 +805,7 @@ impl AgentRuntime {
                                             continue;
                                         }
                                         let result = model_source(&account).map_err(RuntimeFailure::from)
-                                            .and_then(|source| memory_dialogue.send(id, ConversationRequest::Send { session, input, audio: None, transcript: None }, source, &store, &publish));
+                                            .and_then(|source| memory_dialogue.send(id, ConversationRequest::Send { session, input: agentelier_conversation::ComposerSubmission::text(input) }, source, &store, &publish));
                                         match result {
                                             Ok(()) => {}
                                             Err(RuntimeFailure::Conversation(failure)) => emit(&publish, id, AgentEventKind::Memory(Err(failure.to_string())))?,
@@ -1068,38 +1065,44 @@ impl AgentRuntime {
                                         let id = pending.id;
                                         let control = pending.control.clone();
                                         let (event, first) = pending.complete(result, &mut next.conversation);
-                                        if let Some(session) = next.conversation.session_id() {
-                                            owners.insert(Some(session), next);
-                                        }
-                                        if let (ConversationEvent::CreatedForSend(view), Some(first)) = (&event, first) {
+                                        let first_view = if let ConversationEvent::CreatedForSend(view) = &event {
+                                            Some(view.clone())
+                                        } else { None };
+                                        emit(&publish, id, AgentEventKind::Conversation(event))?;
+                                        if let (Some(view), Some(first)) = (first_view, first) {
                                             if let Some(source) = &view.settings.codex
                                                 && let Some((owner, models)) = &model_catalog
                                                 && owner == source
                                                 && let Some(model) = models.iter().find(|model| model.slug == view.settings.slug)
+                                                && let Some(turn) = &view.turn
                                             {
-                                                let (admitted, accepted) = tokio::sync::oneshot::channel();
-                                                title_admissions.insert(id, admitted);
                                                 let session = view.id;
                                                 let request = session_title::TitleRequest {
                                                     session,
                                                     source: source.clone(),
                                                     model: model.clone(),
-                                                    input: first.input.clone(),
+                                                    input: turn.submission.text().to_owned(),
                                                 };
                                                 let credentials = owner_credentials.clone();
                                                 let client = store.client();
                                                 let shutdown = runtime_shutdown.clone();
-                                                title_jobs.spawn(async move { (session, request.run(accepted, credentials, client, shutdown).await) });
+                                                title_jobs.spawn(async move { (session, request.run(credentials, client, shutdown).await) });
                                             }
-                                            initial_send = Some(Command::Conversation {
+                                            let tools = tool_jobs::SessionTools::for_session(&mut next.tools, &view, &next.conversation, store.client(), &ecs_access, &user_skills);
+                                            control.bind_root(&mut next.conversation, &view)?;
+                                            owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.insert(id, control.clone());
+                                            let (sender, receiver) = mpsc::channel(PROGRESS_CAPACITY);
+                                            next.progress = Some(receiver);
+                                            next.model = Some(ModelTask::start(
                                                 id,
                                                 control,
-                                                request: ConversationRequest::Send { session: view.id, input: first.input, audio: None, transcript: None },
-                                                steers: first.steers,
-                                                task_actions: first.task_actions,
-                                            });
+                                                owner_credentials.clone(),
+                                                TaskRequest::Chat(sender, first.steers, first.task_actions, user_skills.root_path().to_owned(), memory.as_ref().ok().map(Memory::client), tools),
+                                            ));
                                         }
-                                        emit(&publish, id, AgentEventKind::Conversation(event))?;
+                                        if let Some(session) = next.conversation.session_id() {
+                                            owners.insert(Some(session), next);
+                                        }
                                     }
                                     Command::Model {
                                         id,
@@ -1133,7 +1136,6 @@ impl AgentRuntime {
                                         }
                                         debug!(operation_id = task.id, "模型操作已真实结束并回收");
                                         drain_progress(conversation, task.id, progress_events, &store.client(), &publish)?;
-                                        title_admissions.remove(&task.id);
                                         let event = complete(conversation, task.id, task.chat, result)?;
                                         if !task.chat && let Some(source) = requesting_catalog.take()
                                             && account.codex_identity() == Some(&source)
@@ -1141,7 +1143,7 @@ impl AgentRuntime {
                                         {
                                             model_catalog = Some((source, models.clone()));
                                         }
-                                        if task.chat {
+                                        if matches!(&event, AgentEventKind::Conversation(ConversationEvent::Finished(_))) {
                                             if task.control.cancel.is_cancelled()
                                                 && let Err(failure) = children.settle_active(&store.client(), conversation, Some(mailbox_requests)).await
                                             {
@@ -1161,6 +1163,9 @@ impl AgentRuntime {
                                             task.control.finished.cancel();
                                             owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.remove(&task.id);
                                             capture_delivery(emit(&publish, task.id, event), &mut delivery_failure);
+                                            if task.chat && let Some(view) = conversation.current() {
+                                                capture_delivery(emit(&publish, 0, AgentEventKind::Conversation(ConversationEvent::IdleUpdated(view))), &mut delivery_failure);
+                                            }
                                         }
                                         if !*finalizing && !*pending_queue && suspending == 0 && pending_source.is_none() && pending_session_model.is_none() && delivery_failure.is_none() && !runtime_shutdown.is_cancelled()
                                             && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
@@ -1236,10 +1241,7 @@ impl AgentRuntime {
                                                 && let Some(bound) = task.control.turn.get() {
                                                 children.steer_wait(agentelier_conversation::AgentId::for_root(bound.session));
                                             }
-                                            let admitted = if matches!(&event, RunnerEvent::Record(record) if matches!(&record.event, agentelier_conversation::RecordEvent::Accepted { .. })) {
-                                                title_admissions.remove(&task.id)
-                                            } else { None };
-                                            progress(conversation, task.id, event, &store.client(), &publish, admitted)?;
+                                            progress(conversation, task.id, event, &store.client(), &publish)?;
                                         } else {
                                             *progress_events = None;
                                         }
@@ -1398,11 +1400,14 @@ impl AgentRuntime {
                                                     Err(failure) => Err(failure),
                                                 };
                                                 let started = prepared.and_then(|(prepared, project)| {
-                                                    if let Some(input) = &first {
-                                                        prepared.check_first_input(input)?;
-                                                    }
-                                                    let mut pending = creation::Creation::start(id, control.clone(), prepared, project, &store)?;
-                                                    pending.first = first.map(|input| creation::FirstMessage { input, steers, task_actions });
+                                                    let (prepared, record, first) = if let Some(input) = first {
+                                                        let (prepared, record) = prepared.prepare_first_input(id, input)?;
+                                                        (prepared, Some(record), Some(creation::FirstMessage { steers, task_actions }))
+                                                    } else {
+                                                        (prepared, None, None)
+                                                    };
+                                                    let mut pending = creation::Creation::start(id, control.clone(), prepared, project, record, &store)?;
+                                                    pending.first = first;
                                                     Ok(pending)
                                                 });
                                                 match started {
@@ -1415,7 +1420,6 @@ impl AgentRuntime {
                                             }
                                             request @ (ConversationRequest::Send { .. } | ConversationRequest::Retry { .. } | ConversationRequest::ContinueWithoutCompaction { .. } | ConversationRequest::ProcessResults { .. }) => {
                                                 if let Err(failure) = model_source(&account).and_then(|source| conversation.validate_model_source(source)) {
-                                                    title_admissions.remove(&id);
                                                     control.finished.cancel();
                                                     emit(&publish, id, AgentEventKind::Conversation(ConversationEvent::Rejected(failure.to_string())))?;
                                                     continue;
@@ -1425,13 +1429,6 @@ impl AgentRuntime {
                                                         let tools = tool_jobs::SessionTools::for_session(session_tools, &view, conversation, store.client(), &ecs_access, &user_skills);
                                                         control.bind_root(conversation, &view)?;
                                                         owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.insert(id, control.clone());
-                                                        emit(
-                                                            &publish,
-                                                            id,
-                                                            AgentEventKind::Conversation(
-                                                                ConversationEvent::Accepted(view),
-                                                            ),
-                                                        )?;
                                                         let (sender, receiver) =
                                                             mpsc::channel(PROGRESS_CAPACITY);
                                                         *progress_events = Some(receiver);
@@ -1443,7 +1440,6 @@ impl AgentRuntime {
                                                         ));
                                                     }
                                                     Err(failure) => {
-                                                        title_admissions.remove(&id);
                                                         control.finished.cancel();
                                                         emit(
                                                             &publish,
@@ -1524,7 +1520,6 @@ impl AgentRuntime {
                                             }
                                             requesting_catalog = None;
                                             model_catalog = None;
-                                            title_admissions.clear();
                                             memory_dialogue.stop("account_changed", &store, &publish).await?;
                                             for owner in owners.values() { owner.cancel(); }
                                             for owner in owners.values_mut() {

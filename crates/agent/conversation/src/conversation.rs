@@ -129,7 +129,7 @@ pub enum ConversationRequest {
     Create(SessionCreate),
     CreateAndSend {
         create: SessionCreate,
-        input: String,
+        input: crate::ComposerSubmission,
     },
     Reset {
         session: SessionId,
@@ -140,9 +140,7 @@ pub enum ConversationRequest {
     },
     Send {
         session: SessionId,
-        input: String,
-        audio: Option<crate::AudioId>,
-        transcript: Option<crate::TranscriptId>,
+        input: crate::ComposerSubmission,
     },
     Retry {
         session: SessionId,
@@ -303,11 +301,8 @@ pub struct TurnView {
     pub operation_id: u64,
     pub input_id: TurnId,
     pub is_retry: bool,
-    pub input: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audio: Option<crate::AudioAttachment>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transcript: Option<agentelier_llm_model::TranscriptReference>,
+    #[serde(flatten)]
+    pub submission: crate::ComposerMessage,
     pub messages: Vec<OutputMessage>,
     pub status: TurnStatus,
     pub request_items: Vec<ProtocolItemSummary>,
@@ -430,6 +425,29 @@ impl PreparedSession {
             .as_ref()
             .ok_or_else(|| ConversationFailure::new("新会话缺少历史"))?;
         self.session.check_pending_input(history, input, None)
+    }
+
+    pub fn prepare_first_input(
+        mut self,
+        operation: u64,
+        input: crate::ComposerSubmission,
+    ) -> Result<(Self, crate::RecordEvent), ConversationFailure> {
+        let session = self.initial.session;
+        let mut pending = Conversation {
+            session: Some(self.session),
+            ..Default::default()
+        };
+        let view = pending.start(operation, ConversationRequest::Send { session, input })?;
+        self.session = pending
+            .session
+            .take()
+            .ok_or_else(|| ConversationFailure::new("首条消息缺少会话"))?;
+        Ok((
+            self,
+            crate::RecordEvent::Accepted {
+                state: crate::StoredState::from(&view),
+            },
+        ))
     }
 }
 
@@ -779,7 +797,7 @@ impl Conversation {
         let view = prepared.session.view.clone();
         let instance = self.activate_root(&view)?;
         self.session = Some(prepared.session);
-        self.next_turn = 0;
+        self.next_turn = view.turn.as_ref().map_or(0, |turn| turn.id.0);
         self.mailboxes = crate::Mailboxes::default();
         Ok((view, instance))
     }
@@ -972,13 +990,8 @@ impl Conversation {
         &mut self,
         operation_id: u64,
         session_id: SessionId,
-        input: Option<String>,
-        audio: Option<crate::AudioId>,
-        transcript: Option<agentelier_llm_model::TranscriptReference>,
+        input: Option<crate::ComposerMessage>,
     ) -> Result<SessionView, ConversationFailure> {
-        if input.as_ref().is_some_and(|input| input.trim().is_empty()) {
-            return Err(ConversationFailure::new("不能发送空白消息"));
-        }
         let session = self
             .session
             .as_mut()
@@ -986,13 +999,13 @@ impl Conversation {
         if session.view.id != session_id {
             return Err(ConversationFailure::new("聊天会话身份已变化"));
         }
-        if audio.is_some() && session.view.audio_draft.as_ref().map(|item| item.id) != audio {
-            return Err(ConversationFailure::new(
-                "草稿音频附件已变化，请核对后重新发送",
-            ));
+        if let Some(input) = &input {
+            input.validate()?;
+            input.validate_transcript_session(session_id)?;
         }
-        let evidence = transcript
+        let evidence = input
             .as_ref()
+            .and_then(|input| input.transcript.as_ref())
             .map(|reference| session.view.transcript_evidence(reference))
             .transpose()?;
         if session
@@ -1021,12 +1034,17 @@ impl Conversation {
             return Err(ConversationFailure::new("当前没有已保存、待处理的工具结果"));
         }
         let request_items = if let Some(input) = &input {
-            session.check_pending_input(history, input, evidence.as_ref())?;
-            history.with_user(input).summary()
+            session.check_pending_input(history, input.text(), evidence.as_ref())?;
+            history.with_user(input.text()).summary()
         } else {
             history.summary()
         };
-        session.view.notice = None;
+        let admission = crate::active::PendingAdmission {
+            prior_turn: None,
+            prior_notice: session.view.notice.take(),
+            prior_background_paused: session.view.task_policy.background_paused,
+            queued: None,
+        };
         if !result_continuation {
             session.view.task_policy.background_paused = false;
         }
@@ -1044,9 +1062,7 @@ impl Conversation {
             input_id: TurnId(id),
             is_retry: false,
             operation_id,
-            input: input.unwrap_or_default(),
-            audio: audio.and_then(|_| session.view.audio_draft.take()),
-            transcript,
+            submission: input.unwrap_or_default(),
             messages: Vec::new(),
             status: TurnStatus::Running,
             request_items,
@@ -1060,6 +1076,7 @@ impl Conversation {
         }));
         self.next_turn = id;
         session.active = Some(ActiveState {
+            admission: Some(admission),
             memory: session.memory.clone(),
             source_sequence: None,
             responses: session
@@ -1082,25 +1099,17 @@ impl Conversation {
     ) -> Result<SessionView, ConversationFailure> {
         match request {
             ConversationRequest::ProcessResults { session } => {
-                self.begin_input(operation, session, None, None, None)
+                self.begin_input(operation, session, None)
             }
-            ConversationRequest::Send {
-                session,
-                input,
-                audio,
-                transcript,
-            } => {
-                let source = transcript
-                    .map(|id| {
-                        self.session
-                            .as_ref()
-                            .filter(|chat| chat.view.id == session)
-                            .ok_or_else(|| ConversationFailure::new("聊天会话已变化"))?
-                            .view
-                            .transcript_reference(id)
-                    })
-                    .transpose()?;
-                self.begin_input(operation, session, Some(input), audio, source)
+            ConversationRequest::Send { session, input } => {
+                let view = &self
+                    .session
+                    .as_ref()
+                    .filter(|chat| chat.view.id == session)
+                    .ok_or_else(|| ConversationFailure::new("聊天会话已变化"))?
+                    .view;
+                let submission = input.resolve(view)?;
+                self.begin_input(operation, session, Some(submission))
             }
             ConversationRequest::ContinueWithoutCompaction {
                 session,
@@ -1126,11 +1135,9 @@ impl Conversation {
                             )
                     })
                     .ok_or(ConversationFailure::new("只有最近失败或取消的输入可以重试"))?;
-                let input = previous.input.clone();
+                let input = previous.submission.clone();
                 let input_id = previous.input_id;
-                let audio = previous.audio.clone();
-                let transcript = previous.transcript.clone();
-                self.begin_input(operation, session, Some(input), None, transcript)?;
+                self.begin_input(operation, session, Some(input))?;
                 let current = self
                     .session
                     .as_mut()
@@ -1141,7 +1148,6 @@ impl Conversation {
                     .as_mut()
                     .ok_or(ConversationFailure::new("重试缺少轮次"))?;
                 turn.input_id = input_id;
-                turn.audio = audio;
                 turn.is_retry = true;
                 Ok(current.view.clone())
             }
@@ -1192,7 +1198,7 @@ impl Conversation {
         let history = if source.input_retained {
             history.clone()
         } else {
-            history.with_user(&turn.input)
+            history.with_user(turn.submission.text())
         };
         let mut context = (*current.view.context).clone();
         context.refresh(
@@ -1201,11 +1207,17 @@ impl Conversation {
             current.tools.definitions(),
         )?;
         crate::result_budget::ensure_context_fits(&context)?;
+        let admission = crate::active::PendingAdmission {
+            prior_turn: Some(turn.clone()),
+            prior_notice: current.view.notice.take(),
+            prior_background_paused: current.view.task_policy.background_paused,
+            queued: None,
+        };
         turn.status = TurnStatus::Running;
         turn.operation_id = operation;
         turn.compaction_continuation = None;
-        current.view.notice = None;
         current.active = Some(ActiveState {
+            admission: Some(admission),
             memory: current.memory.clone(),
             source_sequence: None,
             responses: current
@@ -1282,6 +1294,35 @@ impl Conversation {
             session.view.queue_paused = true;
         }
         Ok(session.view.clone())
+    }
+
+    pub fn reject_unadmitted(&mut self, operation_id: u64) -> Result<bool, ConversationFailure> {
+        self.turn(operation_id)?;
+        let session = self
+            .session
+            .as_mut()
+            .ok_or_else(|| ConversationFailure::new("未接纳输入缺少会话"))?;
+        let Some(active) = session
+            .active
+            .as_mut()
+            .filter(|active| active.source_sequence.is_none())
+        else {
+            return Ok(false);
+        };
+        let Some(admission) = active.admission.take() else {
+            return Ok(false);
+        };
+        session.view.turn = admission
+            .prior_turn
+            .or_else(|| session.view.previous_turns.pop().map(Box::new));
+        session.view.notice = admission.prior_notice;
+        session.view.task_policy.background_paused = admission.prior_background_paused;
+        if let Some(input) = admission.queued {
+            session.view.queue.insert(0, input);
+            session.view.queue_paused = true;
+        }
+        session.idle = session.active.take();
+        Ok(true)
     }
 
     pub fn interrupt(&mut self, operation_id: u64) -> Result<SessionView, ConversationFailure> {

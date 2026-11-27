@@ -4,7 +4,6 @@ use agentelier_llm_model::{ModelInfo, background_text};
 use agentelier_session_store::SessionStoreClient;
 use serde::Deserialize;
 use std::io;
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 const MAX_TITLE_CHARACTERS: usize = 36;
@@ -26,18 +25,10 @@ struct GeneratedTitle {
 impl TitleRequest {
     pub(super) async fn run(
         self,
-        accepted: oneshot::Receiver<()>,
         credentials: CredentialClient,
         store: SessionStoreClient,
         shutdown: CancellationToken,
     ) -> io::Result<bool> {
-        if shutdown
-            .run_until_cancelled(accepted)
-            .await
-            .is_none_or(|result| result.is_err())
-        {
-            return Ok(false);
-        }
         let input: String = self.input.chars().take(MAX_SOURCE_CHARACTERS).collect();
         let Some(identity) = shutdown.run_until_cancelled(credentials.execution()).await else {
             return Ok(false);

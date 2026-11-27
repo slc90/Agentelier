@@ -241,7 +241,7 @@ fn turn_evidence(
     if !turn.result_continuation {
         items.push(item(
             "user",
-            &turn.input,
+            turn.submission.text(),
             anchor(source.input_sequence, Location::Input),
         ));
     }

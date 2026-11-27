@@ -12,6 +12,7 @@ pub enum RunnerEvent {
     Image(TurnImage),
     GeneratedImage(TurnGeneratedImage),
     PublishedAudio(TurnPublishedAudio),
+    Admitted,
     Progress,
     TaskProgress,
     Receipt(InputReceipt),

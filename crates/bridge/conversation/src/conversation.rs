@@ -28,7 +28,7 @@ pub enum ConversationRequest {
     Create(SessionCreate),
     CreateAndSend {
         create: SessionCreate,
-        input: String,
+        input: crate::ComposerSubmission,
     },
     Reset {
         session: SessionId,
@@ -39,9 +39,7 @@ pub enum ConversationRequest {
     },
     Send {
         session: SessionId,
-        input: String,
-        audio: Option<agentelier_conversation::AudioId>,
-        transcript: Option<agentelier_conversation::TranscriptId>,
+        input: crate::ComposerSubmission,
     },
     Retry {
         session: SessionId,
@@ -224,9 +222,7 @@ pub struct TurnView {
     pub operation_id: u64,
     pub input_id: u64,
     pub is_retry: bool,
-    pub input: String,
-    pub audio: Option<AudioAttachmentView>,
-    pub transcript: Option<TranscriptReferenceView>,
+    pub submission: crate::ComposerMessage,
     pub messages: Vec<MessageView>,
     pub status: TurnStatus,
     pub request_items: Vec<HistoryItem>,
@@ -242,15 +238,13 @@ pub struct TurnView {
 pub struct QueuedInput {
     pub operation_id: u64,
     pub input_id: u64,
-    pub text: String,
-    pub transcript: Option<TranscriptReferenceView>,
+    pub submission: crate::ComposerMessage,
 }
 #[derive(Clone)]
 pub enum SessionAction {
     Enqueue {
         session: SessionId,
-        text: String,
-        transcript: Option<agentelier_conversation::TranscriptId>,
+        input: crate::ComposerSubmission,
     },
     Remove {
         session: SessionId,
@@ -575,17 +569,9 @@ pub fn request(request: ConversationRequest) -> agentelier_conversation::Convers
             turn: agentelier_conversation::TurnId(turn),
             failed_request,
         },
-        ConversationRequest::Send {
-            session,
-            input,
-            audio,
-            transcript,
-        } => agentelier_conversation::ConversationRequest::Send {
-            session,
-            input,
-            audio,
-            transcript,
-        },
+        ConversationRequest::Send { session, input } => {
+            agentelier_conversation::ConversationRequest::Send { session, input }
+        }
     }
 }
 
@@ -665,8 +651,7 @@ pub fn view(session: agentelier_conversation::SessionView) -> SessionView {
             .map(|input| QueuedInput {
                 operation_id: input.operation_id,
                 input_id: input.input_id.0,
-                text: input.text,
-                transcript: input.transcript.map(Into::into),
+                submission: input.submission,
             })
             .collect(),
         queue_paused: session.queue_paused,
@@ -835,9 +820,7 @@ fn turn_view(turn: agentelier_conversation::TurnView) -> TurnView {
         input_id: turn.input_id.0,
         is_retry: turn.is_retry,
         operation_id: turn.operation_id,
-        input: turn.input,
-        audio: turn.audio.map(Into::into),
-        transcript: turn.transcript.map(Into::into),
+        submission: turn.submission,
         messages: turn
             .messages
             .into_iter()
@@ -1115,16 +1098,9 @@ pub fn steer_input(
 
 pub fn session_command(id: u64, action: SessionAction) -> agentelier_conversation::SessionCommand {
     match action {
-        SessionAction::Enqueue {
-            session,
-            text,
-            transcript,
-        } => agentelier_conversation::SessionCommand::Enqueue {
-            id,
-            session,
-            text,
-            transcript,
-        },
+        SessionAction::Enqueue { session, input } => {
+            agentelier_conversation::SessionCommand::Enqueue { id, session, input }
+        }
         SessionAction::Remove { session, operation } => {
             agentelier_conversation::SessionCommand::Remove {
                 id,

@@ -90,12 +90,12 @@ pub(crate) fn from_turn(
 ) -> Option<ExpressionExcerpt> {
     if !matches!(turn.status, TurnStatus::Completed)
         || !turn.tools.is_empty()
-        || turn.audio.is_some()
-        || turn.transcript.is_some()
+        || turn.submission.audio().next().is_some()
+        || turn.submission.transcript.is_some()
         || turn.result_continuation
         || !turn.selected_skills.is_empty()
-        || turn.input.lines().nth(1).is_some()
-        || expression_excerpt(&turn.input).is_none()
+        || turn.submission.text().lines().nth(1).is_some()
+        || expression_excerpt(turn.submission.text()).is_none()
         || turn.requests.iter().any(|request| {
             request.projection.memory.as_ref().is_some_and(|old| {
                 let old = &old.snapshot;
@@ -167,7 +167,7 @@ fn already_quoted(opening: &str, quotes: &[&str]) -> bool {
 }
 
 pub(crate) fn references(turn: &TurnView) -> Vec<&str> {
-    std::iter::once(turn.input.as_str())
+    std::iter::once(turn.submission.text())
         .chain(
             turn.steers
                 .iter()

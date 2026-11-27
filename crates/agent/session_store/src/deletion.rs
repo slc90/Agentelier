@@ -183,6 +183,7 @@ fn files(path: &Path) -> io::Result<(Vec<PathBuf>, Option<PathBuf>)> {
                 if !image(&name)
                     && !crate::attachments::generated_file(&name)
                     && !crate::attachments::audio_file(&name)
+                    && !crate::composer::input_image_file(&name)
                     && !temporary(&name)
                 {
                     return Err(io::Error::other(format!("会话中存在未识别附件：{name}")));

@@ -140,7 +140,9 @@ impl crate::ActiveTurn<'_> {
             .turn
             .as_mut()
             .ok_or_else(|| crate::ConversationFailure::new("请求记录缺少任务"))?;
-        if projection.transcript.as_ref().map(|item| &item.reference) != turn.transcript.as_ref() {
+        if projection.transcript.as_ref().map(|item| &item.reference)
+            != turn.submission.transcript.as_ref()
+        {
             return Err(crate::ConversationFailure::new(
                 "请求与本轮选定文稿来源不一致",
             ));

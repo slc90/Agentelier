@@ -9,7 +9,8 @@ use agentelier_controls::{
     AvatarSource,
 };
 use agentelier_conversation_bridge::{
-    ConversationEvent, ConversationRequest, SessionCreate, SessionView, TurnStatus,
+    ComposerContent, ComposerElement, ComposerSubmission, ConversationEvent, ConversationRequest,
+    SessionAction, SessionCreate, SessionView, TurnStatus,
 };
 use agentelier_conversation_bridge::{ProjectId, SessionId, SessionLocation};
 use agentelier_login_ui::AccountState;
@@ -137,7 +138,7 @@ pub struct ChatTurn {
     pub input_id: u64,
     pub is_retry: bool,
     pub input: String,
-    pub audio: Option<crate::audio_attachment::ChatAudio>,
+    pub audio: Vec<crate::audio_attachment::ChatAudio>,
     pub transcript: Option<crate::transcription::ChatTranscriptReference>,
     pub messages: Vec<ChatMessage>,
     pub status: ChatTurnStatus,
@@ -670,10 +671,10 @@ fn send(world: &mut World) -> Result {
     ) {
         return Ok(());
     }
-    let input = state.draft.clone();
+    let mut input = ComposerSubmission::text(state.draft.clone());
     let submitted = PendingDraft {
         id: 0,
-        text: input.clone(),
+        text: state.draft.clone(),
         revision: state.draft_revision,
     };
     let starting_chat = state.new_chat.is_some();
@@ -709,13 +710,10 @@ fn send(world: &mut World) -> Result {
             .session
             .as_ref()
             .ok_or_else(|| io::Error::other("发送消息缺少聊天会话"))?;
+        add_draft_materials(world, session, &mut input);
         ConversationRequest::Send {
             session: session.id,
             input,
-            audio: session.audio_draft.as_ref().map(|audio| audio.id),
-            transcript: world
-                .resource::<crate::transcription::TranscriptionState>()
-                .selection(session),
         }
     };
     let result = world.resource::<AgentHost>().request_conversation(request);
@@ -736,6 +734,19 @@ fn send(world: &mut World) -> Result {
     Ok(())
 }
 
+fn add_draft_materials(world: &World, session: &ChatSession, input: &mut ComposerSubmission) {
+    if let Some(audio) = &session.audio_draft {
+        input
+            .elements
+            .push(ComposerElement::new(ComposerContent::Audio {
+                audio: audio.attachment(),
+            }));
+    }
+    input.transcript = world
+        .resource::<crate::transcription::TranscriptionState>()
+        .selection(session);
+}
+
 fn steer(world: &mut World) -> Result {
     let state = world.resource::<ChatState>();
     if !state.can_steer(world.resource::<AccountState>()) {
@@ -754,17 +765,38 @@ fn steer(world: &mut World) -> Result {
         text: state.draft.clone(),
         revision: state.draft_revision,
     };
-    let result = world.resource::<AgentHost>().steer_conversation(
-        session.id,
-        turn.id,
-        turn.operation_id,
-        submitted.text.clone(),
-    );
+    let mut input = ComposerSubmission::text(submitted.text.clone());
+    add_draft_materials(world, session, &mut input);
+    let queue = input.requires_queue();
+    let host = world.resource::<AgentHost>();
+    let result = if queue {
+        host.request_session(SessionAction::Enqueue {
+            session: session.id,
+            input,
+        })
+    } else {
+        host.steer_conversation(
+            session.id,
+            turn.id,
+            turn.operation_id,
+            submitted.text.clone(),
+        )
+    };
     let mut state = world.resource_mut::<ChatState>();
     match result {
         Ok(id) => {
             state.pending_inputs.push(PendingDraft { id, ..submitted });
-            state.input_feedback = Some("正在提交补充输入…".into());
+            if queue {
+                state.queue_controls.push(id);
+            }
+            state.input_feedback = Some(
+                if queue {
+                    "正在保存排队消息…"
+                } else {
+                    "正在提交补充输入…"
+                }
+                .into(),
+            );
         }
         Err(failure) => {
             state.input_feedback = Some(format!("补充输入未提交：{failure}；草稿保留"));
@@ -982,9 +1014,19 @@ fn project_turn(turn: agentelier_conversation_bridge::TurnView) -> Result<ChatTu
         input_id: turn.input_id,
         is_retry: turn.is_retry,
         operation_id: turn.operation_id,
-        input: turn.input,
-        audio: turn.audio.map(Into::into),
-        transcript: turn.transcript.map(Into::into),
+        input: turn.submission.text().to_owned(),
+        audio: turn
+            .submission
+            .audio()
+            .cloned()
+            .map(agentelier_conversation_bridge::AudioAttachmentView::from)
+            .map(Into::into)
+            .collect(),
+        transcript: turn
+            .submission
+            .transcript
+            .map(agentelier_conversation_bridge::TranscriptReferenceView::from)
+            .map(Into::into),
         messages: turn
             .messages
             .into_iter()
@@ -1074,8 +1116,12 @@ pub(super) fn project(session: SessionView) -> Result<ChatSession> {
             .map(|input| crate::queue::ChatQueuedInput {
                 operation_id: input.operation_id,
                 input_id: input.input_id,
-                text: input.text,
-                transcript: input.transcript.map(Into::into),
+                text: input.submission.text().to_owned(),
+                transcript: input
+                    .submission
+                    .transcript
+                    .map(agentelier_conversation_bridge::TranscriptReferenceView::from)
+                    .map(Into::into),
             })
             .collect(),
         queue_paused: session.queue_paused,
@@ -1630,7 +1676,7 @@ pub(super) fn reconcile_list(
             };
             if !turn.result_continuation && inputs.insert(turn.input_id) {
                 desired.push((user_key.clone(), RowContent::User(turn.input.clone())));
-                if let Some(audio) = &turn.audio {
+                for audio in &turn.audio {
                     let key = ChatRow {
                         item_id: Some(format!("audio-{}", audio.id)),
                         ..user_key.clone()

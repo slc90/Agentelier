@@ -290,7 +290,7 @@ fn recover_response(
                     .map(|(id, saved)| (id, saved.output))
                     .collect(),
                 &response.started,
-                (!retained_input).then_some(turn.input.as_str()),
+                (!retained_input).then_some(turn.submission.text()),
             )
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
         turn.committed_steps = turn
@@ -891,7 +891,7 @@ fn replay(
                     .transcript
                     .as_ref()
                     .map(|item| &item.reference)
-                    != turn.transcript.as_ref()
+                    != turn.submission.transcript.as_ref()
                 {
                     return Err(ConversationFailure::new("冻结请求与选定文稿版本不一致"));
                 }
@@ -1095,7 +1095,8 @@ fn replay(
                 }
                 let mut incoming = incoming;
                 if let Some(turn) = incoming.turn.as_ref() {
-                    if let Some(reference) = &turn.transcript {
+                    register_input_audio(&mut audio_ids, &turn.submission)?;
+                    if let Some(reference) = &turn.submission.transcript {
                         validate_transcript(
                             initial.session,
                             reference,
@@ -1103,22 +1104,18 @@ fn replay(
                             &transcriptions,
                         )?;
                     }
+                    if !turn.result_continuation {
+                        turn.submission.validate()?;
+                    }
                     if turn.is_retry {
-                        if turn.audio != state.turn.as_ref().and_then(|prior| prior.audio.clone()) {
-                            return Err(ConversationFailure::new("重试的音频附件来源不一致"));
-                        }
-                        if turn.transcript.as_ref()
-                            != state
-                                .turn
-                                .as_ref()
-                                .and_then(|prior| prior.transcript.as_ref())
+                        if state
+                            .turn
+                            .as_ref()
+                            .is_none_or(|prior| prior.submission != turn.submission)
                         {
-                            return Err(ConversationFailure::new("重试引用了不同的文稿版本"));
+                            return Err(ConversationFailure::new("重试输入与原输入来源不一致"));
                         }
-                    } else if let Some(audio) = &turn.audio {
-                        if turn.result_continuation || audio_draft.as_ref() != Some(audio) {
-                            return Err(ConversationFailure::new("音频附件没有对应的会话草稿记录"));
-                        }
+                    } else if turn.submission.uses_audio_draft(audio_draft.as_ref()) {
                         audio_draft = None;
                     }
                 }
@@ -1148,8 +1145,7 @@ fn replay(
                     || old.id != next.id
                     || old.input_id != source.input
                     || next.input_id != source.input
-                    || next.input != old.input
-                    || next.transcript != old.transcript
+                    || next.submission != old.submission
                     || next.request_index != source.request
                     || source.input_retained != retained_input
                     || !pending.0.is_empty()
@@ -1247,7 +1243,7 @@ fn replay(
                 if let Some(acceptance) = &acceptance {
                     history
                         .append_response(
-                            (!retained_input).then_some(turn.input.as_str()),
+                            (!retained_input).then_some(turn.submission.text()),
                             &output,
                             acceptance.append,
                         )
@@ -1574,7 +1570,7 @@ fn replay(
                     .as_ref()
                     .filter(|turn| turn.id == claim.turn)
                     .ok_or_else(|| ConversationFailure::new("邮箱输入缺少同一 Turn"))?;
-                let users = [turn.input.as_str(), note.as_str()];
+                let users = [turn.submission.text(), note.as_str()];
                 let expected = if retained_user {
                     &users[..]
                 } else {
@@ -1583,7 +1579,7 @@ fn replay(
                 let valid_history = if is_result {
                     applied.appends_agent_result(
                         &history,
-                        retained_user.then_some(turn.input.as_str()),
+                        retained_user.then_some(turn.submission.text()),
                         &note,
                     )
                 } else {
@@ -1603,7 +1599,9 @@ fn replay(
                 decision,
             } => {
                 for queued in &incoming.queue {
-                    if let Some(reference) = &queued.transcript {
+                    queued.submission.validate()?;
+                    register_input_audio(&mut audio_ids, &queued.submission)?;
+                    if let Some(reference) = &queued.submission.transcript {
                         validate_transcript(
                             initial.session,
                             reference,
@@ -1611,6 +1609,13 @@ fn replay(
                             &transcriptions,
                         )?;
                     }
+                }
+                if matches!(decision, crate::QueueDecision::Enqueued)
+                    && incoming.queue.last().is_some_and(|input| {
+                        input.submission.uses_audio_draft(audio_draft.as_ref())
+                    })
+                {
+                    audio_draft = None;
                 }
                 state.queue = incoming.queue;
                 state.queue_paused = incoming.queue_paused
@@ -2054,4 +2059,22 @@ impl Conversation {
         });
         Ok((view, instance))
     }
+}
+
+fn register_input_audio(
+    ids: &mut std::collections::HashMap<crate::AudioId, crate::AudioAttachment>,
+    input: &crate::ComposerMessage,
+) -> Result<(), ConversationFailure> {
+    for audio in input.audio() {
+        match ids.entry(audio.id) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(audio.clone());
+            }
+            std::collections::hash_map::Entry::Occupied(slot) if slot.get() != audio => {
+                return Err(ConversationFailure::new("音频附件身份绑定了不同内容"));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
