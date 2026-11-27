@@ -104,6 +104,7 @@ impl ComposerSubmission {
         let mut message = ComposerMessage::new(self.elements, transcript);
         message.draft_owner = self.draft_owner;
         message.validate()?;
+        message.validate_image_capability(view.settings.image_input)?;
         for audio in message.audio() {
             if self.draft_owner.is_none() && view.audio_draft.as_ref() != Some(audio) {
                 return Err(ConversationFailure::new(
@@ -165,28 +166,7 @@ impl ComposerMessage {
     fn new(elements: Vec<ComposerElement>, transcript: Option<TranscriptReference>) -> Self {
         let mut text = String::new();
         for element in &elements {
-            match &element.content {
-                ComposerContent::Text { text: part } => text.push_str(part),
-                ComposerContent::Skill { name, .. } => {
-                    text.push('$');
-                    text.push_str(name);
-                }
-                ComposerContent::Mcp { label, .. } => {
-                    text.push('$');
-                    text.push_str(label);
-                }
-                ComposerContent::File { path } => {
-                    let path = path.to_string_lossy();
-                    if path.contains(char::is_whitespace) {
-                        text.push('"');
-                        text.push_str(&path);
-                        text.push('"');
-                    } else {
-                        text.push_str(&path);
-                    }
-                }
-                ComposerContent::Audio { .. } | ComposerContent::Image { .. } => {}
-            }
+            element.content.append_text(&mut text);
         }
         Self {
             elements,
@@ -196,8 +176,48 @@ impl ComposerMessage {
         }
     }
 
+    pub(crate) fn protocol(&self, session: SessionId) -> agentelier_llm_model::UserMessage {
+        use agentelier_llm_model::{UserImage, UserMessage};
+        let mut message = UserMessage::text(String::new());
+        for element in &self.elements {
+            if let ComposerContent::Image { image } = &element.content {
+                let start = message.text.len();
+                message
+                    .text
+                    .push_str(&UserMessage::image_label(message.images.len() + 1));
+                message.images.push(UserImage {
+                    session,
+                    id: image.id,
+                    name: image.name.clone(),
+                    image: image.image.clone(),
+                    placeholder: start..message.text.len(),
+                });
+            } else {
+                element.content.append_text(&mut message.text);
+            }
+        }
+        if message.text.trim().is_empty() && self.audio().next().is_some() {
+            message.text = self
+                .audio()
+                .map(|audio| format!("[Audio: {}]", audio.name))
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+        message
+    }
+
     pub fn draft_owner(&self) -> Option<SessionId> {
         self.draft_owner
+    }
+
+    pub(crate) fn validate_image_capability(
+        &self,
+        capability: Option<bool>,
+    ) -> Result<(), ConversationFailure> {
+        if self.images().next().is_some() {
+            return require_image_input(capability);
+        }
+        Ok(())
     }
 
     pub fn images(&self) -> impl Iterator<Item = &InputImage> {
@@ -305,5 +325,40 @@ impl ComposerMessage {
             return Err(ConversationFailure::new("文稿版本不属于当前会话"));
         }
         Ok(())
+    }
+}
+
+impl ComposerContent {
+    fn append_text(&self, text: &mut String) {
+        match self {
+            ComposerContent::Text { text: part } => text.push_str(part),
+            ComposerContent::Skill { name, .. } => {
+                text.push('$');
+                text.push_str(name);
+            }
+            ComposerContent::Mcp { label, .. } => {
+                text.push('$');
+                text.push_str(label);
+            }
+            ComposerContent::File { path } => {
+                let path = path.to_string_lossy();
+                if path.contains(char::is_whitespace) {
+                    text.push('"');
+                    text.push_str(&path);
+                    text.push('"');
+                } else {
+                    text.push_str(&path);
+                }
+            }
+            ComposerContent::Audio { .. } | ComposerContent::Image { .. } => {}
+        }
+    }
+}
+
+pub(crate) fn require_image_input(capability: Option<bool>) -> Result<(), ConversationFailure> {
+    match capability {
+        Some(true) => Ok(()),
+        Some(false) => Err(ConversationFailure::new("当前模型不支持图片输入")),
+        None => Err(ConversationFailure::new("当前模型的图片输入能力未知")),
     }
 }

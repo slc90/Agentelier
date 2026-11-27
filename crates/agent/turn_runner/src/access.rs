@@ -12,11 +12,17 @@ pub enum RunnerEvent {
     Image(TurnImage),
     GeneratedImage(TurnGeneratedImage),
     PublishedAudio(TurnPublishedAudio),
+    UserImage(Box<TurnUserImage>),
     Admitted,
     Progress,
     TaskProgress,
     Receipt(InputReceipt),
     Inbox(InboxRequest),
+}
+
+pub struct TurnUserImage {
+    pub reference: agentelier_llm_model::UserImage,
+    pub reply: oneshot::Sender<Result<Arc<ImagePayload>, ConversationFailure>>,
 }
 
 pub struct InboxRequest {
@@ -187,6 +193,23 @@ impl TurnAccess {
         result
             .await
             .map_err(|_| ConversationFailure::new("会话记录提交未返回结果"))?
+    }
+
+    pub(crate) async fn read_user_image(
+        &self,
+        reference: agentelier_llm_model::UserImage,
+    ) -> Result<Arc<ImagePayload>, ConversationFailure> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(RunnerEvent::UserImage(Box::new(TurnUserImage {
+                reference,
+                reply,
+            })))
+            .await
+            .map_err(|_| ConversationFailure::new("输入图片读取管道已关闭"))?;
+        result
+            .await
+            .map_err(|_| ConversationFailure::new("未收到输入图片回执"))?
     }
 
     pub(crate) async fn publish_tasks(&self) -> Result<(), ConversationFailure> {

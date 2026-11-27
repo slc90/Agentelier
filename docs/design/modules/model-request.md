@@ -111,3 +111,5 @@ generate 在进入发送阶段后发布 Sending，HTTP 收到响应头后发布�
 显式 `$name` 的选中正文由 Skills 在任务启动时完整读取并由 Conversation 固定。GenerationRequest 携带已确定材料；模型层验证其正文摘要，然后在完整原始协议历史后按输入顺序注入独立 user 项。每个 SkillMaterial 保存来源路径、角色、input 索引、包装正文和摘要。正文不写回 ProtocolHistory，同一任务的多次准备引用相同快照，认证重发完全复用 PreparedGeneration 字节。
 
 新会话绑定的长期记忆摘要在固定基础指令之后作为一条 developer 背景消息加入。RequestProjection 保存发布 ID、摘要 SHA-256、输入位置和实际包装正文。已有协议项的顺序与身份保持原样，认证重发继续发送原先冻结的字节。
+
+用户消息使用 Responses 内容数组。请求准备从正式会话附件加载工作历史中的用户图片，以内容数组中的图片标签与完整文本的编号相对应。冻结的请求复用已读取的字节，诊断只记录附件描述符和占位位置。

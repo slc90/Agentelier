@@ -106,6 +106,13 @@ impl ActiveTurn<'_> {
         if model.slug != self.view.settings.slug {
             return Err(ConversationFailure::new("上下文能力不属于会话模型"));
         }
+        if self.history.user_images().next().is_some() {
+            crate::composer::require_image_input(model.image_input)?;
+        }
+        if let Some(turn) = &self.view.turn {
+            turn.submission
+                .validate_image_capability(model.image_input)?;
+        }
         if self.view.context.limits.comp_hash != model.context_limits.comp_hash {
             self.view.context.anchor = None;
         }
@@ -454,7 +461,8 @@ impl ActiveTurn<'_> {
             return Err(ConversationFailure::new("同步调用的结果尚未进入历史"));
         }
         let context = if !self.state.input_retained {
-            self.history.with_user(turn.submission.text())
+            self.history
+                .with_message(turn.submission.protocol(self.view.id))
         } else {
             self.history.clone()
         };
@@ -531,6 +539,7 @@ impl ActiveTurn<'_> {
                 .ok_or_else(|| ConversationFailure::new("模型缺少有效的服务端压缩阈值"))?,
             effort: self.view.settings.effort.clone(),
             context,
+            input_images: Default::default(),
             tools: self.tools.clone(),
             instructions: self.view.settings.instructions.clone(),
         })
@@ -550,7 +559,9 @@ impl ActiveTurn<'_> {
         let history = if self.state.input_retained {
             &*self.history
         } else {
-            input = self.history.with_user(turn.submission.text());
+            input = self
+                .history
+                .with_message(turn.submission.protocol(self.view.id));
             &input
         };
         context.refresh(
@@ -759,7 +770,9 @@ impl ActiveTurn<'_> {
             .checked_add(1)
             .ok_or(ConversationFailure::new("请求序号已耗尽"))?;
         if !self.state.input_retained {
-            *self.history = self.history.with_user(turn.submission.text());
+            *self.history = self
+                .history
+                .with_message(turn.submission.protocol(self.view.id));
             self.state.input_retained = true;
         }
         let mut applied = Vec::new();
@@ -795,7 +808,13 @@ impl ActiveTurn<'_> {
         let note = delivery.message.render();
         let retained_user = !self.state.input_retained;
         if retained_user {
-            *self.history = self.history.with_user(&self.input()?);
+            let submission = &self
+                .view
+                .turn
+                .as_ref()
+                .ok_or_else(|| ConversationFailure::new("邮箱输入缺少活动任务"))?
+                .submission;
+            *self.history = self.history.with_message(submission.protocol(self.view.id));
             self.state.input_retained = true;
         }
         *self.history = if delivery.message.completion.is_some() {
@@ -826,7 +845,8 @@ impl ActiveTurn<'_> {
         let mut history = if self.state.input_retained {
             self.history.clone()
         } else {
-            self.history.with_user(turn.submission.text())
+            self.history
+                .with_message(turn.submission.protocol(self.view.id))
         };
         for text in turn
             .steers
@@ -968,10 +988,7 @@ impl ActiveTurn<'_> {
         }
         let append = self
             .history
-            .response_append(
-                (!self.state.input_retained).then_some(turn.submission.text()),
-                &result.output,
-            )
+            .response_append(!self.state.input_retained, &result.output)
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
         let request = turn
             .requests
@@ -1314,7 +1331,7 @@ impl ActiveTurn<'_> {
         }
         self.history
             .append_response(
-                (!self.state.input_retained).then_some(turn.submission.text()),
+                (!self.state.input_retained).then(|| turn.submission.protocol(self.view.id)),
                 result.output,
             )
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;

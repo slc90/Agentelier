@@ -424,7 +424,11 @@ impl PreparedSession {
             .history
             .as_ref()
             .ok_or_else(|| ConversationFailure::new("新会话缺少历史"))?;
-        self.session.check_pending_input(history, input, None)
+        self.session.check_pending_input(
+            history,
+            agentelier_llm_model::UserMessage::text(input),
+            None,
+        )
     }
 
     pub fn prepare_first_input(
@@ -1002,6 +1006,7 @@ impl Conversation {
         if let Some(input) = &input {
             input.validate()?;
             input.validate_transcript_session(session_id)?;
+            input.validate_image_capability(session.view.settings.image_input)?;
         }
         let evidence = input
             .as_ref()
@@ -1034,8 +1039,9 @@ impl Conversation {
             return Err(ConversationFailure::new("当前没有已保存、待处理的工具结果"));
         }
         let request_items = if let Some(input) = &input {
-            session.check_pending_input(history, input.text(), evidence.as_ref())?;
-            history.with_user(input.text()).summary()
+            let message = input.protocol(session_id);
+            session.check_pending_input(history, message.clone(), evidence.as_ref())?;
+            history.with_message(message).summary()
         } else {
             history.summary()
         };
@@ -1198,7 +1204,7 @@ impl Conversation {
         let history = if source.input_retained {
             history.clone()
         } else {
-            history.with_user(turn.submission.text())
+            history.with_message(turn.submission.protocol(session))
         };
         let mut context = (*current.view.context).clone();
         context.refresh(

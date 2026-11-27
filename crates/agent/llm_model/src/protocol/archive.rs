@@ -1,4 +1,4 @@
-use super::{HistoryAppend, ProtocolHistory, ProtocolItem, ProtocolOutput};
+use super::{HistoryAppend, ProtocolHistory, ProtocolItem, ProtocolOutput, UserImage, UserMessage};
 use agentelier_tools::{ImageDescriptor, ImagePayload, ToolPayload};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -64,7 +64,8 @@ enum ArchivedItem {
         item: crate::CompactionItem,
     },
     User {
-        text: String,
+        #[serde(flatten)]
+        message: UserMessage,
     },
     AgentResult {
         text: String,
@@ -94,7 +95,22 @@ pub struct ProtocolArchive {
 }
 
 impl ProtocolArchive {
-    pub fn appends_agent_result(&self, previous: &Self, user: Option<&str>, note: &str) -> bool {
+    pub fn user_images(&self) -> impl Iterator<Item = &UserImage> {
+        self.items
+            .iter()
+            .filter_map(|item| match item {
+                ArchivedItem::User { message } => Some(&message.images),
+                _ => None,
+            })
+            .flatten()
+    }
+
+    pub fn appends_agent_result(
+        &self,
+        previous: &Self,
+        user: Option<&UserMessage>,
+        note: &str,
+    ) -> bool {
         let Some((ArchivedItem::AgentResult { text }, prefix)) = self.items.split_last() else {
             return false;
         };
@@ -103,17 +119,17 @@ impl ProtocolArchive {
                 .strip_prefix(previous.items.as_slice())
                 .is_some_and(|added| match (added, user) {
                     ([], None) => true,
-                    ([ArchivedItem::User { text }], Some(user)) => text == user,
+                    ([ArchivedItem::User { message }], Some(user)) => message == user,
                     _ => false,
                 })
     }
 
-    pub fn appends_users(&self, previous: &Self, users: &[&str]) -> bool {
+    pub fn appends_users(&self, previous: &Self, users: &[UserMessage]) -> bool {
         self.items
             .strip_prefix(previous.items.as_slice())
             .is_some_and(|added| {
                 added.len() == users.len() && added.iter().zip(users).all(|(item, expected)| {
-                matches!(item, ArchivedItem::User { text } if text == expected)
+                matches!(item, ArchivedItem::User { message } if message == expected)
             })
             })
     }
@@ -288,7 +304,7 @@ impl ProtocolArchive {
 
     pub fn append_response(
         &mut self,
-        input: Option<&str>,
+        input: Option<UserMessage>,
         output: &ProtocolArchive,
         append: HistoryAppend,
     ) -> Result<(), crate::ModelFailure> {
@@ -317,8 +333,9 @@ impl ProtocolArchive {
         {
             return Err(crate::model::protocol("已保存响应的身份或历史位置不一致"));
         }
-        if let Some(text) = input {
-            self.items.push(ArchivedItem::User { text: text.into() });
+        if let Some(message) = input {
+            message.validate()?;
+            self.items.push(ArchivedItem::User { message });
         }
         self.items.extend(output.items.iter().cloned());
         Ok(())
@@ -381,7 +398,7 @@ impl ProtocolArchive {
         output: ProtocolArchive,
         mut results: std::collections::BTreeMap<String, ArchivedPayload>,
         started: &std::collections::HashSet<String>,
-        input: Option<&str>,
+        input: Option<UserMessage>,
     ) -> Result<(), crate::ModelFailure> {
         let calls = output.call_ids().map(str::to_owned).collect::<Vec<_>>();
         if calls.is_empty() {
@@ -405,8 +422,9 @@ impl ProtocolArchive {
         {
             return Err(crate::model::protocol("中断响应中的函数身份或结果不一致"));
         }
-        if let Some(input) = input {
-            self.items.push(ArchivedItem::User { text: input.into() });
+        if let Some(message) = input {
+            message.validate()?;
+            self.items.push(ArchivedItem::User { message });
         }
         self.items.extend(output.items);
         for call_id in calls {
@@ -440,7 +458,9 @@ fn capture(items: &[ProtocolItem]) -> ProtocolArchive {
             .iter()
             .map(|item| match item {
                 ProtocolItem::Project(item) => ArchivedItem::Project { item: item.clone() },
-                ProtocolItem::User(text) => ArchivedItem::User { text: text.clone() },
+                ProtocolItem::User(message) => ArchivedItem::User {
+                    message: message.clone(),
+                },
                 ProtocolItem::AgentResult(text) => ArchivedItem::AgentResult { text: text.clone() },
                 ProtocolItem::Compaction(item) => ArchivedItem::Compaction { item: item.clone() },
                 ProtocolItem::FunctionCall { raw, call_id, name } => ArchivedItem::FunctionCall {
@@ -489,11 +509,12 @@ impl ProtocolHistory {
                     ProtocolItem::Project(item)
                 }
                 ArchivedItem::Compaction { item } => ProtocolItem::Compaction(item),
-                ArchivedItem::User { text } => {
+                ArchivedItem::User { message } => {
                     if pending.values().any(|asynchronous| !asynchronous) {
                         return Err(crate::model::protocol("历史用户消息插入未封闭同步调用"));
                     }
-                    ProtocolItem::User(text)
+                    message.validate()?;
+                    ProtocolItem::User(message)
                 }
                 ArchivedItem::AgentResult { text } => {
                     if text.is_empty() || pending.values().any(|asynchronous| !asynchronous) {

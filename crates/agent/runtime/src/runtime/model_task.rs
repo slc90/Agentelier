@@ -150,6 +150,26 @@ pub(super) fn progress(
             });
             Ok(())
         }
+        RunnerEvent::UserImage(attachment) => {
+            conversation.active_turn(id)?;
+            let store = store.clone();
+            tokio::spawn(async move {
+                let reference = attachment.reference;
+                let image = agentelier_conversation::InputImage {
+                    id: reference.id,
+                    name: reference.name,
+                    image: reference.image,
+                };
+                let result = store
+                    .input_image(reference.session, image, false)
+                    .await
+                    .map_err(|failure| {
+                        ConversationFailure::new(format!("无法读取正式输入图片：{failure}"))
+                    });
+                drop(attachment.reply.send(result));
+            });
+            Ok(())
+        }
         RunnerEvent::Image(attachment) => {
             let agentelier_turn_runner::TurnImage {
                 session,

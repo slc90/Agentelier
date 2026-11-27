@@ -38,13 +38,13 @@ impl crate::conversation::ChatSession {
     pub(crate) fn check_pending_input(
         &self,
         history: &ProtocolHistory,
-        input: &str,
+        input: agentelier_llm_model::UserMessage,
         transcript: Option<&agentelier_llm_model::TranscriptEvidence>,
     ) -> Result<(), ConversationFailure> {
         if !history.has_open_calls() {
             return Ok(());
         }
-        let candidate = history.with_user(input);
+        let candidate = history.with_message(input);
         let mut context = (*self.view.context).clone();
         let previous = self
             .view

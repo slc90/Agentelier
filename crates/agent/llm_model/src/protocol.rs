@@ -3,9 +3,11 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 mod archive;
 mod estimate;
+mod user;
 pub use archive::{ArchivedPayload, ProtocolArchive};
 pub use estimate::text_tokens as estimated_text_tokens;
 pub use estimate::{result_token_budget, result_tokens};
+pub use user::{UserImage, UserMessage};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HistoryAppend {
@@ -41,7 +43,7 @@ pub enum ProtocolItemSummary {
 pub(crate) enum ProtocolItem {
     Project(crate::ProjectItem),
     Compaction(crate::CompactionItem),
-    User(String),
+    User(UserMessage),
     AgentResult(String),
     FunctionCall {
         raw: Value,
@@ -244,8 +246,12 @@ impl ProtocolHistory {
     }
 
     pub fn with_user(&self, input: &str) -> Self {
+        self.with_message(UserMessage::text(input))
+    }
+
+    pub fn with_message(&self, input: UserMessage) -> Self {
         let mut history = self.clone();
-        history.0.push(ProtocolItem::User(input.to_owned()));
+        history.0.push(ProtocolItem::User(input));
         history
     }
 
@@ -257,7 +263,7 @@ impl ProtocolHistory {
 
     pub fn response_append(
         &self,
-        input: Option<&str>,
+        has_input: bool,
         output: &ProtocolOutput,
     ) -> Result<HistoryAppend, crate::ModelFailure> {
         if self
@@ -279,17 +285,17 @@ impl ProtocolHistory {
                 return Err(crate::model::protocol("完整响应重用了历史调用身份"));
             }
         }
-        self.next_append(output.len() + usize::from(input.is_some()))
+        self.next_append(output.len() + usize::from(has_input))
     }
 
     pub fn append_response(
         &mut self,
-        input: Option<&str>,
+        input: Option<UserMessage>,
         output: ProtocolOutput,
     ) -> Result<HistoryAppend, crate::ModelFailure> {
-        let append = self.response_append(input, &output)?;
+        let append = self.response_append(input.is_some(), &output)?;
         if let Some(input) = input {
-            self.0.push(ProtocolItem::User(input.to_owned()));
+            self.0.push(ProtocolItem::User(input));
         }
         self.0.extend(output.0);
         Ok(append)
@@ -366,19 +372,33 @@ impl ProtocolHistory {
             .collect()
     }
 
+    pub fn user_images(&self) -> impl Iterator<Item = &UserImage> {
+        self.0
+            .iter()
+            .filter_map(|item| match item {
+                ProtocolItem::User(message) => Some(&message.images),
+                _ => None,
+            })
+            .flatten()
+    }
+
     pub fn has_images(&self) -> bool {
-        self.0.iter().any(|item| {
+        self.user_images().next().is_some() || self.0.iter().any(|item| {
             matches!(item, ProtocolItem::FunctionResult { output, .. } if output.image().is_some())
         })
     }
 
-    pub(crate) fn into_input(self) -> Vec<Value> {
+    pub(crate) fn into_input(
+        self,
+        images: &HashMap<(uuid::Uuid, uuid::Uuid), std::sync::Arc<agentelier_tools::ImagePayload>>,
+    ) -> Result<Vec<Value>, crate::ModelFailure> {
         self.0
             .into_iter()
-            .map(|item| match item {
+            .map(|item| Ok(match item {
                 ProtocolItem::Project(item) => serde_json::json!({"role":"user","content":item.text}),
                 ProtocolItem::Compaction(item) => item.0,
-                ProtocolItem::User(input) | ProtocolItem::AgentResult(input) => serde_json::json!({"role": "user", "content": input}),
+                ProtocolItem::User(message) => message.into_input(images)?,
+                ProtocolItem::AgentResult(input) => serde_json::json!({"role": "user", "content": input}),
                 ProtocolItem::Assistant { raw, .. } | ProtocolItem::Reasoning { raw, .. } | ProtocolItem::FunctionCall {raw, ..} => raw,
                 ProtocolItem::FunctionResult {call_id, output} => {
                     let body = match output {
@@ -394,7 +414,7 @@ impl ProtocolHistory {
                     };
                     serde_json::json!({"type":"function_call_output","call_id":call_id,"output":body})
                 },
-            })
+            }))
             .collect()
     }
 }

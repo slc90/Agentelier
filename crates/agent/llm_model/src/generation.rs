@@ -9,7 +9,7 @@ use agentelier_account::{AuthenticatedRequest, CredentialClient, ExecutionIdenti
 use agentelier_prompts::InstructionSnapshot;
 use agentelier_tools::{ToolCatalog, ToolContract, ToolMode};
 use reqwest::Client;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
@@ -32,6 +32,7 @@ pub struct GenerationRequest {
     pub skip_compaction: bool,
     pub effort: Option<String>,
     pub context: ProtocolHistory,
+    pub input_images: HashMap<(uuid::Uuid, uuid::Uuid), Arc<agentelier_tools::ImagePayload>>,
     pub history_position: usize,
     pub instructions: Arc<InstructionSnapshot>,
     pub tools: Arc<ToolCatalog>,
@@ -71,6 +72,8 @@ pub struct RequestProjection {
     pub retired_memory_outputs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub omitted_image_outputs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_images: Vec<crate::UserImage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript: Option<crate::TranscriptMaterial>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -370,7 +373,8 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         });
         input.push(serde_json::json!({"role":"developer", "content":catalog}));
     }
-    input.extend(generation.context.into_input());
+    let user_images = generation.context.user_images().cloned().collect();
+    input.extend(generation.context.into_input(&generation.input_images)?);
     for skill in generation.selected_skills {
         skill
             .validate()
@@ -437,6 +441,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         memory,
         retired_memory_outputs: generation.retired_memory_outputs,
         omitted_image_outputs: Vec::new(),
+        user_images,
         transcript,
         history: Some(history),
         items,

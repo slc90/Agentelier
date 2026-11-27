@@ -14,7 +14,11 @@ pub fn text_tokens(text: &str) -> u64 {
 fn item_tokens(item: &ProtocolItem) -> u64 {
     match item {
         ProtocolItem::Project(item) => text_tokens(&item.text).saturating_add(text_tokens("user")),
-        ProtocolItem::User(text) | ProtocolItem::AgentResult(text) => text_tokens(text),
+        ProtocolItem::User(message) => text_tokens(&message.text).saturating_add(
+            (message.images.len() as u64)
+                .saturating_mul(RESIZED_IMAGE_ESTIMATE_BYTES.div_ceil(TEXT_BYTES_PER_TOKEN)),
+        ),
+        ProtocolItem::AgentResult(text) => text_tokens(text),
         ProtocolItem::Compaction(item) => (item
             .0
             .get("encrypted_content")

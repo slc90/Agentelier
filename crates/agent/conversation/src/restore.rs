@@ -290,7 +290,7 @@ fn recover_response(
                     .map(|(id, saved)| (id, saved.output))
                     .collect(),
                 &response.started,
-                (!retained_input).then_some(turn.submission.text()),
+                (!retained_input).then(|| turn.submission.protocol(state.session)),
             )
             .map_err(|failure| ConversationFailure::new(failure.to_string()))?;
         turn.committed_steps = turn
@@ -1027,6 +1027,16 @@ fn replay(
                                 fact.projection.compaction.is_some(),
                             )
                     })
+                    || (prepared
+                        && !history
+                            .user_images()
+                            .chain(
+                                (!retained_input)
+                                    .then(|| turn.submission.protocol(initial.session))
+                                    .iter()
+                                    .flat_map(|message| message.images.iter()),
+                            )
+                            .eq(&fact.projection.user_images))
                     || fact.projection.base_hashes
                         != initial
                             .settings
@@ -1243,7 +1253,7 @@ fn replay(
                 if let Some(acceptance) = &acceptance {
                     history
                         .append_response(
-                            (!retained_input).then_some(turn.submission.text()),
+                            (!retained_input).then(|| turn.submission.protocol(initial.session)),
                             &output,
                             acceptance.append,
                         )
@@ -1570,7 +1580,10 @@ fn replay(
                     .as_ref()
                     .filter(|turn| turn.id == claim.turn)
                     .ok_or_else(|| ConversationFailure::new("邮箱输入缺少同一 Turn"))?;
-                let users = [turn.submission.text(), note.as_str()];
+                let users = [
+                    turn.submission.protocol(initial.session),
+                    agentelier_llm_model::UserMessage::text(&note),
+                ];
                 let expected = if retained_user {
                     &users[..]
                 } else {
@@ -1579,7 +1592,7 @@ fn replay(
                 let valid_history = if is_result {
                     applied.appends_agent_result(
                         &history,
-                        retained_user.then_some(turn.submission.text()),
+                        retained_user.then_some(&users[0]),
                         &note,
                     )
                 } else {

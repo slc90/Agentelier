@@ -45,4 +45,6 @@ pub use model::{
     select_agent_model, select_session_model, task_catalog, task_model,
 };
 
-pub use protocol::{estimated_text_tokens, result_token_budget, result_tokens};
+pub use protocol::{
+    UserImage, UserMessage, estimated_text_tokens, result_token_budget, result_tokens,
+};

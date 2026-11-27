@@ -46,10 +46,21 @@ async fn request_once(
     ConversationFailure,
 > {
     let (sender, mut events) = mpsc::channel(MODEL_PROGRESS_CAPACITY);
-    let request = match active.call(|mut turn| turn.request()).await {
+    let mut request = match active.call(|mut turn| turn.request()).await {
         Ok(request) => request,
         Err(failure) => return Ok(Some(Err(protocol_failure(failure)))),
     };
+    for image in request.context.user_images() {
+        let key = (image.session, image.id);
+        if let std::collections::hash_map::Entry::Vacant(entry) = request.input_images.entry(key) {
+            match active.read_user_image(image.clone()).await {
+                Ok(payload) => {
+                    entry.insert(payload);
+                }
+                Err(failure) => return Ok(Some(Err(protocol_failure(failure)))),
+            }
+        }
+    }
     let prepared = match agentelier_llm_model::prepare(request) {
         Ok(prepared) => prepared,
         Err(failure) => return Ok(Some(Err(failure))),
