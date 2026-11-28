@@ -2,7 +2,7 @@
 
 ## 提交前检查
 
-提交前必须完成适用的验证与独立 Code Review，并按照 `rules/development.md` 删除本任务的临时进度 Markdown。
+提交前必须完成适用的验证，并按照 `rules/development.md` 删除本任务的临时进度 Markdown。
 
 检查最终 Working Tree、暂存区及 Diff，确保提交范围正确，且临时进度文件没有进入提交。
 
@@ -67,8 +67,6 @@ Unify widget interaction state handling
 
 **Commit Message 无例外地不记录以下内容：**
 
-- 测试的新增、删除或修改。
-- 测试执行过程及结果。
 - 格式化、编译检查、Clippy 等验证工作。
 - Import 整理及单纯代码格式调整。
 - 没有独立语义的附带文件或实现变化。

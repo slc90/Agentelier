@@ -63,15 +63,7 @@ BRP 普通 Pointer 输入使用独立的 Custom Pointer，不等同于原生 OS 
 
 必要时在输入后尽早采集 Screenshot 或 State，并观察关键中间阶段，再确认最终稳定状态。
 
-不要求所有 GUI 测试机械增加多次截图，只验证当前行为实际存在的时序风险。
-
-## 与自动化测试的关系
-
-BRP 用于当前任务的真实 GUI 运行时验收，不属于长期 Unit Test / Integration Test 覆盖体系，也不替代 `rules/testing.md` 要求的回归保护。
-
-如果 BRP 发现可稳定复现的问题，并且能够合理通过 Headless Test 表达，应提炼对应行为契约并增加确定性 Regression Test。
-
-不要求将每个 BRP 操作场景转化为长期自动化测试。
+不要求所有 GUI 验证都采集多次截图，只验证当前行为实际存在的时序风险。
 
 ## 工具能力边界
 

@@ -2,13 +2,12 @@
 
 ## Workspace / Crate 职责与依赖管理
 
-当前整体设计与模块职责关系见 `docs/design/architecture.md`，模块核心设计见 `docs/design/modules/`。本节约束 crate 的职责边界、依赖方向及依赖管理方式。
+当前整体设计见 `docs/design/architecture.md`。本节约束 crate 的职责边界、依赖方向及依赖管理方式。
 
 ### Crate 职责与依赖方向
 
 - `app/`：可运行程序入口、应用业务、窗口和 UI 装配及运行配置，不得作为下层库 crate 的依赖。
 - `crates/assets/`：统一管理应用 Asset，可供其他 Crate 使用。
-- `crates/test_utils/`：跨 Crate 共享的测试及 Benchmark 基础设施，不能进入应用或其他生产代码的正常依赖路径。
 - `crates/` 中将来增加的内部 Library：按实际可交付能力划分。
 
 ### 外部依赖管理
@@ -62,7 +61,7 @@ Module 根据实际职责和语义划分，不机械采用一种 Type 对应一�
 
 不得仅因为文件较长、希望目录整齐或希望各 crate 结构一致，就拆分或重组 Module。
 
-除 Integration Test 目录外，源码采用现代 Rust Module 文件组织方式，不使用 `mod.rs`：
+Crate 的 `src/` 采用现代 Rust Module 文件组织方式，不使用 `mod.rs`：
 
 ```text
 src/
@@ -73,8 +72,6 @@ src/
     └── baz.rs
 ```
 
-`tests/` 下的 Integration Test 可以根据实际需要使用 `mod.rs`。
-
 ### Visibility
 
 声明使用满足当前需求的最小 Visibility：
@@ -83,4 +80,4 @@ src/
 - `pub(crate)`：仅 Crate 内共享。
 - `pub`：明确需要跨 Crate 访问或属于对外 API。
 
-不得仅为了实现或测试方便而扩大 Visibility，也不得在普通开发任务中顺手增加公共 API。
+不得仅为了实现方便而扩大 Visibility，也不得在普通开发任务中顺手增加公共 API。

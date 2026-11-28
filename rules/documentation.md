@@ -22,11 +22,7 @@ Git Commit Message 使用英文，具体要求遵循 `rules/git.md`。
 
 注释应解释不明显的原因和限制，而不是复述代码操作。
 
-不为普通 Type、Field、Function、Module 或 Test 编写显而易见的职责说明，也不在 `lib.rs`、`main.rs` 或 Integration Test 文件头部重复描述已集中维护的功能与测试覆盖信息。
-
-Crate 功能及行为契约由 `docs/features/` 集中记录，模块核心设计及跨模块机制由 `docs/design/` 记录。`app/` 的实际界面与交互以其实现为准，不额外强制维护展示型功能文档。
-
-Integration Test 的 Coverage Model 由对应 Crate 的 `tests/COVERAGE.md` 维护，具体遵循 `rules/testing.md`。
+不为普通 Type、Field、Function 或 Module 编写显而易见的职责说明，也不在 `lib.rs` 或 `main.rs` 文件头部重复描述已集中维护的功能信息。
 
 ## 注释格式
 
@@ -36,8 +32,12 @@ Integration Test 的 Coverage Model 由对应 Crate 的 `tests/COVERAGE.md` 维�
 
 注释应紧邻相关代码，并在修改代码时同步检查其准确性。问题或特殊约束已经消失时，应删除不再适用的注释。
 
-## 特殊例外
+## 项目文档
 
-根目录 `Cargo.toml` 中保留 BRP MCP 安装命令及其配套说明注释，作为普通注释限制的明确例外。
+- `docs/design/`：设计文档。
+- `docs/features/`：功能文档。
+- `docs/known_issues.md`：已知问题。
 
-具体安装命令、版本和参数以 `Cargo.toml` 中的内容为准，不在规则文件中重复维护。
+只同步受变更影响的内容。以实际源码和工程配置为准；未实施的方案放在 `plans/`。
+
+需求或功能文档明确预期失败及其处理结果；未定义的异常按 `rules/code.md` 处理。
