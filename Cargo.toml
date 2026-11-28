@@ -174,3 +174,5 @@ opt-level = 3
 
 [profile.release]
 debug = "line-tables-only"
+lto = "thin"
+codegen-units = 1

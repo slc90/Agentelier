@@ -44,6 +44,10 @@ Agentelier 是供作者个人学习、实验和使用的 AI Agent 项目，不�
 
 ## 开发与验证原则
 
+### Release 构建与使用
+
+方案探索、正式开发、调试和验证默认使用 Cargo 的 `dev` profile。只有用户明确指定时，开发 Agent 才可在指定范围内编译本项目的 Release 版或使用已有的 Release 产物。该约束适用于所有选择 `release` profile 或使用其产物的操作，包括通过脚本、BRP 等工具间接执行的操作。
+
 ### 测试、Benchmark 与 Example 禁令
 
 本项目不编写或维护测试代码、性能 Benchmark 和 Example 程序。
