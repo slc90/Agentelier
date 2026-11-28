@@ -85,6 +85,9 @@ impl AuthenticatedRequest {
     pub fn mark_output_started(&mut self) {
         self.output_started = true;
     }
+    pub fn output_started(&self) -> bool {
+        self.output_started
+    }
     pub fn reset_output_for_retry(&mut self) {
         self.output_started = false;
     }

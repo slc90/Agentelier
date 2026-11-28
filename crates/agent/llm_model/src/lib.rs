@@ -27,7 +27,7 @@ pub use expression::{
 };
 pub use generation::{
     GenerationConnection, GenerationRequest, McpMaterial, PreparedGeneration, RecordedModelSource,
-    RequestCompaction, RequestHistory, RequestProjection, generate, prepare,
+    RequestCompaction, RequestHistory, RequestProjection, RequestTransport, generate, prepare,
 };
 pub use memory::{
     MAX_MEMORY_SUMMARY_BYTES, MEMORY_SUMMARY_PROMPT_BYTES, MemoryMaterial, MemoryReference,

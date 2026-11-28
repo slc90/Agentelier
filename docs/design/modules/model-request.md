@@ -56,7 +56,7 @@ LLM Model 以 ModelRequest::Catalog 读取全部可显示模型，以 Verify 携
 
 聊天 GenerationRequest 额外携带固定的 InstructionSnapshot。生成前核对快照，并通过其统一 `messages()` 映射将基础覆盖及有序补充文本构造成 `developer` 输入消息，再追加 ProtocolHistory 和当前用户输入；基础与补充槽位不对应不同协议优先级。默认空配置保持原有请求行为。指令材料解析与保存归 Prompts，LLM Model 不读提示词文件，不在模型连接验证中自动注入准备区指令。
 
-聊天请求携带会话冻结的 Function Tool 声明、自动选择和 `parallel_tool_calls: true`。固定指令、记忆、技能、协议历史和本轮输入随原顺序排列，材料索引记录实际位置。Codex 新建 `gpt-6-astra` 会话使用 WebSocket 的 `response.create` 和顶层 `tools`，具备异步资格的声明携带 `async: true`。其他模型和已有 Codex 平铺会话使用 HTTP 同步声明。HTTP 聊天使用 `store: false`、`stream: true` 和完整的 `input`，省略 `previous_response_id`。独立的目录与连接验证不附带工具。
+聊天请求携带会话冻结的 Function Tool 声明、自动选择和 `parallel_tool_calls: true`。固定指令、记忆、技能、协议历史和本轮输入随原顺序排列，材料索引记录实际位置。传输在冻结单次请求时确定。`gpt-6-astra` 的 Codex 原生工具契约使用 WebSocket，具备异步资格的声明携带 `async: true`。新建及已有的 Codex `gpt-6.2-sol` 会话使用 WebSocket 的 `response.create`，沿用各自冻结的平铺同步工具声明。其余平铺会话继续发送 HTTP `store: false`、`stream: true` 和完整的 `input`。独立的目录与连接验证不附带工具。
 
 SSE 和 WebSocket 共享 Responses 事件解析。函数参数增量只更新展示。模型层核对完整流项与 `response.completed.output` 的身份、名称、namespace、参数和异步模式。原生路径按无 namespace 的工具名称匹配冻结目录。返回 `async: true` 的调用需要相应声明，省略标志或返回 `false` 按同步处理。请求拒绝沿用实际服务错误。协议历史原样重放 `function_call`，并以 `call_id` 关联 `function_call_output`。普通工具使用有界 JSON 字符串，图片结果使用 `input_text` 和 `input_image` 内容数组。同步调用结果确认追加后才能构建下一次请求；未配对的异步调用保留在冻结请求中。请求在途期间到达的结果只确认保存，待响应接纳或请求停止后按保存序号追加。
 
@@ -74,7 +74,7 @@ SSE 和 WebSocket 共享 Responses 事件解析。函数参数增量只更新展
 
 Model 按当前 Codex 凭据发起 HTTPS Upgrade，沿用认证、TLS 和代理设置。每次请求仍冻结 `store: false` 的全量载荷，用于本地历史与预算核对。连接可在同一运行会话的连续 Turn 中复用。仅当冻结输入以前次已确认的完整输入和响应输出开头时，才发送 `previous_response_id` 和新增输入。当前请求重新携带该次适用的工具声明和压缩配置。工具结果以原 `call_id` 进入新增输入。
 
-前缀变化时从全量冻结输入建立新响应链。连接关闭、来源失效或 Token 版本变化时旧响应 ID 不再参与请求。重开会话或换用新连接时可从已保存历史重放。网络断流时丢弃在途连接，用同一冻结输入重连，只有完整响应通过校验后才接纳历史和派发工具。会话选择的工具契约决定传输方式，WebSocket 会话保持该传输契约。
+前缀变化时从全量冻结输入建立新响应链。连接关闭、来源失效、Token 版本变化或改用 HTTP 时，旧响应 ID 不再参与请求。重开会话或换用新连接时可从已保存历史重放。网络断流时丢弃在途连接，用同一冻结输入重连。复用连接时若服务在输出前拒绝续接 ID，则从完整输入建立新连接。完整响应通过校验后才接纳历史和派发工具。请求记录分别保存工具契约和传输，旧记录沿用原有字段。
 
 ## 任务内固定执行身份
 

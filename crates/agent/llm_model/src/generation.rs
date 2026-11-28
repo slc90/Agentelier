@@ -54,10 +54,20 @@ impl RecordedModelSource {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestTransport {
+    HttpSse,
+    #[serde(rename = "websocket")]
+    WebSocket,
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct RequestProjection {
     #[serde(default, skip_serializing_if = "RecordedModelSource::is_siwc")]
     pub route: RecordedModelSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<RequestTransport>,
     #[serde(default)]
     pub fast: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,6 +166,12 @@ impl RequestProjection {
     }
 
     pub fn validate_request_materials(&self) -> Result<(), ModelFailure> {
+        if matches!(self.transport, Some(RequestTransport::WebSocket)) && self.route.is_siwc()
+            || matches!(self.transport, Some(RequestTransport::HttpSse))
+                && self.tool_contract == ToolContract::CodexWebSocket
+        {
+            return Err(crate::model::protocol("冻结请求的传输与会话契约不一致"));
+        }
         use sha2::{Digest, Sha256};
         if self.tool_contract == ToolContract::CodexWebSocket
             && self.route != RecordedModelSource::Codex
@@ -337,6 +353,12 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
             return Err(crate::model::protocol("已停用的工具契约仅可查看历史"));
         }
     }
+    let transport = if contract == ToolContract::CodexWebSocket || generation.slug == "gpt-6.2-sol"
+    {
+        RequestTransport::WebSocket
+    } else {
+        RequestTransport::HttpSse
+    };
     let mut input = Vec::new();
     input.extend(
         generation
@@ -439,7 +461,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
         "default"
     });
     payload["instructions"] = serde_json::Value::String(String::new());
-    if contract == ToolContract::CodexWebSocket {
+    if transport == RequestTransport::WebSocket {
         payload["type"] = serde_json::json!("response.create");
     }
     let body = serde_json::to_vec(&payload)
@@ -463,6 +485,7 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
     use sha2::{Digest, Sha256};
     let projection = RequestProjection {
         route: RecordedModelSource::Codex,
+        transport: Some(transport),
         fast: generation.fast,
         compaction: Some(compaction),
         tool_contract: contract,
@@ -516,7 +539,7 @@ pub async fn generate(
     identity: &ExecutionIdentity,
     progress: Sender<StreamEvent>,
 ) -> Result<(GenerationResult, GenerationConnection), ModelFailure> {
-    let websocket = generation.projection.tool_contract == ToolContract::CodexWebSocket;
+    let websocket = generation.projection.transport == Some(RequestTransport::WebSocket);
     let request = async {
         generate_inner(
             connection,
@@ -548,6 +571,9 @@ async fn generate_inner(
     progress: Sender<StreamEvent>,
     websocket: bool,
 ) -> Result<(GenerationResult, GenerationConnection), ModelFailure> {
+    if !websocket {
+        connection.0 = None;
+    }
     let client = Client::builder()
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
@@ -568,6 +594,7 @@ async fn generate_inner(
         request_bytes = generation.body.len(),
         payload_hash = generation.projection.payload_hash,
         tool_contract = ?generation.projection.tool_contract,
+        transport = ?generation.projection.transport,
         "开始流式模型请求"
     );
     let mut request = AuthenticatedRequest::new(&current);
@@ -598,6 +625,7 @@ async fn generate_inner(
             .send(StreamEvent::Sending)
             .await
             .map_err(|_| crate::model::protocol("模型进度接收端已关闭"))?;
+        let had_socket = connection.0.is_some();
         let outcome = if websocket {
             codex_socket::generate(
                 connection.0.take(),
@@ -652,7 +680,10 @@ async fn generate_inner(
                     && (failure.status == Some(415)
                         || failure.status == Some(400) && failure.code.is_none())
                     && compressed.take().is_some();
-                let retry = if use_plain_body {
+                let lost_continuation = had_socket
+                    && !request.output_started()
+                    && failure.code.as_deref() == Some("previous_response_not_found");
+                let retry = if use_plain_body || lost_continuation {
                     Some(1)
                 } else if before_stream && retryable_transport && http_attempts < MAX_HTTP_ATTEMPTS
                 {
