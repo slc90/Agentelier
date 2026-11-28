@@ -1,6 +1,6 @@
 use agentelier_conversation::{
-    ComposerContent, ComposerElement, ConversationFailure, McpCapability, bound_skills,
-    validate_mcp_input,
+    ComposerContent, ComposerElement, ConversationFailure, McpCapability, STANDALONE_PROJECT_ID,
+    bound_skills, validate_mcp_input,
 };
 use agentelier_mcp::{ConnectionState, Connections};
 use agentelier_skills::UserSkills;
@@ -78,7 +78,7 @@ pub(super) async fn validate_files(
     if files.is_empty() {
         return Ok(());
     }
-    let project = match project {
+    let project = match project.filter(|id| *id != STANDALONE_PROJECT_ID) {
         Some(project) => Some(store.project_directory(project).await.map_err(|failure| {
             ConversationFailure::new(format!("无法读取文件引用的项目目录：{failure}"))
         })?),

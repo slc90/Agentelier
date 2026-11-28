@@ -430,7 +430,7 @@ impl Invocation {
             .session_project(parent.id)
             .await
             .map_err(failure)?
-            .ok_or_else(|| ConversationFailure::new("请在 Project 内的普通聊天委托后台任务"))?;
+            .ok_or_else(|| ConversationFailure::new("发起聊天没有可用的项目归属"))?;
         let title =
             agentelier_conversation::session_title(self.args.title.as_deref().unwrap_or(""))
                 .map_err(failure)?;

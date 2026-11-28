@@ -127,7 +127,7 @@ Application 在启动阶段安装 Widgetry Tray。托盘就绪后，关闭主窗
 
 Assets 保存相同图案的 EXE ICO、主窗口与任务栏 PNG，以及托盘 ICO。可执行包通过 Widgetry 的图标构建依赖嵌入 EXE 资源，Application 通过 Widgetry 装配运行时图标和托盘。
 
-C 区使用一棵 Widgetry Tree 显示项目，末尾的内置「单独聊天」收纳无项目归属的会话。项目定义与会话归属由 Session Store 写入，Conversation 定义命令和目录投影。界面通过 Bridge 取得保存后的目录，扫描期间可以从已显示的分组打开新聊天草稿。浏览项目时只同步会话高亮，保留侧栏浏览位置。已有会话在 Agent 确认打开后切换 D 区，并在侧栏定位到该会话。用户在自动恢复期间打开的草稿继续显示。Runtime 保留原会话仍在使用的后台工具资源，并发布跨会话的安全任务快照。[项目组织与归属](modules/session-store.md#项目组织与归属)
+C 区使用一棵 Widgetry Tree 显示项目，末尾的内置「单独聊天」具有保留的 ProjectId，可使用相同的后台 Session 委托流程。用户项目定义与会话归属由 Session Store 写入，Conversation 定义命令和目录投影。界面通过 Bridge 取得保存后的目录，扫描期间可以从已显示的分组打开新聊天草稿。浏览项目时只同步会话高亮，保留侧栏浏览位置。已有会话在 Agent 确认打开后切换 D 区，并在侧栏定位到该会话。用户在自动恢复期间打开的草稿继续显示。Runtime 保留原会话仍在使用的后台工具资源，并发布跨会话的安全任务快照。[项目组织与归属](modules/session-store.md#项目组织与归属)
 
 Application 启动时隐藏主窗口，在 Widgetry Splash 窗口播放由 Bevy 原生渲染的四幕字形演出，最终呈现与主窗口共用的背景。完成窗口交接后，Login UI 检查保存的目录，或在主窗口前打开独立的 Widgetry 模态目录选择器。辅助 Job 调用 Login 检查目录并建立数据环境，配置由 Application 的 ConfigStore 串行合并并完整替换提交。成功后主窗口挂载工作区，通过共享 AgentHost 发起账号恢复。数据根路径在本次运行中保持固定。启动窗口的时序见[Splash 启动演出与主窗口交接](modules/splash.md)。
 

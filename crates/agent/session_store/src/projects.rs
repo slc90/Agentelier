@@ -1,5 +1,6 @@
 use agentelier_conversation::{
     ArchiveEntry, Project, ProjectCatalog, ProjectChange, ProjectId, ProjectView,
+    STANDALONE_PROJECT_ID,
 };
 use agentelier_tools::WorkingDirectory;
 use serde::{Deserialize, Serialize};
@@ -41,6 +42,7 @@ fn load(root: &Path) -> io::Result<Vec<Project>> {
     let mut ids = BTreeSet::new();
     for project in &projects {
         if project.id.is_nil()
+            || project.id == STANDALONE_PROJECT_ID
             || !ids.insert(project.id)
             || !project.directory.is_absolute()
             || agentelier_conversation::session_title(&project.name).is_err()
@@ -75,11 +77,20 @@ pub(super) fn session_project(
     if archive.issue.is_some() || archive.summary.archived || archive.summary.deleted {
         return Err(io::Error::other("该会话已归档、已删除或记录不可用"));
     }
-    let project = read_optional(&directory.join(MEMBERSHIP_FILE))?;
-    if let Some(project) = project {
-        project_directory(root, project)?;
+    if archive
+        .initial
+        .as_ref()
+        .is_none_or(|initial| !initial.settings.kind.is_user())
+    {
+        return Ok(None);
     }
-    Ok(project)
+    let assigned = read_optional::<ProjectId>(&directory.join(MEMBERSHIP_FILE))?;
+    if let Some(project) = assigned.filter(|id| *id != STANDALONE_PROJECT_ID)
+        && load(root)?.iter().any(|candidate| candidate.id == project)
+    {
+        return Ok(Some(project));
+    }
+    Ok(Some(STANDALONE_PROJECT_ID))
 }
 
 pub(super) fn catalog(root: &Path, entries: &[ArchiveEntry]) -> io::Result<ProjectCatalog> {
@@ -91,10 +102,12 @@ pub(super) fn catalog(root: &Path, entries: &[ArchiveEntry]) -> io::Result<Proje
         let project = crate::attachments::session_directory(root, session)
             .and_then(|directory| read_optional::<ProjectId>(&directory.join(MEMBERSHIP_FILE)));
         match project {
-            Ok(Some(project)) if known.contains(&project) => {
+            Ok(assigned) => {
+                let project = assigned
+                    .filter(|project| known.contains(project))
+                    .unwrap_or(STANDALONE_PROJECT_ID);
                 catalog.membership.insert(session, project);
             }
-            Ok(_) => {}
             Err(failure) => catalog
                 .issues
                 .push(format!("会话 {session} 的项目归属无法读取：{failure}")),
@@ -165,7 +178,10 @@ pub(super) fn apply(root: &Path, change: ProjectChange) -> io::Result<()> {
             }
         }
         ProjectChange::Move { session, project } => {
-            if project.is_some_and(|id| !projects.iter().any(|candidate| candidate.id == id)) {
+            let project = project.unwrap_or(STANDALONE_PROJECT_ID);
+            if project != STANDALONE_PROJECT_ID
+                && !projects.iter().any(|candidate| candidate.id == project)
+            {
                 return Err(io::Error::new(io::ErrorKind::NotFound, "目标项目不存在"));
             }
             let directory = crate::attachments::session_directory(root, session)?;
@@ -181,14 +197,7 @@ pub(super) fn apply(root: &Path, change: ProjectChange) -> io::Result<()> {
                     "会话已删除或缺少初始记录",
                 ));
             }
-            let path = directory.join(MEMBERSHIP_FILE);
-            return match project {
-                Some(project) => save_membership(&directory, project),
-                None => match fs::remove_file(path) {
-                    Err(failure) if failure.kind() == io::ErrorKind::NotFound => Ok(()),
-                    result => result,
-                },
-            };
+            return save_membership(&directory, project);
         }
     }
     save(&root.join(CATALOG_FILE), &projects)

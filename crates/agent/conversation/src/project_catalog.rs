@@ -4,6 +4,9 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 pub type ProjectId = uuid::Uuid;
 
+// The Max UUID is reserved and cannot be generated as a UUID v4.
+pub const STANDALONE_PROJECT_ID: ProjectId = ProjectId::from_u128(u128::MAX);
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Project {
     pub id: ProjectId,

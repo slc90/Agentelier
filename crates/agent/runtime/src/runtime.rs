@@ -4,7 +4,7 @@ use agentelier_account::{
 };
 use agentelier_conversation::{
     AgentRuntimeId, AudioId, Conversation, ConversationEvent, ConversationFailure,
-    ConversationRequest, SessionCommand, SessionId, SteerInput,
+    ConversationRequest, STANDALONE_PROJECT_ID, SessionCommand, SessionId, SteerInput,
 };
 use agentelier_llm_model::{ModelCatalogSnapshot, ModelFailure, ModelRequest, ModelResult};
 use agentelier_memory::Memory;
@@ -1443,7 +1443,7 @@ impl AgentRuntime {
                                                              .and_then(|catalog| catalog.models_for(&source))
                                                             .ok_or_else(|| ConversationFailure::new("请先刷新当前账号的模型目录"))?;
                                                         let (project, directory) = match &create.location {
-                                                            SessionLocation::Standalone(directory) => (None, directory.clone()),
+                                                            SessionLocation::Standalone(directory) => (Some(STANDALONE_PROJECT_ID), directory.clone()),
                                                             SessionLocation::InProject { project, directory_override } => {
                                                                 let directory = store.project_directory(*project).await
                                                                     .map_err(|failure| ConversationFailure::new(format!("无法读取目标项目：{failure}")))?;

@@ -1,6 +1,6 @@
 use agentelier_conversation::{
     AudioAttachment, ComposerContent, InitialSession, InputImage, ProjectId, RecordEvent,
-    SessionId, SessionRecord, StoredImage,
+    STANDALONE_PROJECT_ID, SessionId, SessionRecord, StoredImage,
 };
 use agentelier_tools::ImagePayload;
 use serde::{Deserialize, Serialize};
@@ -932,8 +932,8 @@ fn create(
         sequence: INITIAL_SEQUENCE,
         kind: RecordKind::Created(initial),
     };
-    if let Some(project) = project {
-        crate::projects::save_membership(&staging, project)?;
+    if kind.is_user() {
+        crate::projects::save_membership(&staging, project.unwrap_or(STANDALONE_PROJECT_ID))?;
     }
     let mut journal = fs::OpenOptions::new()
         .create_new(true)

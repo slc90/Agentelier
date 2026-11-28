@@ -13,7 +13,9 @@ pub use agent_registry::{
 mod project_catalog;
 mod project_context;
 pub use agentelier_llm_model::PublicationKind;
-pub use project_catalog::{Project, ProjectCatalog, ProjectChange, ProjectId, ProjectView};
+pub use project_catalog::{
+    Project, ProjectCatalog, ProjectChange, ProjectId, ProjectView, STANDALONE_PROJECT_ID,
+};
 pub use project_context::{PreparedRequestFact, ProjectCandidate, ProjectContextState};
 mod archive;
 mod audio;
