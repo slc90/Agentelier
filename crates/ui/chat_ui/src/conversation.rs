@@ -1665,9 +1665,9 @@ enum RowContent {
     InputImage(agentelier_conversation_bridge::InputImage),
 }
 
-enum ReplyContent {
-    Waiting,
-    Items(Vec<(ReplyItemKey, ReplyItemContent)>),
+struct ReplyContent {
+    activity: crate::reply_activity::Presentation,
+    items: Vec<(ReplyItemKey, ReplyItemContent)>,
 }
 
 enum ReplyItemContent {
@@ -1744,24 +1744,29 @@ fn reply_content(turn: &ChatTurn, operation: Option<u64>) -> Option<ReplyContent
                 !matches!(artifact, crate::generated_image::Artifact::Generating)
             })
         });
-    if !public {
-        return (operation == Some(turn.operation_id)
-            && matches!(turn.status, ChatTurnStatus::Running))
-        .then_some(ReplyContent::Waiting);
+    if public {
+        items.extend(turn.tools.iter().filter_map(|tool| {
+            let artifact = tool.generated_image.clone()?;
+            Some((
+                ReplyItemKey {
+                    request_index: tool.request_index,
+                    output_index: tool.output_index,
+                    id: ReplyItemId::Image(tool.call_id.clone()),
+                },
+                ReplyItemContent::Image(artifact),
+            ))
+        }));
     }
-    items.extend(turn.tools.iter().filter_map(|tool| {
-        let artifact = tool.generated_image.clone()?;
-        Some((
-            ReplyItemKey {
-                request_index: tool.request_index,
-                output_index: tool.output_index,
-                id: ReplyItemId::Image(tool.call_id.clone()),
-            },
-            ReplyItemContent::Image(artifact),
-        ))
-    }));
+    let running =
+        operation == Some(turn.operation_id) && matches!(turn.status, ChatTurnStatus::Running);
+    if items.is_empty() && turn.tools.is_empty() && !running {
+        return None;
+    }
     items.sort_by_key(|(key, _)| (key.request_index, key.output_index));
-    Some(ReplyContent::Items(items))
+    Some(ReplyContent {
+        activity: crate::reply_activity::Presentation::new(turn, running),
+        items,
+    })
 }
 
 fn reconcile(world: &mut World) -> Result {
@@ -2012,6 +2017,7 @@ pub(super) fn reconcile_list(
                                 @AgentelierAvatar { @source: AvatarSource::Assistant } Name("ChatAssistantAvatar") Node { align_self: AlignSelf::Start }--
                                 @crate::spinner::ring(REPLY_SPINNER_SIZE) ReplyWaiting Name("ChatReplyWaiting")
                                 Node { margin: UiRect::vertical(px(4)) }--
+                                @crate::reply_activity::panel()--
                                 ReplyBody Name("ChatReplyBody")
                                 Node {width:percent(100),min_width:px(0),flex_direction:FlexDirection::Column,row_gap:px(CONTENT_GAP)}
                             ]
@@ -2074,8 +2080,9 @@ fn reconcile_reply(
         .iter()
         .find(|child| world.get::<ReplyBody>(*child).is_some())
         .ok_or_else(|| io::Error::other("助手回复缺少内容区域"))?;
-    let is_waiting = matches!(content, ReplyContent::Waiting);
-    for (entity, visible) in [(waiting, is_waiting), (body, !is_waiting)] {
+    let ReplyContent { activity, items } = content;
+    let is_waiting = activity.running && !activity.has_tools && items.is_empty();
+    for (entity, visible) in [(waiting, is_waiting), (body, !items.is_empty())] {
         let display = if visible {
             Display::Flex
         } else {
@@ -2087,10 +2094,7 @@ fn reconcile_reply(
             .map_unchanged(|node| &mut node.display)
             .set_if_neq(display);
     }
-    let items = match content {
-        ReplyContent::Waiting => Vec::new(),
-        ReplyContent::Items(items) => items,
-    };
+    crate::reply_activity::reconcile(world, root, activity)?;
     let mut existing: HashMap<_, _> = world
         .get::<Children>(body)
         .into_iter()

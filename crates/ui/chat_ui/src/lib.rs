@@ -25,6 +25,7 @@ mod projects;
 mod prompts;
 mod queue;
 mod reading;
+mod reply_activity;
 mod request_inspection;
 mod skills;
 mod spinner;
