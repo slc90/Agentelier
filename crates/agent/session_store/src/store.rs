@@ -9,7 +9,6 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use tempfile::NamedTempFile;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error};
 
@@ -126,7 +125,7 @@ enum Command {
     MemoryCutoffs(oneshot::Sender<io::Result<Vec<crate::MemoryCutoff>>>),
     MemorySource(
         SessionId,
-        oneshot::Sender<io::Result<Option<crate::MemorySourceSnapshot>>>,
+        oneshot::Sender<io::Result<Option<crate::reader::MemoryJournal>>>,
     ),
     Load(
         SessionId,
@@ -419,9 +418,15 @@ impl SessionStoreClient {
             .send(Command::MemorySource(session, reply))
             .await
             .map_err(|_| io::Error::other("会话存储工作者已关闭"))?;
-        result
+        let journal = result
             .await
-            .map_err(|_| io::Error::other("记忆来源未返回读取结果"))?
+            .map_err(|_| io::Error::other("记忆来源未返回日志快照"))??;
+        let Some(journal) = journal else {
+            return Ok(None);
+        };
+        tokio::task::spawn_blocking(move || journal.read())
+            .await
+            .map_err(io::Error::other)?
     }
 
     pub fn load(
@@ -645,7 +650,7 @@ impl SessionStore {
                             let _closed = reply.send(crate::reader::memory_sessions(&root));
                         }
                         Command::MemorySource(session, reply) => {
-                            let _closed = reply.send(crate::reader::memory_source(&root, session));
+                            let _closed = reply.send(crate::reader::MemoryJournal::open(&root, session));
                         }
                         Command::Load(session, source, reply) => {
                             let result = crate::reader::load(&root, session, source, &mut writer);
@@ -913,6 +918,7 @@ fn create(
         .as_ref()
         .map_or(INITIAL_SEQUENCE, |first| first.sequence);
     let (summary, _) = crate::journal::summarize(&initial, first.as_slice(), sequence);
+    let kind = initial.settings.kind;
     let sessions = root.join("sessions");
     fs::create_dir_all(&sessions)?;
     let directory = sessions.join(initial.session.to_string());
@@ -950,17 +956,7 @@ fn create(
     drop(journal);
     fs::rename(&staging, &directory)?;
     // The authoritative journal is already committed even if its projection fails.
-    let summary_failure = (|| {
-        let mut temporary = NamedTempFile::new_in(&directory)?;
-        serde_json::to_writer(temporary.as_file_mut(), &summary)?;
-        temporary.as_file_mut().flush()?;
-        temporary.as_file().sync_all()?;
-        temporary
-            .persist(directory.join("summary.json"))
-            .map_err(|failure| failure.error)?;
-        Ok::<(), io::Error>(())
-    })()
-    .err();
+    let summary_failure = crate::journal::write_summary(&directory, &summary, kind, false).err();
     Ok(Commit {
         session: summary.session,
         sequence,

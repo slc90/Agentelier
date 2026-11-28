@@ -1,3 +1,4 @@
+use crate::journal::{CatalogSummary, JournalStamp};
 use crate::{Commit, FORMAT, FORMAT_VERSION, Record, RecordKind};
 use agentelier_conversation::{
     ArchiveEntry, InitialSession, RecordEvent, RestoredSession, SessionId, SessionRecord,
@@ -57,7 +58,7 @@ fn placeholder(session: SessionId) -> SessionSummary {
     }
 }
 
-pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
+pub(super) fn open_journal(directory: &Path) -> io::Result<(fs::File, fs::Metadata)> {
     let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
@@ -66,7 +67,16 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
     if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Err(io::Error::other("会话日志不是普通文件"));
     }
-    let mut reader = BufReader::new(file);
+    Ok((file, metadata))
+}
+
+pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
+    let (file, metadata) = open_journal(directory)?;
+    read_prefix(file, metadata.len(), session)
+}
+
+fn read_prefix(file: fs::File, length: u64, session: SessionId) -> io::Result<Parsed> {
+    let mut reader = BufReader::new(file.take(length));
     let mut parsed = Parsed {
         initial: None,
         records: Vec::new(),
@@ -75,7 +85,7 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
         deleted: false,
         archived: false,
         sequence: 0,
-        file_length: metadata.len(),
+        file_length: length,
         valid_length: 0,
         prefix_digest: [0; 32],
         issue: None,
@@ -170,6 +180,12 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
         digest.update(&line);
         line.clear();
     }
+    if parsed.issue.is_none() && parsed.valid_length != length {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "会话日志在读取期间缩短",
+        ));
+    }
     parsed.prefix_digest = digest.finalize().into();
     if let Some(initial) = &parsed.initial {
         parsed.summary = crate::journal::summarize(initial, &parsed.records, parsed.sequence).0;
@@ -187,7 +203,7 @@ pub(super) fn read(directory: &Path, session: SessionId) -> io::Result<Parsed> {
     Ok(parsed)
 }
 
-fn cached_summary(directory: &Path) -> io::Result<SessionSummary> {
+fn cached_summary(directory: &Path, session: SessionId) -> io::Result<CatalogSummary> {
     let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
@@ -196,21 +212,29 @@ fn cached_summary(directory: &Path) -> io::Result<SessionSummary> {
     if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
         return Err(io::Error::other("会话摘要不是普通文件"));
     }
-    serde_json::from_reader(file).map_err(|failure: serde_json::Error| {
-        if failure.is_io() {
-            io::Error::other(failure)
-        } else {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "摘要 JSON {:?}，行 {}、列 {}",
-                    failure.classify(),
-                    failure.line(),
-                    failure.column()
-                ),
-            )
-        }
-    })
+    let projection: CatalogSummary =
+        serde_json::from_reader(file).map_err(|failure: serde_json::Error| {
+            if failure.is_io() {
+                io::Error::other(failure)
+            } else {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "摘要 JSON {:?}，行 {}、列 {}",
+                        failure.classify(),
+                        failure.line(),
+                        failure.column()
+                    ),
+                )
+            }
+        })?;
+    let (_, journal) = open_journal(directory)?;
+    if projection.summary.session != session
+        || projection.journal != JournalStamp::from_metadata(&journal)
+    {
+        return Err(io::Error::other("会话摘要与当前日志不匹配"));
+    }
+    Ok(projection)
 }
 
 fn sessions_directory(root: &Path) -> io::Result<Option<(PathBuf, PathBuf)>> {
@@ -272,37 +296,68 @@ pub(super) fn scan(root: &Path, include_task_history: bool) -> io::Result<crate:
         if crate::deletion::group_pending(&root, session) {
             continue;
         }
-        let result = crate::attachments::session_directory(&root, session)
-            .and_then(|directory| read(&directory, session).map(|parsed| (directory, parsed)));
+        let result = crate::attachments::session_directory(&root, session).map(|directory| {
+            let cached = cached_summary(&directory, session);
+            (directory, cached)
+        });
+        if let Ok((_, Ok(cached))) = &result
+            && !cached.summary.deleted
+            && cached.summary.background_source.is_none()
+            && (!include_task_history || !cached.has_tasks)
+        {
+            if cached.kind.is_user() {
+                entries.push(ArchiveEntry {
+                    summary: cached.summary.clone(),
+                    error: None,
+                });
+            }
+            continue;
+        }
+        let result = result.and_then(|(directory, cached)| {
+            read(&directory, session).map(|parsed| (directory, cached, parsed))
+        });
         match result {
-            Ok((directory, mut parsed)) => {
+            Ok((directory, cached, mut parsed)) => {
+                let mut error = parsed.issue.as_ref().map(ToString::to_string);
+                let has_tasks = parsed
+                    .records
+                    .iter()
+                    .any(|record| crate::journal::registers_tasks(&record.event));
+                if parsed.issue.is_none()
+                    && let Some(initial) = &parsed.initial
+                    && !cached.as_ref().is_ok_and(|entry| {
+                        entry.summary == parsed.summary
+                            && entry.kind == initial.settings.kind
+                            && entry.has_tasks == has_tasks
+                    })
+                {
+                    match crate::journal::write_summary(
+                        &directory,
+                        &parsed.summary,
+                        initial.settings.kind,
+                        has_tasks,
+                    ) {
+                        Ok(()) => {
+                            if let Err(failure) = cached {
+                                tracing::info!(session_id = %session, reason = %failure, "会话摘要读取失败后已从权威记录重建");
+                            }
+                        }
+                        Err(failure) => {
+                            error = Some(match cached {
+                                Ok(_) => format!("历史可读，但摘要更新失败：{failure}"),
+                                Err(read_failure) => {
+                                    format!("摘要读取失败：{read_failure}；重建失败：{failure}")
+                                }
+                            })
+                        }
+                    }
+                }
                 if parsed
                     .initial
                     .as_ref()
                     .is_some_and(|initial| !initial.settings.kind.is_user())
                 {
                     continue;
-                }
-                let mut error = parsed.issue.as_ref().map(ToString::to_string);
-                if parsed.issue.is_none() {
-                    let cached = cached_summary(&directory);
-                    if cached.as_ref().ok() != Some(&parsed.summary) {
-                        match crate::journal::write_summary(&directory, &parsed.summary) {
-                            Ok(()) => {
-                                if let Err(failure) = cached {
-                                    tracing::info!(session_id = %session, reason = %failure, "会话摘要读取失败后已从权威记录重建");
-                                }
-                            }
-                            Err(failure) => {
-                                error = Some(match cached {
-                                    Ok(_) => format!("历史可读，但摘要更新失败：{failure}"),
-                                    Err(read_failure) => {
-                                        format!("摘要读取失败：{read_failure}；重建失败：{failure}")
-                                    }
-                                })
-                            }
-                        }
-                    }
                 }
                 if parsed.summary.deleted {
                     if let Err(failure) = crate::deletion::cleanup(&root, session) {
@@ -338,10 +393,9 @@ pub(super) fn scan(root: &Path, include_task_history: bool) -> io::Result<crate:
                             ),
                         );
                     }
-                    if include_task_history && !matches!(parsed.issue, Some(Issue::Corrupt { .. }))
-                        && parsed.records.iter().any(|record| matches!(&record.event,
-                            RecordEvent::Response { registrations: Some(agentelier_conversation::ResponseTasks::Registered(tasks)), .. }
-                                if !tasks.is_empty()))
+                    if include_task_history
+                        && !matches!(parsed.issue, Some(Issue::Corrupt { .. }))
+                        && has_tasks
                         && let Some(initial) = parsed.initial.take()
                     {
                         match restore_archive(&root, initial, parsed.records) {
@@ -503,57 +557,74 @@ fn memory_excluded(entry: &fs::DirEntry, session: SessionId) -> io::Result<bool>
     }))
 }
 
-pub(super) fn memory_source(
-    root: &Path,
+pub(super) struct MemoryJournal {
     session: SessionId,
-) -> io::Result<Option<MemorySourceSnapshot>> {
-    let parsed = match crate::attachments::session_directory(root, session)
-        .and_then(|directory| read(&directory, session))
-    {
-        Ok(parsed) => parsed,
-        Err(failure) if failure.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(failure) => return Err(failure),
-    };
-    match parsed.issue {
-        Some(Issue::Tail(_)) => return Ok(None),
-        Some(issue @ Issue::Corrupt { .. }) => return Err(io::Error::other(issue.to_string())),
-        None => {}
+    file: fs::File,
+    length: u64,
+}
+
+impl MemoryJournal {
+    pub(super) fn open(root: &Path, session: SessionId) -> io::Result<Option<Self>> {
+        if crate::deletion::group_pending(root, session) {
+            return Ok(None);
+        }
+        match crate::attachments::session_directory(root, session)
+            .and_then(|directory| open_journal(&directory))
+        {
+            Ok((file, metadata)) => Ok(Some(Self {
+                session,
+                file,
+                length: metadata.len(),
+            })),
+            Err(failure) if failure.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(failure) => Err(failure),
+        }
     }
-    if parsed.summary.deleted || crate::deletion::group_pending(root, session) {
-        return Ok(None);
+
+    pub(super) fn read(self) -> io::Result<Option<MemorySourceSnapshot>> {
+        let session = self.session;
+        let parsed = read_prefix(self.file, self.length, session)?;
+        match parsed.issue {
+            Some(Issue::Tail(_)) => return Ok(None),
+            Some(issue @ Issue::Corrupt { .. }) => return Err(io::Error::other(issue.to_string())),
+            None => {}
+        }
+        if parsed.summary.deleted {
+            return Ok(None);
+        }
+        let initial = parsed
+            .initial
+            .ok_or_else(|| io::Error::other("记忆来源缺少会话初始记录"))?;
+        if !initial.settings.kind.is_user() || initial.settings.background.is_some() {
+            return Ok(None);
+        }
+        let turns = agentelier_conversation::memory_evidence(
+            parsed.records,
+            initial.settings.working_directory.clone(),
+        )
+        .map_err(io::Error::other)?;
+        if turns.is_empty() {
+            return Ok(None);
+        }
+        let mut revision = Sha256::new();
+        revision.update(session.as_bytes());
+        let mut activity_ms = 0;
+        for turn in &turns {
+            revision.update(turn.input_sequence.to_le_bytes());
+            revision.update(turn.evidence_sequence.to_le_bytes());
+            activity_ms = activity_ms.max(turn.activity_ms);
+        }
+        Ok(Some(MemorySourceSnapshot {
+            session,
+            sequence: parsed.sequence,
+            revision: revision.finalize().into(),
+            activity_ms,
+            origin: initial.settings.is_origin(),
+            work_directory: initial.settings.working_directory,
+            model: initial.settings.slug,
+            turns,
+        }))
     }
-    let initial = parsed
-        .initial
-        .ok_or_else(|| io::Error::other("记忆来源缺少会话初始记录"))?;
-    if !initial.settings.kind.is_user() || initial.settings.background.is_some() {
-        return Ok(None);
-    }
-    let turns = agentelier_conversation::memory_evidence(
-        parsed.records,
-        initial.settings.working_directory.clone(),
-    )
-    .map_err(io::Error::other)?;
-    if turns.is_empty() {
-        return Ok(None);
-    }
-    let mut revision = Sha256::new();
-    revision.update(session.as_bytes());
-    let mut activity_ms = 0;
-    for turn in &turns {
-        revision.update(turn.input_sequence.to_le_bytes());
-        revision.update(turn.evidence_sequence.to_le_bytes());
-        activity_ms = activity_ms.max(turn.activity_ms);
-    }
-    Ok(Some(MemorySourceSnapshot {
-        session,
-        sequence: parsed.sequence,
-        revision: revision.finalize().into(),
-        activity_ms,
-        origin: initial.settings.is_origin(),
-        work_directory: initial.settings.working_directory,
-        model: initial.settings.slug,
-        turns,
-    }))
 }
 
 fn repair(
@@ -562,6 +633,16 @@ fn repair(
     parsed: &Parsed,
     event: RecordEvent,
 ) -> io::Result<Commit> {
+    let kind = parsed
+        .initial
+        .as_ref()
+        .ok_or_else(|| io::Error::other("恢复日志缺少会话初始记录"))?
+        .settings
+        .kind;
+    let has_tasks = parsed
+        .records
+        .iter()
+        .any(|record| crate::journal::registers_tasks(&record.event));
     let directory = crate::attachments::session_directory(root, session)?;
     let path = directory.join("session.jsonl");
     let mut original = fs::OpenOptions::new()
@@ -631,20 +712,20 @@ fn repair(
     replacement.as_file_mut().flush()?;
     replacement.as_file().sync_all()?;
     drop(original);
-    replacement.persist(&path).map_err(|failure| {
+    drop(replacement.persist(&path).map_err(|failure| {
         io::Error::other(format!(
             "原件已保留于 {}，恢复文件提交失败：{}",
             backup_path.display(),
             failure.error
         ))
-    })?;
+    })?);
     tracing::info!(session_id = %session, backup = %backup_path.display(), "已保留残缺日志原件并恢复有效记录");
     let mut summary = parsed.summary.clone();
     summary.last_sequence = sequence;
     Ok(Commit {
         session,
         sequence,
-        summary_failure: crate::journal::write_summary(&directory, &summary).err(),
+        summary_failure: crate::journal::write_summary(&directory, &summary, kind, has_tasks).err(),
     })
 }
 

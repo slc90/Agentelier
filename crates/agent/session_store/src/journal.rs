@@ -1,5 +1,5 @@
 use crate::{Commit, FORMAT, FORMAT_VERSION, Record, RecordKind};
-use agentelier_conversation::{RecordEvent, SessionId, SessionRecord, SessionSummary};
+use agentelier_conversation::{RecordEvent, SessionId, SessionKind, SessionRecord, SessionSummary};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -19,13 +19,47 @@ struct Cursor {
     renamed: bool,
     poisoned: bool,
     kind: agentelier_conversation::SessionKind,
+    has_tasks: bool,
     scene_revisions: HashMap<SessionId, u64>,
 }
 
 #[derive(Default)]
 pub(super) struct Writer(HashMap<SessionId, Cursor>);
 
+#[derive(PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) struct JournalStamp {
+    length: u64,
+    created: u64,
+    modified: u64,
+}
+
+impl JournalStamp {
+    pub(super) fn from_metadata(metadata: &fs::Metadata) -> Self {
+        Self {
+            length: metadata.len(),
+            created: metadata.creation_time(),
+            modified: metadata.last_write_time(),
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(super) struct CatalogSummary {
+    #[serde(flatten)]
+    pub(super) summary: SessionSummary,
+    pub(super) kind: SessionKind,
+    pub(super) journal: JournalStamp,
+    pub(super) has_tasks: bool,
+}
+
+pub(super) fn registers_tasks(event: &RecordEvent) -> bool {
+    matches!(event,
+        RecordEvent::Response { registrations: Some(agentelier_conversation::ResponseTasks::Registered(tasks)), .. }
+            if !tasks.is_empty())
+}
+
 fn update(cursor: &mut Cursor, record: &SessionRecord) {
+    cursor.has_tasks |= registers_tasks(&record.event);
     track_scene_revisions(&mut cursor.scene_revisions, &record.event);
     let input = match &record.event {
         RecordEvent::Accepted { state } => state.turn.as_ref().map(|turn| turn.submission.text()),
@@ -95,6 +129,7 @@ fn summarized_cursor(
         renamed: false,
         poisoned: false,
         kind: initial.settings.kind,
+        has_tasks: false,
         scene_revisions: HashMap::new(),
     };
     for record in records {
@@ -263,6 +298,7 @@ impl Writer {
             cursor.poisoned = true;
             return Err(failure);
         }
+        drop(file);
         cursor.sequence = sequence;
         cursor.length = cursor
             .length
@@ -283,12 +319,30 @@ impl Writer {
         Ok(Commit {
             session,
             sequence,
-            summary_failure: write_summary(&directory, &cursor.summary).err(),
+            summary_failure: write_summary(
+                &directory,
+                &cursor.summary,
+                cursor.kind,
+                cursor.has_tasks,
+            )
+            .err(),
         })
     }
 }
 
-pub(super) fn write_summary(directory: &Path, summary: &SessionSummary) -> io::Result<()> {
+pub(super) fn write_summary(
+    directory: &Path,
+    summary: &SessionSummary,
+    kind: SessionKind,
+    has_tasks: bool,
+) -> io::Result<()> {
+    let (_, metadata) = crate::reader::open_journal(directory)?;
+    let projection = CatalogSummary {
+        summary: summary.clone(),
+        kind,
+        journal: JournalStamp::from_metadata(&metadata),
+        has_tasks,
+    };
     let path = directory.join("summary.json");
     match fs::symlink_metadata(&path) {
         Ok(metadata)
@@ -302,7 +356,7 @@ pub(super) fn write_summary(directory: &Path, summary: &SessionSummary) -> io::R
         Err(failure) => return Err(failure),
     }
     let mut temporary = NamedTempFile::new_in(directory)?;
-    serde_json::to_writer(temporary.as_file_mut(), summary)?;
+    serde_json::to_writer(temporary.as_file_mut(), &projection)?;
     temporary.as_file_mut().flush()?;
     temporary.as_file().sync_all()?;
     temporary.persist(path).map_err(|failure| failure.error)?;

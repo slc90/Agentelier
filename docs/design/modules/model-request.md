@@ -104,7 +104,7 @@ Responses 流允许 compaction 与助手、reasoning、function_call 混排，�
 
 模型层 prepare 是唯一请求构造入口，输出私有冻结字节和 RequestProjection（工具契约、基础摘要、有序协议类型、载荷大小与 SHA-256）。generate 仅消费 PreparedGeneration，认证恢复使用同一字节。重试清理当前尝试的流式预览，已有工具结果留在历史，Stop 可以取消等待。类型化项目项序列化为 user，基础保持 developer。请求在开放调用闭合后恢复 Inline 压缩。
 
-generate 在进入发送阶段后发布 Sending，HTTP 收到响应头后发布实际状态，WebSocket 成功发送后记录已升级的传输状态。Runner 将这些事实交回运行时，Conversation 按当前 Turn 合并并生成待持久化的请求记录。HTTP 认证重发复用原始字节。WebSocket 在重新认证并建立新连接后使用同一冻结载荷的全量输入。
+generate 在进入发送阶段后发布 Sending，HTTP 收到响应头后发布实际状态，WebSocket 成功发送后记录已升级的传输状态。Runner 将这些事实交回运行时，Conversation 按当前 Turn 合并并生成待持久化的请求记录。传输和事件接纳在同一请求生命周期内并行推进，等待存储回执期间传输可继续读取到有界进度队列。Runner 按事件顺序确认进度，再接纳完整响应。HTTP 认证重发复用原始字节。WebSocket 在重新认证并建立新连接后使用同一冻结载荷的全量输入。
 
 ## Skills 调度材料
 

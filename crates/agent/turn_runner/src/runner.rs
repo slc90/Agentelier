@@ -85,45 +85,56 @@ async fn request_once(
     }
     publish(progress, cancel).await?;
     let mut stopped_by_resources = false;
-    let outcome = {
-        let generation = agentelier_llm_model::generate(
-            std::mem::take(connection),
-            credentials,
-            prepared,
-            identity,
-            sender,
-        );
-        tokio::pin!(generation);
-        loop {
-            tokio::select! { biased;
-                event = jobs.work.incoming.recv(), if jobs.has_calls() => {
-                    jobs.apply(active, dispatcher, event, progress, cancel).await?;
-                }
-                command = jobs.controls.recv(), if !jobs.controls.is_closed() => {
-                    if let Some(command) = command {
-                        jobs.command(active, dispatcher, command, progress, cancel).await?;
+    let (outcome, event_failure) = {
+        let finished = CancellationToken::new();
+        let generation = async {
+            let result = agentelier_llm_model::generate(
+                std::mem::take(connection),
+                credentials,
+                prepared,
+                identity,
+                sender,
+            )
+            .await;
+            finished.cancel();
+            result
+        };
+        let handle_events = async {
+            loop {
+                tokio::select! { biased;
+                    event = jobs.work.incoming.recv(), if jobs.has_calls() => {
+                        jobs.apply(active, dispatcher, event, progress, cancel).await?;
                     }
-                }
-                _ = dispatcher.blocked() => {
-                    stopped_by_resources = true;
-                    break None;
-                },
-                result = &mut generation => break Some(result),
-                _ = cancel.cancelled() => break None,
-                input = steers.recv(), if !steers.is_closed() => {
-                    if let Some(input) = input {
-                        jobs.accept_steer(active, input, progress, cancel).await?;
+                    command = jobs.controls.recv(), if !jobs.controls.is_closed() => {
+                        if let Some(command) = command {
+                            jobs.command(active, dispatcher, command, progress, cancel).await?;
+                        }
                     }
-                }
-                event = events.recv() => {
-                    if let Some(event) = event {
+                    _ = dispatcher.blocked() => {
+                        stopped_by_resources = true;
+                        break Ok(None);
+                    },
+                    _ = finished.cancelled() => break Ok(None),
+                    _ = cancel.cancelled() => break Ok(None),
+                    input = steers.recv(), if !steers.is_closed() => {
+                        if let Some(input) = input {
+                            jobs.accept_steer(active, input, progress, cancel).await?;
+                        }
+                    }
+                    event = events.recv() => {
+                        let Some(event) = event else { break Ok(None); };
                         if let Err(failure) = apply_stream_event(active, event).await? {
-                            break Some(Err(failure));
+                            break Ok(Some(failure));
                         }
                         publish(progress, cancel).await?;
                     }
                 }
             }
+        };
+        tokio::pin!(generation, handle_events);
+        tokio::select! { biased;
+            result = &mut generation => (Some(result), handle_events.await?),
+            result = &mut handle_events => (None, result?),
         }
     };
     while let Ok(event) = events.try_recv() {
@@ -135,6 +146,9 @@ async fn request_once(
         return Ok(Some(Err(protocol_failure(ConversationFailure::new(
             "工具资源回收未确认，当前会话已暂停执行",
         )))));
+    }
+    if let Some(failure) = event_failure {
+        return Ok(Some(Err(failure)));
     }
     Ok(outcome)
 }
