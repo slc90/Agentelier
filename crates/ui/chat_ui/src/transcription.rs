@@ -5,15 +5,18 @@ use agentelier_conversation_bridge::{
     SessionId, TranscriptReferenceView, TranscriptionOutcomeView, TranscriptionView,
 };
 use bevy::prelude::*;
+use bevy::text::LineBreak;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::Activate;
+use bevy_widgetry::scroll_area::{
+    WidgetryScrollArea, WidgetryScrollAreaContent, WidgetryScrollAreaViewport,
+};
 use bevy_widgetry::text::WidgetryText;
-use bevy_widgetry::text_field::{AutoSize, WidgetryReadOnlyTextField, WidgetryTextFieldHeadless};
 use std::collections::HashMap;
 use std::io;
 
-const TRANSCRIPT_MIN_ROWS: usize = 3;
-const TRANSCRIPT_MAX_ROWS: usize = 7;
+const TRANSCRIPT_MAX_HEIGHT: f32 = 180.0;
+const TRANSCRIPT_PADDING: f32 = 8.0;
 
 #[derive(Clone, Reflect)]
 pub struct ChatTranscription {
@@ -165,6 +168,8 @@ struct Summary;
 #[derive(Component, Clone, Default)]
 struct TranscriptText;
 #[derive(Component, Clone, Default)]
+struct TranscriptBody;
+#[derive(Component, Clone, Default)]
 struct SelectionPanel;
 #[derive(Component, Clone, Default)]
 struct SelectionLabel;
@@ -197,11 +202,16 @@ pub(crate) fn panel(target: Target) -> impl Scene {
                 @button("用文稿提问", "AskAboutTranscript", Action::Ask)--
                 Text::default() WidgetryText Summary Name("TranscriptionStatus")
             ]--
-            @WidgetryReadOnlyTextField {
-                @multiline: true,
-                @auto_size: {Some(AutoSize {min_rows:TRANSCRIPT_MIN_ROWS, max_rows:TRANSCRIPT_MAX_ROWS})},
+            @WidgetryScrollArea {
+                @children: {Some(Box::new(bsn_list! {
+                    TranscriptBody Name("TranscriptBody") Text::default() WidgetryText
+                    TextLayout::linebreak(LineBreak::AnyCharacter)
+                    Node { width: percent(100), min_width: px(0), flex_shrink: 0.0, padding: UiRect::all(px(TRANSCRIPT_PADDING)) }
+                }) as Box<dyn SceneList>)}
             }
-            TranscriptText Name("TranscriptText") Node { display: Display::None, width: percent(100), min_width: px(0) }
+            TranscriptText Name("TranscriptText")
+            BackgroundColor({Color::srgba_u8(35, 94, 71, 16)})
+            Node { display: Display::None, width: percent(100), min_width: px(0), max_height: px(TRANSCRIPT_MAX_HEIGHT), flex_shrink: 0.0, border_radius: BorderRadius::all(px(6)) }
         ]
     }
 }
@@ -426,7 +436,7 @@ fn synchronize(world: &mut World) -> Result {
             .find(|item| item.audio == audio);
         let finished = latest(session, audio);
         let displayed = finished.map(|(item, _)| item.id);
-        let content = (displayed != panel.displayed)
+        let content = (panel.expanded && displayed != panel.displayed)
             .then(|| finished.map_or("", |(_, text)| text).to_owned());
         let feedback = state
             .feedback
@@ -457,12 +467,23 @@ fn synchronize(world: &mut World) -> Result {
             .unwrap_or_default();
         for child in children {
             if world.get::<TranscriptText>(child).is_some() {
-                set_display(world, child, panel.expanded && displayed.is_some());
-                if let Some(content) = &content
-                    && world.get::<WidgetryTextFieldHeadless>(child).is_some()
-                {
-                    WidgetryTextFieldHeadless::set_text_in_world(world, child, content)
-                        .map_err(|failure| failure.into_bevy_error())?;
+                let display = if panel.expanded && displayed.is_some() {
+                    Display::Grid
+                } else {
+                    Display::None
+                };
+                if let Some(node) = world.get_mut::<Node>(child) {
+                    node.map_unchanged(|node| &mut node.display)
+                        .set_if_neq(display);
+                }
+                if let Some(content) = &content {
+                    let viewport = child_with::<WidgetryScrollAreaViewport>(world, child)?;
+                    let scrolled = child_with::<WidgetryScrollAreaContent>(world, viewport)?;
+                    let body = child_with::<TranscriptBody>(world, scrolled)?;
+                    world
+                        .get_mut::<Text>(body)
+                        .ok_or_else(|| io::Error::other("文稿缺少文本"))?
+                        .set_if_neq(Text::new(content));
                 }
             } else {
                 let controls = world
@@ -493,11 +514,24 @@ fn synchronize(world: &mut World) -> Result {
                 }
             }
         }
-        if let Some(mut panel) = world.get_mut::<Panel>(entity) {
+        if content.is_some()
+            && let Some(mut panel) = world.get_mut::<Panel>(entity)
+        {
             panel.displayed = displayed;
         }
     }
     Ok(())
+}
+
+fn child_with<T: Component>(world: &World, parent: Entity) -> Result<Entity> {
+    world
+        .get::<Children>(parent)
+        .and_then(|children| {
+            children
+                .iter()
+                .find(|child| world.get::<T>(*child).is_some())
+        })
+        .ok_or_else(|| io::Error::other("文稿滚动区缺少子实体").into())
 }
 
 fn synchronize_selection(world: &mut World) {

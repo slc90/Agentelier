@@ -1,4 +1,4 @@
-use super::{AudioClip, AudioPlaybackStatus, READ_TIMEOUT};
+use super::{AudioClip, AudioPlaybackStatus, AudioReadPurpose, READ_TIMEOUT};
 use crate::conversation::ChatState;
 use agentelier_agent_host::AgentHost;
 use agentelier_session_store::{AudioExtrema, summarize_audio};
@@ -44,9 +44,15 @@ struct Mask {
 }
 
 #[derive(Resource, Default)]
-struct Waveforms {
+pub(super) struct Waveforms {
     cache: VecDeque<(String, Arc<[Mask]>)>,
     pending: Option<Pending>,
+}
+
+impl Waveforms {
+    pub(super) fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
 }
 
 struct Pending {
@@ -66,7 +72,9 @@ enum Job {
 pub(super) fn install(app: &mut App) {
     app.init_resource::<Waveforms>().add_systems(
         PostUpdate,
-        (load, present).chain().after(UiSystems::PostLayout),
+        (load, present, super::update_clock)
+            .chain()
+            .after(UiSystems::PostLayout),
     );
 }
 
@@ -89,7 +97,6 @@ pub(super) fn view() -> impl Scene {
 fn load(
     mut waveforms: ResMut<Waveforms>,
     mut images: ResMut<Assets<Image>>,
-    mut redraw: MessageWriter<RequestRedraw>,
     host: Res<AgentHost>,
     chat: Res<ChatState>,
     clips: Query<&AudioClip>,
@@ -154,7 +161,7 @@ fn load(
             *state = WaveformView::Ready(entry.1.clone());
             waveforms.cache.push_back(entry);
         } else if waveforms.pending.is_none() {
-            match clip.read(&host) {
+            match clip.read(&host, AudioReadPurpose::Waveform) {
                 Ok(task) => {
                     waveforms.pending = Some(Pending {
                         view: entity,
@@ -171,9 +178,6 @@ fn load(
                 }
             }
         }
-    }
-    if waveforms.pending.is_some() {
-        redraw.write(RequestRedraw);
     }
 }
 

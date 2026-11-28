@@ -64,6 +64,12 @@ impl Draft {
         })
     }
 
+    pub(crate) fn has_audio(&self) -> bool {
+        self.elements
+            .iter()
+            .any(|item| matches!(item.content, ComposerContent::Audio { .. }))
+    }
+
     pub(crate) fn submission(&self) -> ComposerSubmission {
         ComposerSubmission {
             elements: self.elements.clone(),

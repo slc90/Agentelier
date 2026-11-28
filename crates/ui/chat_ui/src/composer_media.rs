@@ -95,7 +95,7 @@ pub(crate) fn image_button() -> impl Scene {
 
 pub(crate) fn audio_button() -> impl Scene {
     bsn! {
-        @AgentelierButton { @children: bsn_list! { Text("添加音频") WidgetryText } }
+        @AgentelierButton { @children: bsn_list! { Text("添加本地音频") WidgetryText } }
         template(|_| Ok(AddMedia(Kind::Audio))) Name("AddComposerAudio") Node { display: Display::None } on(open_picker)
     }
 }

@@ -7,12 +7,13 @@ use agentelier_conversation_bridge::{AudioAttachment, SessionId};
 use bevy::audio::{AudioPlayer, AudioSink, AudioSinkPlayback, AudioSource, PlaybackSettings};
 use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task, futures::check_ready};
+use bevy::tasks::{AsyncComputeTaskPool, IoTaskPool, Task, futures::check_ready};
 use bevy::text::LineBreak;
 use bevy::ui::{InteractionDisabled, UiSystems};
 use bevy::ui_widgets::Activate;
-use bevy::window::RequestRedraw;
+use bevy::winit::{EventLoopProxyWrapper, WinitUserEvent};
 use bevy_widgetry::text::WidgetryText;
+use futures_timer::Delay;
 use std::time::{Duration, Instant};
 use std::{io::Cursor, sync::Arc};
 
@@ -20,6 +21,7 @@ mod waveform;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 const SINK_TIMEOUT: Duration = Duration::from_secs(3);
+const AUDIO_UPDATE_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Component, Clone)]
 struct AudioClip {
@@ -28,6 +30,12 @@ struct AudioClip {
 }
 
 type AudioRead = Task<Result<Arc<[u8]>, String>>;
+
+#[derive(Clone, Copy)]
+enum AudioReadPurpose {
+    Playback,
+    Waveform,
+}
 
 impl AudioClip {
     fn belongs(&self, chat: &ChatState) -> bool {
@@ -39,17 +47,28 @@ impl AudioClip {
         }
     }
 
-    fn read(&self, host: &AgentHost) -> Result<AudioRead> {
+    fn read(&self, host: &AgentHost, purpose: AudioReadPurpose) -> Result<AudioRead> {
         let reply = host.composer_asset(ComposerAssetRequest::Audio {
             owner: self.owner,
             audio: self.attachment.clone(),
         })?;
         Ok(AsyncComputeTaskPool::get().spawn(async move {
-            match reply.await {
-                Ok(ComposerAssetReply::Audio(bytes)) => Ok(bytes),
-                Ok(_) => Err("收到不匹配的音频附件回执".into()),
-                Err(failure) => Err(failure.to_string()),
+            let bytes = match reply.await {
+                Ok(ComposerAssetReply::Audio(bytes)) => bytes,
+                Ok(_) => return Err("收到不匹配的音频附件回执".into()),
+                Err(failure) => return Err(failure.to_string()),
+            };
+            if matches!(purpose, AudioReadPurpose::Playback) {
+                // Bevy's AudioSource decoder assumes valid input.
+                rodio::Decoder::builder()
+                    .with_byte_len(bytes.len() as u64)
+                    .with_data(Cursor::new(AudioSource {
+                        bytes: bytes.clone(),
+                    }))
+                    .build()
+                    .map_err(|error| format!("无法解码音频：{error}"))?;
             }
+            Ok(bytes)
         }))
     }
 }
@@ -86,6 +105,9 @@ struct Playback {
     active: Option<Active>,
 }
 
+#[derive(Resource, Default)]
+struct AudioUpdates(Option<Task<()>>);
+
 struct Active {
     card: Entity,
     source: Source,
@@ -102,11 +124,13 @@ struct Output {
     player: Entity,
     position: Duration,
     last_progress: Instant,
+    next_update: Instant,
 }
 
 pub(super) fn install(app: &mut App) {
     waveform::install(app);
     app.init_resource::<Playback>()
+        .init_resource::<AudioUpdates>()
         .register_type::<AudioPlaybackStatus>()
         .add_systems(
             PostUpdate,
@@ -186,6 +210,7 @@ fn drive(
                     Some(sink) if !sink.empty() => {
                         if sink.is_paused() {
                             output.last_progress = now;
+                            output.next_update = now;
                             sink.play();
                         } else {
                             sink.pause();
@@ -213,8 +238,9 @@ fn drive(
                 .or_else(|| host_failure.map(Err))
                 .or_else(|| (now >= *expires).then(|| Err("读取音频超时".into())));
             if let Some(result) = result {
-                match result.and_then(|bytes| start(world, bytes)) {
-                    Ok(player) => {
+                match result {
+                    Ok(bytes) => {
+                        let player = start(world, bytes);
                         set_status(world, *card, PlaybackPhase::WaitingForOutput, 0);
                         active = Some(Active {
                             card: *card,
@@ -244,7 +270,7 @@ fn belongs(world: &World, card: Entity) -> bool {
 
 fn request(world: &mut World, card: Entity, now: Instant) -> Option<Active> {
     let clip = world.get::<AudioClip>(card)?;
-    match clip.read(world.resource::<AgentHost>()) {
+    match clip.read(world.resource::<AgentHost>(), AudioReadPurpose::Playback) {
         Ok(task) => {
             set_status(world, card, PlaybackPhase::Loading, 0);
             Some(Active {
@@ -262,22 +288,17 @@ fn request(world: &mut World, card: Entity, now: Instant) -> Option<Active> {
     }
 }
 
-fn start(world: &mut World, bytes: std::sync::Arc<[u8]>) -> Result<Entity, String> {
-    let asset = AudioSource { bytes };
-    // Bevy's AudioSource decoder assumes valid input. Check it with the same decoder first.
-    rodio::Decoder::builder()
-        .with_byte_len(asset.bytes.len() as u64)
-        .with_data(Cursor::new(asset.clone()))
-        .build()
-        .map_err(|error| format!("无法解码音频：{error}"))?;
-    let handle = world.resource_mut::<Assets<AudioSource>>().add(asset);
-    Ok(world
+fn start(world: &mut World, bytes: Arc<[u8]>) -> Entity {
+    let handle = world
+        .resource_mut::<Assets<AudioSource>>()
+        .add(AudioSource { bytes });
+    world
         .spawn((
             Name::new("ChatAudioPlayer"),
             AudioPlayer(handle),
             PlaybackSettings::ONCE.paused(),
         ))
-        .id())
+        .id()
 }
 
 fn tick(world: &mut World, mut active: Active, now: Instant) -> Option<Active> {
@@ -293,6 +314,7 @@ fn tick(world: &mut World, mut active: Active, now: Instant) -> Option<Active> {
                     player: *player,
                     position: Duration::ZERO,
                     last_progress: now,
+                    next_update: now + AUDIO_UPDATE_INTERVAL,
                 });
             } else if now >= *expires {
                 release_player(world, *player);
@@ -343,11 +365,45 @@ fn tick(world: &mut World, mut active: Active, now: Instant) -> Option<Active> {
                 );
                 return None;
             }
-            set_status(world, card, PlaybackPhase::Playing, position_ms);
+            if now >= output.next_update {
+                output.next_update = now + AUDIO_UPDATE_INTERVAL;
+                set_status(world, card, PlaybackPhase::Playing, position_ms);
+            }
         }
     }
-    world.write_message(RequestRedraw);
     Some(active)
+}
+
+fn update_clock(
+    playback: Res<Playback>,
+    waveforms: Res<waveform::Waveforms>,
+    sinks: Query<&AudioSink>,
+    proxy: Option<Res<EventLoopProxyWrapper>>,
+    mut updates: ResMut<AudioUpdates>,
+) {
+    let active = playback
+        .active
+        .as_ref()
+        .is_some_and(|active| match &active.source {
+            Source::Reading { .. } | Source::Starting { .. } => true,
+            Source::Live(output) => sinks.get(output.player).is_ok_and(|sink| !sink.is_paused()),
+            Source::Ended => false,
+        });
+    if !active && !waveforms.is_pending() {
+        updates.0 = None;
+    } else if updates.0.is_none()
+        && let Some(proxy) = proxy
+    {
+        let proxy = (**proxy).clone();
+        updates.0 = Some(IoTaskPool::get().spawn(async move {
+            loop {
+                Delay::new(AUDIO_UPDATE_INTERVAL).await;
+                if proxy.send_event(WinitUserEvent::WakeUp).is_err() {
+                    break;
+                }
+            }
+        }));
+    }
 }
 
 fn release_player(world: &mut World, player: Entity) {

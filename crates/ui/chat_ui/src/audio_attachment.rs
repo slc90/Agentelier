@@ -96,11 +96,12 @@ pub(crate) fn install(app: &mut App) {
 
 pub(crate) fn draft_panel() -> impl Scene {
     bsn! {
-        Node { width: percent(100), min_width: px(0), column_gap: px(8), flex_shrink: 0.0, align_items: AlignItems::Center }
+        Node { width: percent(100), min_width: px(0), flex_direction: FlexDirection::Column, row_gap: px(4), flex_shrink: 0.0 }
         Children [
-            @crate::composer_media::image_button()--
-            @crate::composer_media::audio_button()--
-            Text::default() WidgetryText AudioDraftText Name("AudioDraftStatus") Node { display: Display::None }
+            Node { width: percent(100), min_width: px(0), column_gap: px(8), flex_shrink: 0.0, align_items: AlignItems::Center }
+            Children [@crate::composer_media::image_button()-- @crate::composer_media::audio_button()]--
+            Text::default() WidgetryText AudioDraftText Name("AudioDraftStatus") TextLayout::linebreak(LineBreak::AnyCharacter)
+            Node { display: Display::None, width: percent(100), min_width: px(0), flex_shrink: 0.0 }
         ]
     }
 }
@@ -111,7 +112,7 @@ pub(crate) fn card(session: SessionId, audio: ChatAudio) -> impl Scene {
     let controls = super::audio_playback::controls(session, &audio);
     bsn! {
         Node { flex_direction: FlexDirection::Column, padding: UiRect::all(px(8)), row_gap: px(4), align_self: AlignSelf::Start, max_width: percent(100), flex_shrink: 0.0 }
-        Children [Text("音频附件") WidgetryText-- Text(metadata) WidgetryText-- @controls--
+        Children [Text("本地音频附件") WidgetryText-- Text(metadata) WidgetryText-- @controls--
             @crate::transcription::panel(crate::transcription::Target::Saved(id))]
     }
 }
@@ -178,7 +179,16 @@ fn synchronize(
             .feedback
             .as_ref()
             .filter(|(target, _)| Some(*target) == session)
-            .map_or("", |(_, message)| message.as_str())
+            .map_or_else(
+                || {
+                    if chat.composer.has_audio() {
+                        "原音频保存在本地。发送后可转写，再用文稿提问。"
+                    } else {
+                        ""
+                    }
+                },
+                |(_, message)| message.as_str(),
+            )
     };
     for (mut text, node) in &mut texts {
         text.set_if_neq(Text::new(feedback));
