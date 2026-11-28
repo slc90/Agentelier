@@ -347,10 +347,7 @@ fn prepare_previews(
                         node.insert(ImageNode::new(assets.add(image)));
                     }
                     Err(failure) => {
-                        node.with_child((
-                            Text(format!("图片预览失败：{failure}")),
-                            WidgetryText::default(),
-                        ));
+                        node.with_child((Text(format!("图片预览失败：{failure}")), WidgetryText));
                     }
                 }
             } else {
@@ -384,10 +381,9 @@ fn prepare_previews(
                 redraw.write(RequestRedraw);
             }
             Err(failure) => {
-                node.despawn_children().insert(Resolved).with_child((
-                    Text(format!("图片预览失败：{failure}")),
-                    WidgetryText::default(),
-                ));
+                node.despawn_children()
+                    .insert(Resolved)
+                    .with_child((Text(format!("图片预览失败：{failure}")), WidgetryText));
             }
         }
     }

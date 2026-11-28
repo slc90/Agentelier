@@ -133,7 +133,13 @@ fn execute(world: &mut World, operation: &EcsOperation) -> std::result::Result<V
             target,
             stored,
             widget,
-        } => scenes::validate(world, definition, *target, stored.as_ref(), widget.as_ref()),
+        } => scenes::validate(
+            world,
+            definition,
+            *target,
+            stored.as_deref(),
+            widget.as_ref(),
+        ),
         EcsOperation::SceneSpawn(name, parent, props) => scenes::spawn(world, name, *parent, props),
         EcsOperation::SceneDespawn(root) => scenes::despawn(world, *root),
     }

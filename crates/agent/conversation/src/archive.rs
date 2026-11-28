@@ -201,11 +201,11 @@ pub enum RecordEvent {
         status: agentelier_tools::ToolStatus,
         output: agentelier_llm_model::ArchivedPayload,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        generated_image: Option<GeneratedImage>,
+        generated_image: Option<Box<GeneratedImage>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         published_audio: Option<crate::AudioAttachment>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        published_scene: Option<crate::PublishedScene>,
+        published_scene: Option<Box<crate::PublishedScene>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scene_update: Option<Box<agentelier_tools::ecs_access::SceneUpdate>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

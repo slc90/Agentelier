@@ -88,7 +88,7 @@ pub enum EcsOperation {
     SceneValidate {
         definition: SceneDefinition,
         target: Option<SceneTarget>,
-        stored: Option<SceneStored>,
+        stored: Option<Box<SceneStored>>,
         widget: Option<crate::widget::Candidate>,
     },
     SceneSpawn(String, EcsEntity, Map<String, Value>),

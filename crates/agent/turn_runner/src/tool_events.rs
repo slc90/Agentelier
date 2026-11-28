@@ -777,9 +777,9 @@ async fn save_call(
                     call_id: id,
                     status,
                     output: agentelier_llm_model::ArchivedPayload::capture(&output),
-                    generated_image: image_record,
+                    generated_image: image_record.map(Box::new),
                     published_audio: audio_record,
-                    published_scene: scene_record.publication,
+                    published_scene: scene_record.publication.map(Box::new),
                     scene_update: scene_record.update,
                     execution,
                 })

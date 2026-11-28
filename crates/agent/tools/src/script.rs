@@ -160,7 +160,7 @@ impl ScriptSession {
                     crate::ecs_access::EcsOperation::SceneValidate {
                         definition,
                         target: target.map(|(target, _)| target),
-                        stored,
+                        stored: stored.map(Box::new),
                         widget: candidate,
                     },
                     &control.cancel,

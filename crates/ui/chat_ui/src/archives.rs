@@ -41,7 +41,7 @@ pub struct ArchiveChoice {
     pub error: Option<String>,
 }
 
-#[derive(Resource, Reflect)]
+#[derive(Resource, Reflect, Default)]
 #[reflect(Resource)]
 pub struct ArchiveState {
     pub entries: Vec<ArchiveChoice>,
@@ -59,20 +59,6 @@ enum ArchiveStartup {
     Scanning,
     Restoring,
     Ready,
-}
-
-impl Default for ArchiveState {
-    fn default() -> Self {
-        Self {
-            entries: Vec::new(),
-            selected: None,
-            startup: ArchiveStartup::default(),
-            error: None,
-            opening: None,
-            deleted: Vec::new(),
-            cleanup_errors: Vec::new(),
-        }
-    }
 }
 
 impl ArchiveState {

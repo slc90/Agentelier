@@ -81,8 +81,13 @@ struct Board {
 }
 
 enum Rendered {
-    Path { fill: Path, stroke: Path },
+    Path(Box<Paths>),
     Text { text: CanvasTextStyle, at: Vec2 },
+}
+
+struct Paths {
+    fill: Path,
+    stroke: Path,
 }
 
 struct Path {
@@ -157,7 +162,7 @@ fn update(world: &mut World, root: Entity, props: Properties) -> Result<bool> {
                 name == id
                     && matches!(
                         (item, native),
-                        (Rendered::Path { .. }, Native::Path { .. })
+                        (Rendered::Path(_), Native::Path { .. })
                             | (Rendered::Text { .. }, Native::Text(_))
                     )
             })
@@ -341,10 +346,10 @@ impl Rendered {
                 ..default()
             },
         );
-        Self::Path {
+        Self::Path(Box::new(Paths {
             fill,
             stroke: Path::new(stroke, outline),
-        }
+        }))
     }
 
     fn create(
@@ -355,7 +360,8 @@ impl Rendered {
     ) -> Result<Native, JobFailure> {
         let name = format!("ScriptCanvasItem-{id}");
         match self {
-            Self::Path { fill, stroke } => {
+            Self::Path(paths) => {
+                let Paths { fill, stroke } = *paths;
                 let fill = CanvasDocument::create_path(
                     world,
                     token,
@@ -393,7 +399,8 @@ impl Rendered {
         native: Native,
     ) -> Result<(), JobFailure> {
         match (self, native) {
-            (Self::Path { fill, stroke }, Native::Path { fill: a, stroke: b }) => {
+            (Self::Path(paths), Native::Path { fill: a, stroke: b }) => {
+                let Paths { fill, stroke } = *paths;
                 CanvasDocument::update_path(
                     world,
                     token,

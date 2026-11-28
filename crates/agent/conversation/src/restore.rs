@@ -1436,7 +1436,7 @@ fn replay(
                         return Err(ConversationFailure::new("Scene 产物的会话或身份无效"));
                     }
                     scene.validate(tool, status)?;
-                    published_scenes.insert(call_id.clone(), scene);
+                    published_scenes.insert(call_id.clone(), *scene);
                 }
                 if let Some(update) = scene_update {
                     crate::native_scene::validate_update_source(tool, status)?;
