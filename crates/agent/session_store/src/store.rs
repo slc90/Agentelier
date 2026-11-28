@@ -12,13 +12,13 @@ use std::thread::JoinHandle;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error};
 
-pub const FORMAT: &str = "agentelier.session";
-pub const FORMAT_VERSION: u32 = 1;
+pub(super) const FORMAT: &str = "agentelier.session";
+pub(super) const FORMAT_VERSION: u32 = 1;
 const COMMAND_CAPACITY: usize = 16;
 pub(super) const INITIAL_SEQUENCE: u64 = 1;
 
 #[derive(Serialize, Deserialize)]
-pub struct Record {
+pub(super) struct Record {
     pub format: String,
     pub version: u32,
     pub sequence: u64,
@@ -28,12 +28,13 @@ pub struct Record {
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
-pub enum RecordKind {
+pub(super) enum RecordKind {
     Created(InitialSession),
     Renamed { session: SessionId, title: String },
     Deleted { session: SessionId },
     Archived { session: SessionId },
     Event(SessionRecord),
+    EventDelta(Box<crate::delta::EventDelta>),
 }
 
 pub struct Commit {
@@ -969,7 +970,8 @@ fn create(
             sequence: first.sequence,
             kind: RecordKind::Event(first),
         };
-        serde_json::to_writer(&mut journal, &record)?;
+        let (record, _) = crate::delta::Snapshots::default().encode(&record)?;
+        journal.write_all(&record)?;
         journal.write_all(b"\n")?;
     }
     journal.sync_all()?;

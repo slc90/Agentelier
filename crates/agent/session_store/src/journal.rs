@@ -21,6 +21,7 @@ struct Cursor {
     kind: agentelier_conversation::SessionKind,
     has_tasks: bool,
     scene_revisions: HashMap<SessionId, u64>,
+    snapshots: crate::delta::Snapshots,
 }
 
 #[derive(Default)]
@@ -131,6 +132,7 @@ fn summarized_cursor(
         kind: initial.settings.kind,
         has_tasks: false,
         scene_revisions: HashMap::new(),
+        snapshots: crate::delta::Snapshots::default(),
     };
     for record in records {
         update(&mut cursor, record);
@@ -150,6 +152,7 @@ fn load_cursor(directory: &Path, session: SessionId) -> io::Result<Cursor> {
     let mut cursor = summarized_cursor(initial, &parsed.records, parsed.sequence);
     cursor.length = parsed.file_length;
     cursor.summary = parsed.summary;
+    cursor.snapshots = parsed.snapshots;
     cursor.renamed = parsed.manual_title.is_some();
     cursor.titled |= cursor.renamed;
     Ok(cursor)
@@ -276,8 +279,12 @@ impl Writer {
             sequence,
             kind,
         };
-        let mut bytes = serde_json::to_vec(&record)?;
+        let (mut bytes, snapshot) = cursor.snapshots.encode(&record)?;
         bytes.push(b'\n');
+        let length = cursor
+            .length
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| io::Error::other("会话记录长度超出范围"))?;
         let mut file = OpenOptions::new()
             .append(true)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
@@ -300,11 +307,11 @@ impl Writer {
         }
         drop(file);
         cursor.sequence = sequence;
-        cursor.length = cursor
-            .length
-            .checked_add(bytes.len() as u64)
-            .ok_or_else(|| io::Error::other("会话记录长度超出范围"))?;
+        cursor.length = length;
         cursor.summary.last_sequence = sequence;
+        if let Some(snapshot) = snapshot {
+            cursor.snapshots.commit(snapshot);
+        }
         match record.kind {
             RecordKind::Event(event) => update(cursor, &event),
             RecordKind::Renamed { title, .. } => {
@@ -314,7 +321,9 @@ impl Writer {
             }
             RecordKind::Archived { .. } => cursor.summary.archived = true,
             RecordKind::Deleted { .. } => cursor.summary.deleted = true,
-            RecordKind::Created(_) => return Err(io::Error::other("追加路径不能创建初始记录")),
+            RecordKind::Created(_) | RecordKind::EventDelta(_) => {
+                return Err(io::Error::other("追加路径收到无效的会话记录"));
+            }
         }
         Ok(Commit {
             session,

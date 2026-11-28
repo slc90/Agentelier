@@ -1,8 +1,9 @@
+use crate::delta::Snapshots;
 use crate::journal::{CatalogSummary, JournalStamp};
 use crate::{Commit, FORMAT, FORMAT_VERSION, Record, RecordKind};
 use agentelier_conversation::{
-    ArchiveEntry, InitialSession, RecordEvent, RestoredSession, SessionId, SessionRecord,
-    SessionSummary,
+    ArchiveEntry, InitialSession, RecordEvent, RestoredSession, SessionId, SessionKind,
+    SessionRecord, SessionSummary,
 };
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -40,6 +41,7 @@ pub(super) struct Parsed {
     archived: bool,
     pub(super) sequence: u64,
     pub(super) file_length: u64,
+    pub(super) snapshots: Snapshots,
     valid_length: u64,
     prefix_digest: [u8; 32],
     pub(super) issue: Option<Issue>,
@@ -86,6 +88,7 @@ fn read_prefix(file: fs::File, length: u64, session: SessionId) -> io::Result<Pa
         archived: false,
         sequence: 0,
         file_length: length,
+        snapshots: Snapshots::default(),
         valid_length: 0,
         prefix_digest: [0; 32],
         issue: None,
@@ -123,7 +126,16 @@ fn read_prefix(file: fs::File, length: u64, session: SessionId) -> io::Result<Pa
             if parsed.deleted {
                 return Err(io::Error::other("已删除会话包含后续记录"));
             }
-            match record.kind {
+            let kind = match record.kind {
+                RecordKind::EventDelta(delta) => {
+                    RecordKind::Event(parsed.snapshots.decode(record.sequence, *delta)?)
+                }
+                RecordKind::Event(event) if Snapshots::carries_state(&event.event) => {
+                    return Err(io::Error::other("带状态的会话事件缺少增量快照"));
+                }
+                kind => kind,
+            };
+            match kind {
                 RecordKind::Deleted { session: target }
                     if parsed.initial.is_some() && target == session =>
                 {
@@ -632,17 +644,9 @@ fn repair(
     session: SessionId,
     parsed: &Parsed,
     event: RecordEvent,
+    kind: SessionKind,
+    has_tasks: bool,
 ) -> io::Result<Commit> {
-    let kind = parsed
-        .initial
-        .as_ref()
-        .ok_or_else(|| io::Error::other("恢复日志缺少会话初始记录"))?
-        .settings
-        .kind;
-    let has_tasks = parsed
-        .records
-        .iter()
-        .any(|record| crate::journal::registers_tasks(&record.event));
     let directory = crate::attachments::session_directory(root, session)?;
     let path = directory.join("session.jsonl");
     let mut original = fs::OpenOptions::new()
@@ -707,7 +711,8 @@ fn repair(
         return Err(io::Error::other("原会话日志前缀已变化，原件已保留，未修复"));
     }
     drop(backup_file);
-    serde_json::to_writer(replacement.as_file_mut(), &record)?;
+    let (record, _) = parsed.snapshots.encode(&record)?;
+    replacement.write_all(&record)?;
     replacement.write_all(b"\n")?;
     replacement.as_file_mut().flush()?;
     replacement.as_file().sync_all()?;
@@ -791,7 +796,10 @@ pub(super) fn load(
     {
         return Err(io::Error::other("此会话只能在其关联范围内加载"));
     }
+    let kind = initial.settings.kind;
+    let mut has_tasks = false;
     for record in &parsed.records {
+        has_tasks |= crate::journal::registers_tasks(&record.event);
         let event = match &record.event {
             RecordEvent::AgentTurn { event, .. } => event.as_ref(),
             event => event,
@@ -822,7 +830,14 @@ pub(super) fn load(
     let mut restored = restore_archive(root, initial, std::mem::take(&mut parsed.records))?;
     if matches!(parsed.issue, Some(Issue::Tail(_))) {
         restored.add_recovery_notice("日志尾部残缺，已保留原件并恢复有效记录");
-        let commit = repair(root, session, &parsed, restored.recovery_event())?;
+        let commit = repair(
+            root,
+            session,
+            &parsed,
+            restored.recovery_event(),
+            kind,
+            has_tasks,
+        )?;
         restored.confirm_recovery(commit.sequence);
         writer.reset(session);
         if let Some(failure) = commit.summary_failure {
