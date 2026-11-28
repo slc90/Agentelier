@@ -544,6 +544,7 @@ impl<P: Fn(AgentEvent) -> Result<(), DeliveryFailure>> Environment<'_, P> {
                 self.skills.root_path().to_owned(),
                 self.memory.clone(),
                 tools,
+                None,
             ),
         ));
         Ok(())

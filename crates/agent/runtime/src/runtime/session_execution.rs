@@ -221,6 +221,7 @@ pub(super) async fn next(
 
 pub(super) fn target(command: &Command) -> Option<SessionId> {
     match command {
+        Command::WarmChat(super::ChatWarmupTarget::Session(session)) => Some(*session),
         Command::SaveSceneState(_, target, _) => Some(target.session),
         Command::AudioDraft(_, session, _)
         | Command::TranscribeAudio(_, session, _)

@@ -1,13 +1,13 @@
 use crate::model::{
-    CODEX_RESPONSES_URL, ModelFailure, ModelFailureKind, authorize, http_failure, protocol,
-    request_id,
+    CODEX_RESPONSES_URL, ModelFailure, ModelFailureKind, acquire, authorize, http_failure,
+    protocol, request_id,
 };
 use crate::protocol::{ProtocolItem, ProtocolOutput};
 use crate::stream::{
     EventStream, GenerationResult, STREAM_IDLE_TIMEOUT, StreamEvent, consume_events,
 };
 use agentelier_account::{
-    AuthenticatedRequest, CredentialVersion, ExecutionIdentity, UsableCredentials,
+    AuthenticatedRequest, CredentialClient, CredentialVersion, ExecutionIdentity, UsableCredentials,
 };
 use agentelier_tools::ToolCatalog;
 use futures_util::{FutureExt, SinkExt, StreamExt};
@@ -17,25 +17,107 @@ use sha2::{Digest, Sha256};
 use std::io::{self, Write};
 use std::time::Duration;
 use tokio::sync::mpsc::Sender;
-use tokio::time::{Instant, timeout, timeout_at};
+use tokio::task::JoinHandle;
+use tokio::time::{Instant, sleep_until, timeout, timeout_at};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::{
     Error, Message, handshake,
     protocol::{Role, WebSocketConfig},
 };
+use tokio_util::sync::CancellationToken;
 
 const MAX_CONNECTION_AGE: Duration = Duration::from_secs(55 * 60);
+const PRECONNECTED_IDLE_LIMIT: Duration = Duration::from_secs(90);
+const CONTINUATION_IDLE_LIMIT: Duration = Duration::from_secs(5 * 60);
 struct Connection {
     socket: WebSocketStream<reqwest::Upgraded>,
     opened: Instant,
     request_id: Option<String>,
 }
 
-pub(super) struct Continuation {
+struct Continuation {
     connection: Connection,
     identity: ExecutionIdentity,
     version: CredentialVersion,
-    cursor: Cursor,
+    cursor: Option<Cursor>,
+}
+
+pub(super) struct IdleSocket {
+    take: CancellationToken,
+    task: JoinHandle<Option<Continuation>>,
+}
+
+impl IdleSocket {
+    pub(super) fn preconnect(credentials: CredentialClient) -> Self {
+        Self::spawn(
+            async move {
+                let identity = credentials.execution().await.map_err(authentication)?;
+                let current = acquire(&credentials).await?;
+                identity.validate(&current).map_err(authentication)?;
+                let client = super::generation::response_client(true)?;
+                let connection = tokio::select! { biased;
+                    _ = identity.invalidated() => return Err(authentication("本次预连的授权已失效")),
+                    result = Connection::open(&client, &current) => result?,
+                };
+                tracing::debug!("Codex WebSocket 预连接已就绪");
+                Ok(Continuation {
+                    connection,
+                    identity,
+                    version: current.version().clone(),
+                    cursor: None,
+                })
+            },
+            PRECONNECTED_IDLE_LIMIT,
+        )
+    }
+
+    fn spawn(
+        open: impl Future<Output = Result<Continuation, ModelFailure>> + Send + 'static,
+        idle_limit: Duration,
+    ) -> Self {
+        let take = CancellationToken::new();
+        let taken = take.clone();
+        let task = tokio::spawn(async move {
+            let mut state = match open.await {
+                Ok(state) => state,
+                Err(failure) => {
+                    tracing::debug!(kind = ?failure.kind, status = failure.status, "Codex WebSocket 预连接未能建立");
+                    return None;
+                }
+            };
+            let expiry =
+                (state.connection.opened + MAX_CONNECTION_AGE).min(Instant::now() + idle_limit);
+            let claimed = tokio::select! { biased;
+                _ = state.identity.invalidated() => false,
+                _ = sleep_until(expiry) => false,
+                _ = taken.cancelled() => true,
+                _ = state.connection.wait_idle() => false,
+            };
+            (claimed && state.connection.available()).then_some(state)
+        });
+        Self { take, task }
+    }
+
+    pub(super) fn is_pending_or_open(&self) -> bool {
+        !self.task.is_finished()
+    }
+
+    async fn take(mut self) -> Option<Continuation> {
+        self.take.cancel();
+        match (&mut self.task).await {
+            Ok(state) => state,
+            Err(failure) => {
+                tracing::error!(%failure, "Codex WebSocket 空闲任务异常结束");
+                None
+            }
+        }
+    }
+}
+
+impl Drop for IdleSocket {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 struct Cursor {
@@ -142,6 +224,28 @@ impl Connection {
         }
         true
     }
+
+    async fn wait_idle(&mut self) {
+        loop {
+            match self.socket.next().await {
+                Some(Ok(Message::Ping(_))) => {
+                    if !matches!(
+                        timeout(super::generation::CONNECT_TIMEOUT, self.socket.flush()).await,
+                        Ok(Ok(()))
+                    ) {
+                        tracing::debug!("Codex WebSocket 空闲心跳回应失败");
+                        break;
+                    }
+                    tracing::debug!("已回应 Codex WebSocket 空闲心跳");
+                }
+                Some(Ok(Message::Pong(_))) => {}
+                _ => {
+                    tracing::debug!("Codex WebSocket 空闲连接已结束");
+                    break;
+                }
+            }
+        }
+    }
 }
 
 impl EventStream for Connection {
@@ -169,7 +273,7 @@ impl EventStream for Connection {
 }
 
 pub(super) async fn generate(
-    previous: Option<Continuation>,
+    previous: Option<IdleSocket>,
     client: &reqwest::Client,
     body: &[u8],
     tools: &ToolCatalog,
@@ -177,7 +281,7 @@ pub(super) async fn generate(
     identity: &ExecutionIdentity,
     request: &mut AuthenticatedRequest,
     progress: &Sender<StreamEvent>,
-) -> Result<(GenerationResult, Continuation), ModelFailure> {
+) -> Result<(GenerationResult, IdleSocket), ModelFailure> {
     let mut payload: Value =
         serde_json::from_slice(body).map_err(|_| protocol("冻结的 WebSocket 请求不是有效 JSON"))?;
     let input = payload["input"]
@@ -188,15 +292,18 @@ pub(super) async fn generate(
         digest.append(item)?;
     }
     let input_count = input.len();
+    let previous = match previous {
+        Some(socket) => socket.take().await,
+        None => None,
+    };
     let previous = previous.filter(|previous| {
         &previous.version == credentials.version()
             && previous.identity.validate(credentials).is_ok()
             && previous.connection.opened.elapsed() < MAX_CONNECTION_AGE
     });
-    let (mut connection, cursor) = match previous
-        .and_then(|mut previous| previous.connection.available().then_some(previous))
-    {
-        Some(previous) => (previous.connection, Some(previous.cursor)),
+    let reused_connection = previous.is_some();
+    let (mut connection, cursor) = match previous {
+        Some(previous) => (previous.connection, previous.cursor),
         None => (Connection::open(client, credentials).await?, None),
     };
     let previous_response = match cursor {
@@ -219,6 +326,7 @@ pub(super) async fn generate(
         previous_response_id = previous_response,
         input_items = sent_items,
         request_bytes = send_body.len(),
+        reused_connection,
         "发送 Codex WebSocket 模型请求"
     );
     let message = Message::Text(send_body.into());
@@ -267,18 +375,22 @@ pub(super) async fn generate(
             .count(),
         "Codex WebSocket 响应接收完整"
     );
+    let continuation = Continuation {
+        connection,
+        identity: identity.clone(),
+        version: credentials.version().clone(),
+        cursor: Some(Cursor {
+            response_id,
+            items: item_count,
+            digest: digest.finish(),
+        }),
+    };
     Ok((
         result,
-        Continuation {
-            connection,
-            identity: identity.clone(),
-            version: credentials.version().clone(),
-            cursor: Cursor {
-                response_id,
-                items: item_count,
-                digest: digest.finish(),
-            },
-        },
+        IdleSocket::spawn(
+            std::future::ready(Ok(continuation)),
+            CONTINUATION_IDLE_LIMIT,
+        ),
     ))
 }
 
@@ -293,4 +405,8 @@ fn header_has_token(headers: &header::HeaderMap, name: header::HeaderName, token
 
 fn network(message: &'static str) -> ModelFailure {
     ModelFailure::new(ModelFailureKind::Network, message)
+}
+
+fn authentication(failure: impl std::fmt::Display) -> ModelFailure {
+    ModelFailure::new(ModelFailureKind::Authentication, failure.to_string())
 }

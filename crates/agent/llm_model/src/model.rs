@@ -5,7 +5,8 @@ use agentelier_tools::ToolContract;
 use reqwest::{Client, RequestBuilder, Response};
 use serde::Deserialize;
 use serde_json::Value;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use std::{error::Error, fmt};
 
 const CODEX_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
@@ -16,6 +17,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
 const MAX_DIAGNOSTIC_CHARS: usize = 2048;
+const CATALOG_MAX_AGE: Duration = Duration::from_secs(300);
 
 pub fn codex_tool_contract(slug: &str) -> ToolContract {
     match slug {
@@ -66,6 +68,29 @@ pub struct ModelInfo {
     pub image_input: Option<bool>,
     pub context_limits: crate::ContextLimits,
     pub multi_agent: MultiAgentCapability,
+}
+
+#[derive(Clone)]
+pub struct ModelCatalogSnapshot(Arc<ModelCatalog>);
+
+struct ModelCatalog {
+    identity: crate::CodexIdentity,
+    models: Vec<ModelInfo>,
+    captured: Instant,
+}
+
+impl ModelCatalogSnapshot {
+    pub fn new(identity: crate::CodexIdentity, models: Vec<ModelInfo>) -> Self {
+        Self(Arc::new(ModelCatalog {
+            identity,
+            models,
+            captured: Instant::now(),
+        }))
+    }
+
+    pub fn models_for(&self, identity: &crate::CodexIdentity) -> Option<&[ModelInfo]> {
+        (self.0.identity == *identity).then_some(self.0.models.as_slice())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -756,7 +781,21 @@ pub async fn task_model(
     credentials: CredentialClient,
     identity: &agentelier_account::ExecutionIdentity,
     slug: &str,
+    catalog: Option<&ModelCatalogSnapshot>,
 ) -> Result<ModelInfo, ModelFailure> {
+    if let Some(catalog) = catalog
+        && !identity.is_invalidated()
+        && catalog.0.captured.elapsed() < CATALOG_MAX_AGE
+        && let Some(models) = catalog.models_for(identity.identity())
+        && let Some(model) = models.iter().find(|model| model.slug == slug)
+    {
+        tracing::debug!(
+            model = slug,
+            age_ms = catalog.0.captured.elapsed().as_millis(),
+            "复用当前账号模型目录"
+        );
+        return Ok(model.clone());
+    }
     task_catalog(&credentials, identity)
         .await?
         .into_iter()

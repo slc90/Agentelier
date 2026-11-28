@@ -174,6 +174,7 @@ impl Execution {
                 self.skills.root_path().to_owned(),
                 None,
                 tools.clone(),
+                None,
             ),
         );
         let mut incoming = Some(incoming);

@@ -542,7 +542,11 @@ impl Conversation {
         }
     }
     pub fn current(&self) -> Option<SessionView> {
-        self.session.as_ref().map(|session| session.view.clone())
+        self.current_view().cloned()
+    }
+
+    pub fn current_view(&self) -> Option<&SessionView> {
+        self.session.as_ref().map(|session| &session.view)
     }
 
     pub fn session_id(&self) -> Option<SessionId> {

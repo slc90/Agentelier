@@ -6,12 +6,14 @@ use agentelier_conversation::{
     AgentRuntimeId, AudioId, Conversation, ConversationEvent, ConversationFailure,
     ConversationRequest, SessionCommand, SessionId, SteerInput,
 };
-use agentelier_llm_model::{ModelFailure, ModelRequest, ModelResult};
+use agentelier_llm_model::{ModelCatalogSnapshot, ModelFailure, ModelRequest, ModelResult};
 use agentelier_memory::Memory;
 use agentelier_turn_runner::RunnerEvent;
 mod account_login;
 mod audio_task;
 mod background;
+mod chat_warmup;
+pub use chat_warmup::ChatWarmupTarget;
 mod child_runtime;
 mod composer;
 mod composer_assets;
@@ -53,7 +55,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::{error::Error, fmt, io};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error};
 
@@ -196,7 +198,7 @@ enum Command {
     ),
     Created(io::Result<agentelier_session_store::Commit>),
     Account(AccountCommand),
-    RefreshQuota,
+    RefreshAccountMetadata,
     QuotaFinished(Result<agentelier_account::QuotaCompletion, tokio::task::JoinError>),
     BeginLogin(u64),
     CancelLogin(u64),
@@ -207,6 +209,7 @@ enum Command {
         request: ModelRequest,
     },
     ModelFinished(ModelJoin),
+    WarmChat(ChatWarmupTarget),
     SpawnAgent(Box<spawn_agent::Invocation>),
     Mailbox(mailbox::Command),
     ChildFinished(Result<child_runtime::FinishedChild, tokio::task::JoinError>),
@@ -238,6 +241,7 @@ pub struct AgentRuntime {
     model: SharedModel,
     session_commands: mpsc::Sender<SessionCommand>,
     memory_commands: mpsc::Sender<(u64, MemoryRequest)>,
+    chat_warmup: watch::Sender<Option<ChatWarmupTarget>>,
 }
 
 type SharedModel = Arc<Mutex<HashMap<u64, ModelControl>>>;
@@ -340,6 +344,7 @@ impl AgentRuntime {
         let owner_model = shared_model.clone();
         let (session_commands, mut session_incoming) = mpsc::channel(SESSION_COMMAND_CAPACITY);
         let (memory_commands, mut memory_incoming) = mpsc::channel(COMMAND_CAPACITY);
+        let (chat_warmup, mut warmup_incoming) = watch::channel(None);
         let thread = std::thread::Builder::new()
             .name("agentelier-auth".into())
             .spawn(move || {
@@ -408,9 +413,9 @@ impl AgentRuntime {
                         let mut saving_metadata: Option<session_metadata::SavingMetadata> = None;
                         let mut suspending = 0usize;
                         let mut account = Account::new(owner_credentials.clone(), environment);
-                        let quota_interval = std::time::Duration::from_secs(120);
-                        let mut quota_tick = tokio::time::interval(quota_interval);
-                        quota_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        let account_interval = std::time::Duration::from_secs(120);
+                        let mut account_tick = tokio::time::interval(account_interval);
+                        account_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                         let mut quota_due = false;
                         let mut quota_task: Option<tokio::task::JoinHandle<_>> = None;
                         let mut login = None;
@@ -418,7 +423,9 @@ impl AgentRuntime {
                         let mut logout: Option<(u64, tokio::task::JoinHandle<LogoutCompletion>)> = None;
                         let mut pending_source: Option<SourceSettlement> = None;
                         let mut requesting_catalog = None;
-                        let mut model_catalog: Option<(agentelier_llm_model::CodexIdentity, Vec<agentelier_llm_model::ModelInfo>)> = None;
+                        let mut model_catalog: Option<ModelCatalogSnapshot> = None;
+                        let mut warmup = chat_warmup::ChatWarmup::default();
+                        let mut catalog_refresh: Option<tokio::task::JoinHandle<Result<ModelCatalogSnapshot, String>>> = None;
                         let mut delivery_failure = None;
                         let user_skills = agentelier_skills::UserSkills::new(data_root.join("skills"));
                         let (background_commands, mut background_incoming) = mpsc::channel::<background::Invocation>(COMMAND_CAPACITY);
@@ -447,8 +454,7 @@ impl AgentRuntime {
                                             .and_then(|source| {
                                                 owner.conversation.validate_model_source(source)?;
                                                 model_catalog.as_ref()
-                                                    .filter(|(owner, _)| owner == source)
-                                                    .map(|(_, models)| models.as_slice())
+                                                     .and_then(|catalog| catalog.models_for(source))
                                                     .ok_or_else(|| ConversationFailure::new("请先刷新当前账号的模型目录"))
                                             });
                                         let result = match available {
@@ -463,7 +469,7 @@ impl AgentRuntime {
                                             result: result.map_err(|failure| failure.to_string()),
                                         }))?;
                                         if model_source(&account).and_then(|source| owner.conversation.validate_model_source(source)).is_ok() {
-                                            model_task::start_queued(&mut owner.conversation,&mut owner.model,&mut owner.progress,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),&mut owner.tools,&store,&ecs_access,&mcp_connections).await?;
+                                             model_task::start_queued(&mut owner.conversation,&mut owner.model,&mut owner.progress,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),&mut owner.tools,&store,&ecs_access,&mcp_connections,model_catalog.clone()).await?;
                                         }
                                     }
                                 }
@@ -510,7 +516,22 @@ impl AgentRuntime {
                                         let (id, _) = project_saves.pop_front().ok_or(RuntimeFailure::ModelState)?;
                                         Command::ProjectSaved(id, result)
                                     },
-                                    _ = quota_tick.tick() => Command::RefreshQuota,
+                                    _ = account_tick.tick() => Command::RefreshAccountMetadata,
+                                    result = async {
+                                        match &mut catalog_refresh {
+                                            Some(task) => task.await,
+                                            None => std::future::pending().await,
+                                        }
+                                    }, if catalog_refresh.is_some() => {
+                                        catalog_refresh = None;
+                                        match result {
+                                            Ok(Ok(snapshot)) if account.codex_identity().is_some_and(|source| snapshot.models_for(source).is_some()) => model_catalog = Some(snapshot),
+                                            Ok(Ok(_)) => {},
+                                            Ok(Err(failure)) => debug!(%failure, "后台刷新模型目录失败"),
+                                            Err(failure) => error!(%failure, "模型目录刷新任务异常结束"),
+                                        }
+                                        continue;
+                                    },
                                     result = async {
                                         match &mut quota_task {
                                             Some(task) => task.await,
@@ -590,6 +611,12 @@ impl AgentRuntime {
                                         None => break,
                                     },
                                     Some((id, request)) = memory_incoming.recv() => Command::Memory(id, request),
+                                    Ok(()) = warmup_incoming.changed() => {
+                                        match warmup_incoming.borrow_and_update().clone() {
+                                            Some(target) => Command::WarmChat(target),
+                                            None => continue,
+                                        }
+                                    },
                                     command = incoming.recv() => match command {
                                         Some(command) => command,
                                         None => break,
@@ -623,6 +650,31 @@ impl AgentRuntime {
                                     records, receipts: task_receipts, pending_model: pending_session_model, ..
                                 } = owner;
                                 match command {
+                                    Command::WarmChat(target) => {
+                                        use agentelier_llm_model::RequestTransport;
+                                        let Some(source) = account.codex_identity().filter(|_| pending_source.is_none() && suspending == 0) else {
+                                            continue;
+                                        };
+                                        let eligible = match &target {
+                                            ChatWarmupTarget::Draft(slug) => {
+                                                let native = agentelier_llm_model::codex_tool_contract(slug) == agentelier_tools::ToolContract::CodexWebSocket;
+                                                RequestTransport::for_chat(slug, native) == RequestTransport::WebSocket
+                                                    && model_catalog.as_ref().and_then(|catalog| catalog.models_for(source)).is_some_and(|models| models.iter().any(|model| &model.slug == slug))
+                                            }
+                                            ChatWarmupTarget::Session(session) => !deleting_target && model.is_none() && !*finalizing && !*pending_queue
+                                                && conversation.current_view().is_some_and(|view| {
+                                                    view.id == *session && !view.execution_blocked
+                                                        && view.settings.validate_source(source).is_ok()
+                                                        && RequestTransport::for_chat(&view.settings.slug, view.requires_websocket_model) == RequestTransport::WebSocket
+                                                })
+                                                && session_tools.as_ref().is_none_or(|(_, tools)| {
+                                                    tools.model_connection.try_lock().is_ok_and(|connection| !connection.is_pending_or_open())
+                                                }),
+                                        };
+                                        if eligible {
+                                            warmup.prepare(target, &owner_credentials);
+                                        }
+                                    }
                                     Command::RunWidget(job, wake) => {
                                         let access = ecs_access.clone();
                                         let skills = user_skills.clone();
@@ -778,8 +830,7 @@ impl AgentRuntime {
                                                 return Ok(view);
                                             }
                                             let models = model_catalog.as_ref()
-                                                .filter(|(owner, _)| owner == &source)
-                                                .map(|(_, models)| models.as_slice())
+                                                 .and_then(|catalog| catalog.models_for(&source))
                                                 .ok_or_else(|| ConversationFailure::new("记忆会话需要当前账号的模型目录"))?;
                                             memory_dialogue.open(id, source, models, (slug, effort), &data_root, &store).await
                                         }.await;
@@ -1046,7 +1097,7 @@ impl AgentRuntime {
                                         }
                                         if model.is_none() && !deleting_target && suspending == 0 && !*pending_queue && !*finalizing && pending_source.is_none() && pending_session_model.is_none() && !runtime_shutdown.is_cancelled()
                                             && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
-                                            model_task::start_queued(conversation,model,progress_events,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),session_tools,&store,&ecs_access,&mcp_connections).await?;
+                                            model_task::start_queued(conversation,model,progress_events,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),session_tools,&store,&ecs_access,&mcp_connections,model_catalog.clone()).await?;
                                         }
                                     }
                                     Command::Created(result) => {
@@ -1060,8 +1111,7 @@ impl AgentRuntime {
                                         emit(&publish, id, AgentEventKind::Conversation(event))?;
                                         if let (Some(view), Some(first)) = (first_view, first) {
                                             if let Some(source) = &view.settings.codex
-                                                && let Some((owner, models)) = &model_catalog
-                                                && owner == source
+                                                 && let Some(models) = model_catalog.as_ref().and_then(|catalog| catalog.models_for(source))
                                                 && let Some(model) = models.iter().find(|model| model.slug == view.settings.slug)
                                                 && let Some(turn) = &view.turn
                                             {
@@ -1078,6 +1128,7 @@ impl AgentRuntime {
                                                 title_jobs.spawn(async move { (session, request.run(credentials, client, shutdown).await) });
                                             }
                                             let tools = tool_jobs::SessionTools::for_session(&mut next.tools, &view, &next.conversation, store.client(), &ecs_access, &user_skills);
+                                            warmup.attach(&ChatWarmupTarget::Draft(view.settings.slug.clone()), &tools);
                                             control.bind_root(&mut next.conversation, &view)?;
                                             owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.insert(id, control.clone());
                                             let (sender, receiver) = mpsc::channel(PROGRESS_CAPACITY);
@@ -1086,7 +1137,7 @@ impl AgentRuntime {
                                                 id,
                                                 control,
                                                 owner_credentials.clone(),
-                                                TaskRequest::Chat(sender, first.steers, first.task_actions, user_skills.root_path().to_owned(), memory.as_ref().ok().map(Memory::client), tools),
+                                                 TaskRequest::Chat(sender, first.steers, first.task_actions, user_skills.root_path().to_owned(), memory.as_ref().ok().map(Memory::client), tools, model_catalog.clone()),
                                             ));
                                         }
                                         if let Some(session) = next.conversation.session_id() {
@@ -1104,7 +1155,10 @@ impl AgentRuntime {
                                             continue;
                                         }
                                         if matches!(&request, ModelRequest::Catalog) {
-                                            model_catalog = None;
+                                            if let Some(task) = catalog_refresh.take() {
+                                                task.abort();
+                                                drop(task.await);
+                                            }
                                             requesting_catalog = account.codex_identity().cloned();
                                         }
                                         owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.insert(id, control.clone());
@@ -1130,7 +1184,7 @@ impl AgentRuntime {
                                             && account.codex_identity() == Some(&source)
                                             && let AgentEventKind::ModelCompleted(Ok(ModelResult::Catalog(models))) = &event
                                         {
-                                            model_catalog = Some((source, models.clone()));
+                                            model_catalog = Some(ModelCatalogSnapshot::new(source, models.clone()));
                                         }
                                         if matches!(&event, AgentEventKind::Conversation(ConversationEvent::Finished(_))) {
                                             if task.control.cancel.is_cancelled()
@@ -1158,7 +1212,7 @@ impl AgentRuntime {
                                         }
                                         if !*finalizing && !*pending_queue && suspending == 0 && pending_source.is_none() && pending_session_model.is_none() && delivery_failure.is_none() && !runtime_shutdown.is_cancelled()
                                             && model_source(&account).and_then(|source| conversation.validate_model_source(source)).is_ok() {
-                                            model_task::start_queued(conversation,model,progress_events,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),session_tools,&store,&ecs_access,&mcp_connections).await?;
+                                            model_task::start_queued(conversation,model,progress_events,&owner_model,&owner_credentials,&publish,&user_skills,memory.as_ref().ok().map(Memory::client),session_tools,&store,&ecs_access,&mcp_connections,model_catalog.clone()).await?;
                                         }
                                     }
                                     Command::Session(command) => {
@@ -1385,8 +1439,8 @@ impl AgentRuntime {
                                                 let resolved = match request {
                                                     ConversationRequest::Create(create) => async {
                                                         use agentelier_conversation::SessionLocation;
-                                                        let (_, models) = model_catalog.as_ref()
-                                                            .filter(|(owner, _)| owner == &source)
+                                                         let models = model_catalog.as_ref()
+                                                             .and_then(|catalog| catalog.models_for(&source))
                                                             .ok_or_else(|| ConversationFailure::new("请先刷新当前账号的模型目录"))?;
                                                         let (project, directory) = match &create.location {
                                                             SessionLocation::Standalone(directory) => (None, directory.clone()),
@@ -1456,6 +1510,7 @@ impl AgentRuntime {
                                                 match conversation.start(id, request) {
                                                     Ok(view) => {
                                                         let tools = tool_jobs::SessionTools::for_session(session_tools, &view, conversation, store.client(), &ecs_access, &user_skills);
+                                                        warmup.attach(&ChatWarmupTarget::Session(view.id), &tools);
                                                         control.bind_root(conversation, &view)?;
                                                         owner_model.lock().map_err(|_| RuntimeFailure::ModelState)?.insert(id, control.clone());
                                                         let (sender, receiver) =
@@ -1465,7 +1520,7 @@ impl AgentRuntime {
                                                             id,
                                                             control,
                                                             owner_credentials.clone(),
-                                                            TaskRequest::Chat(sender, steers, task_actions, user_skills.root_path().to_owned(), memory.as_ref().ok().map(Memory::client), tools),
+                                                            TaskRequest::Chat(sender, steers, task_actions, user_skills.root_path().to_owned(), memory.as_ref().ok().map(Memory::client), tools, model_catalog.clone()),
                                                         ));
                                                     }
                                                     Err(failure) => {
@@ -1501,7 +1556,20 @@ impl AgentRuntime {
                                     Command::LoginWaiting(id, prompt) => {
                                         emit(&publish, id, AgentEventKind::Account(AccountEventKind::LoginWaiting(prompt)))?;
                                     }
-                                    Command::RefreshQuota => quota_due = true,
+                                    Command::RefreshAccountMetadata => {
+                                        quota_due = true;
+                                        if catalog_refresh.is_none() && requesting_catalog.is_none() && pending_source.is_none()
+                                            && let Some(source) = account.codex_identity()
+                                            && model_catalog.as_ref().is_some_and(|catalog| catalog.models_for(source).is_some())
+                                        {
+                                            let credentials = owner_credentials.clone();
+                                            catalog_refresh = Some(tokio::spawn(async move {
+                                                let identity = credentials.execution().await.map_err(|failure| failure.to_string())?;
+                                                let models = agentelier_llm_model::task_catalog(&credentials, &identity).await.map_err(|failure| failure.to_string())?;
+                                                Ok(ModelCatalogSnapshot::new(identity.identity().clone(), models))
+                                            }));
+                                        }
+                                    }
                                     Command::QuotaFinished(result) => match result {
                                         Ok(result) => {
                                             if let Some(quota) = account.accept_quota(result) {
@@ -1549,6 +1617,11 @@ impl AgentRuntime {
                                             }
                                             requesting_catalog = None;
                                             model_catalog = None;
+                                            warmup = chat_warmup::ChatWarmup::default();
+                                            if let Some(task) = catalog_refresh.take() {
+                                                task.abort();
+                                                drop(task.await);
+                                            }
                                             memory_dialogue.stop("account_changed", &store, &publish).await?;
                                             for owner in owners.values() { owner.cancel(); }
                                             for owner in owners.values_mut() {
@@ -1591,9 +1664,14 @@ impl AgentRuntime {
                             Ok::<(), RuntimeFailure>(())
                         }
                         .await;
+                        drop(warmup);
                         capture_delivery(memory_dialogue.stop("application_shutdown", &store, &publish).await, &mut delivery_failure);
                         drop(memory_dialogue);
                         if let Some(task) = quota_task {
+                            task.abort();
+                            drop(task.await);
+                        }
+                        if let Some(task) = catalog_refresh {
                             task.abort();
                             drop(task.await);
                         }
@@ -1740,6 +1818,7 @@ impl AgentRuntime {
             model: shared_model,
             session_commands,
             memory_commands,
+            chat_warmup,
         })
     }
 
@@ -1858,6 +1937,11 @@ impl AgentRuntime {
             control: control.clone(),
         })?;
         Ok(())
+    }
+    pub fn preconnect_chat(&self, target: ChatWarmupTarget) -> Result<(), RuntimeFailure> {
+        self.chat_warmup
+            .send(Some(target))
+            .map_err(|_| AccountFailure::Closed.into())
     }
     pub fn change_session_model(
         &self,

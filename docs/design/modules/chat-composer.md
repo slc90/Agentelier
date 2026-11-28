@@ -115,6 +115,8 @@ Session Store 负责保存和受控读取媒体字节。Conversation 保存消�
 
 Composer 草稿按 Session 隔离。提交时冻结当前草稿快照，只有对应输入被 Conversation 确认接纳后，UI 才清除该快照。发送期间用户继续输入的内容属于新修订，不得被旧请求的迟到回执清空。
 
+可提交草稿出现时，Composer 可以经共享宿主提示 Runtime 提前连接 WebSocket。提示只携带草稿模型或已有会话 ID。草稿内容和附件仍随正常提交进入 Conversation。
+
 普通发送、CreateAndSend 和 Queue 使用同一份结构化输入契约。Queue 接纳时保存完整快照及附件引用。出队时按新 Turn 的 Skill 和模型设置校验，MCP 继续使用原会话冻结的工具目录。Retry 使用原 Turn 保存的内容和附件。
 
 Steer 继续接收纯文本。活动 Turn 中含结构化引用或媒体的草稿使用 Queue，或在 Turn 结束后作为新消息提交。

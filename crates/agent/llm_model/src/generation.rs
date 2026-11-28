@@ -62,6 +62,16 @@ pub enum RequestTransport {
     WebSocket,
 }
 
+impl RequestTransport {
+    pub fn for_chat(slug: &str, native_websocket: bool) -> Self {
+        if native_websocket || slug == "gpt-6.2-sol" {
+            Self::WebSocket
+        } else {
+            Self::HttpSse
+        }
+    }
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct RequestProjection {
     #[serde(default, skip_serializing_if = "RecordedModelSource::is_siwc")]
@@ -140,7 +150,19 @@ pub struct PreparedGeneration {
 }
 
 #[derive(Default)]
-pub struct GenerationConnection(Option<codex_socket::Continuation>);
+pub struct GenerationConnection(Option<codex_socket::IdleSocket>);
+
+impl GenerationConnection {
+    pub fn preconnect(credentials: CredentialClient) -> Self {
+        Self(Some(codex_socket::IdleSocket::preconnect(credentials)))
+    }
+
+    pub fn is_pending_or_open(&self) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(codex_socket::IdleSocket::is_pending_or_open)
+    }
+}
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SkillMaterial {
@@ -353,12 +375,8 @@ pub fn prepare(generation: GenerationRequest) -> Result<PreparedGeneration, Mode
             return Err(crate::model::protocol("已停用的工具契约仅可查看历史"));
         }
     }
-    let transport = if contract == ToolContract::CodexWebSocket || generation.slug == "gpt-6.2-sol"
-    {
-        RequestTransport::WebSocket
-    } else {
-        RequestTransport::HttpSse
-    };
+    let transport =
+        RequestTransport::for_chat(&generation.slug, contract == ToolContract::CodexWebSocket);
     let mut input = Vec::new();
     input.extend(
         generation
@@ -563,6 +581,21 @@ pub async fn generate(
     }
 }
 
+pub(super) fn response_client(websocket: bool) -> Result<Client, ModelFailure> {
+    let client = Client::builder()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(STREAM_IDLE_TIMEOUT);
+    if websocket {
+        client.http1_only()
+    } else {
+        client
+    }
+    .build()
+    .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "无法建立安全模型客户端"))
+}
+
 async fn generate_inner(
     mut connection: GenerationConnection,
     credentials: CredentialClient,
@@ -574,18 +607,7 @@ async fn generate_inner(
     if !websocket {
         connection.0 = None;
     }
-    let client = Client::builder()
-        .https_only(true)
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(CONNECT_TIMEOUT)
-        .read_timeout(STREAM_IDLE_TIMEOUT);
-    let client = if websocket {
-        client.http1_only()
-    } else {
-        client
-    }
-    .build()
-    .map_err(|_| ModelFailure::new(ModelFailureKind::Network, "无法建立安全模型客户端"))?;
+    let client = response_client(websocket)?;
     let mut current = acquire(&credentials).await?;
     identity.validate(&current).map_err(|failure| {
         ModelFailure::new(ModelFailureKind::Authentication, failure.to_string())

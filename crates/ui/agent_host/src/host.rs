@@ -351,6 +351,12 @@ impl AgentHost {
         self.state()?.model_busy = true;
         Ok(id)
     }
+    pub fn preconnect_chat(
+        &self,
+        target: agentelier_bridge_connection::ChatWarmupTarget,
+    ) -> Result {
+        self.submit(|connection| connection.preconnect_chat(target))
+    }
     pub fn request_conversation(
         &self,
         request: agentelier_conversation_bridge::ConversationRequest,

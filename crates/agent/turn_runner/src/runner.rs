@@ -203,6 +203,7 @@ pub async fn run(
     work: Arc<tokio::sync::Mutex<ToolWork>>,
     controls: mpsc::Receiver<SessionTaskCommand>,
     connection: Arc<tokio::sync::Mutex<GenerationConnection>>,
+    model_catalog: Option<agentelier_llm_model::ModelCatalogSnapshot>,
 ) -> Result<(), ConversationFailure> {
     let active = TurnAccess::new(progress.clone());
     let (turn_id, native, sequence) = active
@@ -255,6 +256,7 @@ pub async fn run(
         memory,
         &mut jobs,
         &mut connection,
+        model_catalog.as_ref(),
     )
     .await;
     let detach = native && outcome.is_ok() && !cancel.is_cancelled() && !dispatcher.is_blocked();
@@ -456,6 +458,7 @@ async fn run_task(
     memory: Option<agentelier_memory::MemoryClient>,
     jobs: &mut TurnTools,
     connection: &mut GenerationConnection,
+    model_catalog: Option<&agentelier_llm_model::ModelCatalogSnapshot>,
 ) -> Result<TurnStatus, ConversationFailure> {
     if cancel.is_cancelled() {
         return Ok(TurnStatus::Cancelled);
@@ -552,7 +555,7 @@ async fn run_task(
     let slug = settings.slug;
     let model = tokio::select! { biased;
         _ = cancel.cancelled() => return Ok(TurnStatus::Cancelled),
-        result = agentelier_llm_model::task_model(credentials.clone(), &identity, &slug) => match result { Ok(model) => model, Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())) },
+        result = agentelier_llm_model::task_model(credentials.clone(), &identity, &slug, model_catalog) => match result { Ok(model) => model, Err(failure) => return Ok(TurnStatus::Failed(failure.to_string())) },
     };
     if let Err(failure) = active.call(move |mut turn| turn.model_context(model)).await {
         return Ok(TurnStatus::Failed(failure.to_string()));

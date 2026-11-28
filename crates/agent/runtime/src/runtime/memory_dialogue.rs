@@ -150,6 +150,7 @@ impl Dialogue {
                 PathBuf::new(),
                 self.memory.clone(),
                 tools,
+                None,
             ),
         ));
         emit(publish, id, AgentEventKind::MemoryProgress(Box::new(view)))

@@ -3,7 +3,9 @@ use agentelier_account::{CredentialClient, DeliveryFailure};
 use agentelier_conversation::{
     Conversation, ConversationEvent, ConversationFailure, SessionId, SteerInput,
 };
-use agentelier_llm_model::{ModelFailure, ModelFailureKind, ModelRequest, ModelResult};
+use agentelier_llm_model::{
+    ModelCatalogSnapshot, ModelFailure, ModelFailureKind, ModelRequest, ModelResult,
+};
 use agentelier_session_store::SessionStoreClient;
 use agentelier_skills::UserSkills;
 use agentelier_tools::OriginalImage;
@@ -27,6 +29,7 @@ pub(super) enum TaskRequest {
         std::path::PathBuf,
         Option<agentelier_memory::MemoryClient>,
         super::tool_jobs::SessionTools,
+        Option<ModelCatalogSnapshot>,
     ),
 }
 pub(super) struct ModelTask {
@@ -74,6 +77,7 @@ impl ModelTask {
                     user_skills_root,
                     memory,
                     tools,
+                    model_catalog,
                 ) => {
                     let outcome = agentelier_turn_runner::run(
                         credentials,
@@ -86,6 +90,7 @@ impl ModelTask {
                         tools.work.clone(),
                         task_actions,
                         tools.model_connection.clone(),
+                        model_catalog,
                     )
                     .await;
                     Some(TaskResult::Chat(outcome))
@@ -614,6 +619,7 @@ pub(super) async fn start_queued(
     store: &agentelier_session_store::SessionStore,
     ecs_access: &crate::ecs_access::EcsAccess,
     mcp: &agentelier_mcp::Connections,
+    model_catalog: Option<ModelCatalogSnapshot>,
 ) -> Result<(), RuntimeFailure> {
     if model.is_some() {
         return Ok(());
@@ -670,6 +676,7 @@ pub(super) async fn start_queued(
             skills.root_path().to_owned(),
             memory,
             tools,
+            model_catalog,
         ),
     ));
     Ok(())

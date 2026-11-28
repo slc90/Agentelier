@@ -437,6 +437,11 @@ impl Connection {
         self.pending_requests.insert(id);
         Ok(id)
     }
+    pub fn preconnect_chat(&self, target: crate::ChatWarmupTarget) -> Result<(), BridgeFailure> {
+        self.runtime
+            .preconnect_chat(target)
+            .map_err(|failure| BridgeFailure(failure.to_string()))
+    }
     pub fn request_conversation(
         &mut self,
         request: agentelier_conversation_bridge::ConversationRequest,

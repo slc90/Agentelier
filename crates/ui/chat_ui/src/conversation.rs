@@ -287,6 +287,7 @@ struct InputIntents {
     boundary: Option<Boundary>,
     completion: Option<KeyCode>,
     clear_accepted: Option<PendingDraft>,
+    warmup: Option<agentelier_agent_host::ChatWarmupTarget>,
 }
 #[derive(Component, Clone, Default)]
 struct MessageList;
@@ -908,6 +909,7 @@ fn process_input(world: &mut World) -> Result {
         crate::composer_completion::key(world, completion)?;
     }
     crate::composer_completion::update(world)?;
+    preconnect_draft(world);
     if chat_requested {
         if requested.is_some_and(|root| crate::composer_completion::active(world, root)) {
             crate::composer_completion::key(world, KeyCode::Enter)?;
@@ -920,6 +922,35 @@ fn process_input(world: &mut World) -> Result {
         crate::memory_chat::submit(world)?;
     }
     Ok(())
+}
+
+fn preconnect_draft(world: &mut World) {
+    use agentelier_agent_host::ChatWarmupTarget;
+    let state = world.resource::<ChatState>();
+    let target = if !state.can_send(
+        world.resource::<ModelState>(),
+        world.resource::<AccountState>(),
+    ) {
+        None
+    } else if state.new_chat.is_some() {
+        super::composer_footer::draft_model(world)
+            .ok()
+            .map(|model| ChatWarmupTarget::Draft(model.slug))
+    } else {
+        state
+            .session
+            .as_ref()
+            .map(|session| ChatWarmupTarget::Session(session.id))
+    };
+    if world.resource::<InputIntents>().warmup == target {
+        return;
+    }
+    world.resource_mut::<InputIntents>().warmup = target.clone();
+    if let Some(target) = target
+        && let Err(failure) = world.resource::<AgentHost>().preconnect_chat(target)
+    {
+        tracing::debug!(%failure, "聊天连接预热未提交");
+    }
 }
 
 fn history_item(item: agentelier_conversation_bridge::HistoryItem) -> ChatHistoryItem {

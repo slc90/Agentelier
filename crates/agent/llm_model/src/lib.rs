@@ -40,9 +40,10 @@ pub use protocol::{
 pub use stream::{FunctionCall, GenerationResult, OutputMessage, OutputText, StreamEvent};
 
 pub use model::{
-    AgentModelError, BackgroundText, ModelFailure, ModelFailureKind, ModelInfo, ModelReply,
-    ModelRequest, ModelResult, MultiAgentCapability, background_text, codex_tool_contract, execute,
-    select_agent_model, select_session_model, task_catalog, task_model,
+    AgentModelError, BackgroundText, ModelCatalogSnapshot, ModelFailure, ModelFailureKind,
+    ModelInfo, ModelReply, ModelRequest, ModelResult, MultiAgentCapability, background_text,
+    codex_tool_contract, execute, select_agent_model, select_session_model, task_catalog,
+    task_model,
 };
 
 pub use protocol::{

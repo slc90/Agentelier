@@ -209,7 +209,7 @@ flowchart LR
 
 所有库使用宿主统一配置的 tracing。日志只包含安全的操作标识、阶段与诊断，不泄露 Token、授权地址或模型正文。开发与 BRP 验证须保护现有登录状态，未经授权不退出、重新授权、重置凭据或更换数据环境。
 
-Chat UI 通过共享宿主自动加载并持有当前账号的模型目录投影。登录主页以 HomeContent 提供内容位置，application 使用 BSN 挂载 ChatUiHost，并提供已保存的新会话默认模型和推理强度。新建请求经 Conversation Bridge 传入所需参数，由 Runtime 使用当前账号的模型目录解析为会话设置。目录结果在 LLM Model Bridge 转换。相同身份的 Token 更新保留目录，账号失效或身份变化后清除旧目录。
+Chat UI 通过共享宿主自动加载并持有当前账号的模型目录投影。登录主页以 HomeContent 提供内容位置，application 使用 BSN 挂载 ChatUiHost，并提供已保存的新会话默认模型和推理强度。新建请求经 Conversation Bridge 传入所需参数，由 Runtime 使用当前账号的模型目录解析为会话设置。目录结果在 LLM Model Bridge 转换。Runtime 在后台更新目录快照，普通聊天执行使用同一账号的有效快照。相同身份的 Token 更新保留目录，账号失效或身份变化后清除旧目录。Composer 经共享宿主提示 Runtime 预连，LLM Model 负责握手及会话连接的空闲心跳。[单次模型请求](modules/model-request.md)
 
 ## 内存聊天与流式投影
 
