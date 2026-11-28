@@ -346,7 +346,7 @@ pub(crate) fn install(app: &mut App) {
         .add_observer(mount_messages)
         .add_systems(
             PreUpdate,
-            capture_enter
+            capture_input
                 .after(bevy::input::InputSystems)
                 .before(InputFocusSystems::Dispatch),
         )
@@ -762,10 +762,11 @@ fn steer(world: &mut World) -> Result {
     Ok(())
 }
 
-fn capture_enter(
+fn capture_input(
     world: &mut World,
     mut events: Local<MessageCursor<KeyboardInput>>,
     mut ime: Local<MessageCursor<Ime>>,
+    mut image_paste: Local<bool>,
 ) -> Result {
     let ime_active = ime.read(world.resource::<Messages<Ime>>()).any(|event| {
         matches!(event, Ime::Commit { .. })
@@ -795,9 +796,8 @@ fn capture_enter(
     };
     let pressed = world.resource::<ButtonInput<KeyCode>>();
     let shift = pressed.pressed(KeyCode::ShiftLeft) || pressed.pressed(KeyCode::ShiftRight);
-    let shortcut = [
-        KeyCode::ControlLeft,
-        KeyCode::ControlRight,
+    let control = pressed.pressed(KeyCode::ControlLeft) || pressed.pressed(KeyCode::ControlRight);
+    let alt_or_super = [
         KeyCode::AltLeft,
         KeyCode::AltRight,
         KeyCode::SuperLeft,
@@ -806,6 +806,38 @@ fn capture_enter(
     .iter()
     .any(|key| pressed.pressed(*key));
     let boundary_candidate = root.filter(|entity| world.get::<TextSegment>(*entity).is_some());
+    if control
+        && !alt_or_super
+        && !shift
+        && !ime_active
+        && !composing
+        && boundary_candidate.is_some()
+    {
+        return world.resource_scope(|world, mut messages: Mut<Messages<KeyboardInput>>| {
+            for event in events.read_mut(&mut messages) {
+                if window != Some(event.window) || event.state != ButtonState::Pressed {
+                    continue;
+                }
+                let paste = match &event.logical_key {
+                    Key::Character(key) if key.is_ascii() => key.eq_ignore_ascii_case("v"),
+                    Key::Character(_) => event.key_code == KeyCode::KeyV,
+                    _ => false,
+                };
+                if !paste {
+                    continue;
+                }
+                if !event.repeat {
+                    *image_paste = crate::composer_media::paste_clipboard_image(world)?;
+                }
+                if *image_paste {
+                    event.logical_key = Key::Unidentified(NativeKey::Unidentified);
+                    event.text = None;
+                }
+            }
+            Ok(())
+        });
+    }
+    *image_paste = false;
     let mut boundaries = [
         KeyCode::ArrowLeft,
         KeyCode::ArrowRight,
@@ -823,7 +855,7 @@ fn capture_enter(
     let completing = root.is_some_and(|root| crate::composer_completion::active(world, root));
     let mut send = false;
     for event in events.read_mut(&mut world.resource_mut::<Messages<KeyboardInput>>()) {
-        if window != Some(event.window) || ime_active || composing || shortcut {
+        if window != Some(event.window) || ime_active || composing || control || alt_or_super {
             continue;
         }
         if completing

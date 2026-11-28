@@ -11,6 +11,7 @@ pub enum ComposerImageSource {
         reference: FileReference,
         scope: FileScope,
     },
+    Clipboard(image::RgbaImage),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -61,6 +62,9 @@ pub(super) async fn request(
                             tokio::task::spawn_blocking(move || reference.verify(&scope))
                                 .await
                                 .map_err(io::Error::other)??
+                        }
+                        ComposerImageSource::Clipboard(pixels) => {
+                            return store.stage_clipboard_image(draft, pixels).await;
                         }
                     };
                     store.stage_input(draft, path, true).await

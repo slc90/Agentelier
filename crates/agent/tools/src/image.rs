@@ -227,6 +227,13 @@ pub fn prepare_local_image(bytes: Vec<u8>) -> std::io::Result<ImagePayload> {
         .map_err(std::io::Error::other)
 }
 
+pub fn prepare_clipboard_image(pixels: image::RgbaImage) -> std::io::Result<ImagePayload> {
+    if pixels.width() == 0 || pixels.height() == 0 {
+        return Err(std::io::Error::other("剪贴板图片尺寸无效"));
+    }
+    normalize(DynamicImage::ImageRgba8(pixels), true).map_err(std::io::Error::other)
+}
+
 pub async fn from_mcp_bytes(
     bytes: Vec<u8>,
     mime: String,

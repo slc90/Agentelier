@@ -2,7 +2,9 @@ use crate::attachments;
 use agentelier_conversation::{
     AudioAttachment, ComposerContent, ComposerMessage, InputImage, RecordEvent, SessionId,
 };
-use agentelier_tools::{ImagePayload, MAX_PROMPT_IMAGE_BYTES, prepare_local_image};
+use agentelier_tools::{
+    ImagePayload, MAX_PROMPT_IMAGE_BYTES, prepare_clipboard_image, prepare_local_image,
+};
 use std::{
     fs,
     io::{self, Read, Write},
@@ -145,13 +147,23 @@ impl Imported {
         {
             return Err(io::Error::other("图片文件在读取期间变化"));
         }
-        let payload = prepare_local_image(bytes)?;
+        Ok(Self::from_image(name, prepare_local_image(bytes)?))
+    }
+
+    pub(super) fn clipboard_image(pixels: image::RgbaImage) -> io::Result<Self> {
+        Ok(Self::from_image(
+            "剪贴板图片.png".into(),
+            prepare_clipboard_image(pixels)?,
+        ))
+    }
+
+    fn from_image(name: String, payload: ImagePayload) -> Self {
         let image = InputImage {
             id: SessionId::new_v4(),
             name,
             image: payload.descriptor(),
         };
-        Ok(Self::Image(image, payload))
+        Self::Image(image, payload)
     }
 }
 

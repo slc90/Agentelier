@@ -145,7 +145,7 @@ LLM Model 通过 Account 获取凭据，请求 Codex 的目录与 Responses，�
 
 `generate_image` 通过同一任务授权访问 Codex Images。LLM Model 负责图像请求和返回验证，Tools 描述调用，Runtime 沿原工具派发与取消规则执行。Turn Runner 等待 Session Store 确认原图及可用的模型回看附件，再将它们与原调用关联到可恢复的工具结果。Chat UI 通过同一调用身份请求 Runtime 从已确认附件生成显示资源或另存原件。详见[图片生成](subscription-media/02-image-generation.md)。
 
-Chat UI 通过 Widgetry 选择本地音频。Session Store 后台核对 WAV 或 MP3 实际内容，并以不可变字节和草稿记录提交。Conversation 将已确认的草稿附件与用户输入绑定，Bridge 仅传递展示元数据。详见[音频文件理解](subscription-media/03-audio-file-understanding.md)。
+Chat UI 读取 Windows 剪贴板的位图和图片文件列表，也可通过 Widgetry 选择本地媒体。Session Store 在后台准备图片或核对 WAV、MP3 音频，并暂存不可变的附件字节。Conversation 将已确认的草稿附件与用户输入绑定。详见[聊天输入组件](modules/chat-composer.md)和[音频文件理解](subscription-media/03-audio-file-understanding.md)。
 
 音频卡片发起独立的文稿任务。Runtime 沿用音频操作的后台执行与取消，LLM Model 使用绑定的 Codex OAuth 文件转写，Session Store 提交可恢复的版本，Chat UI 展示和复制已保存文稿。
 

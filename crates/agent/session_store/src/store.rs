@@ -179,10 +179,7 @@ impl SessionStoreClient {
         path: PathBuf,
         image: bool,
     ) -> io::Result<ComposerContent> {
-        if owner.is_nil() {
-            return Err(io::Error::other("附件草稿缺少身份"));
-        }
-        let imported = tokio::task::spawn_blocking(move || {
+        self.stage(owner, move || {
             if image {
                 crate::composer::Imported::image(&path)
             } else {
@@ -191,7 +188,30 @@ impl SessionStoreClient {
             }
         })
         .await
-        .map_err(io::Error::other)??;
+    }
+
+    pub async fn stage_clipboard_image(
+        &self,
+        owner: SessionId,
+        pixels: image::RgbaImage,
+    ) -> io::Result<ComposerContent> {
+        self.stage(owner, move || {
+            crate::composer::Imported::clipboard_image(pixels)
+        })
+        .await
+    }
+
+    async fn stage(
+        &self,
+        owner: SessionId,
+        import: impl FnOnce() -> io::Result<crate::composer::Imported> + Send + 'static,
+    ) -> io::Result<ComposerContent> {
+        if owner.is_nil() {
+            return Err(io::Error::other("附件草稿缺少身份"));
+        }
+        let imported = tokio::task::spawn_blocking(import)
+            .await
+            .map_err(io::Error::other)??;
         let (reply, result) = oneshot::channel();
         self.0
             .send(Command::StageInput(owner, imported, reply))

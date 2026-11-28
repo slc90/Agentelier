@@ -20,7 +20,7 @@ flowchart TB
 
 这套设计从草稿本身开始：先确定一条消息可以由什么组成，再说明这些内容如何进入编辑器，最后看它们怎样跨越会话边界进入模型请求。
 
-当前聊天界面以有序草稿承载分段文本和既有音频附件。Conversation、Bridge 和 Session Store 使用同一份输入快照，首条接纳随会话发布。输入 `$` 时从本地能力投影补全 Skill 与 MCP。输入 `@` 时在工作目录与项目范围的交集中索引文件。图片可从文件选择器或 `@` 候选导入，草稿和历史按插入顺序显示实际缩略预览。WAV 和 MP3 可在新会话和既有会话中暂存、播放并随消息保存，正式音频可显式转写后按版本引用。
+当前聊天界面以有序草稿承载分段文本和既有音频附件。Conversation、Bridge 和 Session Store 使用同一份输入快照，首条接纳随会话发布。输入 `$` 时从本地能力投影补全 Skill 与 MCP。输入 `@` 时在工作目录与项目范围的交集中索引文件。图片可从 Windows 剪贴板、文件选择器或 `@` 候选导入，草稿和历史按插入顺序显示实际缩略预览。WAV 和 MP3 可在新会话和既有会话中暂存、播放并随消息保存，正式音频可显式转写后按版本引用。
 
 ## 一条消息由有序内容组成
 
@@ -96,7 +96,9 @@ MCP 引用通过 Agentelier 本地工具上下文传递。可见的 `$server` �
 
 用户图片在 Composer 中按插入位置显示预览。Session Store 提供草稿快照，在消息接纳时生成会话内的正式附件引用。请求按 Codex `LocalImage` / `Image` 的内容形式发送用户图片。
 
-Session Store 负责保存和受控读取媒体字节。Conversation 保存消息与附件之间的关系，Bridge 只传递结构化输入、暂存或正式附件引用和显示元数据。
+聊天文本段获得焦点时，Composer 在分发 `Ctrl+V` 前读取 Windows 剪贴板。位图经 Runtime 异步缩放和编码为 PNG。资源管理器复制的文件列表中，PNG 和 JPEG 沿用本地文件导入路径，保留文件名和列表顺序。两种来源都记录当前草稿和插入位置，使用统一的附件暂存与预览流程。普通文本由 TextField 粘贴。
+
+Session Store 负责保存和受控读取媒体字节。Conversation 保存消息与附件之间的关系，Bridge 转交图片导入请求、结构化输入、附件引用和显示元数据。
 
 ### 音频展示复用已有控件
 
@@ -125,14 +127,14 @@ Steer 继续接收纯文本。活动 Turn 中含结构化引用或媒体的草�
 
 ### 首次发送一并提交会话和首条消息
 
-添加文件时，Session Store 校验原件并为草稿保存不可变的暂存快照。草稿阶段使用暂存引用，新会话仍在首次发送时创建。Runtime 在发送时冻结草稿修订和会话设置，Conversation 按该设置准备首条接纳记录。
+添加媒体时，Session Store 为草稿保存不可变的暂存快照。草稿阶段使用暂存引用，新会话仍在首次发送时创建。Runtime 在发送时冻结草稿修订和会话设置，Conversation 按该设置准备首条接纳记录。
 
 ```mermaid
 sequenceDiagram
     participant UI as Composer
     participant RT as Runtime 与 Conversation
     participant Store as Session Store
-    UI->>Store: 选择并暂存文件
+    UI->>Store: 导入并暂存媒体
     Store-->>UI: 暂存引用与显示元数据
     UI->>RT: 提交草稿修订和创建设置
     RT->>Store: 提交正式附件、Created 和首条 Accepted
@@ -157,7 +159,7 @@ sequenceDiagram
 
 - 富文本编辑、`$` / `@` 补全和媒体布局属于 Agentelier，不向 bevy_widgetry 增加聊天专用控件。
 - 音频附件展示与播放复用现有控件。
-- 本功能处理图片和音频文件输入，不扩展成 PDF、Office 或任意文件上传系统。
+- 媒体输入支持图片文件、剪贴板图片与音频文件。
 - 音频文件输入不是麦克风输入，不包含 GPT-Live、GPT-Realtime、WebRTC 或实时语音会话。
 - Skill 与 MCP 的显式选择不绕过现有工具权限，也不直接执行工具。
 

@@ -5,6 +5,7 @@ use agentelier_agent_host::{
 use agentelier_controls::AgentelierButton;
 use agentelier_conversation_bridge::{FileReference, FileScope, InputImage, SessionId};
 use bevy::asset::RenderAssetUsages;
+use bevy::clipboard::{Clipboard, ClipboardError};
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, futures::check_ready};
@@ -17,7 +18,11 @@ use bevy_widgetry::file_dialog::{
 };
 use bevy_widgetry::scene::WidgetrySceneCommandsExt;
 use bevy_widgetry::text::WidgetryText;
-use std::io;
+use clipboard_win::formats::{CF_HDROP, FileList};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
 const PREVIEW_EDGE: f32 = 150.0;
 
@@ -173,12 +178,7 @@ pub(crate) fn select_file(
     scope: FileScope,
     anchor: Anchor,
 ) -> Result<bool> {
-    if !reference
-        .path
-        .extension()
-        .and_then(|value| value.to_str())
-        .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg"))
-    {
+    if !is_input_image(&reference.path) {
         return Ok(false);
     }
     let chat = world.resource::<ChatState>();
@@ -193,6 +193,71 @@ pub(crate) fn select_file(
     };
     stage(world, placement, request)?;
     Ok(true)
+}
+
+pub(crate) fn paste_clipboard_image(world: &mut World) -> Result<bool> {
+    let chat = world.resource::<ChatState>();
+    if chat.session.is_none() && chat.draft_target().is_none() {
+        return Ok(false);
+    }
+    let Some(anchor) = crate::composer::anchor(world)? else {
+        return Ok(false);
+    };
+    let chat = world.resource::<ChatState>();
+    let placement = Placement {
+        owner: chat.composer.owner(),
+        revision: chat.draft_revision,
+        anchor,
+    };
+    match clipboard_image_sources(&mut world.resource_mut::<Clipboard>()) {
+        Ok(Some(sources)) => {
+            let request = ComposerAssetRequest::StageImages {
+                draft: placement.owner,
+                sources,
+            };
+            stage(world, placement, request)?;
+        }
+        Ok(None) => return Ok(false),
+        Err(failure) => {
+            world.resource_mut::<ChatState>().input_feedback =
+                Some(format!("粘贴图片失败：{failure}"));
+        }
+    }
+    Ok(true)
+}
+
+fn clipboard_image_sources(
+    clipboard: &mut Clipboard,
+) -> std::result::Result<Option<Vec<ComposerImageSource>>, String> {
+    match clipboard.fetch_image() {
+        Ok(image) => image
+            .try_into_dynamic()
+            .map(|image| Some(vec![ComposerImageSource::Clipboard(image.into_rgba8())]))
+            .map_err(|failure| failure.to_string()),
+        Err(ClipboardError::ContentNotAvailable) if clipboard_win::is_format_avail(CF_HDROP) => {
+            let paths: Vec<PathBuf> =
+                clipboard_win::get_clipboard(FileList).map_err(|failure| failure.to_string())?;
+            let sources: Vec<_> = paths
+                .into_iter()
+                .filter(|path| is_input_image(path))
+                .map(ComposerImageSource::Local)
+                .collect();
+            if sources.is_empty() {
+                return Err("剪贴板中没有 PNG 或 JPEG 文件".into());
+            }
+            Ok(Some(sources))
+        }
+        Err(ClipboardError::ContentNotAvailable) => Ok(None),
+        Err(failure) => Err(failure.to_string()),
+    }
+}
+
+fn is_input_image(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| {
+        ["png", "jpg", "jpeg"]
+            .into_iter()
+            .any(|suffix| extension.eq_ignore_ascii_case(suffix))
+    })
 }
 
 fn stage(world: &mut World, placement: Placement, request: ComposerAssetRequest) -> Result {

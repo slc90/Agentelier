@@ -53,6 +53,7 @@ rmcp = { version = "=3.9.0", default-features = false, features = [
   "transport-streamable-http-client-reqwest",
 ] }
 tracing = "0.1.44"
+clipboard-win = { version = "5.4", features = ["std"] }
 winsafe = { version = "0.0.29", default-features = false }
 uiautomation = { version = "=0.25.3", default-features = false }
 tempfile = { version = "3.27.0", default-features = false }
